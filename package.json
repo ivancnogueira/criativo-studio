@@ -11,6 +11,7 @@
   "scripts": {
     "build": "tsc -b packages/contracts packages/whatsapp apps/daemon",
     "typecheck": "tsc -b packages/contracts packages/whatsapp apps/daemon",
+    "start": "npm run start:daemon",
     "configurar": "node scripts/configurar-local.mjs",
     "instalar-skills": "node scripts/instalar-skills.mjs",
     "instalar-upgrade": "node scripts/instalar-upgrade.mjs",

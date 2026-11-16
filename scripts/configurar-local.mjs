@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -90,10 +91,26 @@ export async function configurarLocal({ diretorioRaiz = raiz, semSkills = false 
     skillsResult = await instalarSkills({ diretorioRaiz });
   }
 
+  const semBuild = process.argv.includes("--sem-build");
+  const forcarBuild = process.argv.includes("--forcar-build");
+  const daemonDistOk = existsSync(join(diretorioRaiz, "apps", "daemon", "dist", "server", "daemon-server.js"));
+  const webDistOk = existsSync(join(diretorioRaiz, "apps", "web", "dist", "index.html"));
+
+  if (!semBuild && (forcarBuild || !daemonDistOk || !webDistOk)) {
+    const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+    console.log("\nCompilando daemon e Cockpit Web (primeira execução)...");
+    execFileSync(npmCmd, ["run", "build"], { cwd: diretorioRaiz, stdio: "inherit", shell: process.platform === "win32" });
+    execFileSync(npmCmd, ["run", "build", "--workspace=apps/web"], {
+      cwd: diretorioRaiz,
+      stdio: "inherit",
+      shell: process.platform === "win32",
+    });
+  }
+
   console.log(`\n✅ Ambiente local preparado (${templatesCriados} template(s) inicializado(s)).`);
   console.log("Próximos passos:");
-  console.log("  1. npm run build ; npm run build --workspace=apps/web");
-  console.log("  2. npm run start:daemon");
+  console.log("  1. npm start   (inicia Daemon + Cockpit Web em http://127.0.0.1:3000)");
+  console.log("  2. npm run diagnosticar");
   console.log("  3. Acesse http://127.0.0.1:3000 para concluir o onboarding.\n");
 
   return { ok: true, templatesCriados, skillsInstaladas: skillsResult.total };
