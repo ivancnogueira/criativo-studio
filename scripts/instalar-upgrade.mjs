@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { instalarSkills } from "./instalar-skills.mjs";
+import { homePadrao, interpretarPlataformas, opcao } from "./lib/plataformas.mjs";
 
 const raiz = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -37,6 +38,8 @@ function parseArgs(argv) {
   let pacote = "";
   let fonte = "";
   let dbPath = "";
+  const escolha = opcao(argv, "--plataforma");
+  const homeArg = opcao(argv, "--home");
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--pacote" && argv[i + 1]) {
       pacote = argv[++i].trim().toLowerCase();
@@ -46,7 +49,7 @@ function parseArgs(argv) {
       dbPath = argv[++i].trim();
     }
   }
-  return { pacote, fonte, dbPath };
+  return { pacote, fonte, dbPath, escolha, homeArg };
 }
 
 async function encontrarPastaSkill(origemBase, slug) {
@@ -69,6 +72,8 @@ export async function instalarPacoteUpgrade({
   fonte,
   diretorioRaiz = raiz,
   dbPath,
+  plataformas,
+  home,
 } = {}) {
   const def = PACOTES_UPGRADE[pacoteId];
   if (!def) {
@@ -161,7 +166,7 @@ export async function instalarPacoteUpgrade({
       }
     }
 
-    await instalarSkills({ diretorioRaiz });
+    await instalarSkills({ diretorioRaiz, plataformas, home });
 
     console.log(`\n✅ Upgrade '${def.nome}' instalado com sucesso (${instaladas.join(", ")}).`);
     return { ok: true, pacote: pacoteId, skills: instaladas };
@@ -176,17 +181,25 @@ export async function instalarPacoteUpgrade({
   }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const { pacote, fonte, dbPath } = parseArgs(process.argv.slice(2));
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const { pacote, fonte, dbPath, escolha, homeArg } = parseArgs(process.argv.slice(2));
   if (!pacote) {
-    console.log("Uso: npm run instalar-upgrade -- --pacote <bonus|video> [--fonte <caminho_ou_git>]");
+    console.log(
+      "Uso: npm run instalar-upgrade -- --pacote <bonus|video> [--fonte <caminho_ou_git>] [--plataforma <claude|codex|antigravity|todas>]"
+    );
     process.exitCode = 1;
   } else {
-    instalarPacoteUpgrade({ pacoteId: pacote, fonte: fonte || undefined, dbPath: dbPath || undefined }).catch(
-      (err) => {
-        console.error(`Falha ao instalar upgrade: ${err instanceof Error ? err.message : String(err)}`);
-        process.exitCode = 1;
-      }
-    );
+    const home = homeArg ? resolve(homeArg) : homePadrao();
+    const plataformas = escolha ? interpretarPlataformas(escolha, home) : undefined;
+    instalarPacoteUpgrade({
+      pacoteId: pacote,
+      fonte: fonte || undefined,
+      dbPath: dbPath || undefined,
+      plataformas,
+      home,
+    }).catch((err) => {
+      console.error(`Falha ao instalar upgrade: ${err instanceof Error ? err.message : String(err)}`);
+      process.exitCode = 1;
+    });
   }
 }

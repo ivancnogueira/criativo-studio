@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { instalarSkills } from "./instalar-skills.mjs";
+import { homePadrao, interpretarPlataformas, opcao } from "./lib/plataformas.mjs";
 
 const raiz = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -20,7 +22,23 @@ async function copiarTemplateSeAusente(origem, destino) {
   return true;
 }
 
-export async function configurarLocal({ diretorioRaiz = raiz, semSkills = false } = {}) {
+function lerVersaoProduto(diretorioRaiz) {
+  try {
+    const raw = readFileSync(join(diretorioRaiz, "produto.json"), "utf8");
+    return JSON.parse(raw).versao || "1.0.0";
+  } catch {
+    return "1.0.0";
+  }
+}
+
+export async function configurarLocal({
+  diretorioRaiz = raiz,
+  semSkills = false,
+  plataformas,
+  home = homePadrao(),
+  semBuild = process.argv.includes("--sem-build"),
+  forcarBuild = process.argv.includes("--forcar-build"),
+} = {}) {
   const nodeMajor = Number(process.versions.node.split(".")[0]);
   if (!Number.isInteger(nodeMajor) || nodeMajor < 22) {
     throw new Error(`Node.js >= 22 é obrigatório (versão detectada: ${process.versions.node}).`);
@@ -68,31 +86,47 @@ export async function configurarLocal({ diretorioRaiz = raiz, semSkills = false 
     }
   }
 
-  // Cria .env se não existir e gera CRIATIVO_VAULT_KEY segura
+  // Cria .env se não existir e gera CRIATIVO_VAULT_KEY segura (sem quebrar cofre pré-existente)
   const envPath = join(diretorioRaiz, ".env");
   const envExamplePath = join(diretorioRaiz, ".env.example");
+  const dbPath = join(diretorioRaiz, "apps", "daemon", "dados", "criativo.db");
+  let cofreExistente = false;
+  if (existsSync(dbPath)) {
+    try {
+      const db = new DatabaseSync(dbPath, { readOnly: true });
+      const row = db.prepare(`SELECT COUNT(*) as total FROM cofre_segredos;`).get();
+      cofreExistente = Number(row?.total ?? 0) > 0;
+      db.close();
+    } catch {
+      cofreExistente = false;
+    }
+  }
+
   if (!existsSync(envPath)) {
     const baseEnv = existsSync(envExamplePath)
       ? await readFile(envExamplePath, "utf8")
       : "NODE_ENV=development\nPORT=3000\nHOST=127.0.0.1\nCRIATIVO_VAULT_KEY=\n";
-    const key = randomBytes(32).toString("hex");
-    const filled = baseEnv.includes("CRIATIVO_VAULT_KEY=")
-      ? baseEnv.replace(/CRIATIVO_VAULT_KEY=.*/g, `CRIATIVO_VAULT_KEY=${key}`)
-      : `${baseEnv}\nCRIATIVO_VAULT_KEY=${key}\n`;
-    await writeFile(envPath, filled, "utf8");
-    console.log("  ✅ .env criado com chave mestra CRIATIVO_VAULT_KEY segura.");
+    if (cofreExistente) {
+      await writeFile(envPath, baseEnv, "utf8");
+      console.log("  ⚠️ .env criado preservando CRIATIVO_VAULT_KEY vazia por haver cofre_segredos pré-existente.");
+    } else {
+      const key = randomBytes(32).toString("hex");
+      const filled = baseEnv.includes("CRIATIVO_VAULT_KEY=")
+        ? baseEnv.replace(/CRIATIVO_VAULT_KEY=.*/g, `CRIATIVO_VAULT_KEY=${key}`)
+        : `${baseEnv}\nCRIATIVO_VAULT_KEY=${key}\n`;
+      await writeFile(envPath, filled, "utf8");
+      console.log("  ✅ .env criado com chave mestra CRIATIVO_VAULT_KEY segura.");
+    }
   } else {
     console.log("  ✅ .env preservado (nenhuma credencial alterada).");
   }
 
-  let skillsResult = { total: 0, nomes: [] };
+  let skillsResult = { total: 0, nomes: [], plataformas: [], destinos: [] };
   if (!semSkills) {
     console.log("\nSincronizando skills do pacote instalado:");
-    skillsResult = await instalarSkills({ diretorioRaiz });
+    skillsResult = await instalarSkills({ diretorioRaiz, plataformas, home });
   }
 
-  const semBuild = process.argv.includes("--sem-build");
-  const forcarBuild = process.argv.includes("--forcar-build");
   const daemonDistOk = existsSync(join(diretorioRaiz, "apps", "daemon", "dist", "server", "daemon-server.js"));
   const webDistOk = existsSync(join(diretorioRaiz, "apps", "web", "dist", "index.html"));
 
@@ -107,17 +141,44 @@ export async function configurarLocal({ diretorioRaiz = raiz, semSkills = false 
     });
   }
 
+  // Registra recibo local da instalação (pasta logs/ é ignorada pelo Git)
+  const instalacaoResumo = {
+    em: new Date().toISOString(),
+    versao: lerVersaoProduto(diretorioRaiz),
+    plataformas: skillsResult.plataformas,
+    destinos: skillsResult.destinos,
+    totalSkills: skillsResult.total,
+    templatesCriados,
+  };
+  await writeFile(
+    join(diretorioRaiz, "logs", "instalacao.json"),
+    JSON.stringify(instalacaoResumo, null, 2) + "\n",
+    "utf8"
+  );
+
   console.log(`\n✅ Ambiente local preparado (${templatesCriados} template(s) inicializado(s)).`);
   console.log("Próximos passos:");
   console.log("  1. npm start   (inicia Daemon + Cockpit Web em http://127.0.0.1:3000)");
   console.log("  2. npm run diagnosticar");
   console.log("  3. Acesse http://127.0.0.1:3000 para concluir o onboarding.\n");
 
-  return { ok: true, templatesCriados, skillsInstaladas: skillsResult.total };
+  return {
+    ok: true,
+    templatesCriados,
+    skillsInstaladas: skillsResult.total,
+    plataformas: skillsResult.plataformas,
+    destinos: skillsResult.destinos,
+  };
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  configurarLocal().catch((err) => {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const args = process.argv.slice(2);
+  const homeArg = opcao(args, "--home");
+  const home = homeArg ? resolve(homeArg) : homePadrao();
+  const escolha = opcao(args, "--plataforma");
+  const plataformas = escolha ? interpretarPlataformas(escolha, home) : undefined;
+
+  configurarLocal({ home, plataformas }).catch((err) => {
     console.error(`Falha na configuração local: ${err instanceof Error ? err.message : String(err)}`);
     process.exitCode = 1;
   });

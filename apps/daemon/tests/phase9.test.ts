@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { seedDefaultAgents } from "../src/engine/runner/roster-defaults.ts";
 import { createDaemonServer, type DaemonRuntime } from "../src/server/daemon-server.ts";
 import { validateMetaIntegration } from "../src/server/studio-tools-bridge.ts";
@@ -192,5 +193,53 @@ describe("Fase 9 — Empacotamento Base/Upgrades, Cofre Meta, Backfill de Agente
     assert.equal(brandJson.identidade.marca_nome, "Estúdio Exemplo Agnóstico");
     assert.equal(brandJson.identidade.marcos.perfil, "concluido");
     assert.equal(brandJson.onboarding.perfil_handle, "@estudio_exemplo");
+  });
+
+  it("instala e remove skills nas plataformas Antigravity, Claude Code e Codex e protege dados na atualização", async () => {
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+    const platMod = await import(pathToFileURL(join(repoRoot, "scripts", "lib", "plataformas.mjs")).href);
+    const skillsMod = await import(pathToFileURL(join(repoRoot, "scripts", "instalar-skills.mjs")).href);
+    const updMod = await import(pathToFileURL(join(repoRoot, "scripts", "atualizar.mjs")).href);
+
+    const fakeHome = mkdtempSync(join(tmpdir(), "criativo-home-plat-"));
+    try {
+      // Pré-cria uma skill de outro produto no Claude para validar preservação
+      const skillTerceiro = join(fakeHome, ".claude", "skills", "outra-skill-cliente");
+      mkdirSync(skillTerceiro, { recursive: true });
+      writeFileSync(join(skillTerceiro, "SKILL.md"), "# Outra Skill\n", "utf8");
+
+      const plataformas = platMod.interpretarPlataformas("todas", fakeHome);
+      assert.deepEqual(plataformas, ["claude", "codex", "antigravity"]);
+
+      const installRes = await skillsMod.instalarSkills({
+        diretorioRaiz: repoRoot,
+        plataformas,
+        home: fakeHome,
+      });
+      assert.equal(installRes.total, 9);
+      assert.ok(existsSync(join(fakeHome, ".claude", "skills", "planejar-conteudo", "SKILL.md")));
+      assert.ok(existsSync(join(fakeHome, ".codex", "skills", "copywriter-instagram", "SKILL.md")));
+      assert.ok(existsSync(join(fakeHome, ".gemini", "config", "skills", "configurar-instagram", ".instalado-por.json")));
+
+      // Remoção limpa apenas skills marcadas por este produto
+      await skillsMod.removerSkills({
+        diretorioRaiz: repoRoot,
+        plataformas,
+        home: fakeHome,
+      });
+      assert.ok(!existsSync(join(fakeHome, ".claude", "skills", "planejar-conteudo")));
+      assert.ok(existsSync(join(skillTerceiro, "SKILL.md")), "Skill de terceiro não pode ser apagada");
+
+      // Regras do atualizador preservam dados de instância e upgrades
+      assert.equal(updMod.pertenceAoProduto("AGENTS.md"), true);
+      assert.equal(updMod.pertenceAoProduto(".agents/skills/planejar-conteudo/SKILL.md"), true);
+      assert.equal(updMod.pertenceAoProduto(".env"), false);
+      assert.equal(updMod.pertenceAoProduto("apps/daemon/dados/criativo.db"), false);
+      assert.equal(updMod.pertenceAoProduto("conteudos/perfil-da-marca.md"), false);
+      assert.equal(updMod.pertenceAoProduto("saidas/carrosseis/slide-1.png"), false);
+      assert.equal(updMod.pertenceAoProduto(".agents/skills/criar-video-reels/SKILL.md"), false);
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
   });
 });

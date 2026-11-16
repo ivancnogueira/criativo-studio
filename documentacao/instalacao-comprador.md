@@ -1,23 +1,35 @@
 # Instalação do Comprador — Criativo AI Studio Online (Local & VPS)
 
+> **Instalação guiada pelo seu agente de código:** consulte [INSTALAR.md](../INSTALAR.md) para prompts prontos para **Antigravity**, **Claude Code** e **Codex (GPT)**.
+
 ## 1. Instalação Local (Windows, macOS ou Linux)
 
 **Pré-requisitos:** Node.js 22+ instalado.
 
 ```bash
 npm install
-npm run configurar
-npm run build
-npm run build --workspace=apps/web
-npm run start:daemon
+npm run instalar -- --plataforma todas   # ou antigravity | claude | codex
+npm run start
 ```
 
-O comando `npm run configurar` prepara:
+O comando `npm run instalar` (alias de `npm run configurar`) prepara:
 - Arquivo `.env` local com chave mestra aleatória `CRIATIVO_VAULT_KEY`;
-- Pastas locais da marca (`conteudos/`, `recursos/fotos/`, `recursos/logos/`, `recursos/referencias/`, `recursos/brand/`, `saidas/`) preenchidas com templates agnósticos;
-- Instalação das **9 skills base** em `.agents/skills/` e `~/.gemini/config/skills/`.
+- Pastas locais da marca (`conteudos/`, `recursos/fotos/`, `recursos/logos/`, `recursos/referencias/`, `recursos/brand/`, `saidas/`, `previas/`) preenchidas com templates agnósticos;
+- Sincronização das **9 skills base** em `.agents/skills/` e nas pastas globais das plataformas selecionadas (`~/.gemini/config/skills`, `~/.claude/skills`, `~/.codex/skills`);
+- Build inicial do Daemon e Cockpit Web (`apps/daemon` e `apps/web`).
 
 Acesse o Cockpit em `http://127.0.0.1:3000`.
+
+### Atualização segura da instância
+```bash
+# Via clone Git:
+npm run atualizar
+
+# Via ZIP baixado (simule antes):
+npm run atualizar -- --simular --zip caminho/do/pacote.zip
+npm run atualizar -- --zip caminho/do/pacote.zip
+```
+O atualizador preserva `.env`, `apps/daemon/dados/`, `conteudos/`, `recursos/`, `saidas/`, `previas/` e upgrades instalados.
 
 ---
 
