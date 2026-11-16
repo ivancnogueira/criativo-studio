@@ -1,0 +1,220 @@
+import React from "react";
+import type { AvatarShape, StatusMensageria } from "@criativo/contracts";
+import {
+  ChevronLeft,
+  ChevronRight,
+  KeyRound,
+  PanelLeft,
+  Plus,
+  Smartphone,
+  X,
+} from "lucide-react";
+import { MascoteAvatar } from "./MascoteAvatar";
+
+export interface StudioTabItem {
+  id: string;
+  titulo: string;
+  shape?: AvatarShape;
+  color?: string;
+}
+
+interface DynamicIslandProps {
+  wsConnected: boolean;
+  runningCount: number;
+  pendingCount: number;
+  awaitingApprovalCount: number;
+  whatsappStatus: StatusMensageria;
+  onOpenWhatsAppModal: () => void;
+  onOpenVaultModal: () => void;
+  // Extensões visuais estilo barra superior + abas OpenBot
+  tabs?: StudioTabItem[];
+  activeTabId?: string | null;
+  onSelectTab?: (tabId: string) => void;
+  onCloseTab?: (tabId: string) => void;
+  onNewTab?: () => void;
+  sidebarCollapsed?: boolean;
+  onToggleSidebar?: () => void;
+  onNavigateBack?: () => void;
+  onNavigateForward?: () => void;
+  headerRightContent?: React.ReactNode;
+}
+
+/**
+ * Barra superior com navegação em abas e Dynamic Island central preta (#000000) idêntica ao OpenBot.
+ */
+export const DynamicIsland: React.FC<DynamicIslandProps> = ({
+  wsConnected,
+  runningCount,
+  pendingCount,
+  awaitingApprovalCount,
+  whatsappStatus,
+  onOpenWhatsAppModal,
+  onOpenVaultModal,
+  tabs = [],
+  activeTabId = null,
+  onSelectTab,
+  onCloseTab,
+  onNewTab,
+  onToggleSidebar,
+  onNavigateBack,
+  onNavigateForward,
+  headerRightContent,
+}) => {
+  const islandText =
+    runningCount > 0
+      ? `Produzindo agora · ${runningCount} ativo(s)`
+      : awaitingApprovalCount > 0
+        ? `${awaitingApprovalCount} aguardando aprovação`
+        : pendingCount > 0
+          ? `${pendingCount} na fila FIFO`
+          : "Pronto";
+
+  return (
+    <header className="relative h-[42px] shrink-0 bg-[#0D0D0D] border-b border-white/[0.06] flex items-center justify-between px-2.5 gap-2 select-none">
+      {/* Esquerda: controles de navegação + abas estilo OpenBot */}
+      <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-x-auto no-scrollbar">
+        <div className="flex items-center gap-0.5 text-[#979797] shrink-0 pr-1">
+          <button
+            type="button"
+            onClick={onNavigateBack}
+            aria-label="Aba anterior"
+            className="h-7 w-7 rounded-md flex items-center justify-center hover:bg-[#212121] hover:text-white transition-colors"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={onNavigateForward}
+            aria-label="Próxima aba"
+            className="h-7 w-7 rounded-md flex items-center justify-center hover:bg-[#212121] hover:text-white transition-colors"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+          {onToggleSidebar && (
+            <button
+              type="button"
+              onClick={onToggleSidebar}
+              title="Alternar barra lateral"
+              aria-label="Alternar barra lateral"
+              className="h-7 w-7 rounded-md flex items-center justify-center hover:bg-[#212121] hover:text-white transition-colors"
+            >
+              <PanelLeft className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1 min-w-0">
+          {tabs.map((tab) => {
+            const active = tab.id === activeTabId;
+            return (
+              <div
+                key={tab.id}
+                className={`group flex items-center gap-1.5 h-[30px] pl-2.5 pr-1.5 rounded-lg text-[12px] max-w-[190px] transition-colors shrink-0 ${
+                  active
+                    ? "bg-[#1A1A1A] text-white border border-white/10"
+                    : "text-[#979797] hover:bg-[#1A1A1A]/60 hover:text-[#DCDCDC]"
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => onSelectTab?.(tab.id)}
+                  className="flex items-center gap-1.5 min-w-0 text-left"
+                >
+                  <MascoteAvatar
+                    shape={tab.shape ?? "blob"}
+                    color={tab.color ?? "#38bdf8"}
+                    size={15}
+                  />
+                  <span className="truncate font-medium">{tab.titulo}</span>
+                </button>
+                {onCloseTab && tabs.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCloseTab(tab.id);
+                    }}
+                    aria-label={`Fechar aba ${tab.titulo}`}
+                    className="h-4 w-4 rounded flex items-center justify-center text-[#6A6A6A] hover:text-white hover:bg-white/10 opacity-75 group-hover:opacity-100"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+
+          {onNewTab && (
+            <button
+              type="button"
+              onClick={onNewTab}
+              title="Novo agente"
+              aria-label="Criar novo agente em nova aba"
+              className="h-7 w-7 rounded-lg flex items-center justify-center text-[#979797] hover:bg-[#212121] hover:text-white transition-colors shrink-0"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Centro: Dynamic Island #000000 característica do OpenBot */}
+      <div
+        className="hidden md:flex items-center gap-2.5 h-[30px] px-3.5 rounded-full bg-[#000000] border border-white/10 shadow-[0_6px_20px_rgba(0,0,0,0.65)] shrink-0"
+        title={wsConnected ? "Daemon Live" : "Reconectando"}
+      >
+        <MascoteAvatar
+          shape="hex"
+          color={runningCount > 0 ? "#31cf76" : "#8b5cf6"}
+          size={16}
+          animated={runningCount > 0}
+        />
+        <span
+          className={`h-1.5 w-1.5 rounded-full ${
+            wsConnected ? "bg-[#31CF76]" : "bg-[#FF9412]"
+          }`}
+          aria-label={wsConnected ? "Daemon Live" : "Offline"}
+        />
+        <span className="text-[11.5px] font-medium text-[#DCDCDC] whitespace-nowrap">
+          {islandText}
+        </span>
+        {headerRightContent}
+      </div>
+
+      {/* Direita: Atalhos rápidos WhatsApp & Cofre */}
+      <div className="flex items-center gap-1.5 shrink-0">
+        <button
+          type="button"
+          onClick={onOpenWhatsAppModal}
+          className={`inline-flex items-center gap-1.5 h-[28px] px-2.5 rounded-full text-[11.5px] font-medium border transition-colors ${
+            whatsappStatus === "conectado"
+              ? "bg-[#31CF76]/10 border-[#31CF76]/30 text-[#31CF76]"
+              : "bg-[#212121] border-white/10 text-[#DCDCDC] hover:bg-[#2A2A2A]"
+          }`}
+        >
+          <Smartphone className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">
+            {whatsappStatus === "conectado"
+              ? "WhatsApp Conectado"
+              : whatsappStatus === "aguardando_qrcode"
+                ? "QR Pendente"
+                : "WhatsApp"}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onOpenVaultModal}
+          title="Cofre AES-256-GCM e Chaves"
+          className="inline-flex items-center gap-1 h-[28px] px-2.5 rounded-full bg-[#212121] hover:bg-[#2A2A2A] border border-white/10 text-[11.5px] font-medium text-[#DCDCDC] transition-colors"
+        >
+          <KeyRound className="h-3 w-3 text-[#42A0FF]" />
+          <span className="hidden lg:inline">Cofre</span>
+        </button>
+
+        {/* Indicador acessível silencioso para leitores de tela / testes SSR */}
+        <span className="sr-only">{wsConnected ? "Daemon Live" : "Reconectando"}</span>
+      </div>
+    </header>
+  );
+};

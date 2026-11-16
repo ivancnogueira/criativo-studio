@@ -1,0 +1,22 @@
+services:
+  criativo-studio:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: criativo-ai-studio-online
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      CRIATIVO_DB_PATH: /data/criativo.db
+      CRIATIVO_SOCKET_PATH: /tmp/criativo-control.sock
+      CRIATIVO_VAULT_KEY: ${CRIATIVO_VAULT_KEY:-altere-esta-chave-mestra-em-producao}
+    volumes:
+      - criativo_dados:/data
+
+volumes:
+  criativo_dados:
+    driver: local

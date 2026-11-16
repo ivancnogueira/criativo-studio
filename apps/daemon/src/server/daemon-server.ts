@@ -1,0 +1,716 @@
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { extname, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { StatusTarefa, TarefaRegistro } from "@criativo/contracts";
+import { CriativoDatabase, initializeDatabase } from "../database/client.ts";
+import { FifoQueueManager } from "../queue/fifo-queue.ts";
+import { recoverInterruptedTasks } from "../queue/task-recovery.ts";
+import {
+  WhatsAppApprovalNotifier,
+  WhatsAppMessageHandler,
+  WhatsAppStudioClient,
+  type SocketFactory,
+} from "@criativo/whatsapp";
+import { CronScheduler } from "../routines/cron-scheduler.ts";
+import { VaultService } from "../vault/vault-service.ts";
+import { ProviderRegistry } from "../engine/providers/provider-registry.ts";
+import { AgentRunner, type CustomToolExecutor } from "../engine/runner/agent-runner.ts";
+import { seedDefaultStudioExperience } from "../engine/runner/roster-defaults.ts";
+import { ProviderConnectionService } from "../providers/provider-connection-service.ts";
+import { TranscriptionService } from "../voice/transcription-service.ts";
+import { ControlSocketServer } from "./control-socket.ts";
+import { importOpenBotTelemetryIfAvailable } from "./analytics-skills-service.ts";
+import { tryHandleStudioRoute } from "./studio-routes.ts";
+import { WebSocketHub } from "./websocket-hub.ts";
+
+export interface TaskExecutorHook {
+  execute(tarefa: TarefaRegistro): Promise<void>;
+}
+
+export interface DaemonServerOptions {
+  port?: number;
+  host?: string;
+  dbPath?: string;
+  workspaceRoot?: string;
+  vaultMasterKey?: string;
+  cronIntervalMs?: number;
+  workerPollMs?: number;
+  autoStartLoops?: boolean;
+  controlSocketPath?: string | null;
+  customTools?: Record<string, CustomToolExecutor>;
+  onApproveAndPublishHook?: (tarefa: TarefaRegistro) => Promise<{ permalink?: string }>;
+  taskExecutor?: TaskExecutorHook;
+  whatsappSocketFactory?: SocketFactory;
+}
+
+export interface DaemonRuntime {
+  httpServer: Server;
+  wsHub: WebSocketHub;
+  controlSocket: ControlSocketServer | null;
+  db: CriativoDatabase;
+  queue: FifoQueueManager;
+  vault: VaultService;
+  cron: CronScheduler;
+  providers: ProviderRegistry;
+  runner: AgentRunner;
+  whatsapp: WhatsAppStudioClient;
+  approvalNotifier: WhatsAppApprovalNotifier;
+  port: number;
+  close(): Promise<void>;
+}
+
+function sendJson(res: ServerResponse, statusCode: number, body: unknown): void {
+  const payload = JSON.stringify(body);
+  res.writeHead(statusCode, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type,Authorization",
+  });
+  res.end(payload);
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const raw = Buffer.concat(chunks).toString("utf8").trim();
+  if (!raw) return {};
+  return JSON.parse(raw) as Record<string, unknown>;
+}
+
+export async function createDaemonServer(
+  options: DaemonServerOptions = {}
+): Promise<DaemonRuntime> {
+  const db = initializeDatabase({ dbPath: options.dbPath });
+  const recoveryReport = recoverInterruptedTasks(db);
+  if (recoveryReport.totalInterrompidas > 0) {
+    console.info("[Daemon] Crash recovery executado:", recoveryReport);
+  }
+
+  const queue = new FifoQueueManager(db);
+  const vault = new VaultService(db, options.vaultMasterKey);
+  const wsHub = new WebSocketHub();
+  const providers = new ProviderRegistry({ vault });
+  const runner = new AgentRunner({
+    db,
+    queue,
+    vault,
+    providers,
+    wsHub,
+    customTools: options.customTools,
+  });
+  seedDefaultStudioExperience(db);
+  if (process.env.CRIATIVO_IMPORT_OPENBOT_DB === "1") {
+    importOpenBotTelemetryIfAvailable(db);
+  }
+  const providerConnection = new ProviderConnectionService({
+    db,
+    vault,
+    workspaceRoot: options.workspaceRoot,
+  });
+  const transcription = new TranscriptionService({ vault });
+  const whatsapp = new WhatsAppStudioClient({
+    db: db.connection,
+    socketFactory: options.whatsappSocketFactory,
+    onStatusChange: (snapshot) => {
+      wsHub.broadcast("whatsapp:status", {
+        status: snapshot.status,
+        qrcode: snapshot.qrcode_base64,
+        numero: snapshot.numero ?? null,
+      });
+    },
+  });
+
+  const approvalNotifier = new WhatsAppApprovalNotifier({
+    client: whatsapp,
+    updateTaskStatus: (id, status, result, err) =>
+      queue.updateTaskStatus(id, status, result, err),
+    onApproveAndPublish: async (tarefaId) => {
+      const tarefa = queue.getTask(tarefaId);
+      let permalink =
+        typeof tarefa?.resultado?.permalink === "string"
+          ? tarefa.resultado.permalink
+          : undefined;
+      if (tarefa && options.onApproveAndPublishHook) {
+        const hookRes = await options.onApproveAndPublishHook(tarefa);
+        if (hookRes.permalink) {
+          permalink = hookRes.permalink;
+          queue.updateTaskStatus(tarefaId, "concluido", {
+            ...(tarefa.resultado ?? {}),
+            aprovado: true,
+            aprovado_via: "whatsapp",
+            permalink,
+          });
+        }
+      }
+      wsHub.broadcast("task:completed", {
+        tarefa_id: tarefaId,
+        permalink_instagram: permalink ?? null,
+        tempo_total_ms: 0,
+      });
+      return { permalink };
+    },
+    onRequestAdjustment: async (tarefaId, feedback) => {
+      const original = queue.getTask(tarefaId);
+      queue.enqueueTask({
+        agente_id: original?.agente_id ?? "estrategista",
+        canal_origem: "whatsapp",
+        tipo: original?.tipo ?? "carrossel",
+        titulo: `Ajuste: ${feedback.slice(0, 60)}`,
+        prioridade: 2,
+        payload: { tarefa_original_id: tarefaId, feedback },
+      });
+    },
+  });
+
+  const whatsappHandler = new WhatsAppMessageHandler({
+    client: whatsapp,
+    enqueueTask: (input) => {
+      const created = queue.enqueueTask(input);
+      wsHub.broadcast("task:queued", {
+        tarefa_id: created.tarefa_id,
+        tipo: created.tipo,
+        titulo: created.titulo,
+        prioridade: created.prioridade,
+        canal_origem: created.canal_origem,
+      });
+      return created;
+    },
+    transcribeAudio: (buf, mime) => transcription.transcribeAudio(buf, mime),
+    onApprovalReply: (jid, text) => approvalNotifier.handleReply(jid, text),
+  });
+
+  whatsapp.onMessage(async (msg) => {
+    await whatsappHandler.handleIncomingMessage(msg);
+  });
+  const activeExecutor: TaskExecutorHook = options.taskExecutor ?? {
+    execute: async (tarefa) => {
+      await runner.runTask(tarefa);
+    },
+  };
+
+  const cron = new CronScheduler(db, queue, (tarefaId) => {
+    const tarefa = queue.getTask(tarefaId);
+    if (tarefa) {
+      wsHub.broadcast("task:queued", {
+        tarefa_id: tarefa.tarefa_id,
+        tipo: tarefa.tipo,
+        titulo: tarefa.titulo,
+        prioridade: tarefa.prioridade,
+        canal_origem: tarefa.canal_origem,
+      });
+    }
+  });
+
+  let workerTimer: NodeJS.Timeout | null = null;
+  let isProcessingTask = false;
+
+  const processNextQueuedTask = async (): Promise<void> => {
+    if (isProcessingTask) return;
+    const nextTask = queue.dequeueNextTask();
+    if (!nextTask) return;
+
+    isProcessingTask = true;
+    wsHub.broadcast("task:started", {
+      tarefa_id: nextTask.tarefa_id,
+      agente_id: nextTask.agente_id ?? "estrategista",
+    });
+
+    try {
+      await activeExecutor.execute(nextTask);
+      const refreshedTask = queue.getTask(nextTask.tarefa_id);
+      const targetJid =
+        typeof nextTask.payload?.remetente_jid === "string"
+          ? nextTask.payload.remetente_jid
+          : null;
+      if (
+        refreshedTask &&
+        refreshedTask.status === "aguardando_aprovacao" &&
+        nextTask.canal_origem === "whatsapp" &&
+        targetJid
+      ) {
+        const previews = Array.isArray(refreshedTask.resultado?.previews)
+          ? (refreshedTask.resultado.previews.filter(
+              (item): item is string => typeof item === "string"
+            ))
+          : [];
+        const copy =
+          typeof refreshedTask.resultado?.copy === "string"
+            ? refreshedTask.resultado.copy
+            : "";
+        await approvalNotifier.notifyReadyForApproval({
+          tarefa_id: refreshedTask.tarefa_id,
+          tipo: refreshedTask.tipo,
+          previews,
+          copy,
+          targetJid,
+        });
+      }
+    } catch (error) {
+      const mensagem = error instanceof Error ? error.message : String(error);
+      queue.updateTaskStatus(nextTask.tarefa_id, "falha", null, mensagem);
+      wsHub.broadcast("task:failed", {
+        tarefa_id: nextTask.tarefa_id,
+        erro: mensagem,
+        pode_retentar: true,
+      });
+    } finally {
+      isProcessingTask = false;
+    }
+  };
+
+  const httpServer = createServer(async (req, res) => {
+    try {
+      if (req.method === "OPTIONS") {
+        res.writeHead(204, {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type,Authorization",
+        });
+        res.end();
+        return;
+      }
+
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const path = url.pathname;
+      const method = req.method ?? "GET";
+
+      if (
+        await tryHandleStudioRoute(req, res, path, method, url, {
+          db,
+          queue,
+          vault,
+          providers,
+          providerConnection,
+          wsHub,
+          sendJson,
+          readJsonBody,
+          workspaceRoot: options.workspaceRoot,
+        })
+      ) {
+        return;
+      }
+
+      // Healthcheck
+      if (method === "GET" && path === "/health") {
+        sendJson(res, 200, {
+          status: "ok",
+          service: "criativo-daemon",
+          dbPath: db.dbPath,
+          websocketClients: wsHub.connectedCount,
+          crashRecovery: recoveryReport,
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      // Fila & Tarefas
+      if (method === "GET" && path === "/api/tarefas") {
+        const statusParam = url.searchParams.get("status") as StatusTarefa | null;
+        const tarefas = queue.listTasks(statusParam ?? undefined);
+        sendJson(res, 200, { tarefas });
+        return;
+      }
+
+      if (method === "POST" && path === "/api/tarefas") {
+        const body = await readJsonBody(req);
+        if (typeof body.titulo !== "string" || typeof body.tipo !== "string") {
+          sendJson(res, 400, { erro: "Campos obrigatórios: 'titulo' e 'tipo'." });
+          return;
+        }
+        const tarefa = queue.enqueueTask({
+          titulo: body.titulo,
+          tipo: body.tipo,
+          prioridade: typeof body.prioridade === "number" ? body.prioridade : 5,
+          agente_id: typeof body.agente_id === "string" ? body.agente_id : null,
+          canal_origem:
+            typeof body.canal_origem === "string"
+              ? (body.canal_origem as TarefaRegistro["canal_origem"])
+              : "web",
+          payload:
+            body.payload && typeof body.payload === "object"
+              ? (body.payload as Record<string, unknown>)
+              : {},
+        });
+        wsHub.broadcast("task:queued", {
+          tarefa_id: tarefa.tarefa_id,
+          tipo: tarefa.tipo,
+          titulo: tarefa.titulo,
+          prioridade: tarefa.prioridade,
+          canal_origem: tarefa.canal_origem,
+        });
+        sendJson(res, 201, { tarefa });
+        return;
+      }
+
+      const tarefaActionMatch = path.match(/^\/api\/tarefas\/([^/]+)\/(aprovar|cancelar|retentar)$/);
+      if (method === "POST" && tarefaActionMatch) {
+        const tarefaId = decodeURIComponent(tarefaActionMatch[1]);
+        const acao = tarefaActionMatch[2];
+        const existing = queue.getTask(tarefaId);
+        if (!existing) {
+          sendJson(res, 404, { erro: `Tarefa ${tarefaId} não encontrada.` });
+          return;
+        }
+
+        if (acao === "cancelar") {
+          const updated = queue.cancelTask(tarefaId);
+          sendJson(res, 200, { tarefa: updated });
+          return;
+        }
+        if (acao === "retentar") {
+          const updated = queue.retryTask(tarefaId);
+          wsHub.broadcast("task:queued", {
+            tarefa_id: updated.tarefa_id,
+            tipo: updated.tipo,
+            titulo: updated.titulo,
+            prioridade: updated.prioridade,
+            canal_origem: updated.canal_origem,
+          });
+          sendJson(res, 200, { tarefa: updated });
+          return;
+        }
+        if (acao === "aprovar") {
+          const updated = queue.updateTaskStatus(tarefaId, "concluido", {
+            ...(existing.resultado ?? {}),
+            aprovado: true,
+            aprovado_em: new Date().toISOString(),
+          });
+          wsHub.broadcast("task:completed", {
+            tarefa_id: updated.tarefa_id,
+            permalink_instagram:
+              typeof updated.resultado?.permalink === "string"
+                ? updated.resultado.permalink
+                : null,
+            tempo_total_ms: 0,
+          });
+          sendJson(res, 200, { tarefa: updated });
+          return;
+        }
+      }
+
+      // Roster de Agentes
+      if (method === "GET" && path === "/api/agentes") {
+        const agentes = db.connection
+          .prepare(`SELECT * FROM projecao_agentes ORDER BY ordem_exibicao ASC;`)
+          .all();
+        sendJson(res, 200, { agentes });
+        return;
+      }
+
+      const agentUpdateMatch = path.match(/^\/api\/agentes\/([^/]+)$/);
+      if (method === "PUT" && agentUpdateMatch) {
+        const agenteId = decodeURIComponent(agentUpdateMatch[1]);
+        const body = await readJsonBody(req);
+        const existing = db.connection
+          .prepare(`SELECT * FROM projecao_agentes WHERE agente_id = ?;`)
+          .get(agenteId) as { agente_id: string; modelo_padrao: string } | undefined;
+        if (!existing) {
+          sendJson(res, 404, { erro: `Agente '${agenteId}' não encontrado.` });
+          return;
+        }
+        const novoModelo =
+          typeof body.modelo_padrao === "string" ? body.modelo_padrao : existing.modelo_padrao;
+        db.connection
+          .prepare(
+            `UPDATE projecao_agentes SET modelo_padrao = ?, atualizado_em = ? WHERE agente_id = ?;`
+          )
+          .run(novoModelo, new Date().toISOString(), agenteId);
+        const updated = db.connection
+          .prepare(`SELECT * FROM projecao_agentes WHERE agente_id = ?;`)
+          .get(agenteId);
+        sendJson(res, 200, { agente: updated });
+        return;
+      }
+
+      const agentLogsMatch = path.match(/^\/api\/agentes\/([^/]+)\/logs$/);
+      if (method === "GET" && agentLogsMatch) {
+        const agenteId = decodeURIComponent(agentLogsMatch[1]);
+        const logs = db.connection
+          .prepare(
+            `SELECT * FROM projecao_canal_mensagens WHERE de_agente_id = ? OR para_agente_id = ? ORDER BY enviado_em DESC LIMIT 50;`
+          )
+          .all(agenteId, agenteId);
+        sendJson(res, 200, { logs });
+        return;
+      }
+
+      // Mensageria WhatsApp & Webhooks
+      if (method === "GET" && path === "/api/mensageria/whatsapp/status") {
+        sendJson(res, 200, whatsapp.getStatus());
+        return;
+      }
+
+      if (method === "POST" && path === "/api/mensageria/whatsapp/conectar") {
+        await whatsapp.connect();
+        sendJson(res, 200, whatsapp.getStatus());
+        return;
+      }
+
+      if (method === "POST" && path === "/api/mensageria/whatsapp/desconectar") {
+        await whatsapp.disconnect();
+        sendJson(res, 200, { status: "desconectado" });
+        return;
+      }
+
+      const webhookMatch = path.match(/^\/api\/webhooks\/disparo\/([^/]+)$/);
+      if (method === "POST" && webhookMatch) {
+        const token = decodeURIComponent(webhookMatch[1]);
+        const tokenHash = createHash("sha256").update(token).digest("hex");
+        const webhook = db.connection
+          .prepare(
+            `SELECT * FROM projecao_webhooks WHERE chave_secreta_hash = ? AND ativo = 1;`
+          )
+          .get(tokenHash) as { webhook_id: string; tipo_evento: string } | undefined;
+
+        if (!webhook) {
+          sendJson(res, 401, { erro: "Token de webhook inválido ou inativo." });
+          return;
+        }
+
+        const body = await readJsonBody(req);
+        const tarefa = queue.enqueueTask({
+          canal_origem: "webhook",
+          tipo: typeof body.tipo === "string" ? body.tipo : webhook.tipo_evento,
+          titulo:
+            typeof body.titulo === "string"
+              ? body.titulo
+              : `Disparo externo via webhook (${webhook.webhook_id})`,
+          prioridade: typeof body.prioridade === "number" ? body.prioridade : 4,
+          payload: body,
+        });
+
+        db.connection
+          .prepare(`UPDATE projecao_webhooks SET ultimo_disparo_em = ? WHERE webhook_id = ?;`)
+          .run(new Date().toISOString(), webhook.webhook_id);
+
+        wsHub.broadcast("task:queued", {
+          tarefa_id: tarefa.tarefa_id,
+          tipo: tarefa.tipo,
+          titulo: tarefa.titulo,
+          prioridade: tarefa.prioridade,
+          canal_origem: tarefa.canal_origem,
+        });
+        sendJson(res, 202, { tarefa });
+        return;
+      }
+
+      // Rotinas
+      if (method === "GET" && path === "/api/rotinas") {
+        sendJson(res, 200, { rotinas: cron.listRoutines() });
+        return;
+      }
+
+      if (method === "POST" && path === "/api/rotinas") {
+        const body = await readJsonBody(req);
+        if (
+          typeof body.titulo !== "string" ||
+          typeof body.expressao_cron !== "string" ||
+          typeof body.tipo_tarefa !== "string"
+        ) {
+          sendJson(res, 400, {
+            erro: "Campos obrigatórios: 'titulo', 'expressao_cron' e 'tipo_tarefa'.",
+          });
+          return;
+        }
+        const rotina = cron.createRoutine({
+          titulo: body.titulo,
+          expressao_cron: body.expressao_cron,
+          tipo_tarefa: body.tipo_tarefa,
+          timezone: typeof body.timezone === "string" ? body.timezone : "America/Sao_Paulo",
+          payload_modelo:
+            body.payload_modelo && typeof body.payload_modelo === "object"
+              ? (body.payload_modelo as Record<string, unknown>)
+              : {},
+        });
+        sendJson(res, 201, { rotina });
+        return;
+      }
+
+      // Vault
+      if (method === "GET" && path === "/api/vault/status") {
+        sendJson(res, 200, { chaves: vault.listSecretsMetadata() });
+        return;
+      }
+
+      if (method === "POST" && path === "/api/vault/salvar") {
+        const body = await readJsonBody(req);
+        if (typeof body.chave_nome !== "string" || typeof body.valor !== "string") {
+          sendJson(res, 400, { erro: "Campos obrigatórios: 'chave_nome' e 'valor'." });
+          return;
+        }
+        vault.setSecret(body.chave_nome, body.valor);
+        sendJson(res, 200, { ok: true, chave_nome: body.chave_nome });
+        return;
+      }
+
+const STATIC_MIME_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".webp": "image/webp",
+  ".mp4": "video/mp4",
+};
+
+function resolveWebDistDir(): string {
+  const currentDir = resolve(fileURLToPath(import.meta.url), "..");
+  const candidateA = resolve(currentDir, "../../../../apps/web/dist");
+  const candidateB = resolve(process.cwd(), "apps/web/dist");
+  const candidateC = resolve(process.cwd(), "../web/dist");
+  for (const dir of [candidateA, candidateB, candidateC]) {
+    if (existsSync(resolve(dir, "index.html"))) {
+      return dir;
+    }
+  }
+  return candidateA;
+}
+
+function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
+  if (pathName.startsWith("/api/") || pathName === "/health" || pathName === "/ws") {
+    return false;
+  }
+  const distDir = resolveWebDistDir();
+  const indexHtml = resolve(distDir, "index.html");
+  if (!existsSync(indexHtml)) {
+    return false;
+  }
+
+  const relativePath = pathName === "/" ? "index.html" : pathName.replace(/^\/+/, "");
+  const resolvedTarget = resolve(distDir, relativePath);
+  if (resolvedTarget !== distDir && !resolvedTarget.startsWith(distDir + sep)) {
+    return false;
+  }
+
+  const fileToServe =
+    existsSync(resolvedTarget) && statSync(resolvedTarget).isFile()
+      ? resolvedTarget
+      : indexHtml;
+  const mime = STATIC_MIME_TYPES[extname(fileToServe).toLowerCase()] ?? "application/octet-stream";
+  res.writeHead(200, {
+    "Content-Type": mime,
+    "Cache-Control":
+      fileToServe === indexHtml
+        ? "no-store, no-cache, must-revalidate"
+        : "public, max-age=31536000, immutable",
+  });
+  res.end(readFileSync(fileToServe));
+  return true;
+}
+
+      if (method === "GET" && tryServeWebStatic(path, res)) {
+        return;
+      }
+
+      sendJson(res, 404, { erro: `Rota não encontrada: ${method} ${path}` });
+    } catch (error) {
+      const mensagem = error instanceof Error ? error.message : String(error);
+      sendJson(res, 500, { erro: mensagem });
+    }
+  });
+
+  httpServer.on("upgrade", (req, socket) => {
+    const handled = wsHub.handleUpgrade(req, socket, "/ws");
+    if (!handled) {
+      socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+      socket.destroy();
+    }
+  });
+
+  const listenHost = options.host ?? process.env.HOST ?? "127.0.0.1";
+  const listenPort = options.port ?? Number(process.env.PORT ?? 3000);
+
+  await new Promise<void>((resolveListen, rejectListen) => {
+    httpServer.once("error", rejectListen);
+    httpServer.listen(listenPort, listenHost, () => {
+      httpServer.off("error", rejectListen);
+      resolveListen();
+    });
+  });
+
+  const address = httpServer.address();
+  const resolvedPort = typeof address === "object" && address ? address.port : listenPort;
+
+  const resolvedControlSocketPath =
+    options.controlSocketPath === null
+      ? null
+      : (options.controlSocketPath ?? process.env.CRIATIVO_SOCKET_PATH ?? null);
+
+  let controlSocket: ControlSocketServer | null = null;
+  if (resolvedControlSocketPath) {
+    controlSocket = new ControlSocketServer({
+      socketPath: resolvedControlSocketPath,
+      db,
+      queue,
+      getWhatsAppStatus: () => whatsapp.getStatus(),
+      onRestartRequested: () => {
+        console.info("[Criativo Daemon] Reinicialização solicitada via Control Socket.");
+      },
+    });
+    await controlSocket.listen();
+  }
+
+  if (options.autoStartLoops !== false) {
+    cron.start(options.cronIntervalMs ?? 60_000);
+    workerTimer = setInterval(() => {
+      void processNextQueuedTask();
+    }, options.workerPollMs ?? 500);
+    workerTimer.unref?.();
+  }
+
+  return {
+    httpServer,
+    wsHub,
+    controlSocket,
+    db,
+    queue,
+    vault,
+    cron,
+    providers,
+    runner,
+    whatsapp,
+    approvalNotifier,
+    port: resolvedPort,
+    async close(): Promise<void> {
+      cron.stop();
+      if (workerTimer) {
+        clearInterval(workerTimer);
+        workerTimer = null;
+      }
+      if (controlSocket) {
+        await controlSocket.close();
+      }
+      await whatsapp.disconnect();
+      providerConnection.close();
+      wsHub.closeAll();
+      await new Promise<void>((resolveClose) => {
+        httpServer.close(() => resolveClose());
+      });
+      db.close();
+    },
+  };
+}
+
+const isEntryPoint =
+  process.argv[1] &&
+  resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
+
+if (isEntryPoint) {
+  createDaemonServer()
+    .then((runtime) => {
+      console.info(
+        `[Criativo Daemon] Servidor HTTP + WebSocket ativo em http://127.0.0.1:${runtime.port}`
+      );
+    })
+    .catch((err) => {
+      console.error("[Criativo Daemon] Falha crítica ao iniciar:", err);
+      process.exit(1);
+    });
+}

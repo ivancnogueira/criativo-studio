@@ -1,0 +1,25 @@
+{
+  "name": "criativo-ai-studio-online",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Plataforma autônoma multi-agente para produção de criativos, carrosséis, stories e vídeos cinematográficos Remotion via Web, WhatsApp e Telegram.",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b packages/contracts packages/whatsapp apps/daemon",
+    "typecheck": "tsc -b packages/contracts packages/whatsapp apps/daemon",
+    "start:daemon": "npm run start --workspace=apps/daemon",
+    "test:daemon": "npm run test --workspace=apps/daemon",
+    "test:e2e": "node --test testes/e2e/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3"
+  }
+}

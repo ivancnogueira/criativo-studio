@@ -1,0 +1,25 @@
+# Documentos e artefatos de engenharia reversa / pesquisa / planejamento GSD
+.documentos/
+.planning/
+
+# Dependências e compilação
+node_modules/
+dist/
+build/
+.cache/
+*.tsbuildinfo
+
+# Banco de dados, dados de execução e mídia local (anti-contaminação)
+dados/
+*.db
+*.db-wal
+*.db-shm
+*.sock
+saidas/
+previas/
+recursos/uploads/
+
+# Variáveis de ambiente
+.env
+.env.local
+.env.*

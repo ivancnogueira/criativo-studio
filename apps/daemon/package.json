@@ -1,0 +1,17 @@
+{
+  "name": "@criativo/daemon",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/server/daemon-server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server/daemon-server.js",
+    "dev": "node src/server/daemon-server.ts",
+    "test": "node --test tests/**/*.test.ts"
+  },
+  "dependencies": {
+    "@criativo/contracts": "*",
+    "@criativo/whatsapp": "*"
+  }
+}

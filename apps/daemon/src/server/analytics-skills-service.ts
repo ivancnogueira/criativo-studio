@@ -1,0 +1,785 @@
+import { randomUUID } from "node:crypto";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import type {
+  ConectorIntegracaoInfo,
+  HabilidadeInstaladaInfo,
+  LinhaDetalheUso,
+  PontoDiarioUso,
+  RelatorioAnalyticsHost,
+} from "@criativo/contracts";
+import type { CriativoDatabase } from "../database/client.ts";
+import type { VaultService } from "../vault/vault-service.ts";
+
+function parseSkillFrontmatter(content: string): { name?: string; description?: string; body: string } {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/u.exec(content);
+  if (!match) {
+    return { body: content };
+  }
+  const yamlBlock = match[1];
+  const body = match[2];
+  let name: string | undefined;
+  let description: string | undefined;
+  for (const line of yamlBlock.split(/\r?\n/)) {
+    const idx = line.indexOf(":");
+    if (idx === -1) continue;
+    const key = line.slice(0, idx).trim();
+    const val = line.slice(idx + 1).trim().replace(/^["']|["']$/g, "");
+    if (key === "name") name = val;
+    if (key === "description") description = val;
+  }
+  return { name, description, body };
+}
+
+function inferSkillCategory(slug: string): HabilidadeInstaladaInfo["categoria"] {
+  const s = slug.toLowerCase();
+  if (s.includes("video") || s.includes("reels") || s.includes("roteirista") || s.includes("story") || s.includes("stories")) {
+    return s.includes("video") || s.includes("reels") || s.includes("roteirista") ? "video" : "conteudo";
+  }
+  if (
+    s.includes("carrossel") ||
+    s.includes("post") ||
+    s.includes("copy") ||
+    s.includes("consistencia") ||
+    s.includes("identidade")
+  ) {
+    return "conteudo";
+  }
+  if (s.includes("planejar") || s.includes("metricas") || s.includes("concorrentes") || s.includes("entregaveis")) {
+    return "estrategia";
+  }
+  if (s.includes("configurar") || s.includes("instagram") || s.includes("wp-")) {
+    return "sistema";
+  }
+  return "outros";
+}
+
+function getSkillsRootCandidates(): string[] {
+  const home = homedir();
+  return [
+    join(home, ".gemini", "config", "skills"),
+    join(home, ".agents", "skills"),
+  ];
+}
+
+export function loadSkillPromptBySlug(slug: string, customRoot?: string): { path: string; body: string; tokensEst: number } | null {
+  if (!slug || slug.includes("..") || slug.includes("/") || slug.includes("\\")) return null;
+  const roots = customRoot ? [customRoot] : getSkillsRootCandidates();
+  for (const root of roots) {
+    const filePath = join(root, slug, "SKILL.md");
+    if (existsSync(filePath)) {
+      try {
+        const content = readFileSync(filePath, "utf8");
+        return {
+          path: filePath,
+          body: content,
+          tokensEst: Math.max(80, Math.round(content.length / 4)),
+        };
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+export function listInstalledSkills(db: CriativoDatabase, customRoot?: string): HabilidadeInstaladaInfo[] {
+  const roots = customRoot
+    ? [customRoot]
+    : process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1"
+      ? []
+      : getSkillsRootCandidates();
+
+  const agentsRows = db.connection
+    .prepare(`SELECT nome, config_json FROM projecao_agentes ORDER BY ordem_exibicao ASC;`)
+    .all() as Array<{ nome: string; config_json: string }>;
+
+  const agentsBySkill = new Map<string, string[]>();
+  for (const a of agentsRows) {
+    try {
+      const cfg = JSON.parse(a.config_json) as { skill_slug?: string };
+      if (cfg.skill_slug) {
+        const list = agentsBySkill.get(cfg.skill_slug) ?? [];
+        list.push(a.nome);
+        agentsBySkill.set(cfg.skill_slug, list);
+      }
+    } catch {
+      // ignora config inválida
+    }
+  }
+
+  const skillsMap = new Map<string, HabilidadeInstaladaInfo>();
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    try {
+      const dirs = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory());
+      for (const dir of dirs) {
+        if (skillsMap.has(dir.name)) continue;
+        const skillFile = join(root, dir.name, "SKILL.md");
+        if (!existsSync(skillFile)) continue;
+        try {
+          const content = readFileSync(skillFile, "utf8");
+          const parsed = parseSkillFrontmatter(content);
+          const id = parsed.name || dir.name;
+          skillsMap.set(id, {
+            id,
+            nome: id,
+            descricao: parsed.description || "Habilidade de especialista configurada em SKILL.md.",
+            categoria: inferSkillCategory(id),
+            caminho: skillFile,
+            agentes_vinculados: agentsBySkill.get(id) ?? [],
+            conteudo_preview: parsed.body.trim().slice(0, 650),
+          });
+        } catch {
+          // ignora arquivo ilegível
+        }
+      }
+    } catch {
+      // ignora pasta ilegível
+    }
+  }
+
+  return [...skillsMap.values()].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+}
+
+export function recordChatTurnUsage(
+  db: CriativoDatabase,
+  input: {
+    agentId: string;
+    sessionId: string;
+    turnId: string;
+    provider: string;
+    model: string;
+    uncachedInput: number;
+    cachedInput: number;
+    cacheCreation?: number;
+    output: number;
+    estimatedCostUsd?: number | null;
+    rateBasis?: string | null;
+    occurredAt?: string;
+  }
+): void {
+  const nowIso = input.occurredAt ?? new Date().toISOString();
+  const recordId = `criativo:${randomUUID()}`;
+  db.connection
+    .prepare(
+      `INSERT OR IGNORE INTO projecao_uso_registros
+       (record_id, agent_id, session_id, turn_id, provider, model, occurred_at, uncached_input, cached_input, cache_creation, output_tokens, estimated_cost_usd, rate_basis, origem, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'criativo', ?);`
+    )
+    .run(
+      recordId,
+      input.agentId,
+      input.sessionId,
+      input.turnId,
+      input.provider,
+      input.model,
+      nowIso,
+      Math.max(0, Math.round(input.uncachedInput)),
+      Math.max(0, Math.round(input.cachedInput)),
+      Math.max(0, Math.round(input.cacheCreation ?? 0)),
+      Math.max(0, Math.round(input.output)),
+      input.estimatedCostUsd ?? null,
+      input.rateBasis ?? null,
+      new Date().toISOString()
+    );
+}
+
+export function recordSkillLoadUsage(
+  db: CriativoDatabase,
+  input: {
+    agentId: string;
+    sessionId: string;
+    turnId: string;
+    provider: string;
+    model: string;
+    skill: string;
+    tokens: number | null;
+  }
+): void {
+  const loadId = `skill:${randomUUID().slice(0, 12)}`;
+  db.connection
+    .prepare(
+      `INSERT OR IGNORE INTO projecao_uso_skills
+       (load_id, agent_id, session_id, turn_id, provider, model, skill, tokens, estimated_cost_usd, occurred_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?);`
+    )
+    .run(
+      loadId,
+      input.agentId,
+      input.sessionId,
+      input.turnId,
+      input.provider,
+      input.model,
+      input.skill,
+      input.tokens,
+      new Date().toISOString()
+    );
+}
+
+export function importOpenBotTelemetryIfAvailable(db: CriativoDatabase, customOpenBotDbPath?: string): number {
+  if (!customOpenBotDbPath && process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1") {
+    return 0;
+  }
+  const appDataDir = process.env.APPDATA ?? join(homedir(), "AppData", "Roaming");
+  const openBotDbPath = customOpenBotDbPath ?? join(appDataDir, "OpenBot", "openbot.db");
+  if (!existsSync(openBotDbPath)) {
+    return 0;
+  }
+
+  let imported = 0;
+  try {
+    const extDb = new DatabaseSync(openBotDbPath, { readOnly: true });
+    try {
+      const records = extDb
+        .prepare(
+          `SELECT agent_id, record_id, session_id, turn_id, provider, model, occurred_at, tokens_json, estimated_cost_usd, rate_basis, recorded_at
+           FROM agent_usage_records;`
+        )
+        .all() as Array<{
+        agent_id: string;
+        record_id: string;
+        session_id: string;
+        turn_id: string;
+        provider: string;
+        model: string;
+        occurred_at: string;
+        tokens_json: string;
+        estimated_cost_usd: number | null;
+        rate_basis: string | null;
+        recorded_at: string;
+      }>;
+
+      const insertStmt = db.connection.prepare(
+        `INSERT OR IGNORE INTO projecao_uso_registros
+         (record_id, agent_id, session_id, turn_id, provider, model, occurred_at, uncached_input, cached_input, cache_creation, output_tokens, estimated_cost_usd, rate_basis, origem, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'openbot_importado', ?);`
+      );
+
+      for (const r of records) {
+        let parsed = { uncachedInput: 0, cachedInput: 0, cacheCreation: 0, output: 0 };
+        try {
+          const obj = JSON.parse(r.tokens_json) as Record<string, unknown>;
+          parsed = {
+            uncachedInput: Number(obj.uncachedInput ?? 0) || 0,
+            cachedInput: Number(obj.cachedInput ?? 0) || 0,
+            cacheCreation: Number(obj.cacheCreation ?? 0) || 0,
+            output: Number(obj.output ?? 0) || 0,
+          };
+        } catch {
+          // ignora erro de parse
+        }
+        const res = insertStmt.run(
+          `ob:${r.record_id}`,
+          r.agent_id,
+          r.session_id,
+          r.turn_id,
+          r.provider,
+          r.model,
+          r.occurred_at,
+          parsed.uncachedInput,
+          parsed.cachedInput,
+          parsed.cacheCreation,
+          parsed.output,
+          r.estimated_cost_usd,
+          r.rate_basis,
+          r.recorded_at
+        );
+        if (Number(res.changes ?? 0) > 0) imported += 1;
+      }
+
+      // Importa nomes dos agentes externos do OpenBot para exibição amigável
+      try {
+        const extAgents = extDb
+          .prepare(`SELECT agent_id, agent_json FROM projection_agents;`)
+          .all() as Array<{ agent_id: string; agent_json: string }>;
+        const nameMap: Record<string, string> = {};
+        for (const a of extAgents) {
+          try {
+            const parsed = JSON.parse(a.agent_json) as { name?: string };
+            if (parsed.name) nameMap[a.agent_id] = parsed.name;
+          } catch {
+            // ignora
+          }
+        }
+        if (Object.keys(nameMap).length > 0) {
+          db.connection
+            .prepare(
+              `INSERT INTO projecao_studio_config (chave, valor_json, atualizado_em)
+               VALUES ('analytics_nomes_externos', ?, ?)
+               ON CONFLICT(chave) DO UPDATE SET valor_json = excluded.valor_json, atualizado_em = excluded.atualizado_em;`
+            )
+            .run(JSON.stringify(nameMap), new Date().toISOString());
+        }
+      } catch {
+        // tabela pode não existir em versões antigas
+      }
+
+      // Importa skill loads se existir
+      try {
+        const skillRows = extDb
+          .prepare(
+            `SELECT agent_id, load_id, session_id, turn_id, provider, model, skill, tokens, estimated_cost_usd, occurred_at
+             FROM agent_usage_skill_loads;`
+          )
+          .all() as Array<{
+          agent_id: string;
+          load_id: string;
+          session_id: string;
+          turn_id: string;
+          provider: string;
+          model: string;
+          skill: string;
+          tokens: number | null;
+          estimated_cost_usd: number | null;
+          occurred_at: string;
+        }>;
+        const insertSkillStmt = db.connection.prepare(
+          `INSERT OR IGNORE INTO projecao_uso_skills
+           (load_id, agent_id, session_id, turn_id, provider, model, skill, tokens, estimated_cost_usd, occurred_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+        );
+        for (const s of skillRows) {
+          insertSkillStmt.run(
+            `ob:${s.load_id}`,
+            s.agent_id,
+            s.session_id,
+            s.turn_id,
+            s.provider,
+            s.model,
+            s.skill,
+            s.tokens,
+            s.estimated_cost_usd,
+            s.occurred_at
+          );
+        }
+      } catch {
+        // ignora se ausente
+      }
+    } finally {
+      extDb.close();
+    }
+  } catch {
+    // banco externo bloqueado ou indisponível
+  }
+  return imported;
+}
+
+function formatProviderDisplayLabel(provider: string): string {
+  const p = provider.toLowerCase();
+  if (p === "antigravity" || p === "gemini") return "Antigravity CLI";
+  if (p === "claude") return "Claude Code";
+  if (p === "codex" || p === "openai") return "Codex / ChatGPT";
+  if (p === "opencode") return "OpenCode CLI";
+  if (p === "grok") return "Grok CLI";
+  if (p === "ollama") return "Ollama Local";
+  return provider;
+}
+
+function emptyMetricAccumulator() {
+  return {
+    sessions: new Set<string>(),
+    turns: 0,
+    unpriced: 0,
+    incomplete: 0,
+    uncachedInput: 0,
+    cachedInput: 0,
+    cacheCreation: 0,
+    output: 0,
+    costSum: 0,
+    hasPriced: false,
+  };
+}
+
+export function computeHostAnalytics(
+  db: CriativoDatabase,
+  options: { dias?: number; agenteId?: string | null }
+): RelatorioAnalyticsHost {
+  const dias = Math.max(1, Math.min(365, options.dias ?? 30));
+  const agenteId = options.agenteId || null;
+  const cutoffIso = new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
+
+  const rows = agenteId
+    ? (db.connection
+        .prepare(
+          `SELECT * FROM projecao_uso_registros WHERE occurred_at >= ? AND agent_id = ? ORDER BY occurred_at ASC;`
+        )
+        .all(cutoffIso, agenteId) as Array<{
+        record_id: string;
+        agent_id: string;
+        session_id: string;
+        turn_id: string;
+        provider: string;
+        model: string;
+        occurred_at: string;
+        uncached_input: number;
+        cached_input: number;
+        cache_creation: number;
+        output_tokens: number;
+        estimated_cost_usd: number | null;
+        recorded_at: string;
+      }>)
+    : (db.connection
+        .prepare(`SELECT * FROM projecao_uso_registros WHERE occurred_at >= ? ORDER BY occurred_at ASC;`)
+        .all(cutoffIso) as Array<{
+        record_id: string;
+        agent_id: string;
+        session_id: string;
+        turn_id: string;
+        provider: string;
+        model: string;
+        occurred_at: string;
+        uncached_input: number;
+        cached_input: number;
+        cache_creation: number;
+        output_tokens: number;
+        estimated_cost_usd: number | null;
+        recorded_at: string;
+      }>);
+
+  // Mapa de nomes dos agentes internos + externos importados
+  const agentNameMap = new Map<string, { nome: string; provedor: string }>();
+  const internalAgents = db.connection
+    .prepare(`SELECT agente_id, nome, modelo_padrao FROM projecao_agentes;`)
+    .all() as Array<{ agente_id: string; nome: string; modelo_padrao: string }>;
+  for (const a of internalAgents) {
+    agentNameMap.set(a.agente_id, { nome: a.nome, provedor: a.modelo_padrao });
+  }
+  const extNamesRow = db.connection
+    .prepare(`SELECT valor_json FROM projecao_studio_config WHERE chave = 'analytics_nomes_externos';`)
+    .get() as { valor_json: string } | undefined;
+  if (extNamesRow) {
+    try {
+      const parsed = JSON.parse(extNamesRow.valor_json) as Record<string, string>;
+      for (const [id, name] of Object.entries(parsed)) {
+        if (!agentNameMap.has(id)) agentNameMap.set(id, { nome: name, provedor: "antigravity" });
+      }
+    } catch {
+      // ignora
+    }
+  }
+
+  const tot = emptyMetricAccumulator();
+  const byProvider = new Map<string, ReturnType<typeof emptyMetricAccumulator>>();
+  const byModel = new Map<string, { acc: ReturnType<typeof emptyMetricAccumulator>; provider: string }>();
+  const byAgent = new Map<string, { acc: ReturnType<typeof emptyMetricAccumulator>; provider: string }>();
+  const byDay = new Map<string, ReturnType<typeof emptyMetricAccumulator>>();
+
+  let earliestIso = rows[0]?.occurred_at ?? new Date().toISOString();
+  let latestIso = rows[rows.length - 1]?.recorded_at ?? rows[rows.length - 1]?.occurred_at ?? new Date().toISOString();
+
+  for (const r of rows) {
+    if (r.occurred_at < earliestIso) earliestIso = r.occurred_at;
+    if (r.occurred_at > latestIso) latestIso = r.occurred_at;
+
+    const add = (acc: ReturnType<typeof emptyMetricAccumulator>) => {
+      acc.sessions.add(r.session_id);
+      acc.turns += 1;
+      acc.uncachedInput += r.uncached_input;
+      acc.cachedInput += r.cached_input;
+      acc.cacheCreation += r.cache_creation;
+      acc.output += r.output_tokens;
+      if (r.estimated_cost_usd === null || r.estimated_cost_usd === undefined) {
+        acc.unpriced += 1;
+      } else {
+        acc.costSum += r.estimated_cost_usd;
+        acc.hasPriced = true;
+      }
+    };
+
+    add(tot);
+
+    const pKey = r.provider.toLowerCase();
+    if (!byProvider.has(pKey)) byProvider.set(pKey, emptyMetricAccumulator());
+    add(byProvider.get(pKey)!);
+
+    if (!byModel.has(r.model)) byModel.set(r.model, { acc: emptyMetricAccumulator(), provider: pKey });
+    add(byModel.get(r.model)!.acc);
+
+    if (!byAgent.has(r.agent_id)) byAgent.set(r.agent_id, { acc: emptyMetricAccumulator(), provider: pKey });
+    add(byAgent.get(r.agent_id)!.acc);
+
+    const dayKey = r.occurred_at.slice(0, 10);
+    if (!byDay.has(dayKey)) byDay.set(dayKey, emptyMetricAccumulator());
+    add(byDay.get(dayKey)!);
+  }
+
+  const totalTokensWithoutCache = tot.uncachedInput + tot.cacheCreation + tot.output;
+  const totalProcessed = totalTokensWithoutCache + tot.cachedInput;
+
+  const toLine = (
+    chave: string,
+    nome: string,
+    provedor: string | null,
+    acc: ReturnType<typeof emptyMetricAccumulator>
+  ): LinhaDetalheUso => {
+    const tokensSemCache = acc.uncachedInput + acc.cacheCreation + acc.output;
+    const processados = tokensSemCache + acc.cachedInput;
+    const custo = acc.hasPriced ? Number(acc.costSum.toFixed(4)) : null;
+    const share =
+      totalTokensWithoutCache > 0
+        ? Number(((tokensSemCache / totalTokensWithoutCache) * 100).toFixed(1))
+        : null;
+    return {
+      chave,
+      nome,
+      provedor,
+      sessoes: acc.sessions.size,
+      turnos: acc.turns,
+      turnos_sem_uso: 0,
+      registros_sem_preco: acc.unpriced,
+      registros_incompletos: acc.incomplete,
+      tokens_sem_cache: tokensSemCache,
+      tokens_processados: processados,
+      entrada_cache: acc.cachedInput,
+      entrada_sem_cache: acc.uncachedInput,
+      criacao_cache: acc.cacheCreation,
+      saida: acc.output,
+      custo_estimado_usd: custo,
+      participacao_percentual: share,
+    };
+  };
+
+  // Preenche pontos diários
+  const porDia: LinhaDetalheUso[] = [...byDay.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([day, acc]) => toLine(day, day, null, acc));
+
+  const pontosDiarios: PontoDiarioUso[] = [...byDay.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([day, acc]) => ({
+      data: day,
+      rotulo: day,
+      custo_usd: acc.hasPriced ? Number(acc.costSum.toFixed(4)) : 0,
+      tokens: acc.uncachedInput + acc.cacheCreation + acc.output,
+      turnos: acc.turns,
+    }));
+
+  // Skill loads
+  const skillRows = (
+    agenteId
+      ? db.connection
+          .prepare(`SELECT * FROM projecao_uso_skills WHERE occurred_at >= ? AND agent_id = ?;`)
+          .all(cutoffIso, agenteId)
+      : db.connection.prepare(`SELECT * FROM projecao_uso_skills WHERE occurred_at >= ?;`).all(cutoffIso)
+  ) as Array<{ skill: string; tokens: number | null; estimated_cost_usd: number | null }>;
+
+  const skillAgg = new Map<string, { loads: number; tokens: number; cost: number; hasCost: boolean }>();
+  let totalSkillTokens = 0;
+  for (const s of skillRows) {
+    const cur = skillAgg.get(s.skill) ?? { loads: 0, tokens: 0, cost: 0, hasCost: false };
+    cur.loads += 1;
+    cur.tokens += s.tokens ?? 0;
+    totalSkillTokens += s.tokens ?? 0;
+    if (s.estimated_cost_usd !== null) {
+      cur.cost += s.estimated_cost_usd;
+      cur.hasCost = true;
+    }
+    skillAgg.set(s.skill, cur);
+  }
+
+  return {
+    periodo_dias: dias,
+    agente_id: agenteId,
+    coleta_iniciada_em: earliestIso,
+    atualizado_em: latestIso,
+    totais: {
+      sessoes: tot.sessions.size,
+      turnos: tot.turns,
+      turnos_sem_uso: 0,
+      registros_sem_preco: tot.unpriced,
+      registros_incompletos: tot.incomplete,
+      tokens_sem_cache: totalTokensWithoutCache,
+      tokens_processados: totalProcessed,
+      entrada_cache: tot.cachedInput,
+      entrada_sem_cache: tot.uncachedInput,
+      criacao_cache: tot.cacheCreation,
+      saida: tot.output,
+      custo_estimado_usd: tot.hasPriced ? Number(tot.costSum.toFixed(4)) : null,
+    },
+    provedores: [...byProvider.entries()].map(([prov, acc]) => {
+      const tokens = acc.uncachedInput + acc.cacheCreation + acc.output;
+      return {
+        provedor: prov,
+        rotulo: formatProviderDisplayLabel(prov),
+        tokens,
+        custo_estimado_usd: acc.hasPriced ? Number(acc.costSum.toFixed(4)) : null,
+        participacao_percentual:
+          totalTokensWithoutCache > 0 ? Number(((tokens / totalTokensWithoutCache) * 100).toFixed(1)) : null,
+      };
+    }),
+    por_modelo: [...byModel.entries()]
+      .map(([model, v]) => toLine(model, model, v.provider, v.acc))
+      .sort((a, b) => b.tokens_sem_cache - a.tokens_sem_cache),
+    por_agente: [...byAgent.entries()]
+      .map(([id, v]) => {
+        const meta = agentNameMap.get(id);
+        return toLine(id, meta?.nome ?? id, v.provider, v.acc);
+      })
+      .sort((a, b) => b.tokens_sem_cache - a.tokens_sem_cache),
+    por_dia: pontosDiarios,
+    por_habilidade: [...skillAgg.entries()]
+      .map(([hab, v]) => ({
+        habilidade: hab,
+        carregamentos: v.loads,
+        tokens: v.tokens,
+        custo_estimado_usd: v.hasCost ? Number(v.cost.toFixed(4)) : null,
+        participacao_percentual:
+          totalSkillTokens > 0 ? Number(((v.tokens / totalSkillTokens) * 100).toFixed(1)) : null,
+      }))
+      .sort((a, b) => b.tokens - a.tokens),
+  };
+}
+
+export function buildConnectorsList(db: CriativoDatabase, vault: VaultService): ConectorIntegracaoInfo[] {
+  const secrets = new Map(vault.listSecretsMetadata().map((s) => [s.chave_nome, s]));
+  const waRow = db.connection
+    .prepare(`SELECT status, sessao_dados_json FROM projecao_conexoes_mensageria WHERE tipo_servico = 'whatsapp';`)
+    .get() as { status: string; sessao_dados_json?: string | null } | undefined;
+  const mcpCountRow = db.connection
+    .prepare(`SELECT COUNT(*) as total FROM projecao_mcp_servidores WHERE ativo = 1;`)
+    .get() as { total: number };
+  const mcpServers = db.connection
+    .prepare(`SELECT mcp_id, nome, comando, ativo FROM projecao_mcp_servidores ORDER BY nome ASC;`)
+    .all() as Array<{ mcp_id: string; nome: string; comando: string; ativo: number }>;
+
+  const cfgRow = db.connection
+    .prepare(`SELECT valor_json FROM projecao_studio_config WHERE chave = 'conectores_orquestradores';`)
+    .get() as { valor_json: string } | undefined;
+  const orquestradores = cfgRow ? (JSON.parse(cfgRow.valor_json) as Record<string, string>) : {};
+
+  const igTokenOk = secrets.has("instagram_access_token");
+  const igBizOk = secrets.has("instagram_business_account_id");
+  const tgOk = secrets.has("telegram_bot_token");
+  const elevenOk = secrets.has("elevenlabs_api_key");
+  const fishOk = secrets.has("fish_audio_api_key");
+
+  const waStatus = waRow?.status === "conectado" ? "conectado" : waRow?.status === "aguardando_qr" ? "atencao" : "desconectado";
+
+  return [
+    {
+      id: "whatsapp",
+      nome: "WhatsApp",
+      categoria: "mensageria",
+      descricao: "Receba áudios e briefings pelo WhatsApp (Baileys QR Code) e aprove prévias com a palavra '1'.",
+      subtitulo: "Canal direto do Studio no celular",
+      status: waStatus,
+      resumo_estado:
+        waStatus === "conectado"
+          ? "Aparelho pareado e pronto para comandos"
+          : waStatus === "atencao"
+            ? "Aguardando leitura do QR Code"
+            : "Não conectado",
+      cor_marca: "#25D366",
+      agente_orquestrador_id: orquestradores.whatsapp ?? "estrategista",
+      detalhes: [
+        { chave: "whatsapp_pairing", rotulo: "Pareamento Baileys", configurado: waStatus === "conectado" },
+      ],
+    },
+    {
+      id: "instagram",
+      nome: "Instagram (Meta Graph API)",
+      categoria: "publicacao",
+      descricao: "Publique Posts, Carrosséis e Reels oficialmente na conta Instagram Business após aprovação humana.",
+      subtitulo: "Publicação oficial + métricas de alcance",
+      status: igTokenOk && igBizOk ? "conectado" : igTokenOk || igBizOk ? "atencao" : "desconectado",
+      resumo_estado:
+        igTokenOk && igBizOk
+          ? "Token Meta + Business ID cifrados no Cofre"
+          : igTokenOk || igBizOk
+            ? "Falta preencher Token ou Account ID"
+            : "Não configurado",
+      cor_marca: "#E1306C",
+      agente_orquestrador_id: orquestradores.instagram ?? "publicador_meta",
+      detalhes: [
+        {
+          chave: "instagram_access_token",
+          rotulo: "Instagram Access Token",
+          configurado: igTokenOk,
+          valor_mascarado: igTokenOk ? "•••• (cifrado no Cofre)" : null,
+        },
+        {
+          chave: "instagram_business_account_id",
+          rotulo: "Instagram Business Account ID",
+          configurado: igBizOk,
+          valor_mascarado: igBizOk ? "•••• (cifrado no Cofre)" : null,
+        },
+      ],
+    },
+    {
+      id: "telegram",
+      nome: "Telegram Bot",
+      categoria: "mensageria",
+      descricao: "Envie alertas instantâneos de renderização, links de aprovação com botões inline e comandos remotos.",
+      subtitulo: "Notificações e aprovações em 1 toque",
+      status: tgOk ? "conectado" : "desconectado",
+      resumo_estado: tgOk ? "Bot Token cifrado no Cofre" : "Não configurado",
+      cor_marca: "#26A5E4",
+      agente_orquestrador_id: orquestradores.telegram ?? "estrategista",
+      detalhes: [
+        {
+          chave: "telegram_bot_token",
+          rotulo: "Telegram Bot Token",
+          configurado: tgOk,
+          valor_mascarado: tgOk ? "•••• (cifrado no Cofre)" : null,
+        },
+      ],
+    },
+    {
+      id: "elevenlabs",
+      nome: "ElevenLabs Voice",
+      categoria: "voz",
+      descricao: "Síntese de narração natural em pt-br com clonagem de voz para Reels Faceless e legendas karaokê.",
+      subtitulo: "Motor premium de narração TTS",
+      status: elevenOk ? "conectado" : "desconectado",
+      resumo_estado: elevenOk ? "API Key cifrada no Cofre" : "Não configurado (usando edge-tts fallback)",
+      cor_marca: "#F0F0F0",
+      detalhes: [
+        {
+          chave: "elevenlabs_api_key",
+          rotulo: "ElevenLabs API Key",
+          configurado: elevenOk,
+          valor_mascarado: elevenOk ? "•••• (cifrado no Cofre)" : null,
+        },
+      ],
+    },
+    {
+      id: "fish_audio",
+      nome: "Fish Audio",
+      categoria: "voz",
+      descricao: "Síntese vocal alternativa de baixa latência para vídeos curtos, Shorts e anúncios narrados.",
+      subtitulo: "Voz expressiva de baixa latência",
+      status: fishOk ? "conectado" : "desconectado",
+      resumo_estado: fishOk ? "API Key cifrada no Cofre" : "Não configurado",
+      cor_marca: "#00B4D8",
+      detalhes: [
+        {
+          chave: "fish_audio_api_key",
+          rotulo: "Fish Audio API Key",
+          configurado: fishOk,
+          valor_mascarado: fishOk ? "•••• (cifrado no Cofre)" : null,
+        },
+      ],
+    },
+    {
+      id: "mcp",
+      nome: "Servidores MCP (Model Context Protocol)",
+      categoria: "sistema",
+      descricao: "Conecte servidores de ferramentas externas (WordPress, Elementor, CRM, bancos de dados) aos 15 agentes.",
+      subtitulo: `${mcpCountRow?.total ?? 0} servidor(es) ativo(s)`,
+      status: Number(mcpCountRow?.total ?? 0) > 0 ? "conectado" : "desconectado",
+      resumo_estado:
+        mcpServers.length > 0
+          ? mcpServers.map((m) => m.nome).join(", ")
+          : "Nenhum servidor MCP externo cadastrado",
+      cor_marca: "#74B9FF",
+      detalhes: mcpServers.map((m) => ({
+        chave: m.mcp_id,
+        rotulo: `${m.nome} (${m.comando})`,
+        configurado: m.ativo === 1,
+      })),
+    },
+  ];
+}

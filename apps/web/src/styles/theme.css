@@ -1,0 +1,118 @@
+@import "./tokens-openbot.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background-color: var(--openbot-bg-frame);
+  color: var(--openbot-text-primary);
+  font-family: var(--openbot-font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+.font-terminal {
+  font-family: var(--openbot-font-mono);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+/* Fundo em grade de pontos sutil igual à tela de Fluxos do OpenBot */
+.openbot-dot-grid {
+  background-color: var(--openbot-bg-canvas);
+  background-image: radial-gradient(rgba(255, 255, 255, 0.14) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* Botões CTA em pílula invertida branca (#F0F0F0) característicos do OpenBot */
+.openbot-btn-primary {
+  background-color: var(--openbot-surface-light);
+  color: var(--openbot-text-on-light);
+  font-weight: 600;
+  border-radius: var(--openbot-radius-pill);
+  transition: background-color 0.15s ease, transform 0.12s ease;
+}
+
+.openbot-btn-primary:hover:not(:disabled) {
+  background-color: #ffffff;
+}
+
+.openbot-btn-primary:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+.openbot-btn-secondary {
+  background-color: var(--openbot-bg-control-active);
+  color: var(--openbot-text-primary);
+  border: 1px solid var(--openbot-border-strong);
+  font-weight: 500;
+  border-radius: var(--openbot-radius-pill);
+  transition: background-color 0.15s ease;
+}
+
+.openbot-btn-secondary:hover:not(:disabled) {
+  background-color: #333336;
+}
+
+@keyframes mascoteFloat {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-2.5px);
+  }
+}
+
+@keyframes mascoteWorkingBreathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.035);
+  }
+}
+
+.mascote-idle {
+  animation: mascoteFloat 4.2s ease-in-out infinite;
+}
+
+.mascote-working {
+  animation: mascoteWorkingBreathe 1.9s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mascote-idle,
+  .mascote-working {
+    animation: none;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
