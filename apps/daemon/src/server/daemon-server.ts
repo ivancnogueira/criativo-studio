@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { extname, resolve, sep } from "node:path";
+import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { StatusTarefa, TarefaRegistro } from "@criativo/contracts";
 import { CriativoDatabase, initializeDatabase } from "../database/client.ts";
@@ -82,9 +82,43 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   return JSON.parse(raw) as Record<string, unknown>;
 }
 
+function hasRootMarkers(dir: string): boolean {
+  return (
+    existsSync(join(dir, "produto.json")) ||
+    existsSync(join(dir, "templates", "marca")) ||
+    (existsSync(join(dir, ".agents", "skills")) && existsSync(join(dir, "apps", "daemon")))
+  );
+}
+
+/**
+ * Resolve a raiz da instalação (monorepo) mesmo quando o daemon inicia via `npm --workspace=apps/daemon`.
+ */
+export function resolveDefaultWorkspaceRoot(cwd = process.cwd()): string {
+  let cursor = resolve(cwd);
+  for (let i = 0; i < 5; i += 1) {
+    if (hasRootMarkers(cursor)) return cursor;
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+
+  let modCursor = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6; i += 1) {
+    if (hasRootMarkers(modCursor)) return modCursor;
+    const parent = dirname(modCursor);
+    if (parent === modCursor) break;
+    modCursor = parent;
+  }
+
+  return resolve(cwd);
+}
+
 export async function createDaemonServer(
   options: DaemonServerOptions = {}
 ): Promise<DaemonRuntime> {
+  const resolvedWorkspaceRoot = options.workspaceRoot
+    ? resolve(options.workspaceRoot)
+    : resolveDefaultWorkspaceRoot();
   const db = initializeDatabase({ dbPath: options.dbPath });
   const recoveryReport = recoverInterruptedTasks(db);
   if (recoveryReport.totalInterrompidas > 0) {
@@ -102,7 +136,7 @@ export async function createDaemonServer(
   const providerConnection = new ProviderConnectionService({
     db,
     vault,
-    workspaceRoot: options.workspaceRoot,
+    workspaceRoot: resolvedWorkspaceRoot,
   });
   const runner = new AgentRunner({
     db,
@@ -290,7 +324,7 @@ export async function createDaemonServer(
           wsHub,
           sendJson,
           readJsonBody,
-          workspaceRoot: options.workspaceRoot,
+          workspaceRoot: resolvedWorkspaceRoot,
         })
       ) {
         return;

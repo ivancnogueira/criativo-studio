@@ -5,8 +5,10 @@ import { dirname, join, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { seedDefaultAgents } from "../src/engine/runner/roster-defaults.ts";
-import { createDaemonServer, type DaemonRuntime } from "../src/server/daemon-server.ts";
-import { validateMetaIntegration } from "../src/server/studio-tools-bridge.ts";
+import { ProviderConnectionService } from "../src/providers/provider-connection-service.ts";
+import { createDaemonServer, resolveDefaultWorkspaceRoot, type DaemonRuntime } from "../src/server/daemon-server.ts";
+import { hasExplicitVisualGenerationIntent, isGreetingOrCapabilityQuestion } from "../src/server/studio-routes.ts";
+import { buildStudioLiveContext, validateMetaIntegration } from "../src/server/studio-tools-bridge.ts";
 
 describe("Fase 9 — Empacotamento Base/Upgrades, Cofre Meta, Backfill de Agentes, Ferramentas & Inter-Agentes", () => {
   let tempDir: string;
@@ -240,6 +242,95 @@ describe("Fase 9 — Empacotamento Base/Upgrades, Cofre Meta, Backfill de Agente
       assert.equal(updMod.pertenceAoProduto(".agents/skills/criar-video-reels/SKILL.md"), false);
     } finally {
       rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("bloqueia handoff/imagem involuntários em saudações, resolve raiz correta e serve referências no Cockpit", async () => {
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+    // Mesmo simulando cwd em apps/daemon, resolveDefaultWorkspaceRoot encontra a raiz do monorepo
+    assert.equal(resolveDefaultWorkspaceRoot(join(repoRoot, "apps", "daemon")), repoRoot);
+
+    assert.equal(isGreetingOrCapabilityQuestion("oi"), true);
+    assert.equal(isGreetingOrCapabilityQuestion("o que voce pode fazer?"), true);
+    assert.equal(isGreetingOrCapabilityQuestion("vc tem acesso a pasta de referencias?"), true);
+    assert.equal(hasExplicitVisualGenerationIntent("oi", "designer_carrossel", false), false);
+    assert.equal(hasExplicitVisualGenerationIntent("o que voce pode fazer?", "designer_carrossel", false), false);
+    assert.equal(hasExplicitVisualGenerationIntent("Crie uma arte de carrossel sobre gestão", "designer_carrossel", false), true);
+    assert.equal(hasExplicitVisualGenerationIntent("oi", "estrategista", false), false);
+
+    // Saudação e pergunta de capacidade via API não criam tarefa nem handoff
+    const greetRes = await fetch(`${baseUrl}/api/agentes/estrategista/mensagens`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conteudo: "oi" }),
+    });
+    assert.equal(greetRes.status, 201);
+    const greetJson = (await greetRes.json()) as {
+      mensagem_agente: { tarefa_id: string | null; anexos: unknown[] };
+      mensagens_handoff?: unknown[];
+    };
+    assert.equal(greetJson.mensagem_agente.tarefa_id, null);
+    assert.equal(greetJson.mensagem_agente.anexos.length, 0);
+    assert.equal(greetJson.mensagens_handoff?.length ?? 0, 0);
+
+    // Mesmo perguntando ao designer_carrossel "o que voce pode fazer?", não dispara produção nem imagem
+    const capRes = await fetch(`${baseUrl}/api/agentes/designer_carrossel/mensagens`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conteudo: "o que voce pode fazer?" }),
+    });
+    assert.equal(capRes.status, 201);
+    const capJson = (await capRes.json()) as {
+      mensagem_agente: { tarefa_id: string | null; anexos: unknown[] };
+    };
+    assert.equal(capJson.mensagem_agente.tarefa_id, null);
+    assert.equal(capJson.mensagem_agente.anexos.length, 0);
+
+    // Arquivos colocados em recursos/referencias/, recursos/logos/ e brandbook são indexados, servidos e injetados no aprendizado
+    const refDir = join(tempDir, "recursos", "referencias");
+    const brandDir = join(tempDir, "recursos", "brand");
+    const contDir = join(tempDir, "conteudos");
+    mkdirSync(refDir, { recursive: true });
+    mkdirSync(brandDir, { recursive: true });
+    mkdirSync(contDir, { recursive: true });
+
+    writeFileSync(join(refDir, "ref-editorial.png"), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]));
+    writeFileSync(join(brandDir, "brandbook.md"), "# Brandbook Teste\nDireção editorial de alto contraste com serifas finas.\n".repeat(4));
+    writeFileSync(join(contDir, "identidade-visual.yml"), "tema:\n  cor_fundo: \"#07080C\"\n  cor_destaque: \"#FF6B00\"\n  estilo: \"Editorial Luxo\"\n".repeat(4));
+
+    const prevProbe = process.env.CRIATIVO_SKIP_LOCAL_PROBE;
+    delete process.env.CRIATIVO_SKIP_LOCAL_PROBE;
+    try {
+      const listRes = await fetch(`${baseUrl}/api/arquivos`);
+      assert.equal(listRes.status, 200);
+      const listJson = (await listRes.json()) as {
+        arquivos: Array<{ nome_original: string; caminho_relativo: string; url: string; tipo_uso: string }>;
+      };
+      const foundRef = listJson.arquivos.find((a) => a.caminho_relativo === "recursos/referencias/ref-editorial.png");
+      assert.ok(foundRef, "Referência salva na pasta recursos/referencias/ deve aparecer no Cockpit");
+      assert.equal(foundRef.tipo_uso, "referencia");
+
+      const rawRes = await fetch(`${baseUrl}${foundRef.url}`);
+      assert.equal(rawRes.status, 200, "Rota /api/arquivos/raw deve servir recursos/referencias/ sem erro 403");
+
+      const provConn = new ProviderConnectionService({
+        db: runtime.db,
+        vault: runtime.vault,
+        workspaceRoot: tempDir,
+      });
+      const liveCtx = buildStudioLiveContext({
+        db: runtime.db,
+        vault: runtime.vault,
+        providerConnection: provConn,
+        workspaceRoot: tempDir,
+      });
+      provConn.close();
+      assert.ok(liveCtx.includes("ref-editorial.png"), "Contexto vivo deve listar referências reais");
+      assert.ok(liveCtx.includes("Brandbook Teste"), "Contexto vivo deve ensinar brandbook.md aos agentes");
+      assert.ok(liveCtx.includes("Editorial Luxo"), "Contexto vivo deve ensinar identidade-visual.yml aos agentes");
+    } finally {
+      if (prevProbe === undefined) delete process.env.CRIATIVO_SKIP_LOCAL_PROBE;
+      else process.env.CRIATIVO_SKIP_LOCAL_PROBE = prevProbe;
     }
   });
 });

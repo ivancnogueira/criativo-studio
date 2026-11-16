@@ -10,28 +10,24 @@ Escolha a opção conforme a forma como você recebeu o **Criativo AI Studio Onl
 4. Cole este prompt no chat:
 
 ```text
-Inicie a instalação guiada do Criativo AI Studio Online nesta pasta, que veio de um arquivo ZIP. Leia integralmente AGENTS.md, README.md, INSTALAR.md e documentacao/onboarding-guiado.md. Você está autorizado a executar npm install, npm run instalar -- --plataforma codex, npm run build e preparar o ambiente. Conduza a instalação e o onboarding como um único processo contínuo, sem encerrar entre etapas.
+Inicie a instalação guiada do Criativo AI Studio Online nesta pasta, que veio de um arquivo ZIP. Leia integralmente AGENTS.md, README.md, INSTALAR.md e documentacao/onboarding-guiado.md. Você está autorizado a executar npm install, npm run instalar -- --plataforma codex, npm run build e preparar o ambiente. Conduza os 4 Marcos da instalação como um único processo contínuo, encerrando após validar as credenciais e entregar o Cockpit Web funcionando em http://127.0.0.1:3000.
 
-Antes da primeira pergunta, mostre estes seis marcos:
+Antes da primeira pergunta, mostre estes quatro marcos:
 1) Instalação (Node.js 22+, dependências, .env com Cofre AES-256-GCM, build Daemon/Web e 9 skills base no Codex)
-2) Perfil da Marca (nome, @perfil, nicho, público e tom de voz em conteudos/perfil-da-marca.md ou no Cockpit Web)
-3) Identidade Visual (fotos em recursos/fotos/, logo em recursos/logos/, referências em recursos/referencias/ e brandbook)
-4) IA & Credenciais Meta (provedor de IA no Cofre + credenciais Instagram/Meta validadas sem expor segredos)
-5) Primeiro Criativo & Preview Mobile (gerar o primeiro post/carrossel/story e revisar na Vitrine Mobile 4:5 ou 9:16 em http://127.0.0.1:3000)
-6) Publicação Oficial Segura (opcional; só com aprovação explícita no Cockpit/WhatsApp ou escrevendo PUBLICAR)
+2) Perfil da Marca (nome, @perfil, nicho, público e tom de voz em conteudos/perfil-da-marca.md e no Cockpit Web)
+3) Identidade Visual & Referências (paleta, brandbook, design system e coleta de referências em recursos/referencias/, fotos em recursos/fotos/ e logo em recursos/logos/)
+4) IA & Credenciais Meta — Conclusão da Instalação (provedor de IA no Cofre + credenciais Instagram/Meta opcionais validadas sem expor segredos, entregando o Cockpit Web pronto em http://127.0.0.1:3000)
 
 Em cada interação, mostre o marco atual, o progresso, a decisão que estamos tomando e o resultado da próxima etapa. Nunca termine apenas perguntando se quero continuar.
 
 Regras fundamentais:
 - Fale comigo em português simples, sem jargão: eu posso ser iniciante e não conhecer terminal, Node.js ou git. Explique o que vai fazer antes de cada comando.
-- No marco Instalação, confira node --version (precisa ser 22 ou superior). Se faltar, me diga o que é, de onde baixar e pare até eu instalar. Depois rode npm install e npm run instalar -- --plataforma codex (que instala as 9 skills base em ~/.codex/skills ou $CODEX_HOME/skills sem incluir pacotes de upgrade). Depois rode npm run diagnosticar e explique o resultado em linguagem simples.
+- No Marco 1 (Instalação), confira node --version (precisa ser 22 ou superior). Se faltar, me diga o que é, de onde baixar e pare até eu instalar. Depois rode npm install e npm run instalar -- --plataforma codex (que instala as 9 skills base em ~/.codex/skills ou $CODEX_HOME/skills sem incluir pacotes de upgrade). Depois rode npm run diagnosticar e explique o resultado em linguagem simples.
 - Avise que os comandos de barra ficam ligados a esta pasta e que eu não devo movê-la depois; se eu mover, rode npm run instalar -- --plataforma codex de novo na pasta nova.
+- No Marco 3 (Identidade Visual & Referências), além de configurar paleta/fontes/brandbook, PARE e me peça explicitamente para salvar ou enviar referências visuais em recursos/referencias/, fotos em recursos/fotos/ e logo em recursos/logos/ (ou confirmar se subirei depois na aba Arquivos do Cockpit), analisando as referências recebidas para alimentar identidade-visual.yml e brandbook.md.
 - Nunca abra, mostre ou peça o conteúdo do .env, nem peça chaves ou tokens no chat. Use npm run diagnosticar e npm run validar:integracoes para saber o que está configurado. Para IA e Meta API, me oriente a usar o Cockpit Web (http://127.0.0.1:3000 -> Conexões) ou o .env local seguindo documentacao/configurar-meta.md.
-- O marco IA & Credenciais Meta é uma parada obrigatória: não pule e não avance sem a minha resposta. Espere eu avisar que salvei as credenciais, rode npm run validar:integracoes e me mostre o resultado sem expor tokens. Só avance quando eu confirmar ou pedir para pular por agora.
-- Preserve sempre .env, apps/daemon/dados/, conteudos/, recursos/, saidas/ e upgrades já instalados; não sobrescreva minhas respostas anteriores.
-- Nunca prometa skills dos pacotes Bônus ou Vídeo se npm run diagnosticar mostrar que não estão instalados; caso eu queira adicioná-los depois, me explique o comando npm run instalar-upgrade.
-- No marco Publicação, nunca publique nada automaticamente: exija aprovação explícita no Cockpit, resposta 1 no WhatsApp ou a palavra PUBLICAR.
-- Ao final, avise que preciso fechar e reabrir o Codex nesta pasta para os novos comandos /planejar-conteudo, /copywriter-instagram, /criar-carrossel e demais skills aparecerem, e mostre como acessar o Cockpit Web em http://127.0.0.1:3000.
+- O Marco 4 (IA & Credenciais Meta) é uma parada obrigatória e o último marco do instalador: espere eu avisar que salvei (ou pular a Meta por agora), rode npm run validar:integracoes e npm run diagnosticar sem expor tokens, inicie o Cockpit Web com npm start (http://127.0.0.1:3000), marque o onboarding inicial como concluído no Cockpit e encerre entregando o Cockpit pronto para eu trabalhar direto com os agentes por lá.
+- Preserve sempre .env, apps/daemon/dados/, conteudos/, recursos/, saidas/ e upgrades já instalados.
 ```
 
 ---
@@ -41,27 +37,24 @@ Regras fundamentais:
 Precisa de **Git** instalado (<https://git-scm.com>) e acesso ao repositório `criativo-studio`. Em uma pasta vazia, abra o Codex e cole:
 
 ```text
-Instale o Criativo AI Studio Online a partir de https://github.com/ivancnogueira/criativo-studio.git em uma nova pasta criativo-studio-online no diretório atual. Depois do clone, entre na pasta e leia integralmente AGENTS.md, README.md, INSTALAR.md e documentacao/onboarding-guiado.md. Você está autorizado a executar npm install, npm run instalar -- --plataforma codex e preparar o ambiente. Conduza a instalação e o onboarding como um único processo contínuo, sem encerrar entre etapas.
+Instale o Criativo AI Studio Online a partir de https://github.com/ivancnogueira/criativo-studio.git em uma nova pasta criativo-studio-online no diretório atual. Depois do clone, entre na pasta e leia integralmente AGENTS.md, README.md, INSTALAR.md e documentacao/onboarding-guiado.md. Você está autorizado a executar npm install, npm run instalar -- --plataforma codex e preparar o ambiente. Conduza os 4 Marcos da instalação como um único processo contínuo, encerrando após validar as credenciais e entregar o Cockpit Web funcionando em http://127.0.0.1:3000.
 
-Antes da primeira pergunta, mostre estes seis marcos:
+Antes da primeira pergunta, mostre estes quatro marcos:
 1) Instalação (clone GitHub, Node.js 22+, dependências, .env com Cofre AES-256-GCM, build Daemon/Web e 9 skills base no Codex)
-2) Perfil da Marca (nome, @perfil, nicho, público e tom de voz em conteudos/perfil-da-marca.md ou no Cockpit Web)
-3) Identidade Visual (fotos em recursos/fotos/, logo em recursos/logos/, referências em recursos/referencias/ e brandbook)
-4) IA & Credenciais Meta (provedor de IA no Cofre + credenciais Instagram/Meta validadas sem expor segredos)
-5) Primeiro Criativo & Preview Mobile (gerar o primeiro post/carrossel/story e revisar na Vitrine Mobile 4:5 ou 9:16 em http://127.0.0.1:3000)
-6) Publicação Oficial Segura (opcional; só com aprovação explícita no Cockpit/WhatsApp ou escrevendo PUBLICAR)
+2) Perfil da Marca (nome, @perfil, nicho, público e tom de voz em conteudos/perfil-da-marca.md e no Cockpit Web)
+3) Identidade Visual & Referências (paleta, brandbook, design system e coleta de referências em recursos/referencias/, fotos em recursos/fotos/ e logo em recursos/logos/)
+4) IA & Credenciais Meta — Conclusão da Instalação (provedor de IA no Cofre + credenciais Instagram/Meta opcionais validadas sem expor segredos, entregando o Cockpit Web pronto em http://127.0.0.1:3000)
 
 Em cada interação, mostre o marco atual, o progresso, a decisão que estamos tomando e o resultado da próxima etapa. Nunca termine apenas perguntando se quero continuar.
 
 Regras fundamentais:
 - Fale comigo em português simples, sem jargão. Explique o que vai fazer antes de cada comando.
 - Se o git clone pedir login ou falhar por falta de acesso, pare e me explique como autenticar no Git (por exemplo gh auth login) ou usar a opção ZIP. Nunca peça token no chat.
-- No marco Instalação, confira node --version (22 ou superior), rode npm install e npm run instalar -- --plataforma codex, depois npm run diagnosticar e explique em linguagem simples.
+- No Marco 1 (Instalação), confira node --version (22 ou superior), rode npm install e npm run instalar -- --plataforma codex, depois npm run diagnosticar e explique em linguagem simples.
+- No Marco 3 (Identidade Visual & Referências), me peça explicitamente para salvar ou enviar referências visuais em recursos/referencias/, fotos em recursos/fotos/ e logo em recursos/logos/ (ou avisar se subirei depois pela aba Arquivos do Cockpit), registrando as referências analisadas em identidade-visual.yml e brandbook.md.
 - Nunca abra, mostre ou peça o conteúdo do .env nem chaves/tokens no chat. Oriente o preenchimento pelo Cockpit Web (http://127.0.0.1:3000 -> Conexões) ou pelo .env seguindo documentacao/configurar-meta.md, e comprove com npm run validar:integracoes.
-- O marco IA & Credenciais Meta é uma parada obrigatória: só avance quando eu confirmar que concluí ou que quero pular por enquanto.
+- O Marco 4 (IA & Credenciais Meta) é o último marco da instalação: espere eu confirmar que concluí (ou deixarei a Meta para depois), valide com npm run validar:integracoes, deixe o Cockpit Web rodando via npm start (http://127.0.0.1:3000), marque o onboarding concluído no Cockpit e encerre entregando o Cockpit pronto.
 - Preserve sempre .env, apps/daemon/dados/, conteudos/, recursos/, saidas/ e upgrades existentes.
-- No marco Publicação, nunca publique sem aprovação explícita no Cockpit/WhatsApp ou a palavra PUBLICAR.
-- Ao final, avise para fechar e reabrir o Codex na pasta criativo-studio-online para carregar os comandos de barra e informe o endereço http://127.0.0.1:3000 do Cockpit Web.
 ```
 
 ---

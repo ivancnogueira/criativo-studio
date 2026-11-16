@@ -39,6 +39,7 @@ import {
 import {
   buildStudioLiveContext,
   isUpgradeUnlocked,
+  syncWorkspaceFilesToDatabase,
   validateMetaIntegration,
 } from "./studio-tools-bridge.ts";
 import type { WebSocketHub } from "./websocket-hub.ts";
@@ -160,7 +161,7 @@ function extractMentionedAgentIds(text: string, excludeId?: string): string[] {
   const found = new Set<string>();
   const validIds = new Set(ROSTER_15_AGENTES.map((a) => a.agente_id));
 
-  // Detecta [HANDOFF:agente_id] ou @agente_id
+  // Detecta [HANDOFF:agente_id] ou @agente_id no texto do usuário
   for (const m of text.matchAll(/\[HANDOFF:([a-z0-9_]+)\]/gi)) {
     const id = m[1].toLowerCase();
     if (validIds.has(id) && id !== excludeId) found.add(id);
@@ -170,6 +171,80 @@ function extractMentionedAgentIds(text: string, excludeId?: string): string[] {
     if (validIds.has(id) && id !== excludeId) found.add(id);
   }
   return Array.from(found);
+}
+
+function extractExplicitAgentHandoffTags(text: string, excludeId?: string): string[] {
+  const found = new Set<string>();
+  const validIds = new Set(ROSTER_15_AGENTES.map((a) => a.agente_id));
+  for (const m of text.matchAll(/\[HANDOFF:([a-z0-9_]+)\]/gi)) {
+    const id = m[1].toLowerCase();
+    if (validIds.has(id) && id !== excludeId) found.add(id);
+  }
+  return Array.from(found);
+}
+
+const EXPLICIT_CREATION_ACTION_RE =
+  /(?:^|\b)(crie|criar|gere|gerar|fa[cç]a|fazer|produza|produzir|monte|montar|desenhe|desenhar|refa[cç]a|refazer|ajuste|ajustar|renderize|renderizar|cria|gera|faz|quero um|quero uma|preciso de um|preciso de uma)\b/i;
+
+const IMPERATIVE_OR_WANT_RE =
+  /(?:^|\b)(crie|gere|fa[cç]a|produza|monte|desenhe|refa[cç]a|ajuste|renderize|quero um|quero uma|preciso de um|preciso de uma)\b/i;
+
+const EXPLICIT_VISUAL_ASSET_NOUN_RE =
+  /\b(imagem|imagens|arte|artes|banner|capa|post|posts|carrossel|carross[eé]is|slide|slides|l[aâ]mina|l[aâ]minas|storie|stories|story|criativo|criativos|an[uú]ncio|an[uú]ncios)\b/i;
+
+const DIRECT_IMAGE_NOUN_RE =
+  /\b(imagem|imagens|arte|artes|foto|fotos|banner|capa|ilustra[cç][aã]o)\b/i;
+
+export function isGreetingOrCapabilityQuestion(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return true;
+
+  const clean = trimmed
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[?!.,;:]+$/g, "")
+    .trim();
+
+  if (
+    /^(oi+|ola+|e ai|opa|eae|hello|hi|bom dia|boa tarde|boa noite|tudo bem|td bem|teste|ok|obrigad[oa]|valeu|tente novamente|novamente)$/i.test(
+      clean
+    )
+  ) {
+    return true;
+  }
+
+  const isCapabilityOrAccessQuestion =
+    /(o que (voce|vc|voces|vcs) (pode|consegue|sabe|faz)|quais (sao )?(as )?(suas )?(funcoes|capacidades|pastas|referencias|arquivos)|como (voce|vc|isso|o studio) funciona|(voce|vc) tem acesso|tem acesso a|pode me explicar|me explique|quem e voce|quem eh voce)/i.test(
+      clean
+    ) && clean.length < 180;
+
+  if (isCapabilityOrAccessQuestion && !IMPERATIVE_OR_WANT_RE.test(clean)) {
+    return true;
+  }
+
+  if (EXPLICIT_CREATION_ACTION_RE.test(trimmed)) return false;
+
+  return false;
+}
+
+export function hasExplicitVisualGenerationIntent(
+  userPrompt: string,
+  agentId: string,
+  isHandoff = false
+): boolean {
+  if (isGreetingOrCapabilityQuestion(userPrompt)) return false;
+  if (!EXPLICIT_CREATION_ACTION_RE.test(userPrompt)) return false;
+
+  const isVisualAgent = agentId.startsWith("designer_") || agentId === "consistencia_visual";
+  if (isVisualAgent) {
+    return EXPLICIT_VISUAL_ASSET_NOUN_RE.test(userPrompt);
+  }
+  if (isHandoff) {
+    return false;
+  }
+  // Agentes não-visuais (estrategista, copywriter, etc.) só geram imagem se o usuário pedir explicitamente uma imagem/arte
+  return DIRECT_IMAGE_NOUN_RE.test(userPrompt);
 }
 
 function enrichAgentRow(
@@ -252,7 +327,11 @@ async function generateAgentChatReply(
   userPrompt: string,
   anexos: AnexoChat[],
   history: MensagemChat[],
-  onProgress?: (evt: ChatProgressReport) => void
+  onProgress?: (evt: ChatProgressReport) => void,
+  options?: {
+    isHandoff?: boolean;
+    originalUserPrompt?: string;
+  }
 ): Promise<{
   markdown: string;
   steps: PassoChat[];
@@ -419,14 +498,21 @@ async function generateAgentChatReply(
     });
   }
 
-  // Verifica intenção de produção visual
+  // Verifica intenção explícita de produção / geração visual sem disparar em saudações ou dúvidas
+  const intentSourcePrompt = options?.originalUserPrompt ?? userPrompt;
+  const greetingOrCapability = isGreetingOrCapabilityQuestion(intentSourcePrompt);
+  const lower = intentSourcePrompt.toLowerCase();
   let tarefaCriadaId: string | null = null;
-  const lower = userPrompt.toLowerCase();
+
   const asksProduction =
-    /(criar|gerar|produzir|renderizar|post|carrossel|stories|reel|an[uú]ncio|imagem|arte|banner|capa)/i.test(lower);
-  const asksVisualAsset =
-    /(imagem|arte|banner|capa|post|carrossel|stories|criativo|an[uú]ncio|visual)/i.test(lower) ||
-    agente.agente_id.startsWith("designer_");
+    !greetingOrCapability &&
+    EXPLICIT_CREATION_ACTION_RE.test(intentSourcePrompt) &&
+    EXPLICIT_VISUAL_ASSET_NOUN_RE.test(intentSourcePrompt);
+  const asksVisualAsset = hasExplicitVisualGenerationIntent(
+    intentSourcePrompt,
+    agente.agente_id,
+    Boolean(options?.isHandoff)
+  );
 
   if (asksProduction) {
     const tipoInferido = lower.includes("carrossel")
@@ -468,12 +554,38 @@ async function generateAgentChatReply(
   }
 
   const anexosGerados: AnexoChat[] = [];
-  const resolvedImageDiskPaths = anexos
+  let resolvedImageDiskPaths = anexos
     .map((a) => resolve(workspaceRoot, a.caminho_relativo))
     .filter((p) => existsSync(p));
 
-  // Se houver conta conectada e pedido visual direto, gera arte real via gemini-3.1-flash-image
-  if (hasAntigravityAccount && asksVisualAsset && /(imagem|arte|gerar arte|criar arte|gera.*imagem|cria.*imagem|gera.*post|cria.*post|carrossel|banner|capa)/i.test(lower)) {
+  // Quando o usuário não anexou na mensagem e é um turno visual/designer, carrega referências da marca do disco/SQLite
+  if (
+    resolvedImageDiskPaths.length === 0 &&
+    (asksVisualAsset || agente.agente_id.startsWith("designer_") || agente.agente_id === "consistencia_visual") &&
+    process.env.CRIATIVO_SKIP_LOCAL_PROBE !== "1"
+  ) {
+    const refRows = deps.db.connection
+      .prepare(
+        `SELECT caminho_relativo FROM projecao_arquivos
+         WHERE tipo_uso IN ('referencia', 'logo', 'personagem')
+           AND mime_type LIKE 'image/%'
+           AND mime_type NOT LIKE '%svg%'
+         ORDER BY CASE
+           WHEN caminho_relativo LIKE 'recursos/referencias/%' THEN 0
+           WHEN caminho_relativo LIKE 'recursos/fotos/%' THEN 1
+           WHEN caminho_relativo LIKE 'recursos/logos/%' THEN 2
+           ELSE 3
+         END, criado_em DESC
+         LIMIT 4;`
+      )
+      .all() as Array<{ caminho_relativo: string }>;
+    resolvedImageDiskPaths = refRows
+      .map((r) => resolve(workspaceRoot, r.caminho_relativo))
+      .filter((p) => existsSync(p));
+  }
+
+  // Se houver conta conectada e pedido visual explícito, gera arte real via gemini-3.1-flash-image
+  if (hasAntigravityAccount && asksVisualAsset) {
     const tImgStart = Date.now();
     try {
       const imgGen = await agService.executeCodeAssistGenerate({
@@ -1627,11 +1739,18 @@ export async function tryHandleStudioRoute(
       mensagem: agentMsg,
     });
 
-    // Handoff 1:1 automático se o usuário ou agente mencionou outro especialista (@agente_id / [HANDOFF:id])
-    const handoffTargets = extractMentionedAgentIds(
-      `${userMsg.conteudo_markdown}\n${agentMsg.conteudo_markdown}`,
-      agenteId
-    ).slice(0, 2);
+    // Handoff 1:1 somente quando não for saudação/dúvida:
+    // - do usuário: aceita @agente_id ou [HANDOFF:agente_id]
+    // - da resposta do agente: exige [HANDOFF:agente_id] explícito (nunca @mencao em explicação)
+    const isSimpleGreeting = isGreetingOrCapabilityQuestion(userMsg.conteudo_markdown);
+    const handoffTargets = isSimpleGreeting
+      ? []
+      : Array.from(
+          new Set([
+            ...extractMentionedAgentIds(userMsg.conteudo_markdown, agenteId),
+            ...extractExplicitAgentHandoffTags(agentMsg.conteudo_markdown, agenteId),
+          ])
+        ).slice(0, 2);
     const mensagensHandoff: MensagemChat[] = [];
 
     if (handoffTargets.length > 0) {
@@ -1666,6 +1785,10 @@ export async function tryHandleStudioRoute(
               turno_id: `${liveTurnId}-h${hIdx}`,
               ...prog,
             });
+          },
+          {
+            isHandoff: true,
+            originalUserPrompt: userMsg.conteudo_markdown,
           }
         );
 
@@ -1942,6 +2065,10 @@ export async function tryHandleStudioRoute(
             turno_id: liveTurnId,
             ...prog,
           });
+        },
+        {
+          isHandoff: idx > 0,
+          originalUserPrompt: userMsg.conteudo_markdown,
         }
       );
 
@@ -2159,6 +2286,7 @@ export async function tryHandleStudioRoute(
 
   // 6. Arquivos, Uploads (ImagePaths) & Leitura Segura
   if (method === "GET" && path === "/api/arquivos") {
+    syncWorkspaceFilesToDatabase(db, workspaceRoot);
     const tipo = url.searchParams.get("tipo");
     const rows = tipo
       ? (db.connection
@@ -2218,18 +2346,27 @@ export async function tryHandleStudioRoute(
     const cleanName = sanitizeFileName(body.nome);
     const arquivoId = `arq-${randomUUID().slice(0, 8)}`;
     const storedName = `${arquivoId}-${cleanName}`;
-    const uploadsDir = resolve(workspaceRoot, "recursos", "uploads");
-    mkdirSync(uploadsDir, { recursive: true });
-
-    const targetPath = resolve(uploadsDir, storedName);
-    writeFileSync(targetPath, buffer);
-
-    const relPath = `recursos/uploads/${storedName}`;
     const mimeType =
       typeof body.mime_type === "string" && body.mime_type.length > 0
         ? body.mime_type
         : RAW_MIME_MAP[extname(cleanName).toLowerCase()] ?? "application/octet-stream";
     const tipoUso = inferTipoUso(mimeType, typeof body.tipo_uso === "string" ? body.tipo_uso : undefined);
+
+    const relFolder =
+      tipoUso === "referencia"
+        ? "recursos/referencias"
+        : tipoUso === "logo"
+          ? "recursos/logos"
+          : tipoUso === "personagem"
+            ? "recursos/personagens"
+            : "recursos/uploads";
+    const targetDir = resolve(workspaceRoot, relFolder);
+    mkdirSync(targetDir, { recursive: true });
+
+    const targetPath = resolve(targetDir, storedName);
+    writeFileSync(targetPath, buffer);
+
+    const relPath = `${relFolder}/${storedName}`;
     const agenteId = typeof body.agente_id === "string" ? body.agente_id : null;
     const tarefaId = typeof body.tarefa_id === "string" ? body.tarefa_id : null;
     const agora = new Date().toISOString();
@@ -2276,7 +2413,8 @@ export async function tryHandleStudioRoute(
     }
 
     const allowedRoots = [
-      resolve(workspaceRoot, "recursos", "uploads"),
+      resolve(workspaceRoot, "recursos"),
+      resolve(workspaceRoot, "conteudos"),
       resolve(workspaceRoot, "saidas"),
       resolve(workspaceRoot, "previas"),
     ];

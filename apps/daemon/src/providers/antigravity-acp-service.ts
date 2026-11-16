@@ -620,7 +620,7 @@ class AcpProcessConnection {
 export class AntigravityAcpService {
   private readonly workers = new Map<
     string,
-    { conn: AcpProcessConnection; idleTimer: NodeJS.Timeout | null; queue: Promise<unknown> }
+    { conn: AcpProcessConnection; idleTimer: NodeJS.Timeout | null; queue: Promise<unknown>; activeCount: number }
   >();
   private readonly executableOverride?: string;
   private readonly spawnArgsFactory?: (geminiDir: string) => string[];
@@ -734,6 +734,7 @@ export class AntigravityAcpService {
         ),
         idleTimer: null,
         queue: Promise.resolve(),
+        activeCount: 0,
       };
       this.workers.set(accountKey, slot);
     }
@@ -744,19 +745,23 @@ export class AntigravityAcpService {
     }
 
     const currentSlot = slot;
+    currentSlot.activeCount += 1;
     const run = currentSlot.queue.then(() => fn(currentSlot.conn));
     currentSlot.queue = run.catch(() => {});
 
     try {
       return await run;
     } finally {
-      currentSlot.idleTimer = setTimeout(() => {
-        currentSlot.conn.dispose();
-        if (this.workers.get(accountKey) === currentSlot) {
-          this.workers.delete(accountKey);
-        }
-      }, WORKER_IDLE_TTL_MS);
-      currentSlot.idleTimer.unref?.();
+      currentSlot.activeCount = Math.max(0, currentSlot.activeCount - 1);
+      if (currentSlot.activeCount === 0) {
+        currentSlot.idleTimer = setTimeout(() => {
+          currentSlot.conn.dispose();
+          if (this.workers.get(accountKey) === currentSlot) {
+            this.workers.delete(accountKey);
+          }
+        }, WORKER_IDLE_TTL_MS);
+        currentSlot.idleTimer.unref?.();
+      }
     }
   }
 

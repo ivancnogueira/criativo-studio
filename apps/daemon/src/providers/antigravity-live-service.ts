@@ -1045,7 +1045,8 @@ export class AntigravityLiveService {
     const cliAvailable = Boolean(this.acpService.getCliExecutable());
 
     // 1. Chamadas de TEXTO/CHAT preferem o protocolo ACP aquecido (renova token sozinho, zero bloat de MCPs)
-    //    quando a CLI está instalada e não estamos rodando somente um mock HTTP de fetch (sem CLI).
+    //    com retry automático e fallback transparente para Code Assist REST se a sessão ACP oscilar.
+    let acpLastError: unknown = null;
     if (!input.generateImage && cliAvailable && (chosenEntry.hasRefreshToken || !chosenEntry.tokenValid)) {
       const promptParts: string[] = [];
       if (input.systemPrompt) {
@@ -1063,27 +1064,36 @@ export class AntigravityLiveService {
 
       const sandboxCwd = resolve(this.workspaceCwd, "dados", "agent-sandbox");
       mkdirSync(sandboxCwd, { recursive: true });
+      const combinedPrompt = promptParts.join("\n\n");
 
-      const acpOut = await this.acpService.executePrompt(chosenEntry.id, {
-        geminiDir: chosenEntry.geminiDir,
-        cwd: sandboxCwd,
-        promptText: promptParts.join("\n\n"),
-        modelId: input.model,
-        imagePaths: input.imagePaths,
-        onDelta: input.onDelta,
-      });
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const acpOut = await this.acpService.executePrompt(chosenEntry.id, {
+            geminiDir: chosenEntry.geminiDir,
+            cwd: sandboxCwd,
+            promptText: combinedPrompt,
+            modelId: attempt === 0 ? input.model : undefined,
+            imagePaths: input.imagePaths,
+            onDelta: attempt === 0 ? input.onDelta : undefined,
+          });
 
-      // Aproveita para invalidar cache local de cotas para refletir o token renovado
-      this.snapshotCache = null;
-
-      return {
-        text: acpOut.text,
-        images: [],
-        modelUsed: acpOut.modelUsed,
-        accountId: chosenEntry.id,
-        accountEmail: chosenEntry.email,
-        usage: acpOut.usage,
-      };
+          if (acpOut.text && acpOut.text.trim().length > 0) {
+            this.snapshotCache = null;
+            return {
+              text: acpOut.text,
+              images: [],
+              modelUsed: acpOut.modelUsed,
+              accountId: chosenEntry.id,
+              accountEmail: chosenEntry.email,
+              usage: acpOut.usage,
+            };
+          }
+          acpLastError = new Error("Sessão ACP retornou resposta vazia.");
+        } catch (err) {
+          acpLastError = err;
+        }
+        this.acpService.disposeAccount(chosenEntry.id);
+      }
     }
 
     // 2. Geração de IMAGEM ou ambientes HTTP puros (e.g. testes unitários sem CLI) via Code Assist REST
@@ -1133,15 +1143,23 @@ export class AntigravityLiveService {
       };
     });
 
+    const normalizeRestCandidates = (requested: string, defModel: string | null): string[] => {
+      const isInternalAcp = /orchestrator|argon|g1-pro/i.test(requested);
+      const list = isInternalAcp
+        ? ["gemini-2.5-pro", "gemini-2.5-flash", defModel || "gemini-3.8-flash-high"]
+        : [requested, defModel || "gemini-3.8-flash-high", "gemini-2.5-pro", "gemini-2.5-flash"];
+      return [...new Set(list.filter(Boolean))];
+    };
+
     const candidateModels = input.generateImage
       ? [
           ...(snapshot.imageGenerationModelIds.length > 0
             ? snapshot.imageGenerationModelIds
             : ["gemini-3.1-flash-image"]),
         ]
-      : [...new Set([input.model, snapshot.defaultModelId || "gemini-3.8-flash-high", "gemini-2.5-flash"])];
+      : normalizeRestCandidates(input.model, snapshot.defaultModelId);
 
-    let lastError: unknown = null;
+    let lastError: unknown = acpLastError;
     for (const modelToTry of candidateModels) {
       try {
         const requestBody: Record<string, unknown> = {

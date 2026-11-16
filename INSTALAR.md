@@ -23,7 +23,7 @@ Nos dois casos o agente conduz tudo passo a passo. Abra o seu agente e cole o pr
 | Claude Code | [INSTALAR-COM-CLAUDE.md](INSTALAR-COM-CLAUDE.md) |
 | Codex (GPT) | [INSTALAR-COM-CODEX.md](INSTALAR-COM-CODEX.md) |
 
-O agente instala as dependências, prepara as pastas da marca e o `.env` com chave mestra do Cofre, compila o Daemon e o Cockpit Web, instala as **9 skills base** na sua plataforma e conduz os **6 Marcos do Onboarding** até o primeiro criativo publicado com segurança.
+O agente instala as dependências, prepara as pastas da marca e o `.env` com chave mestra do Cofre, compila o Daemon e o Cockpit Web, instala as **9 skills base** na sua plataforma e conduz os **4 Marcos da Instalação** (Instalação, Perfil da Marca, Identidade Visual & Referências, IA & Credenciais Meta), encerrando com tudo pronto para você criar direto no **Cockpit Web (`http://127.0.0.1:3000`)**.
 
 **Importante:** os comandos de barra e o Cockpit Web ficam vinculados à pasta onde você instalou o sistema. Escolha uma pasta definitiva antes de rodar `npm run instalar`. Se mover a pasta depois, rode `npm run instalar` novamente no novo local.
 

@@ -285,7 +285,11 @@ export class ProviderConnectionService {
     this.db = options.db;
     this.vault = options.vault;
     const baseWorkspace = resolve(options.workspaceRoot ?? process.cwd());
-    const accountsRoot = join(baseWorkspace, "dados", "contas");
+    const daemonDadosContas = join(baseWorkspace, "apps", "daemon", "dados", "contas");
+    const daemonDadosDir = join(baseWorkspace, "apps", "daemon", "dados");
+    const accountsRoot = existsSync(daemonDadosContas) || existsSync(daemonDadosDir)
+      ? daemonDadosContas
+      : join(baseWorkspace, "dados", "contas");
 
     this.antigravityLive =
       options.antigravityLive ??

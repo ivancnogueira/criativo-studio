@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { IdentidadeMarcaStudio, PacoteUpgradeInfo } from "@criativo/contracts";
 import type { CriativoDatabase } from "../database/client.ts";
@@ -169,6 +169,23 @@ atualizado_em: ${JSON.stringify(brand.atualizado_em)}
 
   for (const [rel, content] of files) {
     const abs = resolve(workspaceRoot, rel);
+    if (
+      (rel === "conteudos/perfil-da-marca.md" || rel === "conteudos/identidade-visual.yml") &&
+      existsSync(abs)
+    ) {
+      try {
+        const existing = await readFile(abs, "utf8");
+        const hasPlaceholders =
+          existing.includes("[A PREENCHER]") ||
+          existing.includes("[NOME_DA_MARCA]") ||
+          existing.includes("[@SEU_PERFIL]");
+        if (!hasPlaceholders && existing.trim().length > 350) {
+          continue;
+        }
+      } catch {
+        // segue e atualiza se não conseguir ler
+      }
+    }
     await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, content, "utf8");
   }

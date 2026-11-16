@@ -43,14 +43,19 @@ Esta pasta pode representar o **produto** (template genérico distribuído para 
 | `npm run build` | Compila os workspaces `packages/contracts`, `packages/whatsapp` e `apps/daemon` |
 | `npm run test:daemon` | Executa a suíte de testes do Daemon (`apps/daemon/tests/*.test.ts`) |
 
-## Fluxo de operação e onboarding guiado
+## Fluxo de operação e onboarding guiado (4 Marcos)
 
-Quando o usuário pedir para instalar, configurar ou fazer o primeiro uso:
-1. Siga o roteiro em `documentacao/onboarding-guiado.md` (6 Marcos contínuos), sempre informando o marco atual, o progresso e o resultado verificado.
-2. **Marco 1 (Instalação):** valide Node.js >= 22 (`node --version`), rode `npm install` (se faltar `node_modules`) e `npm run instalar -- --plataforma <plataforma>`, depois `npm run diagnosticar` e `npm start` (ou deixe pronto para abrir `http://127.0.0.1:3000`).
-3. **Marco 2 e 3 (Marca & Identidade Visual):** colete ou oriente o preenchimento dos arquivos em `conteudos/` e `recursos/` (via Cockpit Web `/api/marca/identidade` ou ferramentas `atualizar_memorias_marca` / `ler_memorias_marca`) sem expor ou commitar dados reais no produto.
-4. **Marco 4 (IA & Meta API):** o provedor de IA (OpenCode gratuito, OAuth no navegador ou API Key BYOK) e os tokens da Meta (`META_ACCESS_TOKEN`, `META_IG_USER_ID`) ficam cifrados no Cofre SQLite (`POST /api/conectores/:id/configurar` ou UI em **Conexões**). Nunca peça chaves secretas no chat; use `documentacao/configurar-meta.md` como guia e confira com `npm run validar:integracoes` ou pela ferramenta `validar_integracao_meta`.
-5. **Marcos 5 e 6 (Primeiro Criativo & Publicação):** use as skills base para gerar roteiro/copy/arte, envie para revisão na Vitrine Mobile do Cockpit (`http://127.0.0.1:3000`) e **jamais publique automaticamente** sem aprovação humana explícita (`approved_by_human === true` pelo Cockpit ou resposta `1` no WhatsApp / confirmação `PUBLICAR`).
+Quando o usuário pedir para instalar, configurar ou fazer o setup inicial:
+1. Siga o roteiro enxuto de **4 Marcos** em `documentacao/onboarding-guiado.md`, sempre informando o marco atual, o progresso e o resultado verificado — encerrando a instalação no Marco 4 e entregando o uso diário para o **Cockpit Web (`http://127.0.0.1:3000`)**.
+2. **Marco 1 (Instalação):** valide Node.js >= 22 (`node --version`), rode `npm install` (se faltar `node_modules`) e `npm run instalar -- --plataforma <plataforma>`, depois `npm run diagnosticar` e inicie/prepare `npm start`.
+3. **Marco 2 (Perfil da Marca):** registre posicionamento, nicho, ofertas, público e tom de voz em `conteudos/perfil-da-marca.md` e via `/api/marca/identidade`.
+4. **Marco 3 (Identidade Visual & Referências):** gere/atualize `identidade-visual.yml`, `brandbook.md`, `design-system.md` e `tokens.css` e **peça explicitamente para o usuário colocar ou anexar suas referências visuais em `recursos/referencias/`, fotos em `recursos/fotos/` e logo em `recursos/logos/`** (ou enviar na aba **Arquivos** do Cockpit) antes de avançar.
+5. **Marco 4 (IA & Credenciais Meta — Fim da Instalação):** oriente o usuário a conectar seu provedor de IA e credenciais Meta no **Cockpit Web (`http://127.0.0.1:3000` → Conexões)** ou `.env` local seguindo `documentacao/configurar-meta.md` (jamais peça tokens no chat), confira com `npm run validar:integracoes`, confirme que o Cockpit está ativo em `http://127.0.0.1:3000` e encerre entregando a operação para os agentes no Cockpit.
+
+## Como os agentes aprendem no Cockpit
+
+- Todos os agentes no Cockpit Web carregam automaticamente `conteudos/perfil-da-marca.md`, `conteudos/identidade-visual.yml`, `recursos/brand/brandbook.md`, `recursos/brand/design-system.md`, os arquivos escaneados de `recursos/referencias/`, `recursos/fotos/` e `recursos/logos/` e as memórias individuais salvas no SQLite.
+- A aba **Arquivos** do Cockpit (`GET /api/arquivos`) sincroniza automaticamente as mídias colocadas nessas pastas.
 
 ## Colaboração multi-agente e upgrades
 

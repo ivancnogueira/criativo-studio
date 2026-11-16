@@ -10,28 +10,24 @@ Escolha a opção conforme a forma como você recebeu o **Criativo AI Studio Onl
 4. Cole este prompt no chat:
 
 ```text
-Inicie a instalação guiada do Criativo AI Studio Online nesta pasta, que veio de um arquivo ZIP. Leia integralmente AGENTS.md, README.md, INSTALAR.md e documentacao/onboarding-guiado.md. Você está autorizado a executar npm install, npm run instalar -- --plataforma antigravity, npm run build e preparar o ambiente. Conduza a instalação e o onboarding como um único processo contínuo, sem encerrar entre etapas.
+Inicie a instalação guiada do Criativo AI Studio Online nesta pasta, que veio de um arquivo ZIP. Leia integralmente AGENTS.md, README.md, INSTALAR.md e documentacao/onboarding-guiado.md. Você está autorizado a executar npm install, npm run instalar -- --plataforma antigravity, npm run build e preparar o ambiente. Conduza os 4 Marcos da instalação como um único processo contínuo, encerrando após validar as credenciais e entregar o Cockpit Web funcionando em http://127.0.0.1:3000.
 
-Antes da primeira pergunta, mostre estes seis marcos:
+Antes da primeira pergunta, mostre estes quatro marcos:
 1) Instalação (Node.js 22+, dependências, .env com Cofre AES-256-GCM, build Daemon/Web e 9 skills base no Antigravity)
-2) Perfil da Marca (nome, @perfil, nicho, público e tom de voz em conteudos/perfil-da-marca.md ou no Cockpit Web)
-3) Identidade Visual (fotos em recursos/fotos/, logo em recursos/logos/, referências em recursos/referencias/ e brandbook)
-4) IA & Credenciais Meta (provedor de IA no Cofre + credenciais Instagram/Meta validadas sem expor segredos)
-5) Primeiro Criativo & Preview Mobile (gerar o primeiro post/carrossel/story e revisar na Vitrine Mobile 4:5 ou 9:16 em http://127.0.0.1:3000)
-6) Publicação Oficial Segura (opcional; só com aprovação explícita no Cockpit/WhatsApp ou escrevendo PUBLICAR)
+2) Perfil da Marca (nome, @perfil, nicho, público e tom de voz em conteudos/perfil-da-marca.md e no Cockpit Web)
+3) Identidade Visual & Referências (paleta, brandbook, design system e coleta de referências em recursos/referencias/, fotos em recursos/fotos/ e logo em recursos/logos/)
+4) IA & Credenciais Meta — Conclusão da Instalação (provedor de IA no Cofre + credenciais Instagram/Meta opcionais validadas sem expor segredos, entregando o Cockpit Web pronto em http://127.0.0.1:3000)
 
 Em cada interação, mostre o marco atual, o progresso, a decisão que estamos tomando e o resultado da próxima etapa. Nunca termine apenas perguntando se quero continuar.
 
 Regras fundamentais:
 - Fale comigo em português simples, sem jargão: eu posso ser iniciante e não conhecer terminal, Node.js ou git. Explique o que vai fazer antes de cada comando.
-- No marco Instalação, confira node --version (precisa ser 22 ou superior). Se faltar, me diga de onde baixar e pare até eu instalar. Depois rode npm install e npm run instalar -- --plataforma antigravity (e explique que isso sincroniza as 9 skills base sem incluir upgrades pagos/opcionais de vídeo ou bônus). Em seguida rode npm run diagnosticar e explique o resultado.
+- No Marco 1 (Instalação), confira node --version (precisa ser 22 ou superior). Se faltar, me diga de onde baixar e pare até eu instalar. Depois rode npm install e npm run instalar -- --plataforma antigravity (explicando que isso sincroniza as 9 skills base sem incluir upgrades opcionais de vídeo ou bônus). Em seguida rode npm run diagnosticar e explique o resultado.
 - Avise que os comandos de barra ficam ligados a esta pasta e que eu não devo movê-la depois; se mover, basta rodar npm run instalar -- --plataforma antigravity novamente.
+- No Marco 3 (Identidade Visual & Referências), depois de configurar paleta/fontes/brandbook, PARE e me peça explicitamente para salvar ou enviar minhas imagens de referência em recursos/referencias/, fotos da marca em recursos/fotos/ e logo em recursos/logos/ (ou confirmar se prefiro subir depois pela aba Arquivos do Cockpit Web). Se eu colocar/anexar referências agora, analise-as e registre as características estéticas em identidade-visual.yml e brandbook.md para os agentes aprenderem.
 - Nunca abra, mostre ou peça o conteúdo do .env, nem peça tokens ou chaves de API no chat. Use npm run diagnosticar e npm run validar:integracoes para verificar o que está configurado. Para salvar IA ou Meta API, me oriente a usar o Cockpit Web (http://127.0.0.1:3000 -> Conexões) ou o .env local seguindo documentacao/configurar-meta.md.
-- O marco IA & Credenciais Meta é uma parada obrigatória: não pule e não avance sem a minha resposta (se configurei ou se quero deixar a publicação Meta para depois). Rode npm run validar:integracoes para comprovar.
-- Preserve sempre .env, apps/daemon/dados/, conteudos/, recursos/, saidas/ e upgrades já instalados; não sobrescreva minhas respostas nem ativos anteriores.
-- Nunca prometa skills dos pacotes Bônus ou Vídeo se npm run diagnosticar indicar que não estão instalados; caso eu queira ativá-los depois, me explique como usar npm run instalar-upgrade.
-- No marco Publicação, nunca publique nada automaticamente: exija aprovação explícita pelo Cockpit, resposta 1 no WhatsApp ou a palavra PUBLICAR.
-- Ao concluir a instalação, inicie ou mostre como iniciar o Cockpit Web com npm start (http://127.0.0.1:3000) e avise se eu devo iniciar um novo chat para recarregar os comandos /planejar-conteudo, /copywriter-instagram, /criar-carrossel e demais skills base.
+- O Marco 4 (IA & Credenciais Meta) é uma parada obrigatória e o último marco do instalador: espere eu confirmar que configurei (ou que deixarei a Meta para depois), rode npm run validar:integracoes e npm run diagnosticar para comprovar, deixe o Cockpit Web rodando com npm start (http://127.0.0.1:3000), marque o setup inicial como concluído no Cockpit e encerre me entregando acesso direto ao Cockpit Web (sem precisar gerar nem publicar posts nesta conversa de instalação).
+- Preserve sempre .env, apps/daemon/dados/, conteudos/, recursos/, saidas/ e upgrades já instalados; não sobrescreva arquivos ricos já configurados.
 ```
 
 ---
@@ -41,27 +37,24 @@ Regras fundamentais:
 Precisa de **Git** instalado (<https://git-scm.com>) e acesso ao repositório `criativo-studio`. Em uma pasta vazia (ex.: `Documentos`), abra o Antigravity e cole:
 
 ```text
-Instale o Criativo AI Studio Online a partir de https://github.com/ivancnogueira/criativo-studio.git em uma nova pasta criativo-studio-online no diretório atual. Depois do clone, entre na pasta e leia integralmente AGENTS.md, README.md, INSTALAR.md e documentacao/onboarding-guiado.md. Você está autorizado a executar npm install, npm run instalar -- --plataforma antigravity e preparar o ambiente. Conduza a instalação e o onboarding como um único processo contínuo, sem encerrar entre etapas.
+Instale o Criativo AI Studio Online a partir de https://github.com/ivancnogueira/criativo-studio.git em uma nova pasta criativo-studio-online no diretório atual. Depois do clone, entre na pasta e leia integralmente AGENTS.md, README.md, INSTALAR.md e documentacao/onboarding-guiado.md. Você está autorizado a executar npm install, npm run instalar -- --plataforma antigravity e preparar o ambiente. Conduza os 4 Marcos da instalação como um único processo contínuo, encerrando após validar as credenciais e entregar o Cockpit Web funcionando em http://127.0.0.1:3000.
 
-Antes da primeira pergunta, mostre estes seis marcos:
+Antes da primeira pergunta, mostre estes quatro marcos:
 1) Instalação (clone GitHub, Node.js 22+, dependências, .env com Cofre AES-256-GCM, build Daemon/Web e 9 skills base no Antigravity)
-2) Perfil da Marca (nome, @perfil, nicho, público e tom de voz em conteudos/perfil-da-marca.md ou no Cockpit Web)
-3) Identidade Visual (fotos em recursos/fotos/, logo em recursos/logos/, referências em recursos/referencias/ e brandbook)
-4) IA & Credenciais Meta (provedor de IA no Cofre + credenciais Instagram/Meta validadas sem expor segredos)
-5) Primeiro Criativo & Preview Mobile (gerar o primeiro post/carrossel/story e revisar na Vitrine Mobile 4:5 ou 9:16 em http://127.0.0.1:3000)
-6) Publicação Oficial Segura (opcional; só com aprovação explícita no Cockpit/WhatsApp ou escrevendo PUBLICAR)
+2) Perfil da Marca (nome, @perfil, nicho, público e tom de voz em conteudos/perfil-da-marca.md e no Cockpit Web)
+3) Identidade Visual & Referências (paleta, brandbook, design system e coleta de referências em recursos/referencias/, fotos em recursos/fotos/ e logo em recursos/logos/)
+4) IA & Credenciais Meta — Conclusão da Instalação (provedor de IA no Cofre + credenciais Instagram/Meta opcionais validadas sem expor segredos, entregando o Cockpit Web pronto em http://127.0.0.1:3000)
 
 Em cada interação, mostre o marco atual, o progresso, a decisão que estamos tomando e o resultado da próxima etapa. Nunca termine apenas perguntando se quero continuar.
 
 Regras fundamentais:
 - Fale comigo em português simples, sem jargão. Explique o que vai fazer antes de cada comando.
 - Se o git clone pedir login ou falhar por falta de permissão, pare e me explique como autenticar no GitHub (por exemplo gh auth login ou login no navegador) ou sugerir usar o ZIP. Nunca peça token ou senha no chat.
-- No marco Instalação, confira node --version (22 ou superior). Rode npm install e npm run instalar -- --plataforma antigravity, depois npm run diagnosticar e me explique o resultado.
+- No Marco 1 (Instalação), confira node --version (22 ou superior). Rode npm install e npm run instalar -- --plataforma antigravity, depois npm run diagnosticar e me explique o resultado.
+- No Marco 3 (Identidade Visual & Referências), além de registrar cores/tipografia/brandbook, me peça explicitamente para salvar ou enviar referências visuais em recursos/referencias/, fotos em recursos/fotos/ e logo em recursos/logos/ (ou avisar se enviarei depois pela aba Arquivos do Cockpit), analisando as referências recebidas para que os agentes aprendam o estilo da marca.
 - Nunca abra, mostre ou peça o conteúdo do .env nem chaves/tokens no chat. Para IA e Meta API, me guie até o Cockpit Web (http://127.0.0.1:3000 -> Conexões) ou .env local seguindo documentacao/configurar-meta.md, e valide com npm run validar:integracoes.
-- O marco IA & Credenciais Meta é uma parada obrigatória: só avance quando eu confirmar que configurei ou que vou deixar a publicação Meta para depois.
+- O Marco 4 (IA & Credenciais Meta) é o marco final da instalação: espere minha confirmação, valide com npm run validar:integracoes, inicie o Cockpit Web com npm start (http://127.0.0.1:3000), marque o onboarding inicial como concluído no Cockpit e encerre entregando o Cockpit pronto para eu operar direto com os agentes por lá (e avise para abrir nova conversa caso use os comandos /... aqui no Antigravity).
 - Preserve .env, apps/daemon/dados/, conteudos/, recursos/, saidas/ e upgrades existentes.
-- No marco Publicação, nunca publique sem aprovação explícita no Cockpit/WhatsApp ou a palavra PUBLICAR.
-- Ao final, deixe o Cockpit Web pronto via npm start (http://127.0.0.1:3000) e me avise para abrir uma nova conversa caso os novos comandos /... ainda não apareçam no menu.
 ```
 
 ---
@@ -80,7 +73,7 @@ Depois rode npm run diagnosticar e me confirme quais novos agentes e skills fica
 
 ## Atualizar depois
 
-As atualizações trocam somente o código e os recursos do produto. **Seus dados nunca são tocados**: `.env`, banco SQLite + Cofre (`apps/daemon/dados/`), marca e pautas (`conteudos/`), fotos e logos (`recursos/`), criativos (`saidas/`, `previas/`) e upgrades instalados. Abra o Antigravity na pasta e cole:
+As atualizações trocam somente o código e os recursos do produto. **Seus dados nunca são tocados**: `.env`, banco SQLite + Cofre (`apps/daemon/dados/`), marca e pautas (`conteudos/`), fotos, referências e logos (`recursos/`), criativos (`saidas/`, `previas/`) e upgrades instalados. Abra o Antigravity na pasta e cole:
 
 ```text
 Atualize o Criativo AI Studio Online nesta pasta. Se ela for um clone do git, rode npm run atualizar -- --plataforma antigravity. Se eu tiver baixado um ZIP novo, rode npm run atualizar -- --simular --zip CAMINHO-DO-ARQUIVO --plataforma antigravity, me mostre o relatório e, com a minha confirmação, rode sem --simular. Nunca apague nem sobrescreva .env, apps/daemon/dados, conteudos, recursos, saidas, previas ou meus upgrades, e nunca abra o .env. Ao final, rode npm run diagnosticar e explique em português simples o que mudou.
