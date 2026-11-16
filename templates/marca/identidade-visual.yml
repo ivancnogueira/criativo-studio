@@ -1,0 +1,24 @@
+# Identidade Visual (Template Agnóstico)
+# Preenchido dinamicamente durante o onboarding ou via Conexões / Marca no Cockpit.
+
+perfil:
+  marca: "[NOME_DA_MARCA]"
+  usuario: "[@SEU_PERFIL]"
+  avatar: null
+  verificado: false
+
+tema:
+  estilo: null
+  cor_fundo: "#141414"
+  cor_texto: "#FFFFFF"
+  cor_destaque: "#31CF76"
+  cor_secundaria: "#42A0FF"
+  cor_acento: "#F59E0B"
+  fonte_titulo: "Inter, sans-serif"
+  fonte_texto: "Inter, sans-serif"
+
+recursos:
+  fotos: []
+  logo: null
+  referencias: []
+  direitos_de_uso: null

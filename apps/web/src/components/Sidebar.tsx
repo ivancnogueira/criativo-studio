@@ -103,9 +103,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const filteredAgents = useMemo(() => {
+    const unlocked = agentes.filter(
+      (a) => (a.config as Record<string, unknown>)?.upgrade_desbloqueado !== false
+    );
     const q = search.trim().toLowerCase();
-    if (!q) return agentes;
-    return agentes.filter(
+    if (!q) return unlocked;
+    return unlocked.filter(
       (a) =>
         a.nome.toLowerCase().includes(q) ||
         a.papel.toLowerCase().includes(q) ||

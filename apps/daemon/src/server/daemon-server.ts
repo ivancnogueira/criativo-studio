@@ -95,14 +95,6 @@ export async function createDaemonServer(
   const vault = new VaultService(db, options.vaultMasterKey);
   const wsHub = new WebSocketHub();
   const providers = new ProviderRegistry({ vault });
-  const runner = new AgentRunner({
-    db,
-    queue,
-    vault,
-    providers,
-    wsHub,
-    customTools: options.customTools,
-  });
   seedDefaultStudioExperience(db);
   if (process.env.CRIATIVO_IMPORT_OPENBOT_DB === "1") {
     importOpenBotTelemetryIfAvailable(db);
@@ -111,6 +103,15 @@ export async function createDaemonServer(
     db,
     vault,
     workspaceRoot: options.workspaceRoot,
+  });
+  const runner = new AgentRunner({
+    db,
+    queue,
+    vault,
+    providers,
+    providerConnection,
+    wsHub,
+    customTools: options.customTools,
   });
   const transcription = new TranscriptionService({ vault });
   const whatsapp = new WhatsAppStudioClient({

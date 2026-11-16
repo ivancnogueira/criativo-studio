@@ -10,6 +10,7 @@ import type { WebSocketHub } from "../../server/websocket-hub.ts";
 import type { VaultService } from "../../vault/vault-service.ts";
 import type { McpClient } from "../providers/mcp-client.ts";
 import type { ProviderRegistry } from "../providers/provider-registry.ts";
+import type { ProviderConnectionService } from "../../providers/provider-connection-service.ts";
 import { BrowserAutomationService } from "../tools/browser-automation.ts";
 import { generateImageTool, type GenerateImageParams } from "../tools/generate-image.ts";
 import { metaPublishTool, type MetaPublishParams } from "../tools/meta-publish.ts";
@@ -30,6 +31,7 @@ export interface AgentRunnerOptions {
   queue: FifoQueueManager;
   vault: VaultService;
   providers: ProviderRegistry;
+  providerConnection?: ProviderConnectionService;
   wsHub?: WebSocketHub;
   skillLoader?: SkillLoader;
   mcpClients?: McpClient[];
@@ -157,6 +159,7 @@ export class AgentRunner {
   private readonly queue: FifoQueueManager;
   private readonly vault: VaultService;
   private readonly providers: ProviderRegistry;
+  private readonly providerConnection?: ProviderConnectionService;
   private readonly wsHub?: WebSocketHub;
   private readonly skillLoader: SkillLoader;
   private readonly memoryManager: MemoryManager;
@@ -171,6 +174,7 @@ export class AgentRunner {
     this.queue = options.queue;
     this.vault = options.vault;
     this.providers = options.providers;
+    this.providerConnection = options.providerConnection;
     this.wsHub = options.wsHub;
     this.skillLoader = options.skillLoader ?? new SkillLoader();
     this.memoryManager = new MemoryManager(options.db);
@@ -324,7 +328,12 @@ export class AgentRunner {
         memoriaContexto: memories,
       });
       const model = this.getAgentModel(agenteId);
-      const client = this.providers.getClientForModel(model);
+      let client: ReturnType<ProviderRegistry["getClientForModel"]> | null = null;
+      try {
+        client = this.providers.getClientForModel(model);
+      } catch {
+        client = null;
+      }
 
       const mcpTools = this.mcpClients.flatMap((c) => c.tools);
       const availableTools = [...NATIVE_TOOLS_SCHEMA, ...mcpTools];
@@ -339,7 +348,43 @@ export class AgentRunner {
       let finalText = "";
       let turnsExecuted = 0;
 
-      for (let turn = 0; turn < this.maxTurns; turn++) {
+      if (!client && this.providerConnection) {
+        turnsExecuted = 1;
+        const provName = this.providers.resolveProviderName(model);
+        const promptMessages = messages.map((m) => ({
+          role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
+          text: m.content,
+        }));
+
+        if (provName === "opencode") {
+          const ocRes = await this.providerConnection.getOpenCodeService().executePrompt({
+            modelId: model,
+            systemPrompt: compiledSkill.systemPrompt,
+            messages: promptMessages,
+          });
+          finalText = ocRes.text;
+        } else if (provName === "claude" || provName === "openai") {
+          const cliRes = await this.providerConnection.getCliOAuthService().executeTurn({
+            provedor: provName,
+            modelId: model,
+            systemPrompt: compiledSkill.systemPrompt,
+            messages: promptMessages,
+          });
+          finalText = cliRes.text;
+        } else {
+          const agRes = await this.providerConnection.getAntigravityService().executeCodeAssistGenerate({
+            model,
+            systemPrompt: compiledSkill.systemPrompt,
+            messages: promptMessages,
+          });
+          finalText = agRes.text;
+        }
+      } else if (!client) {
+        // Dispara erro original do registry caso não haja providerConnection nem API Key
+        client = this.providers.getClientForModel(model);
+      }
+
+      for (let turn = 0; client && turn < this.maxTurns; turn++) {
         turnsExecuted += 1;
 
         const turnResult = await client.streamTurn(

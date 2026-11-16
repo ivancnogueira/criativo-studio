@@ -4,7 +4,7 @@ import type { CriativoDatabase } from "../../database/client.ts";
 import type { FifoQueueManager } from "../../queue/fifo-queue.ts";
 
 export interface HandoffInput {
-  tarefa_id: string;
+  tarefa_id?: string | null;
   de_agente_id: string;
   para_agente_id: string;
   instrucao: string;
@@ -82,7 +82,7 @@ export class HandoffBus {
     proximaTarefaId: string | null;
   } {
     const mensagem = this.postChannelMessage({
-      tarefa_id: input.tarefa_id,
+      tarefa_id: input.tarefa_id ?? null,
       de_agente_id: input.de_agente_id,
       para_agente_id: input.para_agente_id,
       tipo_mensagem: "handoff",
@@ -101,7 +101,7 @@ export class HandoffBus {
       .run(
         randomUUID(),
         randomUUID(),
-        input.tarefa_id,
+        input.tarefa_id ?? mensagem.mensagem_id,
         new Date().toISOString(),
         JSON.stringify({
           de: input.de_agente_id,
@@ -118,7 +118,7 @@ export class HandoffBus {
         titulo: `Handoff [${input.de_agente_id} -> ${input.para_agente_id}]`,
         prioridade: input.prioridade ?? 3,
         payload: {
-          tarefa_origem_id: input.tarefa_id,
+          tarefa_origem_id: input.tarefa_id ?? null,
           instrucao: input.instrucao,
           artefatos: input.artefatos ?? [],
         },

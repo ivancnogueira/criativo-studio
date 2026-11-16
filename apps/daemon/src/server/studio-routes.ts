@@ -16,6 +16,8 @@ import type {
 } from "@criativo/contracts";
 import type { CriativoDatabase } from "../database/client.ts";
 import type { ProviderRegistry } from "../engine/providers/provider-registry.ts";
+import { HandoffBus } from "../engine/runner/handoff-bus.ts";
+import { ROSTER_15_AGENTES } from "../engine/runner/roster-defaults.ts";
 import type { ProviderConnectionService } from "../providers/provider-connection-service.ts";
 import type { FifoQueueManager } from "../queue/fifo-queue.ts";
 import type { VaultService } from "../vault/vault-service.ts";
@@ -28,6 +30,17 @@ import {
   recordChatTurnUsage,
   recordSkillLoadUsage,
 } from "./analytics-skills-service.ts";
+import {
+  activateUpgradePackage,
+  getBrandIdentity,
+  listUpgradePackages,
+  saveBrandIdentity,
+} from "./brand-onboarding-service.ts";
+import {
+  buildStudioLiveContext,
+  isUpgradeUnlocked,
+  validateMetaIntegration,
+} from "./studio-tools-bridge.ts";
 import type { WebSocketHub } from "./websocket-hub.ts";
 
 export interface StudioRoutesDeps {
@@ -143,6 +156,22 @@ function mapWorkflowRow(row: {
   };
 }
 
+function extractMentionedAgentIds(text: string, excludeId?: string): string[] {
+  const found = new Set<string>();
+  const validIds = new Set(ROSTER_15_AGENTES.map((a) => a.agente_id));
+
+  // Detecta [HANDOFF:agente_id] ou @agente_id
+  for (const m of text.matchAll(/\[HANDOFF:([a-z0-9_]+)\]/gi)) {
+    const id = m[1].toLowerCase();
+    if (validIds.has(id) && id !== excludeId) found.add(id);
+  }
+  for (const m of text.matchAll(/@([a-z0-9_]+)/gi)) {
+    const id = m[1].toLowerCase();
+    if (validIds.has(id) && id !== excludeId) found.add(id);
+  }
+  return Array.from(found);
+}
+
 function enrichAgentRow(
   db: CriativoDatabase,
   row: {
@@ -156,7 +185,8 @@ function enrichAgentRow(
     ordem_exibicao: number;
     config_json: string;
     atualizado_em: string;
-  }
+  },
+  workspaceRoot = process.cwd()
 ) {
   const canalId = `agente:${row.agente_id}`;
   const unreadRow = db.connection
@@ -170,7 +200,30 @@ function enrichAgentRow(
     )
     .get(canalId) as { conteudo_markdown: string; criado_em: string } | undefined;
 
-  const config = safeJsonParse<Record<string, unknown>>(row.config_json, {});
+  const def = ROSTER_15_AGENTES.find((a) => a.agente_id === row.agente_id);
+  const parsedConfig = safeJsonParse<Record<string, unknown>>(row.config_json, {});
+  const pacote = (
+    parsedConfig.pacote === "bonus" || parsedConfig.pacote === "video"
+      ? parsedConfig.pacote
+      : def?.pacote ?? "base"
+  ) as "base" | "bonus" | "video";
+  const upgradeDesbloqueado = isUpgradeUnlocked(db, workspaceRoot, pacote);
+  const promptBase =
+    typeof parsedConfig.prompt_base === "string" && parsedConfig.prompt_base.trim().length > 0
+      ? parsedConfig.prompt_base
+      : def?.prompt_base ?? "";
+
+  const config = {
+    ...parsedConfig,
+    pacote,
+    upgrade_desbloqueado: upgradeDesbloqueado,
+    skill_slug: parsedConfig.skill_slug ?? def?.skill_slug,
+    ferramentas: Array.isArray(parsedConfig.ferramentas)
+      ? parsedConfig.ferramentas
+      : def?.ferramentas ?? ["handoff_agente"],
+    prompt_base: promptBase,
+  };
+
   return {
     ...row,
     config,
@@ -215,17 +268,27 @@ async function generateAgentChatReply(
   const onboarding = deps.providerConnection.getOnboardingState();
   const skillSlug = typeof config.skill_slug === "string" ? config.skill_slug : agente.agente_id;
   const loadedSkill =
-    process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1" ? null : loadSkillPromptBySlug(skillSlug);
+    process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1"
+      ? null
+      : loadSkillPromptBySlug(skillSlug, undefined, workspaceRoot);
 
   // Carrega memórias persistidas do agente para contextualizar respostas reais
   const memories = deps.db.connection
     .prepare(`SELECT texto FROM projecao_agente_memorias WHERE agente_id = ? ORDER BY criado_em DESC LIMIT 8;`)
     .all(agente.agente_id) as Array<{ texto: string }>;
 
+  const liveStudioContext = buildStudioLiveContext({
+    db: deps.db,
+    vault: deps.vault,
+    providerConnection: deps.providerConnection,
+    workspaceRoot,
+  });
+
   const promptBaseParts = [
     typeof config.prompt_base === "string" && config.prompt_base.length > 0
       ? config.prompt_base
       : `Você é ${agente.nome} (${agente.papel}) do Criativo AI Studio para ${onboarding.marca_nome} (${onboarding.perfil_handle}).`,
+    liveStudioContext,
   ];
   if (loadedSkill) {
     promptBaseParts.push(`Instruções oficiais da habilidade ${skillSlug}:\n${loadedSkill.body.slice(0, 2800)}`);
@@ -233,6 +296,50 @@ async function generateAgentChatReply(
   if (memories.length > 0) {
     promptBaseParts.push(`Memórias do agente:\n${memories.map((m) => `- ${m.texto}`).join("\n")}`);
   }
+
+  // Ponte nativa para validação real da Meta Graph API (sem expor tokens)
+  const lowerCheck = userPrompt.toLowerCase();
+  const asksMetaValidation =
+    agente.agente_id === "engenheiro_meta" &&
+    /(validar|valida|valide|testar|teste|status|diagn[oó]stico|integra[cç][aã]o|meta|instagram|credencia)/i.test(
+      lowerCheck
+    );
+
+  let metaValidationSummary: Awaited<ReturnType<typeof validateMetaIntegration>> | null = null;
+  if (asksMetaValidation && deps.vault) {
+    const tMeta0 = Date.now();
+    metaValidationSummary = await validateMetaIntegration(deps.vault);
+    const metaStep: PassoChat = {
+      id: `step-${randomUUID().slice(0, 8)}`,
+      ferramenta: "validar_integracao_meta",
+      titulo: metaValidationSummary.ok
+        ? `Meta Graph API v21.0 validada (HTTP ${metaValidationSummary.detalhes.httpStatus} · Estágio ${metaValidationSummary.estagio})`
+        : `Diagnóstico Meta (Estágio ${metaValidationSummary.estagio}): ${metaValidationSummary.resumo.slice(0, 80)}`,
+      detalhes: JSON.stringify({
+        tokenConfigurado: metaValidationSummary.detalhes.tokenConfigurado,
+        accountIdConfigurado: metaValidationSummary.detalhes.accountIdConfigurado,
+        graphApiOk: metaValidationSummary.detalhes.graphApiOk,
+        username: metaValidationSummary.detalhes.username,
+        followersCount: metaValidationSummary.detalhes.followersCount,
+        mediaCount: metaValidationSummary.detalhes.mediaCount,
+      }),
+      status: metaValidationSummary.ok ? "concluido" : "erro",
+      duracao_ms: Date.now() - tMeta0,
+    };
+    onProgress?.({
+      fase: "etapa",
+      mensagem_status: metaValidationSummary.resumo,
+      step: metaStep,
+    });
+    promptBaseParts.push(
+      `## Resultado Real Executado Agora por validar_integracao_meta (Cofre SQLite + Graph API v21.0)\n${JSON.stringify(
+        metaValidationSummary,
+        null,
+        2
+      )}\nBaseie sua resposta exclusivamente neste diagnóstico real sem jamais pedir ou exibir tokens.`
+    );
+  }
+
   const promptBase = promptBaseParts.join("\n\n");
 
   const providerName = deps.providers.resolveProviderName(agente.modelo_padrao);
@@ -266,6 +373,18 @@ async function generateAgentChatReply(
     duracao_ms: 45,
   };
   const steps: PassoChat[] = [skillStep];
+  if (metaValidationSummary) {
+    steps.push({
+      id: `step-${randomUUID().slice(0, 8)}`,
+      ferramenta: "validar_integracao_meta",
+      titulo: metaValidationSummary.ok
+        ? `Meta Graph API v21.0 validada (HTTP ${metaValidationSummary.detalhes.httpStatus} · @${metaValidationSummary.detalhes.username ?? "conectado"})`
+        : `Diagnóstico Meta (Estágio ${metaValidationSummary.estagio}): ${metaValidationSummary.resumo.slice(0, 90)}`,
+      detalhes: metaValidationSummary.resumo,
+      status: metaValidationSummary.ok ? "concluido" : "erro",
+      duracao_ms: 95,
+    });
+  }
   onProgress?.({
     fase: "etapa",
     mensagem_status: loadedSkill
@@ -748,6 +867,22 @@ async function generateAgentChatReply(
     }
   }
 
+  if (metaValidationSummary) {
+    const det = metaValidationSummary.detalhes;
+    const metaReportMarkdown = [
+      `### Diagnóstico Oficial da Integração Meta (Cofre AES-256-GCM + Graph API v21.0)`,
+      "",
+      `| Componente | Status | Detalhe |`,
+      `|---|---|---|`,
+      `| Token Meta no Cofre SQLite | ${det.tokenConfigurado ? "✅ Configurado" : "❌ Ausente"} | Criptografado localmente (nunca exposto) |`,
+      `| Instagram Business Account ID | ${det.accountIdConfigurado ? "✅ Configurado" : "❌ Ausente"} | ID validado no Cofre |`,
+      `| Meta Graph API v21.0 | ${det.graphApiOk ? `✅ HTTP ${det.httpStatus} OK` : `❌ Falha${det.httpStatus ? ` HTTP ${det.httpStatus}` : ""}`} | ${det.graphApiOk ? `Perfil @${det.username ?? "ativo"}` : det.erro ?? "Erro na consulta"} |`,
+      "",
+      `**Estágio atual:** ${metaValidationSummary.estagio} — ${metaValidationSummary.resumo}`,
+    ].join("\n");
+    return { markdown: metaReportMarkdown, steps, tarefaCriadaId, anexosGerados };
+  }
+
   // 5. Resposta honesta: diferencia erro técnico em provedor conectado vs ausência real de conexão
   const statusLabel = hadConnectedRoute ? "Falha na chamada" : "Não conectado";
   const detailLine = hadConnectedRoute
@@ -865,7 +1000,54 @@ export async function tryHandleStudioRoute(
   }
 
   if (method === "GET" && path === "/api/habilidades") {
-    sendJson(res, 200, { habilidades: listInstalledSkills(db) });
+    sendJson(res, 200, { habilidades: listInstalledSkills(db, undefined, workspaceRoot) });
+    return true;
+  }
+
+  const skillDetailMatch = path.match(/^\/api\/habilidades\/([^/]+)$/);
+  if (method === "GET" && skillDetailMatch) {
+    const slug = decodeURIComponent(skillDetailMatch[1]);
+    const loaded = loadSkillPromptBySlug(slug, undefined, workspaceRoot);
+    if (!loaded) {
+      sendJson(res, 404, { erro: `Habilidade '${slug}' não encontrada.` });
+      return true;
+    }
+    sendJson(res, 200, { slug, caminho: loaded.path, conteudo: loaded.body });
+    return true;
+  }
+
+  // Marca & Onboarding Estratégico (6 Marcos)
+  if (method === "GET" && path === "/api/marca/identidade") {
+    sendJson(res, 200, { identidade: getBrandIdentity(providerConnection) });
+    return true;
+  }
+
+  if (method === "PUT" && path === "/api/marca/identidade") {
+    const body = await readJsonBody(req);
+    const updated = await saveBrandIdentity(providerConnection, workspaceRoot, body);
+    sendJson(res, 200, { identidade: updated, onboarding: providerConnection.getOnboardingState() });
+    return true;
+  }
+
+  // Upgrades Modulares (Bônus & Vídeo em Etapas)
+  if (method === "GET" && path === "/api/upgrades") {
+    sendJson(res, 200, { upgrades: listUpgradePackages(db, workspaceRoot) });
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/upgrades/instalar") {
+    const body = await readJsonBody(req);
+    if (body.pacote !== "bonus" && body.pacote !== "video") {
+      sendJson(res, 400, { erro: "Campo obrigatório: 'pacote' ('bonus' ou 'video')." });
+      return true;
+    }
+    const upgrades = activateUpgradePackage(db, workspaceRoot, body.pacote);
+    wsHub.broadcast("provider:updated", {
+      provedor: "gemini",
+      conectado: true,
+      modo: "assinatura",
+    });
+    sendJson(res, 200, { ok: true, upgrades });
     return true;
   }
 
@@ -893,7 +1075,13 @@ export async function tryHandleStudioRoute(
       if (deps.vault && body.segredos && typeof body.segredos === "object") {
         for (const [k, v] of Object.entries(body.segredos as Record<string, unknown>)) {
           if (typeof v === "string" && v.trim().length > 0) {
-            deps.vault.setSecret(k, v.trim());
+            const val = v.trim();
+            deps.vault.setSecret(k, val);
+            // Sincroniza aliases Meta para compatibilidade entre UI, Chat e CLI
+            if (k === "instagram_access_token") deps.vault.setSecret("META_ACCESS_TOKEN", val);
+            if (k === "META_ACCESS_TOKEN") deps.vault.setSecret("instagram_access_token", val);
+            if (k === "instagram_business_account_id") deps.vault.setSecret("META_IG_USER_ID", val);
+            if (k === "META_IG_USER_ID") deps.vault.setSecret("instagram_business_account_id", val);
           }
         }
       }
@@ -920,38 +1108,19 @@ export async function tryHandleStudioRoute(
 
     // acao === "testar"
     if (conectorId === "instagram" && deps.vault) {
-      const token = deps.vault.getSecret("instagram_access_token");
-      const accountId = deps.vault.getSecret("instagram_business_account_id");
-      if (!token || !accountId) {
+      const report = await validateMetaIntegration(deps.vault);
+      if (!report.detalhes.tokenConfigurado || !report.detalhes.accountIdConfigurado) {
         sendJson(res, 400, { ok: false, mensagem: "Preencha Access Token e Business Account ID antes de testar." });
         return true;
       }
-      try {
-        const resGraph = await fetch(
-          `https://graph.facebook.com/v21.0/${encodeURIComponent(accountId)}?fields=id,username,followers_count&access_token=${encodeURIComponent(token)}`
-        );
-        const dataGraph = (await resGraph.json()) as Record<string, unknown>;
-        if (!resGraph.ok) {
-          sendJson(res, 200, {
-            ok: false,
-            mensagem: `Meta API respondeu HTTP ${resGraph.status}`,
-            detalhes: dataGraph,
-          });
-          return true;
-        }
-        sendJson(res, 200, {
-          ok: true,
-          mensagem: `Conectado a @${String(dataGraph.username ?? accountId)}`,
-          detalhes: dataGraph,
-        });
-        return true;
-      } catch (err) {
-        sendJson(res, 200, {
-          ok: false,
-          mensagem: err instanceof Error ? err.message : "Erro ao consultar Meta Graph API.",
-        });
-        return true;
-      }
+      sendJson(res, 200, {
+        ok: report.ok,
+        mensagem: report.ok
+          ? `Conectado a @${report.detalhes.username ?? "conta_business"}`
+          : report.resumo,
+        detalhes: report.detalhes,
+      });
+      return true;
     }
 
     if (conectorId === "telegram" && deps.vault) {
@@ -1094,10 +1263,15 @@ export async function tryHandleStudioRoute(
 
   // 3. Agentes enriquecidos + criação de customizado + edição completa
   if (method === "GET" && path === "/api/agentes") {
+    const apenasDesbloqueados = url.searchParams.get("apenas_desbloqueados") === "1";
     const rows = db.connection
       .prepare(`SELECT * FROM projecao_agentes ORDER BY ordem_exibicao ASC;`)
       .all() as Array<Parameters<typeof enrichAgentRow>[1]>;
-    sendJson(res, 200, { agentes: rows.map((row) => enrichAgentRow(db, row)) });
+    const enriched = rows.map((row) => enrichAgentRow(db, row, workspaceRoot));
+    const filtered = apenasDesbloqueados
+      ? enriched.filter((a) => a.config.upgrade_desbloqueado !== false)
+      : enriched;
+    sendJson(res, 200, { agentes: filtered });
     return true;
   }
 
@@ -1232,7 +1406,46 @@ export async function tryHandleStudioRoute(
       .prepare(`SELECT * FROM projecao_agentes WHERE agente_id = ?;`)
       .get(agenteId) as Parameters<typeof enrichAgentRow>[1];
 
-    sendJson(res, 200, { agente: enrichAgentRow(db, updated) });
+    sendJson(res, 200, { agente: enrichAgentRow(db, updated, workspaceRoot) });
+    return true;
+  }
+
+  const agentRestoreMatch = path.match(/^\/api\/agentes\/([^/]+)\/restaurar$/);
+  if (method === "POST" && agentRestoreMatch) {
+    const agenteId = decodeURIComponent(agentRestoreMatch[1]);
+    const def = ROSTER_15_AGENTES.find((a) => a.agente_id === agenteId);
+    if (!def) {
+      sendJson(res, 404, { erro: `Agente padrão '${agenteId}' não encontrado.` });
+      return true;
+    }
+    const restoredConfig = {
+      frente: def.frente,
+      pacote: def.pacote,
+      pasta: def.pasta,
+      skill_slug: def.skill_slug,
+      avatar_shape: def.avatar_shape,
+      avatar_color: def.avatar_color,
+      effort: def.effort,
+      ferramentas: def.ferramentas,
+      prompt_base: def.prompt_base,
+      customizado: false,
+    };
+    db.connection
+      .prepare(
+        `UPDATE projecao_agentes SET nome = ?, papel = ?, modelo_padrao = ?, config_json = ?, atualizado_em = ? WHERE agente_id = ?;`
+      )
+      .run(
+        def.nome,
+        def.papel,
+        def.modelo_padrao,
+        JSON.stringify(restoredConfig),
+        new Date().toISOString(),
+        agenteId
+      );
+    const updated = db.connection
+      .prepare(`SELECT * FROM projecao_agentes WHERE agente_id = ?;`)
+      .get(agenteId) as Parameters<typeof enrichAgentRow>[1];
+    sendJson(res, 200, { agente: enrichAgentRow(db, updated, workspaceRoot) });
     return true;
   }
 
@@ -1414,9 +1627,98 @@ export async function tryHandleStudioRoute(
       mensagem: agentMsg,
     });
 
+    // Handoff 1:1 automático se o usuário ou agente mencionou outro especialista (@agente_id / [HANDOFF:id])
+    const handoffTargets = extractMentionedAgentIds(
+      `${userMsg.conteudo_markdown}\n${agentMsg.conteudo_markdown}`,
+      agenteId
+    ).slice(0, 2);
+    const mensagensHandoff: MensagemChat[] = [];
+
+    if (handoffTargets.length > 0) {
+      const handoffBus = new HandoffBus(db, deps.queue);
+      let chainHistory = [...history, agentMsg];
+      for (let hIdx = 0; hIdx < handoffTargets.length; hIdx += 1) {
+        const targetId = handoffTargets[hIdx];
+        const targetAg = db.connection
+          .prepare(`SELECT * FROM projecao_agentes WHERE agente_id = ?;`)
+          .get(targetId) as Parameters<typeof generateAgentChatReply>[1] | undefined;
+        if (!targetAg) continue;
+
+        handoffBus.dispatchHandoff({
+          tarefa_id: agentMsg.tarefa_id ?? null,
+          de_agente_id: agenteId,
+          para_agente_id: targetId,
+          instrucao: `Handoff de ${agente.nome}: ${userMsg.conteudo_markdown}`,
+          artefatos: agentMsg.anexos.map((a) => a.caminho_relativo),
+          enfileirarNovaTarefa: false,
+        });
+
+        const hReply = await generateAgentChatReply(
+          deps,
+          targetAg,
+          `[Handoff recebido de ${agente.nome} (@${agenteId})]\nSolicitação original: ${userMsg.conteudo_markdown}\nEntrega do colega anterior:\n${agentMsg.conteudo_markdown}`,
+          anexos,
+          chainHistory,
+          (prog) => {
+            wsHub.broadcast("chat:progress", {
+              canal_id: canalId,
+              agente_id: targetId,
+              turno_id: `${liveTurnId}-h${hIdx}`,
+              ...prog,
+            });
+          }
+        );
+
+        const hMsg: MensagemChat = {
+          mensagem_id: `msg-${randomUUID()}`,
+          canal_id: canalId,
+          agente_id: targetId,
+          autor: "agente",
+          autor_nome: targetAg.nome,
+          conteudo_markdown: hReply.markdown,
+          anexos: hReply.anexosGerados,
+          steps: [
+            {
+              id: `step-${randomUUID().slice(0, 8)}`,
+              ferramenta: "handoff_agente",
+              titulo: `Recebeu o bastão de ${agente.nome}`,
+              status: "concluido",
+              duracao_ms: 20,
+            },
+            ...hReply.steps,
+          ],
+          tarefa_id: hReply.tarefaCriadaId,
+          lida: true,
+          criado_em: new Date(Date.now() + 10 + hIdx * 10).toISOString(),
+        };
+
+        insertMsgStmt.run(
+          hMsg.mensagem_id,
+          canalId,
+          targetId,
+          "agente",
+          targetAg.nome,
+          hMsg.conteudo_markdown,
+          JSON.stringify(hMsg.anexos),
+          JSON.stringify(hMsg.steps),
+          hMsg.tarefa_id ?? null,
+          1,
+          hMsg.criado_em
+        );
+        wsHub.broadcast("chat:message", {
+          canal_id: canalId,
+          agente_id: targetId,
+          mensagem: hMsg,
+        });
+        mensagensHandoff.push(hMsg);
+        chainHistory = [...chainHistory, hMsg];
+      }
+    }
+
     sendJson(res, 201, {
       mensagem_usuario: userMsg,
       mensagem_agente: agentMsg,
+      mensagens_handoff: mensagensHandoff,
     });
     return true;
   }
@@ -1578,23 +1880,61 @@ export async function tryHandleStudioRoute(
       mensagem: userMsg,
     });
 
-    const membros = safeJsonParse<string[]>(canal.membros_agentes_json, ["estrategista"]);
+    const membrosConfig = safeJsonParse<string[]>(canal.membros_agentes_json, ["estrategista"]);
+    const mencionados = extractMentionedAgentIds(userMsg.conteudo_markdown);
+    const membrosAtivos =
+      mencionados.length > 0
+        ? Array.from(new Set([...mencionados, ...membrosConfig.filter((m) => mencionados.includes(m))]))
+        : membrosConfig.slice(0, 4);
+
+    // Carrega histórico recente real do canal em ordem cronológica
+    const prevRowsDesc = db.connection
+      .prepare(
+        `SELECT * FROM projecao_conversas_chat WHERE canal_id = ? AND mensagem_id != ? ORDER BY criado_em DESC LIMIT 16;`
+      )
+      .all(canalId, userMsg.mensagem_id) as Array<Parameters<typeof mapChatRow>[0]>;
+    const runningHistory: MensagemChat[] = [
+      ...prevRowsDesc.reverse().map(mapChatRow),
+      userMsg,
+    ];
+
     const respostas: MensagemChat[] = [];
     const liveTurnId = `turn-${randomUUID().slice(0, 8)}`;
+    const handoffBus = new HandoffBus(db, deps.queue);
 
-    for (let idx = 0; idx < Math.min(2, membros.length); idx += 1) {
-      const mId = membros[idx];
+    for (let idx = 0; idx < membrosAtivos.length; idx += 1) {
+      const mId = membrosAtivos[idx];
       const ag = db.connection
         .prepare(`SELECT * FROM projecao_agentes WHERE agente_id = ?;`)
         .get(mId) as Parameters<typeof generateAgentChatReply>[1] | undefined;
       if (!ag) continue;
 
+      const colegasAnteriores = respostas
+        .map((r) => `### Contribuição anterior de ${r.autor_nome ?? r.agente_id} (@${r.agente_id}):\n${r.conteudo_markdown}`)
+        .join("\n\n");
+
+      const promptCanal =
+        idx === 0 || !colegasAnteriores
+          ? `[Canal ${canal.nome}] Pedido do usuário: ${userMsg.conteudo_markdown}\n(Sua equipe neste canal: ${membrosAtivos.map((id) => `@${id}`).join(", ")}. Entregue a parte da sua especialidade para o próximo colega continuar.)`
+          : `[Canal ${canal.nome}] Pedido original: ${userMsg.conteudo_markdown}\n\n${colegasAnteriores}\n\nAgora é a sua vez (${ag.nome} / @${ag.agente_id}). Leia o que seus colegas produziram acima e execute a sua etapa especializada complementando e avançando a produção sem repetir o que já foi feito.`;
+
+      if (idx > 0 && respostas[idx - 1]?.agente_id) {
+        handoffBus.dispatchHandoff({
+          tarefa_id: respostas[idx - 1].tarefa_id ?? null,
+          de_agente_id: respostas[idx - 1].agente_id!,
+          para_agente_id: ag.agente_id,
+          instrucao: `Passagem de bastão no canal ${canal.nome}`,
+          artefatos: respostas[idx - 1].anexos.map((a) => a.caminho_relativo),
+          enfileirarNovaTarefa: false,
+        });
+      }
+
       const reply = await generateAgentChatReply(
         deps,
         ag,
-        `[Canal ${canal.nome}] ${userMsg.conteudo_markdown}`,
+        promptCanal,
         anexos,
-        [],
+        runningHistory,
         (prog) => {
           wsHub.broadcast("chat:progress", {
             canal_id: canalId,
@@ -1613,7 +1953,19 @@ export async function tryHandleStudioRoute(
         autor_nome: ag.nome,
         conteudo_markdown: reply.markdown,
         anexos: reply.anexosGerados,
-        steps: reply.steps,
+        steps:
+          idx > 0 && respostas[idx - 1]
+            ? [
+                {
+                  id: `step-${randomUUID().slice(0, 8)}`,
+                  ferramenta: "handoff_agente",
+                  titulo: `Recebeu contexto de ${respostas[idx - 1].autor_nome ?? respostas[idx - 1].agente_id}`,
+                  status: "concluido",
+                  duracao_ms: 18,
+                },
+                ...reply.steps,
+              ]
+            : reply.steps,
         tarefa_id: reply.tarefaCriadaId,
         lida: true,
         criado_em: new Date(Date.now() + 5 + idx * 5).toISOString(),
@@ -1638,6 +1990,7 @@ export async function tryHandleStudioRoute(
         mensagem: agentMsg,
       });
       respostas.push(agentMsg);
+      runningHistory.push(agentMsg);
     }
 
     db.connection

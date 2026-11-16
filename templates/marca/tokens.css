@@ -1,0 +1,12 @@
+:root {
+  --brand-primary: #31cf76;
+  --brand-secondary: #42a0ff;
+  --brand-accent: #f59e0b;
+  --brand-background: #141414;
+  --brand-surface: #1a1a1a;
+  --brand-text: #ffffff;
+  --brand-text-muted: #979797;
+  --brand-font-heading: "Inter", sans-serif;
+  --brand-font-body: "Inter", sans-serif;
+  --brand-space-safe: 72px;
+}

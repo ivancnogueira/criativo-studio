@@ -39,6 +39,7 @@ interface RightInspectorPanelProps {
       effort?: NivelEsforco;
     }
   ) => Promise<void>;
+  onRestoreAgentDefaults?: (agenteId: string) => Promise<void>;
   onAddMemory?: (agenteId: string, texto: string) => Promise<void>;
   onLoadMemories?: (
     agenteId: string
@@ -60,6 +61,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   onOpenFilesPage,
   onOpenWhatsAppModal,
   onSaveAgentSettings,
+  onRestoreAgentDefaults,
   onAddMemory,
   onLoadMemories,
   onApproveTask,
@@ -347,13 +349,62 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                 />
               </div>
 
-              <button
-                type="submit"
-                disabled={saving}
-                className="openbot-btn-primary w-full py-2 text-[12.5px]"
-              >
-                {saving ? "Salvando..." : "Salvar configurações"}
-              </button>
+              <div className="rounded-xl bg-[#212121] border border-white/[0.06] p-3 space-y-2 text-[11.5px]">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[#8E8E93]">Modelo ativo</span>
+                  <span className="text-white font-mono text-[11px] truncate max-w-[165px]">
+                    {agente.modelo_padrao}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[#8E8E93]">Habilidade (SKILL.md)</span>
+                  <span className="text-[#31CF76] font-mono text-[11px]">
+                    {String((agente.config as Record<string, unknown>)?.skill_slug ?? agente.agente_id)}
+                  </span>
+                </div>
+                {Array.isArray((agente.config as Record<string, unknown>)?.ferramentas) && (
+                  <div className="pt-1 border-t border-white/[0.05]">
+                    <span className="text-[#8E8E93] block mb-1">Ferramentas nativas</span>
+                    <div className="flex flex-wrap gap-1">
+                      {((agente.config as Record<string, unknown>).ferramentas as string[]).map((tool) => (
+                        <span
+                          key={tool}
+                          className="px-1.5 py-0.5 rounded bg-white/[0.06] text-[#DCDCDC] font-mono text-[10px]"
+                        >
+                          {tool}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="openbot-btn-primary flex-1 py-2 text-[12.5px]"
+                >
+                  {saving ? "Salvando..." : "Salvar configurações"}
+                </button>
+                {onRestoreAgentDefaults && (
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={async () => {
+                      setSaving(true);
+                      try {
+                        await onRestoreAgentDefaults(agente.agente_id);
+                      } finally {
+                        setSaving(false);
+                      }
+                    }}
+                    className="openbot-btn-secondary px-3 py-2 text-[12px]"
+                  >
+                    Restaurar
+                  </button>
+                )}
+              </div>
             </form>
 
             {/* Memória persistente no SQLite */}

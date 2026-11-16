@@ -56,17 +56,26 @@ function inferSkillCategory(slug: string): HabilidadeInstaladaInfo["categoria"] 
   return "outros";
 }
 
-function getSkillsRootCandidates(): string[] {
+function getSkillsRootCandidates(workspaceRoot?: string): string[] {
   const home = homedir();
-  return [
-    join(home, ".gemini", "config", "skills"),
-    join(home, ".agents", "skills"),
-  ];
+  const baseCwd = workspaceRoot ?? process.cwd();
+  return Array.from(
+    new Set([
+      join(baseCwd, ".agents", "skills"),
+      join(baseCwd, "..", "..", ".agents", "skills"),
+      join(home, ".gemini", "config", "skills"),
+      join(home, ".agents", "skills"),
+    ])
+  );
 }
 
-export function loadSkillPromptBySlug(slug: string, customRoot?: string): { path: string; body: string; tokensEst: number } | null {
+export function loadSkillPromptBySlug(
+  slug: string,
+  customRoot?: string,
+  workspaceRoot?: string
+): { path: string; body: string; tokensEst: number } | null {
   if (!slug || slug.includes("..") || slug.includes("/") || slug.includes("\\")) return null;
-  const roots = customRoot ? [customRoot] : getSkillsRootCandidates();
+  const roots = customRoot ? [customRoot] : getSkillsRootCandidates(workspaceRoot);
   for (const root of roots) {
     const filePath = join(root, slug, "SKILL.md");
     if (existsSync(filePath)) {
@@ -85,12 +94,16 @@ export function loadSkillPromptBySlug(slug: string, customRoot?: string): { path
   return null;
 }
 
-export function listInstalledSkills(db: CriativoDatabase, customRoot?: string): HabilidadeInstaladaInfo[] {
+export function listInstalledSkills(
+  db: CriativoDatabase,
+  customRoot?: string,
+  workspaceRoot?: string
+): HabilidadeInstaladaInfo[] {
   const roots = customRoot
     ? [customRoot]
     : process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1"
       ? []
-      : getSkillsRootCandidates();
+      : getSkillsRootCandidates(workspaceRoot);
 
   const agentsRows = db.connection
     .prepare(`SELECT nome, config_json FROM projecao_agentes ORDER BY ordem_exibicao ASC;`)
@@ -650,11 +663,11 @@ export function buildConnectorsList(db: CriativoDatabase, vault: VaultService): 
     .get() as { valor_json: string } | undefined;
   const orquestradores = cfgRow ? (JSON.parse(cfgRow.valor_json) as Record<string, string>) : {};
 
-  const igTokenOk = secrets.has("instagram_access_token");
-  const igBizOk = secrets.has("instagram_business_account_id");
-  const tgOk = secrets.has("telegram_bot_token");
-  const elevenOk = secrets.has("elevenlabs_api_key");
-  const fishOk = secrets.has("fish_audio_api_key");
+  const igTokenOk = secrets.has("instagram_access_token") || secrets.has("META_ACCESS_TOKEN");
+  const igBizOk = secrets.has("instagram_business_account_id") || secrets.has("META_IG_USER_ID");
+  const tgOk = secrets.has("telegram_bot_token") || secrets.has("TELEGRAM_BOT_TOKEN");
+  const elevenOk = secrets.has("elevenlabs_api_key") || secrets.has("ELEVENLABS_API_KEY");
+  const fishOk = secrets.has("fish_audio_api_key") || secrets.has("FISH_AUDIO_API_KEY");
 
   const waStatus = waRow?.status === "conectado" ? "conectado" : waRow?.status === "aguardando_qr" ? "atencao" : "desconectado";
 

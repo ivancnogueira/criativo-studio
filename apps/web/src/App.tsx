@@ -10,6 +10,7 @@ import type {
   MensagemChat,
   NivelEsforco,
   OnboardingEstado,
+  PacoteUpgradeInfo,
   PassoChat,
   ProvedorStatusInfo,
   ProviderName,
@@ -92,6 +93,7 @@ export function App() {
   const [usoPeriodoDias, setUsoPeriodoDias] = useState<number>(30);
   const [usoAgenteFiltro, setUsoAgenteFiltro] = useState<string | null>(null);
   const [habilidades, setHabilidades] = useState<HabilidadeInstaladaInfo[]>([]);
+  const [upgrades, setUpgrades] = useState<PacoteUpgradeInfo[]>([]);
   const [conectores, setConectores] = useState<ConectorIntegracaoInfo[]>([]);
   const [vaultKeys, setVaultKeys] = useState<Array<{ chave_nome: string; atualizado_em: string }>>([]);
 
@@ -150,6 +152,7 @@ export function App() {
         usageSnap,
         analyticsData,
         skillsList,
+        upgradeList,
         connList,
         wfList,
         fileList,
@@ -164,6 +167,7 @@ export function App() {
         daemonApi.getProvidersUsage(false),
         daemonApi.getUsageAnalytics({ dias: 30, agente_id: null }),
         daemonApi.listSkills(),
+        daemonApi.listUpgrades(),
         daemonApi.listConnectors(),
         daemonApi.listWorkflows(),
         daemonApi.listFiles(),
@@ -180,6 +184,7 @@ export function App() {
       setUso(usageSnap);
       setAnalyticsUso(analyticsData);
       setHabilidades(skillsList);
+      setUpgrades(upgradeList);
       setConectores(connList);
       setWorkflows(wfList);
       setArquivos(fileList);
@@ -539,6 +544,7 @@ export function App() {
             [targetKey]: mergeUniqueMessages(withoutTemp, [
               res.mensagem_usuario,
               res.mensagem_agente,
+              ...(res.mensagens_handoff ?? []),
             ]),
           };
         });
@@ -634,6 +640,12 @@ export function App() {
         pendingAuthUrl={pendingAuthLink}
         onComplete={async (patch) => {
           const updated = await daemonApi.updateOnboarding(patch);
+          if (patch.marca_nome || patch.perfil_handle) {
+            await daemonApi.saveBrandIdentity({
+              marca_nome: patch.marca_nome,
+              perfil_handle: patch.perfil_handle,
+            });
+          }
           setOnboarding(updated);
           setProvedores(await daemonApi.listProvidersStatus(false));
           setUso(await daemonApi.getProvidersUsage());
@@ -766,6 +778,12 @@ export function App() {
                           prev.map((a) => (a.agente_id === updated.agente_id ? updated : a))
                         );
                       }}
+                      onRestoreAgentDefaults={async (agenteId) => {
+                        const restored = await daemonApi.restoreAgentDefaults(agenteId);
+                        setAgentes((prev) =>
+                          prev.map((a) => (a.agente_id === restored.agente_id ? restored : a))
+                        );
+                      }}
                       onLoadMemories={daemonApi.listAgentMemories}
                       onAddMemory={daemonApi.addAgentMemory}
                       onApproveTask={async (tarefaId) => {
@@ -882,7 +900,14 @@ export function App() {
               whatsappStatus={whatsappStatus}
               agentes={agentes}
               habilidades={habilidades}
+              upgrades={upgrades}
               conectores={conectores}
+              onInstallUpgrade={async (pacote) => {
+                const nextUpgrades = await daemonApi.installUpgrade(pacote);
+                setUpgrades(nextUpgrades);
+                setAgentes(await daemonApi.listAgents());
+                setHabilidades(await daemonApi.listSkills());
+              }}
               defaultProvider={onboarding?.provedor_selecionado ?? "gemini"}
               onSelectDefaultProvider={async (prov) => {
                 const updated = await daemonApi.updateOnboarding({ provedor_selecionado: prov });

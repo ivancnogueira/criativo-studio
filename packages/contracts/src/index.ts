@@ -220,6 +220,47 @@ export interface AgenteConfigVisual {
   [key: string]: unknown;
 }
 
+export interface MarcosOnboardingStudio {
+  instalacao: "pendente" | "concluido";
+  perfil: "pendente" | "concluido";
+  identidade_visual: "pendente" | "concluido";
+  configuracoes: "pendente" | "concluido";
+  primeiro_post: "pendente" | "concluido";
+  postagem: "pendente" | "concluido";
+}
+
+export interface IdentidadeMarcaStudio {
+  marca_nome: string;
+  perfil_handle: string;
+  nicho: string;
+  publico_alvo: string;
+  oferta_principal: string;
+  tom_voz: string;
+  cores: {
+    fundo: string;
+    texto: string;
+    primaria: string;
+    secundaria: string;
+    acento: string;
+  };
+  fontes: {
+    titulo: string;
+    texto: string;
+  };
+  marcos: MarcosOnboardingStudio;
+  atualizado_em: string;
+}
+
+export interface PacoteUpgradeInfo {
+  id: "bonus" | "video";
+  nome: string;
+  descricao: string;
+  instalado: boolean;
+  agentes: string[];
+  skills: string[];
+  comando_cli: string;
+}
+
 export interface OnboardingEstado {
   onboarding_concluido: boolean;
   modo_provedor_inicial: "gratuito" | "assinatura" | null;
@@ -227,6 +268,7 @@ export interface OnboardingEstado {
   telemetria_anonima: boolean;
   marca_nome: string;
   perfil_handle: string;
+  marcos?: MarcosOnboardingStudio;
   runtime_versao: string;
   atualizado_em: string;
 }

@@ -1,0 +1,44 @@
+---
+name: gerar-stories
+description: Crie stories verticais premium para Instagram (9:16, 1080x1920) usando generate_image do Antigravity, fotos reais, referências e zonas seguras.
+---
+
+# Gerar Stories (Produção Vertical Premium)
+
+Atue como diretora de arte para conteúdo efêmero e dinâmico de Instagram Stories. A entrega é um PNG `1080x1920` (9:16) formatado com alto impacto visual, leitura instantânea e respeito absoluto às zonas seguras do Instagram.
+
+Leia `documentacao/agentes/contrato-operacional.md`, `documentacao/agentes/qualidade-editorial.md` e `documentacao/agentes/pipeline-visual.md`.
+
+---
+
+## 🛑 Regras Obrigatórias de Stories
+
+1. **Zonas Seguras do Instagram:**
+   - **Topo (15% superior - aprox. 250px):** Reservado para foto de perfil e nome do Instagram. Nunca coloque títulos ou textos nessa área.
+   - **Rodapé (20% inferior - aprox. 350px):** Reservado para campo "Enviar Mensagem" e reações. Não coloque CTAs críticos colados no rodapé.
+   - **Área Central Segura (65% intermediário):** Onde ficam o ponto focal, fotos, headline e cards visuais.
+
+2. **Uso de Referências Verticais (APENAS Composição e Estilo):**
+   - Inspecione `recursos/referencias/stories/` para extrair composições verticais elegantes. Se vazia, use `recursos/referencias/` (geral).
+   - **REGRA CRÍTICA ANTI-CÓPIA:** Referências servem apenas para formato, layout e luz. **NUNCA copie nomes de designers, empresas, arrobas (@handles), marcas d'água ou textos das referências.** Use apenas o `@usuario` oficial do projeto (`conteudos/identidade-visual.yml`) ou não coloque arroba.
+   - Passe referências de `recursos/referencias/stories/` em `ImagePaths` no `generate_image`.
+   - **Prioridade de seleção:** Sempre prefira referências da subpasta específica do formato. Se vazia, use a pasta geral.
+
+3. **Elementos Interativos Simulados:**
+   - Para stories de engajamento, ilustre caixas de perguntas, enquetes ou sliders com design limpo e moderno.
+   - Texto super conciso: máximo de 5 a 10 palavras por tela.
+
+---
+
+## 🛠️ Passo a Passo de Execução
+
+1. **Definição de Objetivo:**
+   - Escolha entre: Engajamento (enquete/pergunta), Aviso de Novo Post (feed hook), Prova Social/Depoimento ou Oferta/Direct.
+2. **Geração via `generate_image`:**
+   - AspectRatio: `"9:16"` (1080×1920).
+   - Passe a foto do usuário e a referência visual em `ImagePaths`.
+   - Prompt com instruções verticais, margens seguras e **cláusula anti-cópia**: *"STRICT RULE: Do NOT copy any names, @handles, signatures, or logos from reference images. Branding must strictly be '@[USUARIO_DO_PROJETO]' or omitted."*
+3. **Salvar e Visualizar:**
+   - Salve em `saidas/stories/{slug}/story-01.png`.
+   - Crie o manifesto `publicacao.json` com `tipo: "story"` e gere a prévia com `npm run criar-previa`.
+4. **Revisão e Quality Gate:** Confirme que nenhum dado/arroba de terceiros vazou para o story antes de disponibilizar.

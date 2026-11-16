@@ -80,15 +80,41 @@ case "$cmd" in
       echo ""
     fi
     ;;
+  diagnosticar)
+    APP_DIR="${CRIATIVO_APP_DIR:-/opt/criativo-ai-studio-online}"
+    node "$APP_DIR/scripts/diagnosticar.mjs"
+    ;;
+  validar)
+    APP_DIR="${CRIATIVO_APP_DIR:-/opt/criativo-ai-studio-online}"
+    node "$APP_DIR/scripts/validar-integracoes.mjs"
+    ;;
+  upgrade)
+    APP_DIR="${CRIATIVO_APP_DIR:-/opt/criativo-ai-studio-online}"
+    shift || true
+    pacote="${1:-}"
+    fonte="${2:-}"
+    if [[ -z "$pacote" ]]; then
+      echo "Uso: criativo upgrade <bonus|video> [fonte_git_ou_pasta]"
+      exit 1
+    fi
+    if [[ -n "$fonte" ]]; then
+      node "$APP_DIR/scripts/instalar-upgrade.mjs" --pacote "$pacote" --fonte "$fonte"
+    else
+      node "$APP_DIR/scripts/instalar-upgrade.mjs" --pacote "$pacote"
+    fi
+    ;;
   *)
     echo -e "${INDIGO}Criativo AI Studio CLI${RESET}"
     echo "Uso: criativo <comando>"
     echo ""
     echo "Comandos disponíveis:"
-    echo "  status     Exibe uptime, CPU, memória, fila e status WhatsApp"
-    echo "  fila       Lista tarefas na fila FIFO"
-    echo "  whatsapp   Consulta estado da conexão WhatsApp"
-    echo "  logs       Exibe logs ao vivo do serviço systemd"
-    echo "  reiniciar  Reinicia o daemon com segurança"
+    echo "  status       Exibe uptime, CPU, memória, fila e status WhatsApp"
+    echo "  fila         Lista tarefas na fila FIFO"
+    echo "  whatsapp     Consulta estado da conexão WhatsApp"
+    echo "  logs         Exibe logs ao vivo do serviço systemd"
+    echo "  diagnosticar Verifica skills, banco SQLite, build e upgrades"
+    echo "  validar      Valida credenciais Meta Graph API sem expor segredos"
+    echo "  upgrade      Instala upgrade modular em etapas (bonus|video)"
+    echo "  reiniciar    Reinicia o daemon com segurança"
     ;;
 esac

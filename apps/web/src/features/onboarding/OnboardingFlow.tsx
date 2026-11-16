@@ -45,6 +45,16 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
 }) => {
   const [step, setStep] = useState<1 | 2>(initialStep);
   const [telemetria, setTelemetria] = useState(initialState.telemetria_anonima);
+  const [marcaNome, setMarcaNome] = useState(
+    initialState.marca_nome && !initialState.marca_nome.includes("[NOME_DA_MARCA]")
+      ? initialState.marca_nome
+      : ""
+  );
+  const [perfilHandle, setPerfilHandle] = useState(
+    initialState.perfil_handle && !initialState.perfil_handle.includes("[@SEU_PERFIL]")
+      ? initialState.perfil_handle
+      : ""
+  );
   const [selectedProvider, setSelectedProvider] = useState<ProviderName | null>(
     initialState.provedor_selecionado
   );
@@ -82,6 +92,16 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
     return provedores.find((p) => p.provedor === selectedProvider)?.conectado ?? false;
   }, [provedores, selectedProvider]);
 
+  const buildBrandPatch = (): Partial<OnboardingEstado> => {
+    const patch: Partial<OnboardingEstado> = {};
+    if (marcaNome.trim()) patch.marca_nome = marcaNome.trim();
+    if (perfilHandle.trim()) {
+      const clean = perfilHandle.trim();
+      patch.perfil_handle = clean.startsWith("@") ? clean : `@${clean}`;
+    }
+    return patch;
+  };
+
   const handleChooseFree = async () => {
     setSubmitting(true);
     try {
@@ -91,6 +111,7 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
         modo_provedor_inicial: "gratuito",
         provedor_selecionado: openCodeConnected ? "opencode" : "ollama",
         telemetria_anonima: telemetria,
+        ...buildBrandPatch(),
       });
     } finally {
       setSubmitting(false);
@@ -105,6 +126,7 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
         modo_provedor_inicial: "assinatura",
         provedor_selecionado: selectedProvider ?? "gemini",
         telemetria_anonima: telemetria,
+        ...buildBrandPatch(),
       });
     } finally {
       setSubmitting(false);
@@ -203,6 +225,36 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
 
           {/* Caixa agrupada estilo OpenBot */}
           <div className="w-full rounded-2xl bg-[#1A1A1A] border border-white/10 overflow-hidden text-left shadow-2xl">
+            <div className="px-4 py-3 border-b border-white/[0.06] grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div>
+                <label htmlFor="onboarding-brand-name" className="block text-[11px] text-[#8E8E93] mb-1">
+                  Nome da sua marca (opcional agora)
+                </label>
+                <input
+                  id="onboarding-brand-name"
+                  name="marca_nome"
+                  type="text"
+                  value={marcaNome}
+                  onChange={(e) => setMarcaNome(e.target.value)}
+                  placeholder="Ex.: Minha Marca"
+                  className="w-full rounded-lg bg-[#141414] border border-white/10 px-2.5 py-1.5 text-[12px] text-white placeholder-[#5A5A5F] focus:outline-none focus:border-[#42A0FF]"
+                />
+              </div>
+              <div>
+                <label htmlFor="onboarding-brand-handle" className="block text-[11px] text-[#8E8E93] mb-1">
+                  @ do Instagram (opcional agora)
+                </label>
+                <input
+                  id="onboarding-brand-handle"
+                  name="perfil_handle"
+                  type="text"
+                  value={perfilHandle}
+                  onChange={(e) => setPerfilHandle(e.target.value)}
+                  placeholder="Ex.: @seu_perfil"
+                  className="w-full rounded-lg bg-[#141414] border border-white/10 px-2.5 py-1.5 text-[12px] text-white placeholder-[#5A5A5F] focus:outline-none focus:border-[#42A0FF]"
+                />
+              </div>
+            </div>
             <button
               type="button"
               disabled={submitting}

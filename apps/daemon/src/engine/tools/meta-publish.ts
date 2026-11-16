@@ -29,11 +29,15 @@ export async function metaPublishTool(
     );
   }
 
-  const accessToken = deps.vault.getSecret("META_ACCESS_TOKEN");
-  const igUserId = deps.vault.getSecret("META_IG_USER_ID");
+  const accessToken =
+    deps.vault.getSecret("instagram_access_token") ||
+    deps.vault.getSecret("META_ACCESS_TOKEN");
+  const igUserId =
+    deps.vault.getSecret("instagram_business_account_id") ||
+    deps.vault.getSecret("META_IG_USER_ID");
   if (!accessToken || !igUserId) {
     throw new Error(
-      "Credenciais META_ACCESS_TOKEN ou META_IG_USER_ID ausentes no Cofre de Segredos."
+      "Credenciais Meta (instagram_access_token/META_ACCESS_TOKEN ou instagram_business_account_id/META_IG_USER_ID) ausentes no Cofre de Segredos."
     );
   }
 

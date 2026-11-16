@@ -11,6 +11,11 @@
   "scripts": {
     "build": "tsc -b packages/contracts packages/whatsapp apps/daemon",
     "typecheck": "tsc -b packages/contracts packages/whatsapp apps/daemon",
+    "configurar": "node scripts/configurar-local.mjs",
+    "instalar-skills": "node scripts/instalar-skills.mjs",
+    "instalar-upgrade": "node scripts/instalar-upgrade.mjs",
+    "validar:integracoes": "node scripts/validar-integracoes.mjs",
+    "diagnosticar": "node scripts/diagnosticar.mjs",
     "start:daemon": "npm run start --workspace=apps/daemon",
     "test:daemon": "npm run test --workspace=apps/daemon",
     "test:e2e": "node --test testes/e2e/*.test.mjs"

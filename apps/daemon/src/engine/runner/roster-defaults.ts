@@ -6,6 +6,7 @@ export interface AgenteDefinicao {
   nome: string;
   papel: string;
   frente: FrenteAgente;
+  pacote: "base" | "bonus" | "video";
   pasta: string;
   skill_slug: string;
   modelo_padrao: string;
@@ -14,8 +15,27 @@ export interface AgenteDefinicao {
   effort: NivelEsforco;
   ordem_exibicao: number;
   skills_paths: string[];
+  ferramentas: string[];
   prompt_base: string;
 }
+
+const DEFAULT_AGENT_TOOLS: Record<string, string[]> = {
+  estrategista: ["salvar_identidade_marca", "inspecionar_ativos_marca", "handoff_agente"],
+  copywriter: ["inspecionar_ativos_marca", "handoff_agente"],
+  designer_individual: ["generate_image", "crop_margem_segura", "inspecionar_ativos_marca", "handoff_agente"],
+  designer_carrossel: ["generate_image", "crop_margem_segura", "inspecionar_ativos_marca", "handoff_agente"],
+  designer_ads: ["generate_image", "crop_margem_segura", "inspecionar_ativos_marca", "handoff_agente"],
+  designer_stories: ["generate_image", "crop_margem_segura", "inspecionar_ativos_marca", "handoff_agente"],
+  diretor_identidade: ["salvar_identidade_marca", "inspecionar_ativos_marca", "handoff_agente"],
+  engenheiro_meta: ["validar_integracao_meta", "consultar_metricas_meta", "meta_publicar", "handoff_agente"],
+  analista_metricas: ["consultar_metricas_meta", "handoff_agente"],
+  diretor_entregaveis: ["inspecionar_ativos_marca", "handoff_agente"],
+  inteligencia_competitiva: ["inspecionar_url", "handoff_agente"],
+  consistencia_visual: ["generate_image", "inspecionar_ativos_marca", "handoff_agente"],
+  editor_video: ["exec_remotion_render", "inspecionar_ativos_marca", "handoff_agente"],
+  roteirista_faceless: ["inspecionar_ativos_marca", "handoff_agente"],
+  roteirista_talking_head: ["inspecionar_ativos_marca", "handoff_agente"],
+};
 
 const DEFAULT_AVATAR_THEMES: Record<
   string,
@@ -38,7 +58,7 @@ const DEFAULT_AVATAR_THEMES: Record<
   roteirista_talking_head: { shape: "cloud", color: "#a8324e", effort: "medio", pasta: "Estúdio de Vídeo" },
 };
 
-export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = [
+export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
   {
     agente_id: "estrategista",
     nome: "Estrategista Editorial",
@@ -279,7 +299,11 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = [
     prompt_base:
       "Você é o Roteirista Talking Head. Crie roteiros conversacionais formatados para teleprompter com marcações de ênfase e ganchos visuais nos primeiros 3 segundos.",
   },
-];
+] as Array<Omit<AgenteDefinicao, "pacote" | "ferramentas">>).map((ag) => ({
+  ...ag,
+  pacote: ag.frente === "bonus" ? "bonus" : ag.frente === "video" ? "video" : "base",
+  ferramentas: DEFAULT_AGENT_TOOLS[ag.agente_id] ?? ["handoff_agente"],
+}));
 
 /**
  * Garante que todos os 15 agentes especialistas existam na tabela `projecao_agentes`.
@@ -300,11 +324,13 @@ export function seedDefaultAgents(db: CriativoDatabase): number {
     for (const ag of ROSTER_15_AGENTES) {
       const config = {
         frente: ag.frente,
+        pacote: ag.pacote,
         pasta: ag.pasta,
         skill_slug: ag.skill_slug,
         avatar_shape: ag.avatar_shape,
         avatar_color: ag.avatar_color,
         effort: ag.effort,
+        ferramentas: ag.ferramentas,
         prompt_base: ag.prompt_base,
         customizado: false,
       };
@@ -321,7 +347,7 @@ export function seedDefaultAgents(db: CriativoDatabase): number {
       inseridos += Number(res.changes);
     }
 
-    // Enriquece linhas antigas que ainda não possuem avatar_shape em config_json
+    // Backfill completo: preenche prompt_base, skill_slug, pacote, ferramentas e tema caso ausentes ou vazios
     const existingRows = db.connection
       .prepare(`SELECT agente_id, config_json FROM projecao_agentes;`)
       .all() as Array<{ agente_id: string; config_json: string }>;
@@ -331,21 +357,38 @@ export function seedDefaultAgents(db: CriativoDatabase): number {
     );
 
     for (const row of existingRows) {
+      const def = ROSTER_15_AGENTES.find((a) => a.agente_id === row.agente_id);
       const theme = DEFAULT_AVATAR_THEMES[row.agente_id];
-      if (!theme) continue;
+      if (!def && !theme) continue;
       let parsed: Record<string, unknown> = {};
       try {
         parsed = JSON.parse(row.config_json || "{}") as Record<string, unknown>;
       } catch {
         parsed = {};
       }
-      if (!parsed.avatar_shape || !parsed.avatar_color) {
+      const promptVazio = typeof parsed.prompt_base !== "string" || parsed.prompt_base.trim().length === 0;
+      const precisaAtualizar =
+        !parsed.avatar_shape ||
+        !parsed.avatar_color ||
+        promptVazio ||
+        !parsed.skill_slug ||
+        !parsed.pacote ||
+        !Array.isArray(parsed.ferramentas);
+
+      if (precisaAtualizar) {
         const merged = {
           ...parsed,
-          avatar_shape: parsed.avatar_shape ?? theme.shape,
-          avatar_color: parsed.avatar_color ?? theme.color,
-          effort: parsed.effort ?? theme.effort,
-          pasta: parsed.pasta ?? theme.pasta,
+          frente: parsed.frente ?? def?.frente ?? "conteudo",
+          pacote: parsed.pacote ?? def?.pacote ?? "base",
+          pasta: parsed.pasta ?? def?.pasta ?? theme?.pasta ?? "Conteúdo Base",
+          skill_slug: parsed.skill_slug ?? def?.skill_slug,
+          avatar_shape: parsed.avatar_shape ?? def?.avatar_shape ?? theme?.shape ?? "blob",
+          avatar_color: parsed.avatar_color ?? def?.avatar_color ?? theme?.color ?? "#38bdf8",
+          effort: parsed.effort ?? def?.effort ?? theme?.effort ?? "medio",
+          ferramentas: Array.isArray(parsed.ferramentas)
+            ? parsed.ferramentas
+            : def?.ferramentas ?? ["handoff_agente"],
+          prompt_base: promptVazio ? def?.prompt_base ?? "" : parsed.prompt_base,
         };
         updateConfigStmt.run(JSON.stringify(merged), row.agente_id);
       }

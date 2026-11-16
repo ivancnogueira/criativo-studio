@@ -3,6 +3,7 @@ import type {
   AgenteRegistro,
   ConectorIntegracaoInfo,
   HabilidadeInstaladaInfo,
+  PacoteUpgradeInfo,
   ProvedorStatusInfo,
   ProviderName,
   StatusMensageria,
@@ -82,6 +83,8 @@ interface ConnectorsPageProps {
   onTestConnector?: (
     conectorId: string
   ) => Promise<{ ok: boolean; mensagem: string; detalhes?: unknown }>;
+  upgrades?: PacoteUpgradeInfo[];
+  onInstallUpgrade?: (pacote: "bonus" | "video") => Promise<void>;
 }
 
 type HubSectionTab = "provedores" | "apps" | "habilidades" | "cofre";
@@ -187,6 +190,8 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
   onSetModelsVisibility,
   onConfigureConnector,
   onTestConnector,
+  upgrades = [],
+  onInstallUpgrade,
 }) => {
   const [hubTab, setHubTab] = useState<HubSectionTab>("provedores");
   const [sidebarSearch, setSidebarSearch] = useState("");
@@ -885,9 +890,54 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
           </div>
         )}
 
-        {/* ABA 3: HABILIDADES (Catálogo real de SKILL.md instalados) */}
+        {/* ABA 3: HABILIDADES (Catálogo real de SKILL.md instalados + Upgrades em etapas) */}
         {hubTab === "habilidades" && (
           <div className="space-y-4">
+            {upgrades.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {upgrades.map((up) => (
+                  <div
+                    key={up.id}
+                    className="rounded-2xl bg-[#1C1C20] border border-white/[0.08] p-4 flex flex-col justify-between gap-3"
+                  >
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[13.5px] font-semibold text-white">{up.nome}</span>
+                        <span
+                          className={`text-[10.5px] px-2 py-0.5 rounded-full font-medium ${
+                            up.instalado
+                              ? "bg-[#31CF76]/15 text-[#31CF76]"
+                              : "bg-white/[0.07] text-[#B5B5B5]"
+                          }`}
+                        >
+                          {up.instalado ? "Instalado" : "Upgrade modular"}
+                        </span>
+                      </div>
+                      <p className="text-[12px] text-[#979797]">{up.descricao}</p>
+                      <p className="text-[11px] text-[#787878]">
+                        Agentes: {up.agentes.join(", ")}
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 pt-2 border-t border-white/[0.05]">
+                      <code className="text-[10.5px] text-[#787878] truncate">{up.comando_cli}</code>
+                      {!up.instalado && onInstallUpgrade && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await onInstallUpgrade(up.id);
+                            showToast(`${up.nome} desbloqueado nos seus agentes!`);
+                          }}
+                          className="rounded-lg bg-[#F0F0F0] hover:bg-white text-[#141414] px-3 py-1 text-[11.5px] font-semibold shrink-0"
+                        >
+                          Ativar pacote
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="relative flex-1 min-w-[220px]">
                 <Search className="h-3.5 w-3.5 text-[#6A6A6A] absolute left-3 top-1/2 -translate-y-1/2" />

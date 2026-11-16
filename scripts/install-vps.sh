@@ -51,7 +51,7 @@ echo "==> [4/6] Copiando e compilando Criativo AI Studio Online..."
 cp -a "$REPO_SOURCE_DIR"/. "$APP_DIR"/
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 
-su -s /bin/bash "$APP_USER" -c "cd '$APP_DIR' && npm ci --omit=dev && npm run build && npm run build --workspace=apps/web"
+su -s /bin/bash "$APP_USER" -c "cd '$APP_DIR' && npm ci --omit=dev && npm run build && npm run build --workspace=apps/web && node scripts/configurar-local.mjs"
 
 echo "==> [5/6] Configurando Cofre Mestre e variaveis de ambiente..."
 if [[ ! -f "$ENV_FILE" ]]; then

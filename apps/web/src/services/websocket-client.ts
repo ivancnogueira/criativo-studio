@@ -7,9 +7,11 @@ import type {
   ConectorIntegracaoInfo,
   ContaProvedorInfo,
   HabilidadeInstaladaInfo,
+  IdentidadeMarcaStudio,
   MensagemChat,
   NivelEsforco,
   OnboardingEstado,
+  PacoteUpgradeInfo,
   ProvedorStatusInfo,
   ProviderName,
   RelatorioAnalyticsHost,
@@ -494,6 +496,43 @@ export const daemonApi = {
     return { ...json.agente, config: json.agente.config ?? cfg };
   },
 
+  async restoreAgentDefaults(agenteId: string): Promise<AgenteRegistro> {
+    const res = await fetch(`/api/agentes/${encodeURIComponent(agenteId)}/restaurar`, {
+      method: "POST",
+    });
+    const json = (await res.json()) as { agente: AgenteRegistro & { config_json?: string } };
+    const cfg = json.agente.config_json
+      ? (JSON.parse(json.agente.config_json) as Record<string, unknown>)
+      : {};
+    return { ...json.agente, config: json.agente.config ?? cfg };
+  },
+
+  async listUpgrades(): Promise<PacoteUpgradeInfo[]> {
+    const res = await fetch("/api/upgrades");
+    const json = (await res.json()) as { upgrades: PacoteUpgradeInfo[] };
+    return json.upgrades ?? [];
+  },
+
+  async installUpgrade(pacote: "bonus" | "video"): Promise<PacoteUpgradeInfo[]> {
+    const res = await fetch("/api/upgrades/instalar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pacote }),
+    });
+    const json = (await res.json()) as { upgrades: PacoteUpgradeInfo[] };
+    return json.upgrades ?? [];
+  },
+
+  async saveBrandIdentity(patch: Partial<IdentidadeMarcaStudio>): Promise<IdentidadeMarcaStudio> {
+    const res = await fetch("/api/marca/identidade", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const json = (await res.json()) as { identidade: IdentidadeMarcaStudio };
+    return json.identidade;
+  },
+
   async listAgentMessages(agenteId: string): Promise<MensagemChat[]> {
     const res = await fetch(`/api/agentes/${encodeURIComponent(agenteId)}/mensagens`);
     const json = (await res.json()) as { mensagens: MensagemChat[] };
@@ -510,7 +549,11 @@ export const daemonApi = {
     agenteId: string,
     conteudo: string,
     anexos: AnexoChat[]
-  ): Promise<{ mensagem_usuario: MensagemChat; mensagem_agente: MensagemChat }> {
+  ): Promise<{
+    mensagem_usuario: MensagemChat;
+    mensagem_agente: MensagemChat;
+    mensagens_handoff?: MensagemChat[];
+  }> {
     const res = await fetch(`/api/agentes/${encodeURIComponent(agenteId)}/mensagens`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -519,6 +562,7 @@ export const daemonApi = {
     return (await res.json()) as {
       mensagem_usuario: MensagemChat;
       mensagem_agente: MensagemChat;
+      mensagens_handoff?: MensagemChat[];
     };
   },
 

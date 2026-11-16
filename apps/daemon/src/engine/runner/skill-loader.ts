@@ -52,11 +52,11 @@ export class SkillLoader {
   constructor(searchRoots: string[] = []) {
     this.searchRoots = [
       ...searchRoots,
+      resolve(process.cwd(), ".agents", "skills"),
+      resolve(process.cwd(), "..", "..", ".agents", "skills"),
       process.cwd(),
       resolve(process.cwd(), ".."),
       resolve(process.cwd(), "..", "criativo-ai-studio"),
-      resolve(process.cwd(), "..", "skills-agents-bonus"),
-      resolve(process.cwd(), "..", "criativo-video-studio", "skill"),
     ];
   }
 
