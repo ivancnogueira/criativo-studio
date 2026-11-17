@@ -6,18 +6,27 @@ import type {
   AnexoChat,
   ArquivoStudio,
   CanalEquipe,
+  ConversationMessage,
   MensagemChat,
   OnboardingEstado,
   PassoChat,
   ProviderName,
+  ToolDefinition,
   WorkflowAresta,
   WorkflowNo,
   WorkflowVisual,
 } from "@criativo/contracts";
+import type { WhatsAppOrchestrator, WhatsAppSessionManager } from "@criativo/whatsapp";
 import type { CriativoDatabase } from "../database/client.ts";
 import type { ProviderRegistry } from "../engine/providers/provider-registry.ts";
 import { HandoffBus } from "../engine/runner/handoff-bus.ts";
 import { ROSTER_15_AGENTES } from "../engine/runner/roster-defaults.ts";
+import { SkillLoader } from "../engine/runner/skill-loader.ts";
+import type { CatalogService } from "../marketplace/catalog-service.ts";
+import type { GithubImporter } from "../marketplace/github-importer.ts";
+import type { SkillsManager } from "../marketplace/skills-manager.ts";
+import type { McpGateway, McpOAuthRequiredNotice } from "../mcp/mcp-gateway.ts";
+import { redactMcpPayload, redactMcpSecrets } from "../mcp/mcp-redaction.ts";
 import type { ProviderConnectionService } from "../providers/provider-connection-service.ts";
 import type { FifoQueueManager } from "../queue/fifo-queue.ts";
 import type { VaultService } from "../vault/vault-service.ts";
@@ -36,9 +45,13 @@ import {
   listUpgradePackages,
   saveBrandIdentity,
 } from "./brand-onboarding-service.ts";
+import { tryHandleWhatsAppMcpStoreRoute } from "./routes-whatsapp-mcp-store.ts";
 import {
   buildStudioLiveContext,
+  executeStudioExtensionTool,
+  isPhase10ExtensionTool,
   isUpgradeUnlocked,
+  PHASE10_TOOL_DEFINITIONS,
   syncWorkspaceFilesToDatabase,
   validateMetaIntegration,
 } from "./studio-tools-bridge.ts";
@@ -54,6 +67,12 @@ export interface StudioRoutesDeps {
   sendJson: (res: ServerResponse, statusCode: number, body: unknown) => void;
   readJsonBody: (req: IncomingMessage) => Promise<Record<string, unknown>>;
   workspaceRoot?: string;
+  mcpGateway?: McpGateway;
+  catalogService?: CatalogService;
+  githubImporter?: GithubImporter;
+  skillsManager?: SkillsManager;
+  whatsappManager?: WhatsAppSessionManager;
+  whatsappOrchestrator?: WhatsAppOrchestrator;
 }
 
 const RAW_MIME_MAP: Record<string, string> = {
@@ -350,6 +369,8 @@ async function generateAgentChatReply(
     process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1"
       ? null
       : loadSkillPromptBySlug(skillSlug, undefined, workspaceRoot);
+  const chatSkillLoader = new SkillLoader([], workspaceRoot);
+  const linkedSkills = chatSkillLoader.loadLinkedAgentSkills(deps.db, agente.agente_id);
 
   // Carrega memórias persistidas do agente para contextualizar respostas reais
   const memories = deps.db.connection
@@ -371,6 +392,14 @@ async function generateAgentChatReply(
   ];
   if (loadedSkill) {
     promptBaseParts.push(`Instruções oficiais da habilidade ${skillSlug}:\n${loadedSkill.body.slice(0, 2800)}`);
+  }
+  const extraLinkedSkills = linkedSkills.filter((s) => s.slug !== skillSlug || !loadedSkill);
+  if (extraLinkedSkills.length > 0) {
+    promptBaseParts.push(
+      extraLinkedSkills
+        .map((s) => `Habilidade vinculada ${s.name} (${s.slug}):\n${s.body.slice(0, 1800)}`)
+        .join("\n\n")
+    );
   }
   if (memories.length > 0) {
     promptBaseParts.push(`Memórias do agente:\n${memories.map((m) => `- ${m.texto}`).join("\n")}`);
@@ -420,6 +449,16 @@ async function generateAgentChatReply(
   }
 
   const promptBase = promptBaseParts.join("\n\n");
+  const mcpTools = deps.mcpGateway
+    ? await deps.mcpGateway.getToolsForAgent(agente.agente_id).catch(() => [])
+    : [];
+  const availableChatToolsMap = new Map<string, ToolDefinition>();
+  for (const t of [...PHASE10_TOOL_DEFINITIONS, ...mcpTools]) {
+    if (!availableChatToolsMap.has(t.name)) {
+      availableChatToolsMap.set(t.name, t);
+    }
+  }
+  const availableChatTools = Array.from(availableChatToolsMap.values());
 
   const providerName = deps.providers.resolveProviderName(agente.modelo_padrao);
   const agService = deps.providerConnection.getAntigravityService();
@@ -598,6 +637,7 @@ async function generateAgentChatReply(
         ],
         imagePaths: resolvedImageDiskPaths,
         generateImage: true,
+        agentId: agente.agente_id,
         preferredAccountId: typeof config.provider_account_id === "string" ? config.provider_account_id : null,
       });
 
@@ -796,6 +836,7 @@ async function generateAgentChatReply(
         modelId: agente.modelo_padrao,
         systemPrompt: `${promptBase}\nResponda em pt-br de forma prática e especializada.`,
         messages: ocMsgs,
+        agentId: agente.agente_id,
         onDelta: (delta) => {
           onProgress?.({
             fase: "chunk",
@@ -840,7 +881,7 @@ async function generateAgentChatReply(
     }
   }
 
-  // 3. Execução via API Key cadastrada no Cofre ou Ollama local
+  // 3. Execução via API Key cadastrada no Cofre ou Ollama local (com loop multi-turn de tools até 6 iterações)
   if (canCallVaultOrLocal) {
     hadConnectedRoute = true;
     onProgress?.({
@@ -850,7 +891,7 @@ async function generateAgentChatReply(
     const t0 = Date.now();
     try {
       const client = deps.providers.getClientForModel(agente.modelo_padrao);
-      const turnMessages = history.slice(-8).map((item) => ({
+      const turnMessages: ConversationMessage[] = history.slice(-8).map((item) => ({
         role: (item.autor === "usuario" ? "user" : "assistant") as "user" | "assistant",
         content: item.conteudo_markdown,
       }));
@@ -862,24 +903,193 @@ async function generateAgentChatReply(
             : userPrompt,
       });
 
-      const llmResult = await client.executeTurn({
-        model: agente.modelo_padrao,
-        systemPrompt: `${promptBase}\nResponda sempre em pt-br com objetividade, tabelas Markdown quando útil e zero dados fictícios de clientes reais.`,
-        messages: turnMessages,
-      });
+      const systemPromptChat = `${promptBase}\nResponda sempre em pt-br com objetividade, tabelas Markdown quando útil e zero dados fictícios de clientes reais.`;
+      let totalInputTokens = 0;
+      let totalOutputTokens = 0;
+      let finalReplyText = "";
 
-      if (llmResult.text && llmResult.text.trim().length > 0) {
+      for (let iter = 0; iter < 6; iter += 1) {
+        const llmResult = await client.executeTurn({
+          model: agente.modelo_padrao,
+          systemPrompt: systemPromptChat,
+          messages: turnMessages,
+          tools: availableChatTools,
+        });
+
+        totalInputTokens += llmResult.usage?.inputTokens ?? 0;
+        totalOutputTokens += llmResult.usage?.outputTokens ?? 0;
+
+        if (!llmResult.toolCalls || llmResult.toolCalls.length === 0) {
+          finalReplyText = llmResult.text?.trim() ?? "";
+          break;
+        }
+
+        turnMessages.push({
+          role: "assistant",
+          content: llmResult.text ?? "",
+          toolCalls: llmResult.toolCalls,
+        });
+
+        for (const call of llmResult.toolCalls) {
+          const stepStart = Date.now();
+          const runningStep: PassoChat = {
+            id: `step-${randomUUID().slice(0, 8)}`,
+            ferramenta: call.name,
+            titulo: `Executando ${call.name}...`,
+            status: "executando",
+          };
+          onProgress?.({
+            fase: "etapa",
+            mensagem_status: `Executando ferramenta ${call.name}...`,
+            step: runningStep,
+          });
+
+          let toolOutput: unknown;
+          let toolFailed = false;
+          try {
+            if (isPhase10ExtensionTool(call.name)) {
+              toolOutput = await executeStudioExtensionTool(call.name, call.arguments, {
+                db: deps.db,
+                vault: deps.vault,
+                wsHub: deps.wsHub,
+                workspaceRoot,
+                agenteId: agente.agente_id,
+                canalId: `agente:${agente.agente_id}`,
+                mcpGateway: deps.mcpGateway,
+                catalogService: deps.catalogService,
+                skillsManager: deps.skillsManager,
+                whatsappManager: deps.whatsappManager,
+                whatsappOrchestrator: deps.whatsappOrchestrator,
+              });
+            } else if (deps.mcpGateway && call.name.startsWith("mcp_")) {
+              toolOutput = await deps.mcpGateway.callMcpTool(call.name, call.arguments, {
+                agentId: agente.agente_id,
+              });
+            } else {
+              toolFailed = true;
+              toolOutput = { erro: `Ferramenta '${call.name}' indisponível no contexto atual.` };
+            }
+          } catch (toolErr) {
+            toolFailed = true;
+            const rawErrMsg = toolErr instanceof Error ? toolErr.message : String(toolErr);
+            toolOutput = { erro: redactMcpSecrets(rawErrMsg, []) };
+          }
+
+          if (
+            toolOutput &&
+            typeof toolOutput === "object" &&
+            (toolOutput as { action?: unknown }).action === "sign_in"
+          ) {
+            const notice = toolOutput as McpOAuthRequiredNotice;
+            const safeReason = redactMcpSecrets(notice.motivo, []);
+            deps.wsHub.broadcast("mcp.oauth_solicitado", {
+              mcp_id: notice.mcpId,
+              nome: notice.nome,
+              app_slug: notice.appSlug ?? null,
+              authorize_url: notice.authorizeUrl ?? null,
+              canal_id: `agente:${agente.agente_id}`,
+              agente_id: agente.agente_id,
+              motivo: safeReason,
+            });
+            const promptPayload = {
+              type: "mcp_oauth_prompt",
+              mcpId: notice.mcpId,
+              nome: notice.nome,
+              appSlug: notice.appSlug ?? null,
+              authorizeUrl: notice.authorizeUrl ?? null,
+              motivo: safeReason,
+            };
+            steps.push({
+              id: `step-${randomUUID().slice(0, 8)}`,
+              ferramenta: "mcp_oauth_prompt",
+              titulo: `Autenticação OAuth solicitada: ${notice.nome}`,
+              detalhes: JSON.stringify(promptPayload),
+              status: "erro",
+              duracao_ms: Date.now() - stepStart,
+            });
+            anexosGerados.push({
+              arquivo_id: `oauth-${notice.mcpId}`,
+              nome: notice.nome,
+              caminho_relativo: notice.mcpId,
+              url: notice.authorizeUrl ?? "",
+              mime_type: "application/vnd.criativo.mcp-oauth+json",
+              tipo_uso: "mcp_oauth_prompt",
+            });
+          } else if (
+            toolOutput &&
+            typeof toolOutput === "object" &&
+            (toolOutput as { type?: unknown }).type === "marketplace_app_suggestion" &&
+            (toolOutput as { app?: { slug?: string; name?: string } | null }).app
+          ) {
+            const appInfo = (toolOutput as { app: { slug: string; name: string } }).app;
+            steps.push({
+              id: `step-${randomUUID().slice(0, 8)}`,
+              ferramenta: "marketplace_app_suggestion",
+              titulo: `App sugerido da Loja: ${appInfo.name}`,
+              detalhes: JSON.stringify(toolOutput),
+              status: "concluido",
+              duracao_ms: Date.now() - stepStart,
+            });
+            anexosGerados.push({
+              arquivo_id: `app-${appInfo.slug}`,
+              nome: appInfo.name,
+              caminho_relativo: appInfo.slug,
+              url: `/loja/apps/${encodeURIComponent(appInfo.slug)}`,
+              mime_type: "application/vnd.criativo.marketplace-app+json",
+              tipo_uso: "marketplace_app_suggestion",
+            });
+          }
+
+          const redactedOut = redactMcpPayload(toolOutput, []);
+          const doneToolStep: PassoChat = {
+            id: runningStep.id,
+            ferramenta: call.name,
+            titulo: toolFailed
+              ? `Falha em ${call.name}`
+              : `Ferramenta ${call.name} executada`,
+            detalhes: JSON.stringify(redactedOut).slice(0, 800),
+            status: toolFailed ? "erro" : "concluido",
+            duracao_ms: Date.now() - stepStart,
+          };
+          steps.push(doneToolStep);
+          onProgress?.({
+            fase: "etapa",
+            mensagem_status: doneToolStep.titulo,
+            step: doneToolStep,
+          });
+
+          turnMessages.push({
+            role: "tool",
+            toolCallId: call.id,
+            toolName: call.name,
+            content: JSON.stringify(redactedOut),
+          });
+        }
+
+        if (iter === 5 && !finalReplyText) {
+          const finalTurn = await client.executeTurn({
+            model: agente.modelo_padrao,
+            systemPrompt: systemPromptChat,
+            messages: turnMessages,
+          });
+          totalInputTokens += finalTurn.usage?.inputTokens ?? 0;
+          totalOutputTokens += finalTurn.usage?.outputTokens ?? 0;
+          finalReplyText = finalTurn.text?.trim() ?? "";
+        }
+      }
+
+      if (finalReplyText.length > 0) {
         const estIn = Math.max(50, Math.round((promptBase.length + userPrompt.length) / 4));
-        const estOut = Math.max(20, Math.round(llmResult.text.length / 4));
+        const estOut = Math.max(20, Math.round(finalReplyText.length / 4));
         recordChatTurnUsage(deps.db, {
           agentId: agente.agente_id,
           sessionId,
           turnId,
           provider: providerName,
           model: agente.modelo_padrao,
-          uncachedInput: llmResult.usage?.inputTokens ?? estIn,
+          uncachedInput: totalInputTokens > 0 ? totalInputTokens : estIn,
           cachedInput: 0,
-          output: llmResult.usage?.outputTokens ?? estOut,
+          output: totalOutputTokens > 0 ? totalOutputTokens : estOut,
         });
 
         steps.push({
@@ -889,7 +1099,7 @@ async function generateAgentChatReply(
           status: "concluido",
           duracao_ms: Date.now() - t0,
         });
-        return { markdown: llmResult.text.trim(), steps, tarefaCriadaId, anexosGerados };
+        return { markdown: finalReplyText, steps, tarefaCriadaId, anexosGerados };
       }
     } catch (vaultErr) {
       lastExecutionError = vaultErr instanceof Error ? vaultErr.message : String(vaultErr);
@@ -936,6 +1146,7 @@ async function generateAgentChatReply(
         systemPrompt: `${promptBase}\nResponda em pt-br de forma prática e especializada como ${agente.nome}. Use tabelas Markdown quando ajudar na organização. Nunca invente handles ou marcas reais: utilize apenas os informados pelo usuário.`,
         messages: historyMsgs,
         imagePaths: resolvedImageDiskPaths,
+        agentId: agente.agente_id,
         preferredAccountId: typeof config.provider_account_id === "string" ? config.provider_account_id : null,
         onDelta: (delta) => {
           onProgress?.({
@@ -1028,6 +1239,10 @@ export async function tryHandleStudioRoute(
   url: URL,
   deps: StudioRoutesDeps
 ): Promise<boolean> {
+  if (await tryHandleWhatsAppMcpStoreRoute(req, res, path, method, url, deps)) {
+    return true;
+  }
+
   const { db, sendJson, readJsonBody, providerConnection, wsHub } = deps;
   const workspaceRoot = deps.workspaceRoot ?? process.cwd();
 

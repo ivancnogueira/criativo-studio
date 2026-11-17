@@ -8,22 +8,32 @@ import { CriativoDatabase, initializeDatabase } from "../database/client.ts";
 import { FifoQueueManager } from "../queue/fifo-queue.ts";
 import { recoverInterruptedTasks } from "../queue/task-recovery.ts";
 import {
-  WhatsAppApprovalNotifier,
-  WhatsAppMessageHandler,
-  WhatsAppStudioClient,
+  DEFAULT_WHATSAPP_ACCOUNT_ID,
+  WhatsAppArchiveService,
+  WhatsAppMediaService,
+  WhatsAppOrchestrator,
+  WhatsAppSenderRules,
+  WhatsAppSessionManager,
+  type WhatsAppApprovalNotifier,
   type SocketFactory,
 } from "@criativo/whatsapp";
 import { CronScheduler } from "../routines/cron-scheduler.ts";
 import { VaultService } from "../vault/vault-service.ts";
 import { ProviderRegistry } from "../engine/providers/provider-registry.ts";
+import type { FetchLike } from "../engine/providers/provider-interface.ts";
 import { AgentRunner, type CustomToolExecutor } from "../engine/runner/agent-runner.ts";
 import { seedDefaultStudioExperience } from "../engine/runner/roster-defaults.ts";
+import { CatalogService } from "../marketplace/catalog-service.ts";
+import { GithubImporter } from "../marketplace/github-importer.ts";
+import { SkillsManager } from "../marketplace/skills-manager.ts";
+import { McpGateway } from "../mcp/mcp-gateway.ts";
 import { ProviderConnectionService } from "../providers/provider-connection-service.ts";
 import { TranscriptionService } from "../voice/transcription-service.ts";
 import { ControlSocketServer } from "./control-socket.ts";
 import { importOpenBotTelemetryIfAvailable } from "./analytics-skills-service.ts";
 import { tryHandleStudioRoute } from "./studio-routes.ts";
 import { WebSocketHub } from "./websocket-hub.ts";
+import type { WhatsAppStudioClient } from "@criativo/whatsapp";
 
 export interface TaskExecutorHook {
   execute(tarefa: TarefaRegistro): Promise<void>;
@@ -38,7 +48,9 @@ export interface DaemonServerOptions {
   cronIntervalMs?: number;
   workerPollMs?: number;
   autoStartLoops?: boolean;
+  autoBootWhatsApp?: boolean;
   controlSocketPath?: string | null;
+  fetchImpl?: FetchLike;
   customTools?: Record<string, CustomToolExecutor>;
   onApproveAndPublishHook?: (tarefa: TarefaRegistro) => Promise<{ permalink?: string }>;
   taskExecutor?: TaskExecutorHook;
@@ -55,6 +67,12 @@ export interface DaemonRuntime {
   cron: CronScheduler;
   providers: ProviderRegistry;
   runner: AgentRunner;
+  mcpGateway: McpGateway;
+  catalogService: CatalogService;
+  githubImporter: GithubImporter;
+  skillsManager: SkillsManager;
+  whatsappManager: WhatsAppSessionManager;
+  whatsappOrchestrator: WhatsAppOrchestrator;
   whatsapp: WhatsAppStudioClient;
   approvalNotifier: WhatsAppApprovalNotifier;
   port: number;
@@ -66,7 +84,7 @@ function sendJson(res: ServerResponse, statusCode: number, body: unknown): void 
   res.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+    "Access-Control-Allow-Methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type,Authorization",
   });
   res.end(payload);
@@ -138,30 +156,103 @@ export async function createDaemonServer(
     vault,
     workspaceRoot: resolvedWorkspaceRoot,
   });
-  const runner = new AgentRunner({
+  const mcpGateway = new McpGateway({
     db,
-    queue,
     vault,
-    providers,
-    providerConnection,
-    wsHub,
-    customTools: options.customTools,
-  });
-  const transcription = new TranscriptionService({ vault });
-  const whatsapp = new WhatsAppStudioClient({
-    db: db.connection,
-    socketFactory: options.whatsappSocketFactory,
-    onStatusChange: (snapshot) => {
-      wsHub.broadcast("whatsapp:status", {
-        status: snapshot.status,
-        qrcode: snapshot.qrcode_base64,
-        numero: snapshot.numero ?? null,
+    fetchImpl: options.fetchImpl,
+    onOAuthRequired: (notice) => {
+      wsHub.broadcast("mcp.oauth_solicitado", {
+        mcp_id: notice.mcpId,
+        nome: notice.nome,
+        app_slug: notice.appSlug,
+        authorize_url: notice.authorizeUrl ?? null,
+        agente_id: notice.agentId ?? null,
+        motivo: notice.motivo,
+      });
+    },
+    onServerStatusChanged: (evt) => {
+      wsHub.broadcast("mcp.status_atualizado", {
+        mcp_id: evt.mcpId,
+        ativo: evt.ativo,
+        oauth_status: evt.oauthStatus,
+        qtd_ferramentas: evt.qtdFerramentas,
+        ultimo_erro: evt.ultimoErro ?? null,
       });
     },
   });
+  await mcpGateway.start();
+  providerConnection.attachMcpGateway(mcpGateway);
 
-  const approvalNotifier = new WhatsAppApprovalNotifier({
-    client: whatsapp,
+  const skillsManager = new SkillsManager({
+    db,
+    workspaceRoot: resolvedWorkspaceRoot,
+  });
+  skillsManager.syncDiskAndCatalog();
+
+  const catalogService = new CatalogService({
+    db,
+    vault,
+    mcpGateway,
+    mcpStore: mcpGateway.store,
+    oauthProvider: mcpGateway.oauthProvider,
+    skillsManager,
+    workspaceRoot: resolvedWorkspaceRoot,
+  });
+  const githubImporter = new GithubImporter({
+    skillsManager,
+    catalogService,
+  });
+
+  const transcription = new TranscriptionService({ vault });
+  const whatsappSenderRules = new WhatsAppSenderRules(db.connection);
+  const whatsappMediaService = new WhatsAppMediaService({
+    db: db.connection,
+    workspaceRoot: resolvedWorkspaceRoot,
+  });
+  const whatsappArchiveService = new WhatsAppArchiveService({
+    db: db.connection,
+    workspaceRoot: resolvedWorkspaceRoot,
+  });
+
+  const whatsappManager = new WhatsAppSessionManager({
+    db: db.connection,
+    socketFactory: options.whatsappSocketFactory,
+    onStatusChange: (contaId, snapshot) => {
+      wsHub.broadcast("whatsapp.conta_atualizada", {
+        conta_id: contaId,
+        status: snapshot.status,
+        qrcode_base64: snapshot.qrcode_base64,
+        pairing_code: snapshot.pairing_code ?? null,
+        numero_telefone: snapshot.numero ?? null,
+        ultimo_erro: snapshot.ultimo_erro ?? null,
+      });
+      if (contaId === DEFAULT_WHATSAPP_ACCOUNT_ID) {
+        wsHub.broadcast("whatsapp:status", {
+          status: snapshot.status,
+          qrcode: snapshot.qrcode_base64,
+          numero: snapshot.numero ?? null,
+        });
+      }
+    },
+  });
+
+  const whatsappOrchestrator = new WhatsAppOrchestrator({
+    db: db.connection,
+    sessionManager: whatsappManager,
+    senderRules: whatsappSenderRules,
+    mediaService: whatsappMediaService,
+    archiveService: whatsappArchiveService,
+    enqueueTask: (input) => {
+      const created = queue.enqueueTask(input);
+      wsHub.broadcast("task:queued", {
+        tarefa_id: created.tarefa_id,
+        tipo: created.tipo,
+        titulo: created.titulo,
+        prioridade: created.prioridade,
+        canal_origem: created.canal_origem,
+      });
+      return created;
+    },
     updateTaskStatus: (id, status, result, err) =>
       queue.updateTaskStatus(id, status, result, err),
     onApproveAndPublish: async (tarefaId) => {
@@ -200,27 +291,40 @@ export async function createDaemonServer(
         payload: { tarefa_original_id: tarefaId, feedback },
       });
     },
-  });
-
-  const whatsappHandler = new WhatsAppMessageHandler({
-    client: whatsapp,
-    enqueueTask: (input) => {
-      const created = queue.enqueueTask(input);
-      wsHub.broadcast("task:queued", {
-        tarefa_id: created.tarefa_id,
-        tipo: created.tipo,
-        titulo: created.titulo,
-        prioridade: created.prioridade,
-        canal_origem: created.canal_origem,
-      });
-      return created;
-    },
     transcribeAudio: (buf, mime) => transcription.transcribeAudio(buf, mime),
-    onApprovalReply: (jid, text) => approvalNotifier.handleReply(jid, text),
+    onPairingRequested: (contaId, request) => {
+      wsHub.broadcast("whatsapp.pairing_solicitado", {
+        conta_id: contaId,
+        request,
+      });
+    },
+    onMessageRecorded: (contaId, registro) => {
+      wsHub.broadcast("whatsapp.mensagem_recebida", {
+        conta_id: contaId,
+        mensagem: registro,
+      });
+    },
   });
 
-  whatsapp.onMessage(async (msg) => {
-    await whatsappHandler.handleIncomingMessage(msg);
+  const whatsapp = whatsappManager.getPrimaryClient();
+  const approvalNotifier = whatsappOrchestrator.getApprovalNotifier(
+    DEFAULT_WHATSAPP_ACCOUNT_ID
+  );
+
+  const runner = new AgentRunner({
+    db,
+    queue,
+    vault,
+    providers,
+    providerConnection,
+    wsHub,
+    mcpGateway,
+    whatsappManager,
+    whatsappOrchestrator,
+    catalogService,
+    skillsManager,
+    workspaceRoot: resolvedWorkspaceRoot,
+    customTools: options.customTools,
   });
   const activeExecutor: TaskExecutorHook = options.taskExecutor ?? {
     execute: async (tarefa) => {
@@ -303,7 +407,7 @@ export async function createDaemonServer(
       if (req.method === "OPTIONS") {
         res.writeHead(204, {
           "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+          "Access-Control-Allow-Methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
           "Access-Control-Allow-Headers": "Content-Type,Authorization",
         });
         res.end();
@@ -325,6 +429,12 @@ export async function createDaemonServer(
           sendJson,
           readJsonBody,
           workspaceRoot: resolvedWorkspaceRoot,
+          mcpGateway,
+          catalogService,
+          githubImporter,
+          skillsManager,
+          whatsappManager,
+          whatsappOrchestrator,
         })
       ) {
         return;
@@ -694,10 +804,19 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
 
   if (options.autoStartLoops !== false) {
     cron.start(options.cronIntervalMs ?? 60_000);
+    whatsappArchiveService.startPeriodicCleanup();
     workerTimer = setInterval(() => {
       void processNextQueuedTask();
     }, options.workerPollMs ?? 500);
     workerTimer.unref?.();
+  }
+
+  const shouldAutoBootWhatsApp =
+    options.autoBootWhatsApp ?? options.autoStartLoops !== false;
+  if (shouldAutoBootWhatsApp) {
+    void whatsappManager.bootSavedAccounts().catch((err) => {
+      console.warn("[Daemon] Falha no auto-boot WhatsApp:", err);
+    });
   }
 
   return {
@@ -710,11 +829,19 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
     cron,
     providers,
     runner,
+    mcpGateway,
+    catalogService,
+    githubImporter,
+    skillsManager,
+    whatsappManager,
+    whatsappOrchestrator,
     whatsapp,
     approvalNotifier,
     port: resolvedPort,
     async close(): Promise<void> {
       cron.stop();
+      whatsappArchiveService.stopPeriodicCleanup();
+      whatsappOrchestrator.stop();
       if (workerTimer) {
         clearInterval(workerTimer);
         workerTimer = null;
@@ -722,7 +849,8 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
       if (controlSocket) {
         await controlSocket.close();
       }
-      await whatsapp.disconnect();
+      await whatsappManager.shutdownAll();
+      await mcpGateway.close();
       providerConnection.close();
       wsHub.closeAll();
       await new Promise<void>((resolveClose) => {
