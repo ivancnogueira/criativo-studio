@@ -1,11 +1,36 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, extname, join, relative, resolve } from "node:path";
-import type { ArquivoStudio } from "@criativo/contracts";
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  mcpConfigErrors,
+  normalizeMcpConfig,
+  whatsAppNumberForms,
+  type ArquivoStudio,
+  type MarketplaceSourceFilter,
+  type McpAcessoAgentes,
+  type McpServidorConfig,
+  type ToolDefinition,
+} from "@criativo/contracts";
+import {
+  DEFAULT_WHATSAPP_ACCOUNT_ID,
+  WHATSAPP_MAX_POST_CHARS,
+  WhatsAppArchiveService,
+  type WhatsAppOrchestrator,
+  type WhatsAppSessionManager,
+} from "@criativo/whatsapp";
 import type { CriativoDatabase } from "../database/client.ts";
 import { ROSTER_15_AGENTES } from "../engine/runner/roster-defaults.ts";
+import type { CatalogService } from "../marketplace/catalog-service.ts";
+import type { SkillsManager } from "../marketplace/skills-manager.ts";
+import type { McpGateway } from "../mcp/mcp-gateway.ts";
+import {
+  maskMcpServerForClient,
+  redactMcpPayload,
+  redactMcpSecrets,
+} from "../mcp/mcp-redaction.ts";
 import type { ProviderConnectionService } from "../providers/provider-connection-service.ts";
 import type { VaultService } from "../vault/vault-service.ts";
+import type { WebSocketHub } from "./websocket-hub.ts";
 
 export interface MetaCredentialsResolved {
   accessToken: string | null;
@@ -464,4 +489,890 @@ export function buildStudioLiveContext(deps: {
   );
 
   return lines.join("\n");
+}
+
+export interface StudioExtensionToolDeps {
+  db: CriativoDatabase;
+  vault?: VaultService;
+  wsHub?: WebSocketHub;
+  workspaceRoot?: string;
+  agenteId?: string;
+  canalId?: string | null;
+  mcpGateway?: McpGateway;
+  catalogService?: CatalogService;
+  skillsManager?: SkillsManager;
+  whatsappManager?: WhatsAppSessionManager;
+  whatsappOrchestrator?: WhatsAppOrchestrator;
+}
+
+export const PHASE10_TOOL_DEFINITIONS: ToolDefinition[] = [
+  {
+    name: "messaging_list_places",
+    description:
+      "Lista as contas WhatsApp configuradas, contatos/grupos autorizados e conversas recentes disponíveis para envio ou consulta.",
+    parameters: {
+      type: "object",
+      properties: {
+        contaId: { type: "string", description: "Opcional: filtra por ID da conta WhatsApp." },
+      },
+    },
+  },
+  {
+    name: "messaging_history",
+    description:
+      "Consulta o histórico recente de mensagens WhatsApp armazenadas (padrão 30, máximo 100 mensagens).",
+    parameters: {
+      type: "object",
+      properties: {
+        contaId: { type: "string", description: "ID da conta WhatsApp." },
+        chatJid: { type: "string", description: "JID do chat/contato/grupo." },
+        limit: { type: "number", description: "Quantidade máxima de mensagens (1 a 100, padrão 30)." },
+      },
+    },
+  },
+  {
+    name: "messaging_post",
+    description:
+      "Envia mensagem de texto (máximo 8.000 caracteres) e anexo de mídia opcional para um contato ou grupo autorizado no WhatsApp.",
+    parameters: {
+      type: "object",
+      properties: {
+        contaId: { type: "string", description: "ID da conta WhatsApp (padrão: whatsapp-principal)." },
+        chatJid: { type: "string", description: "JID ou número de telefone autorizado do destinatário." },
+        text: { type: "string", description: "Texto da mensagem (até 8.000 caracteres)." },
+        mediaPath: {
+          type: "string",
+          description: "Caminho relativo seguro em recursos/, saidas/ ou previas/ para anexo.",
+        },
+        caption: { type: "string", description: "Legenda opcional para imagem/vídeo/documento." },
+        asAudioPtt: { type: "boolean", description: "Se áudio, envia como mensagem de voz (PTT)." },
+      },
+      required: ["chatJid"],
+    },
+  },
+  {
+    name: "messaging_remember",
+    description:
+      "Registra uma memória operacional durável para uma conta ou conversa específica do WhatsApp.",
+    parameters: {
+      type: "object",
+      properties: {
+        contaId: { type: "string", description: "ID da conta WhatsApp (padrão: whatsapp-principal)." },
+        chatJid: { type: "string", description: "Opcional: JID do chat associado à memória." },
+        texto: { type: "string", description: "Regra, preferência ou contexto operacional a lembrar." },
+      },
+      required: ["texto"],
+    },
+  },
+  {
+    name: "messaging_forget_memory",
+    description: "Remove uma memória operacional registrada anteriormente no canal WhatsApp.",
+    parameters: {
+      type: "object",
+      properties: {
+        contaId: { type: "string", description: "ID da conta WhatsApp (padrão: whatsapp-principal)." },
+        memoriaId: { type: "string", description: "ID exato da memória a esquecer." },
+        texto: { type: "string", description: "Texto exato ou trecho da memória a remover." },
+        chatJid: { type: "string", description: "Opcional: JID do chat associado." },
+      },
+    },
+  },
+  {
+    name: "list_mcp_servers",
+    description:
+      "Lista todos os servidores MCP cadastrados, status de conexão, quantidade de ferramentas, status OAuth e escopo de agentes (sem expor segredos).",
+    parameters: {
+      type: "object",
+      properties: {
+        includeDisabled: { type: "boolean", description: "Incluir servidores desativados (padrão true)." },
+        agentId: { type: "string", description: "Opcional: filtra servidores autorizados para este agente." },
+      },
+    },
+  },
+  {
+    name: "save_mcp_server",
+    description:
+      "Cria ou atualiza um servidor MCP STDIO ou Streamable HTTP no estúdio, armazenando segredos com segurança no Cofre.",
+    parameters: {
+      type: "object",
+      properties: {
+        mcp_id: { type: "string", description: "Opcional ao criar; obrigatório para atualizar servidor específico." },
+        nome: { type: "string", description: "Nome identificador do servidor MCP." },
+        transporte: { type: "string", enum: ["stdio", "http"] },
+        comando: { type: "string", description: "Executável STDIO (ex.: npx, node)." },
+        args: { type: "array", items: { type: "string" } },
+        env: { type: "object", additionalProperties: { type: "string" } },
+        envPassthrough: { type: "array", items: { type: "string" } },
+        workingDirectory: { type: "string" },
+        url: { type: "string", description: "URL HTTP/HTTPS para transporte Streamable HTTP." },
+        headers: { type: "object", additionalProperties: { type: "string" } },
+        acesso: {
+          type: "object",
+          properties: {
+            mode: { type: "string", enum: ["everyone", "agents"] },
+            agentIds: { type: "array", items: { type: "string" } },
+          },
+        },
+        ativo: { type: "boolean" },
+        testar: { type: "boolean", description: "Quando true, executa sondagem real após salvar." },
+      },
+      required: ["nome"],
+    },
+  },
+  {
+    name: "test_mcp_server",
+    description:
+      "Executa sondagem real em um servidor MCP salvo, retornando ferramentas descobertas ou solicitando OAuth se necessário.",
+    parameters: {
+      type: "object",
+      properties: {
+        mcpId: { type: "string", description: "ID do servidor MCP a testar." },
+      },
+      required: ["mcpId"],
+    },
+  },
+  {
+    name: "set_mcp_server_enabled",
+    description: "Ativa ou desativa um servidor MCP cadastrado sem apagá-lo.",
+    parameters: {
+      type: "object",
+      properties: {
+        mcpId: { type: "string" },
+        ativo: { type: "boolean" },
+      },
+      required: ["mcpId", "ativo"],
+    },
+  },
+  {
+    name: "remove_mcp_server",
+    description: "Remove um servidor MCP e revoga credenciais OAuth e segredos associados no Cofre.",
+    parameters: {
+      type: "object",
+      properties: {
+        mcpId: { type: "string" },
+      },
+      required: ["mcpId"],
+    },
+  },
+  {
+    name: "suggest_marketplace_app",
+    description:
+      "Sugere ao usuário um aplicativo oficial do catálogo da Loja Unificada inline no chat com prompts prontos.",
+    parameters: {
+      type: "object",
+      properties: {
+        slug: { type: "string", description: "Slug do app (ex.: canva, figma, notion, elevenlabs, github)." },
+        query: { type: "string", description: "Termo de busca caso não saiba o slug exato." },
+      },
+    },
+  },
+  {
+    name: "list_local_skills",
+    description: "Lista habilidades instaladas e disponíveis no catálogo local da Loja.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        source: { type: "string", enum: ["all", "verified", "public"] },
+        agentId: { type: "string" },
+        category: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "read_local_skill",
+    description: "Lê os metadados e o conteúdo completo do SKILL.md de uma habilidade instalada ou do catálogo.",
+    parameters: {
+      type: "object",
+      properties: {
+        slugOrId: { type: "string", description: "Slug ou skillId da habilidade." },
+      },
+      required: ["slugOrId"],
+    },
+  },
+  {
+    name: "create_skill",
+    description:
+      "Cria uma nova habilidade personalizada (SKILL.md) em dados/skills-loja/ e opcionalmente vincula aos agentes.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        slug: { type: "string" },
+        description: { type: "string" },
+        category: { type: "string" },
+        instructions: { type: "string", description: "Conteúdo Markdown completo das instruções." },
+        agentIds: { type: "array", items: { type: "string" } },
+      },
+      required: ["name", "description", "instructions"],
+    },
+  },
+  {
+    name: "revise_skill",
+    description: "Atualiza instruções e metadados de uma habilidade local não-nativa.",
+    parameters: {
+      type: "object",
+      properties: {
+        slugOrId: { type: "string" },
+        name: { type: "string" },
+        description: { type: "string" },
+        category: { type: "string" },
+        instructions: { type: "string" },
+      },
+      required: ["slugOrId", "instructions"],
+    },
+  },
+  {
+    name: "install_local_skill",
+    description: "Instala uma habilidade do catálogo da Loja para o disco local e vincula aos agentes informados.",
+    parameters: {
+      type: "object",
+      properties: {
+        slugOrId: { type: "string" },
+        targetAgentIds: { type: "array", items: { type: "string" } },
+      },
+      required: ["slugOrId"],
+    },
+  },
+  {
+    name: "set_skill_enabled",
+    description: "Habilita ou desabilita uma habilidade vinculada para um agente específico.",
+    parameters: {
+      type: "object",
+      properties: {
+        agenteId: { type: "string" },
+        slugOrId: { type: "string" },
+        habilitada: { type: "boolean" },
+      },
+      required: ["agenteId", "slugOrId", "habilitada"],
+    },
+  },
+  {
+    name: "uninstall_skill",
+    description: "Desinstala uma habilidade da Loja, GitHub ou personalizada (habilidades nativas são protegidas).",
+    parameters: {
+      type: "object",
+      properties: {
+        slugOrId: { type: "string" },
+      },
+      required: ["slugOrId"],
+    },
+  },
+];
+
+export const PHASE10_TOOL_NAMES: ReadonlySet<string> = new Set(
+  PHASE10_TOOL_DEFINITIONS.map((t) => t.name)
+);
+
+export function isPhase10ExtensionTool(name: string): boolean {
+  return PHASE10_TOOL_NAMES.has(name);
+}
+
+function readStringArg(args: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const val = args[key];
+    if (typeof val === "string" && val.trim().length > 0) {
+      return val.trim();
+    }
+  }
+  return undefined;
+}
+
+function readStringArrayArg(args: Record<string, unknown>, ...keys: string[]): string[] {
+  for (const key of keys) {
+    const val = args[key];
+    if (Array.isArray(val)) {
+      return val.filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+    }
+  }
+  return [];
+}
+
+function readStringRecordArg(
+  args: Record<string, unknown>,
+  ...keys: string[]
+): Record<string, string> | undefined {
+  for (const key of keys) {
+    const val = args[key];
+    if (val && typeof val === "object" && !Array.isArray(val)) {
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+        if (typeof v === "string") out[k] = v;
+      }
+      return out;
+    }
+  }
+  return undefined;
+}
+
+export function resolveSafeStudioMediaPath(workspaceRoot: string, rawMediaPath: string): string {
+  const trimmed = rawMediaPath.trim();
+  if (!trimmed || trimmed.includes("\0")) {
+    throw new Error("Caminho de mídia inválido.");
+  }
+
+  const allowedRoots = [
+    resolve(workspaceRoot, "recursos"),
+    resolve(workspaceRoot, "saidas"),
+    resolve(workspaceRoot, "previas"),
+  ];
+  const resolvedTarget = isAbsolute(trimmed)
+    ? resolve(trimmed)
+    : resolve(workspaceRoot, trimmed);
+
+  const contained = allowedRoots.some((root) => {
+    const rel = relative(root, resolvedTarget);
+    return rel !== "" && !rel.startsWith("..") && !rel.includes(`..${sep}`) && !isAbsolute(rel);
+  });
+
+  if (!contained) {
+    throw new Error(
+      "Acesso negado: o anexo de mídia deve estar contido em recursos/, saidas/ ou previas/."
+    );
+  }
+
+  if (!existsSync(resolvedTarget) || !statSync(resolvedTarget).isFile()) {
+    throw new Error(`Arquivo de mídia não encontrado: ${rawMediaPath}`);
+  }
+
+  return resolvedTarget;
+}
+
+function normalizeTargetWhatsAppJid(rawTarget: string): string {
+  const trimmed = rawTarget.trim();
+  if (trimmed.includes("@")) return trimmed;
+  const digits = trimmed.replace(/[^0-9]/g, "");
+  return digits ? `${digits}@s.whatsapp.net` : trimmed;
+}
+
+function isRecipientAuthorizedForAccount(
+  db: CriativoDatabase,
+  contaId: string,
+  targetJid: string
+): boolean {
+  const account = db.connection
+    .prepare(`SELECT jid_proprio, numero_telefone FROM whatsapp_contas WHERE conta_id = ? LIMIT 1;`)
+    .get(contaId) as { jid_proprio?: string | null; numero_telefone?: string | null } | undefined;
+
+  const targetForms = new Set(whatsAppNumberForms(targetJid));
+  if (account) {
+    const ownForms = new Set([
+      ...(account.jid_proprio ? whatsAppNumberForms(account.jid_proprio) : []),
+      ...(account.numero_telefone ? whatsAppNumberForms(account.numero_telefone) : []),
+    ]);
+    for (const form of targetForms) {
+      if (ownForms.has(form)) return true;
+    }
+  }
+
+  const rows = db.connection
+    .prepare(
+      `SELECT tipo, identificador_jid, telefone_normalizado, variantes_json
+       FROM whatsapp_contatos_autorizados
+       WHERE conta_id = ? AND permitido = 1;`
+    )
+    .all(contaId) as Array<{
+    tipo: string;
+    identificador_jid: string;
+    telefone_normalizado: string | null;
+    variantes_json: string;
+  }>;
+
+  for (const row of rows) {
+    if (row.identificador_jid === targetJid) return true;
+    if (row.tipo === "contato") {
+      if (row.telefone_normalizado && targetForms.has(row.telefone_normalizado)) return true;
+      try {
+        const variants = JSON.parse(row.variantes_json) as unknown;
+        if (Array.isArray(variants) && variants.some((v) => typeof v === "string" && targetForms.has(v))) {
+          return true;
+        }
+      } catch {
+        // ignora JSON inválido
+      }
+      if (whatsAppNumberForms(row.identificador_jid).some((f) => targetForms.has(f))) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+export async function executeStudioExtensionTool(
+  toolName: string,
+  args: Record<string, unknown>,
+  deps: StudioExtensionToolDeps
+): Promise<unknown> {
+  const workspaceRoot = deps.workspaceRoot ?? process.cwd();
+  const getArchive = () =>
+    new WhatsAppArchiveService({
+      db: deps.db.connection,
+      workspaceRoot,
+    });
+
+  switch (toolName) {
+    // ------------------------------------------------------------------
+    // 5 Tools WhatsApp (WAPP-03 / D-04)
+    // ------------------------------------------------------------------
+    case "messaging_list_places": {
+      const contaId = readStringArg(args, "contaId", "conta_id");
+      return getArchive().listPlaces(contaId);
+    }
+
+    case "messaging_history": {
+      const contaId = readStringArg(args, "contaId", "conta_id");
+      const chatJid = readStringArg(args, "chatJid", "chat_jid");
+      const rawLimit = typeof args.limit === "number" ? args.limit : Number(args.limit ?? 30);
+      const limit = Number.isFinite(rawLimit)
+        ? Math.min(100, Math.max(1, Math.trunc(rawLimit)))
+        : 30;
+      const mensagens = getArchive().listHistory({ contaId, chatJid, limit });
+      return {
+        contaId: contaId ?? null,
+        chatJid: chatJid ?? null,
+        limit,
+        total: mensagens.length,
+        mensagens,
+      };
+    }
+
+    case "messaging_post": {
+      if (!deps.whatsappOrchestrator) {
+        throw new Error("Orquestrador WhatsApp não está ativo neste daemon.");
+      }
+      const contaId = readStringArg(args, "contaId", "conta_id") ?? DEFAULT_WHATSAPP_ACCOUNT_ID;
+      const rawTarget = readStringArg(args, "chatJid", "chat_jid", "to", "destinatario");
+      if (!rawTarget) {
+        throw new Error("Informe 'chatJid' do destinatário autorizado para envio.");
+      }
+      const targetJid = normalizeTargetWhatsAppJid(rawTarget);
+      if (!isRecipientAuthorizedForAccount(deps.db, contaId, targetJid)) {
+        throw new Error(
+          `Destinatário '${rawTarget}' não está autorizado na conta WhatsApp '${contaId}'.`
+        );
+      }
+
+      const text = typeof args.text === "string"
+        ? args.text
+        : typeof args.texto === "string"
+          ? args.texto
+          : "";
+      if (text.length > WHATSAPP_MAX_POST_CHARS) {
+        throw new Error(
+          `Mensagem excede o limite de ${WHATSAPP_MAX_POST_CHARS} caracteres por envio no WhatsApp.`
+        );
+      }
+
+      const rawMediaPath = readStringArg(args, "mediaPath", "media_path");
+      const safeMediaPath = rawMediaPath
+        ? resolveSafeStudioMediaPath(workspaceRoot, rawMediaPath)
+        : undefined;
+
+      if (!text.trim() && !safeMediaPath) {
+        throw new Error("Informe 'text' ou 'mediaPath' para enviar no WhatsApp.");
+      }
+
+      const registro = await deps.whatsappOrchestrator.sendMessageAndArchive(
+        contaId,
+        targetJid,
+        {
+          text,
+          mediaPath: safeMediaPath,
+          caption: readStringArg(args, "caption", "legenda"),
+          asAudioPtt: typeof args.asAudioPtt === "boolean" ? args.asAudioPtt : undefined,
+        }
+      );
+
+      return { ok: true, mensagem: registro };
+    }
+
+    case "messaging_remember": {
+      if (!deps.whatsappOrchestrator) {
+        throw new Error("Orquestrador WhatsApp não está ativo neste daemon.");
+      }
+      const texto = readStringArg(args, "texto", "text", "memory");
+      if (!texto) {
+        throw new Error("Informe o campo 'texto' para gravar a memória operacional.");
+      }
+      const contaId = readStringArg(args, "contaId", "conta_id") ?? DEFAULT_WHATSAPP_ACCOUNT_ID;
+      const chatJid = readStringArg(args, "chatJid", "chat_jid");
+      const memoria = deps.whatsappOrchestrator.rememberChannelMemory({
+        contaId,
+        chatJid,
+        texto,
+        origem: "manual",
+      });
+      return { ok: Boolean(memoria), memoria };
+    }
+
+    case "messaging_forget_memory": {
+      if (!deps.whatsappOrchestrator) {
+        throw new Error("Orquestrador WhatsApp não está ativo neste daemon.");
+      }
+      const contaId = readStringArg(args, "contaId", "conta_id") ?? DEFAULT_WHATSAPP_ACCOUNT_ID;
+      const memoriaId = readStringArg(args, "memoriaId", "memoria_id", "id");
+      const texto = readStringArg(args, "texto", "text");
+      const chatJid = readStringArg(args, "chatJid", "chat_jid");
+      if (!memoriaId && !texto) {
+        throw new Error("Informe 'memoriaId' ou 'texto' para remover a memória do canal.");
+      }
+      const removed = deps.whatsappOrchestrator.forgetChannelMemory({
+        contaId,
+        memoriaId,
+        texto,
+        chatJid,
+      });
+      return { ok: removed, removed };
+    }
+
+    // ------------------------------------------------------------------
+    // 5 Tools MCP + Sugestão de App (MCP-03 / STORE-02 / D-07)
+    // ------------------------------------------------------------------
+    case "list_mcp_servers": {
+      if (!deps.mcpGateway) {
+        throw new Error("McpGateway não inicializado neste daemon.");
+      }
+      const includeDisabled =
+        typeof args.includeDisabled === "boolean" ? args.includeDisabled : true;
+      const agentId = readStringArg(args, "agentId", "agenteId");
+      const servers = deps.mcpGateway.store
+        .listServersForClient({ includeDisabled, agentId })
+        .map((srv) => ({
+          ...maskMcpServerForClient(srv),
+          oauthStatus: deps.mcpGateway!.oauthProvider.getOAuthStatus(srv.mcp_id),
+        }));
+
+      return { total: servers.length, servidores: servers };
+    }
+
+    case "save_mcp_server": {
+      if (!deps.mcpGateway) {
+        throw new Error("McpGateway não inicializado neste daemon.");
+      }
+      const rawAcesso = (args.acesso ?? args.access) as Partial<McpAcessoAgentes> | undefined;
+      const payload: Partial<McpServidorConfig> = {
+        mcp_id: readStringArg(args, "mcp_id", "mcpId"),
+        nome: readStringArg(args, "nome", "name"),
+        transporte:
+          args.transporte === "http" || args.transport === "http"
+            ? "http"
+            : args.transporte === "stdio" || args.transport === "stdio"
+              ? "stdio"
+              : undefined,
+        comando: readStringArg(args, "comando", "command"),
+        args: readStringArrayArg(args, "args"),
+        env: readStringRecordArg(args, "env"),
+        envPassthrough: readStringArrayArg(args, "envPassthrough", "env_passthrough"),
+        workingDirectory:
+          args.workingDirectory === null || args.working_directory === null
+            ? null
+            : readStringArg(args, "workingDirectory", "working_directory"),
+        url: args.url === null ? null : readStringArg(args, "url"),
+        headers: readStringRecordArg(args, "headers"),
+        acesso:
+          rawAcesso && typeof rawAcesso === "object"
+            ? {
+                mode: rawAcesso.mode === "agents" ? "agents" : "everyone",
+                agentIds: Array.isArray(rawAcesso.agentIds)
+                  ? rawAcesso.agentIds.filter((id): id is string => typeof id === "string")
+                  : [],
+              }
+            : undefined,
+        ativo: typeof args.ativo === "boolean" ? args.ativo : true,
+      };
+
+      const normalized = normalizeMcpConfig(payload);
+      const errors = mcpConfigErrors(normalized);
+      const firstErr = errors.nome ?? errors.comando ?? errors.url ?? errors.acesso;
+      if (firstErr) {
+        throw new Error(firstErr);
+      }
+
+      const saved = deps.mcpGateway.store.saveServer(payload);
+      deps.mcpGateway.invalidateServer(saved.mcp_id);
+      deps.mcpGateway.refreshProxyRoutes();
+
+      const shouldProbe = args.testar === true || args.probe === true;
+      const probe = shouldProbe ? await deps.mcpGateway.testServer(saved.mcp_id) : undefined;
+      const latest = deps.mcpGateway.store.getServer(saved.mcp_id, false) ?? saved;
+      const oauthStatus = deps.mcpGateway.oauthProvider.getOAuthStatus(saved.mcp_id);
+
+      deps.wsHub?.broadcast("mcp.status_atualizado", {
+        mcp_id: latest.mcp_id,
+        ativo: latest.ativo,
+        oauth_status: oauthStatus,
+        qtd_ferramentas: probe?.toolCount ?? latest.qtdFerramentas,
+        ultimo_erro: latest.ultimoErro ?? null,
+      });
+
+      return redactMcpPayload(
+        {
+          ok: true,
+          servidor: maskMcpServerForClient({ ...latest, oauthStatus }),
+          ...(probe ? { probe } : {}),
+        },
+        []
+      );
+    }
+
+    case "test_mcp_server": {
+      if (!deps.mcpGateway) {
+        throw new Error("McpGateway não inicializado neste daemon.");
+      }
+      const mcpId = readStringArg(args, "mcpId", "mcp_id");
+      if (!mcpId) {
+        throw new Error("Informe 'mcpId' do servidor MCP a testar.");
+      }
+
+      const resultado = await deps.mcpGateway.testServer(mcpId);
+      const server = deps.mcpGateway.store.getServer(mcpId, false);
+      if (resultado.status === "needs_sign_in") {
+        const motivo = resultado.error ?? `Autenticação OAuth necessária para '${server?.nome ?? mcpId}'.`;
+        deps.wsHub?.broadcast("mcp.oauth_solicitado", {
+          mcp_id: mcpId,
+          nome: server?.nome ?? mcpId,
+          app_slug: server?.origemAppSlug ?? null,
+          authorize_url: resultado.authUrl ?? null,
+          canal_id: deps.canalId ?? null,
+          agente_id: deps.agenteId ?? null,
+          motivo,
+        });
+        return redactMcpPayload(
+          {
+            ...resultado,
+            ok: false,
+            action: "sign_in",
+            mcpId,
+            nome: server?.nome ?? mcpId,
+            appSlug: server?.origemAppSlug ?? null,
+            motivo,
+          },
+          []
+        );
+      }
+
+      return redactMcpPayload({ ...resultado, mcpId }, []);
+    }
+
+    case "set_mcp_server_enabled": {
+      if (!deps.mcpGateway) {
+        throw new Error("McpGateway não inicializado neste daemon.");
+      }
+      const mcpId = readStringArg(args, "mcpId", "mcp_id");
+      if (!mcpId || typeof args.ativo !== "boolean") {
+        throw new Error("Informe 'mcpId' e 'ativo' (boolean).");
+      }
+
+      const updated = deps.mcpGateway.store.setServerEnabled(mcpId, args.ativo);
+      deps.mcpGateway.invalidateServer(mcpId);
+      deps.mcpGateway.refreshProxyRoutes();
+      const oauthStatus = deps.mcpGateway.oauthProvider.getOAuthStatus(mcpId);
+
+      deps.wsHub?.broadcast("mcp.status_atualizado", {
+        mcp_id: updated.mcp_id,
+        ativo: updated.ativo,
+        oauth_status: oauthStatus,
+        qtd_ferramentas: updated.qtdFerramentas,
+        ultimo_erro: updated.ultimoErro ?? null,
+      });
+
+      return {
+        ok: true,
+        servidor: maskMcpServerForClient({ ...updated, oauthStatus }),
+      };
+    }
+
+    case "remove_mcp_server": {
+      if (!deps.mcpGateway) {
+        throw new Error("McpGateway não inicializado neste daemon.");
+      }
+      const mcpId = readStringArg(args, "mcpId", "mcp_id");
+      if (!mcpId) {
+        throw new Error("Informe 'mcpId' do servidor MCP a remover.");
+      }
+
+      await deps.mcpGateway.oauthProvider.signOut(mcpId).catch(() => undefined);
+      deps.mcpGateway.invalidateServer(mcpId);
+      const removed = deps.mcpGateway.store.removeServer(mcpId);
+      deps.mcpGateway.refreshProxyRoutes();
+
+      if (removed) {
+        deps.wsHub?.broadcast("mcp.status_atualizado", {
+          mcp_id: mcpId,
+          ativo: false,
+          oauth_status: "disconnected",
+          qtd_ferramentas: 0,
+          ultimo_erro: null,
+        });
+      }
+
+      return { ok: removed, removed, mcpId };
+    }
+
+    case "suggest_marketplace_app": {
+      if (!deps.catalogService) {
+        throw new Error("CatalogService não inicializado neste daemon.");
+      }
+      const slug = readStringArg(args, "slug");
+      const query = readStringArg(args, "query", "q");
+      let app = slug ? deps.catalogService.findAppBySlug(slug) : null;
+      if (!app && (query || slug)) {
+        app = deps.catalogService.searchCatalogApps(query ?? slug ?? "", 1)[0] ?? null;
+      }
+
+      if (!app) {
+        return {
+          type: "marketplace_app_suggestion",
+          found: false,
+          app: null,
+        };
+      }
+
+      return {
+        type: "marketplace_app_suggestion",
+        app: {
+          slug: app.slug,
+          name: app.name,
+          tagline: app.tagline,
+          category: app.category,
+          verified: app.verified,
+          prompts: app.prompts,
+        },
+      };
+    }
+
+    // ------------------------------------------------------------------
+    // 7 Tools Skills (STORE-03 / D-09)
+    // ------------------------------------------------------------------
+    case "list_local_skills": {
+      if (!deps.skillsManager) {
+        throw new Error("SkillsManager não inicializado neste daemon.");
+      }
+      const skills = deps.skillsManager.listSkills({
+        query: readStringArg(args, "query", "q"),
+        source: (readStringArg(args, "source", "fonte") as MarketplaceSourceFilter) ?? "all",
+        agentId: readStringArg(args, "agentId", "agenteId"),
+        category: readStringArg(args, "category", "categoria"),
+      });
+      return { total: skills.length, skills };
+    }
+
+    case "read_local_skill": {
+      if (!deps.skillsManager) {
+        throw new Error("SkillsManager não inicializado neste daemon.");
+      }
+      const slugOrId = readStringArg(args, "slugOrId", "slug", "skillId", "skill_id");
+      if (!slugOrId) {
+        throw new Error("Informe 'slugOrId' da habilidade.");
+      }
+      const result = deps.skillsManager.readSkill(slugOrId);
+      if (!result) {
+        throw new Error(`Habilidade '${slugOrId}' não encontrada.`);
+      }
+      return result;
+    }
+
+    case "create_skill": {
+      if (!deps.skillsManager) {
+        throw new Error("SkillsManager não inicializado neste daemon.");
+      }
+      const name = readStringArg(args, "name", "nome");
+      const description = readStringArg(args, "description", "descricao");
+      const instructions = readStringArg(args, "instructions", "instrucoes");
+      if (!name || !description || !instructions) {
+        throw new Error("Informe 'name', 'description' e 'instructions' para criar a habilidade.");
+      }
+      const created = deps.skillsManager.createCustomSkill({
+        name,
+        slug: readStringArg(args, "slug"),
+        description,
+        category: readStringArg(args, "category", "categoria") ?? "Automação & Rotinas",
+        instructions,
+        agentIds: readStringArrayArg(args, "agentIds", "agentes"),
+      });
+      deps.wsHub?.broadcast("loja.skill_atualizada", {
+        skill_id: created.skillId,
+        acao: "criada",
+      });
+      return { ok: true, skill: created };
+    }
+
+    case "revise_skill": {
+      if (!deps.skillsManager) {
+        throw new Error("SkillsManager não inicializado neste daemon.");
+      }
+      const slugOrId = readStringArg(args, "slugOrId", "slug", "skillId", "skill_id");
+      const instructions = readStringArg(args, "instructions", "instrucoes");
+      if (!slugOrId || !instructions) {
+        throw new Error("Informe 'slugOrId' e 'instructions' para revisar a habilidade.");
+      }
+      const updated = deps.skillsManager.reviseSkill(slugOrId, {
+        name: readStringArg(args, "name", "nome"),
+        description: readStringArg(args, "description", "descricao"),
+        category: readStringArg(args, "category", "categoria"),
+        instructions,
+      });
+      deps.wsHub?.broadcast("loja.skill_atualizada", {
+        skill_id: updated.skillId,
+        acao: "atualizada",
+      });
+      return { ok: true, skill: updated };
+    }
+
+    case "install_local_skill": {
+      if (!deps.skillsManager) {
+        throw new Error("SkillsManager não inicializado neste daemon.");
+      }
+      const slugOrId = readStringArg(args, "slugOrId", "slug", "skillId", "skill_id");
+      if (!slugOrId) {
+        throw new Error("Informe 'slugOrId' da habilidade a instalar.");
+      }
+      const targetAgentIds = readStringArrayArg(args, "targetAgentIds", "agentIds", "agentes");
+      const installed = deps.skillsManager.installCatalogSkill(slugOrId, targetAgentIds);
+      deps.wsHub?.broadcast("loja.skill_atualizada", {
+        skill_id: installed.skillId,
+        acao: "instalada",
+      });
+      return { ok: true, skill: installed };
+    }
+
+    case "set_skill_enabled": {
+      if (!deps.skillsManager) {
+        throw new Error("SkillsManager não inicializado neste daemon.");
+      }
+      const agenteId = readStringArg(args, "agenteId", "agentId") ?? deps.agenteId;
+      const slugOrId = readStringArg(args, "slugOrId", "slug", "skillId", "skill_id");
+      if (!agenteId || !slugOrId || typeof args.habilitada !== "boolean") {
+        throw new Error("Informe 'agenteId', 'slugOrId' e 'habilitada' (boolean).");
+      }
+      const res = deps.skillsManager.setSkillEnabledForAgent(agenteId, slugOrId, args.habilitada);
+      deps.wsHub?.broadcast("loja.skill_atualizada", {
+        skill_id: res.skillId,
+        acao: "vinculada",
+      });
+      return { ok: true, ...res };
+    }
+
+    case "uninstall_skill": {
+      if (!deps.skillsManager) {
+        throw new Error("SkillsManager não inicializado neste daemon.");
+      }
+      const slugOrId = readStringArg(args, "slugOrId", "slug", "skillId", "skill_id");
+      if (!slugOrId) {
+        throw new Error("Informe 'slugOrId' da habilidade a desinstalar.");
+      }
+      const res = deps.skillsManager.uninstallSkill(slugOrId);
+      if (res.removed && res.skillId) {
+        deps.wsHub?.broadcast("loja.skill_atualizada", {
+          skill_id: res.skillId,
+          acao: "removida",
+        });
+      }
+      return { ok: res.removed, ...res };
+    }
+
+    default:
+      throw new Error(`Ferramenta de extensão desconhecida: ${toolName}`);
+  }
 }

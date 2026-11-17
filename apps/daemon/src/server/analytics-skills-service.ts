@@ -106,22 +106,56 @@ export function listInstalledSkills(
       : getSkillsRootCandidates(workspaceRoot);
 
   const agentsRows = db.connection
-    .prepare(`SELECT nome, config_json FROM projecao_agentes ORDER BY ordem_exibicao ASC;`)
-    .all() as Array<{ nome: string; config_json: string }>;
+    .prepare(`SELECT agente_id, nome, config_json FROM projecao_agentes ORDER BY ordem_exibicao ASC;`)
+    .all() as Array<{ agente_id: string; nome: string; config_json: string }>;
 
-  const agentsBySkill = new Map<string, string[]>();
+  const agentNameById = new Map<string, string>();
+  const agentsBySkill = new Map<string, Set<string>>();
   for (const a of agentsRows) {
+    agentNameById.set(a.agente_id, a.nome);
     try {
       const cfg = JSON.parse(a.config_json) as { skill_slug?: string };
       if (cfg.skill_slug) {
-        const list = agentsBySkill.get(cfg.skill_slug) ?? [];
-        list.push(a.nome);
-        agentsBySkill.set(cfg.skill_slug, list);
+        const set = agentsBySkill.get(cfg.skill_slug) ?? new Set<string>();
+        set.add(a.nome);
+        agentsBySkill.set(cfg.skill_slug, set);
       }
     } catch {
       // ignora config inválida
     }
   }
+
+  // Mescla vínculos persistidos em projecao_agente_habilidades (Fase 10)
+  const linkedBySlugOrId = new Map<string, Set<string>>();
+  try {
+    const linkRows = db.connection
+      .prepare(
+        `SELECT ah.agente_id, ah.skill_id, c.slug
+         FROM projecao_agente_habilidades ah
+         JOIN projecao_habilidades_catalogo c ON c.skill_id = ah.skill_id
+         WHERE ah.habilitada = 1;`
+      )
+      .all() as Array<{ agente_id: string; skill_id: string; slug: string }>;
+    for (const link of linkRows) {
+      const agentLabel = agentNameById.get(link.agente_id) ?? link.agente_id;
+      for (const key of [link.slug, link.skill_id]) {
+        const set = linkedBySlugOrId.get(key) ?? new Set<string>();
+        set.add(agentLabel);
+        linkedBySlugOrId.set(key, set);
+      }
+    }
+  } catch {
+    // tabela pode não existir em instâncias antigas
+  }
+
+  const getAgentsForSkill = (slug: string, skillId?: string): string[] => {
+    const merged = new Set<string>(agentsBySkill.get(slug) ?? []);
+    for (const name of linkedBySlugOrId.get(slug) ?? []) merged.add(name);
+    if (skillId) {
+      for (const name of linkedBySlugOrId.get(skillId) ?? []) merged.add(name);
+    }
+    return Array.from(merged);
+  };
 
   const skillsMap = new Map<string, HabilidadeInstaladaInfo>();
   for (const root of roots) {
@@ -142,7 +176,7 @@ export function listInstalledSkills(
             descricao: parsed.description || "Habilidade de especialista configurada em SKILL.md.",
             categoria: inferSkillCategory(id),
             caminho: skillFile,
-            agentes_vinculados: agentsBySkill.get(id) ?? [],
+            agentes_vinculados: getAgentsForSkill(id),
             conteudo_preview: parsed.body.trim().slice(0, 650),
           });
         } catch {
@@ -151,6 +185,64 @@ export function listInstalledSkills(
       }
     } catch {
       // ignora pasta ilegível
+    }
+  }
+
+  // Quando não está em modo diretório customizado isolado, mescla skills da Loja / dados/skills-loja/
+  if (!customRoot) {
+    try {
+      const catalogRows = db.connection
+        .prepare(
+          `SELECT skill_id, slug, nome, descricao, categoria, origem, caminho_pasta
+           FROM projecao_habilidades_catalogo
+           ORDER BY nome ASC;`
+        )
+        .all() as Array<{
+        skill_id: string;
+        slug: string;
+        nome: string;
+        descricao: string;
+        categoria: string;
+        origem: string;
+        caminho_pasta: string;
+      }>;
+
+      for (const row of catalogRows) {
+        const existing = skillsMap.get(row.slug);
+        if (existing) {
+          const mergedAgents = new Set([
+            ...existing.agentes_vinculados,
+            ...getAgentsForSkill(row.slug, row.skill_id),
+          ]);
+          existing.agentes_vinculados = Array.from(mergedAgents);
+          continue;
+        }
+
+        const skillFile = join(row.caminho_pasta, "SKILL.md");
+        let preview = row.descricao;
+        if (existsSync(skillFile)) {
+          try {
+            const parsed = parseSkillFrontmatter(readFileSync(skillFile, "utf8"));
+            if (parsed.body.trim()) {
+              preview = parsed.body.trim().slice(0, 650);
+            }
+          } catch {
+            // fallback para descrição do catálogo
+          }
+        }
+
+        skillsMap.set(row.slug, {
+          id: row.slug,
+          nome: row.nome || row.slug,
+          descricao: row.descricao || "Habilidade instalada via Loja.",
+          categoria: inferSkillCategory(row.slug || row.categoria),
+          caminho: skillFile,
+          agentes_vinculados: getAgentsForSkill(row.slug, row.skill_id),
+          conteudo_preview: preview,
+        });
+      }
+    } catch {
+      // tabela pode estar ausente em bancos antigos
     }
   }
 
@@ -651,12 +743,61 @@ export function buildConnectorsList(db: CriativoDatabase, vault: VaultService): 
   const waRow = db.connection
     .prepare(`SELECT status, sessao_dados_json FROM projecao_conexoes_mensageria WHERE tipo_servico = 'whatsapp';`)
     .get() as { status: string; sessao_dados_json?: string | null } | undefined;
+
+  let waAccounts: Array<{
+    conta_id: string;
+    rotulo: string;
+    numero_telefone: string | null;
+    modo_operacao: string;
+    status: string;
+    agente_orquestrador_id: string | null;
+  }> = [];
+  try {
+    waAccounts = db.connection
+      .prepare(
+        `SELECT conta_id, rotulo, numero_telefone, modo_operacao, status, agente_orquestrador_id
+         FROM whatsapp_contas
+         ORDER BY CASE WHEN conta_id = 'whatsapp-principal' THEN 0 ELSE 1 END, atualizado_em DESC;`
+      )
+      .all() as typeof waAccounts;
+  } catch {
+    waAccounts = [];
+  }
+
   const mcpCountRow = db.connection
     .prepare(`SELECT COUNT(*) as total FROM projecao_mcp_servidores WHERE ativo = 1;`)
     .get() as { total: number };
   const mcpServers = db.connection
-    .prepare(`SELECT mcp_id, nome, comando, ativo FROM projecao_mcp_servidores ORDER BY nome ASC;`)
-    .all() as Array<{ mcp_id: string; nome: string; comando: string; ativo: number }>;
+    .prepare(
+      `SELECT mcp_id, nome, transporte, comando, url, ativo, qtd_ferramentas
+       FROM projecao_mcp_servidores
+       ORDER BY posicao ASC, nome ASC;`
+    )
+    .all() as Array<{
+    mcp_id: string;
+    nome: string;
+    transporte?: string | null;
+    comando: string;
+    url?: string | null;
+    ativo: number;
+    qtd_ferramentas?: number | null;
+  }>;
+
+  const oauthStatusMap = new Map<string, "conectado" | "expirado">();
+  try {
+    const oauthRows = db.connection
+      .prepare(`SELECT mcp_id, perdido_em FROM projecao_mcp_oauth_tokens;`)
+      .all() as Array<{ mcp_id: string; perdido_em: string | null }>;
+    for (const row of oauthRows) {
+      if (row.perdido_em === null) {
+        oauthStatusMap.set(row.mcp_id, "conectado");
+      } else if (!oauthStatusMap.has(row.mcp_id)) {
+        oauthStatusMap.set(row.mcp_id, "expirado");
+      }
+    }
+  } catch {
+    // tabela ausente em bancos legados antes da migração
+  }
 
   const cfgRow = db.connection
     .prepare(`SELECT valor_json FROM projecao_studio_config WHERE chave = 'conectores_orquestradores';`)
@@ -669,27 +810,63 @@ export function buildConnectorsList(db: CriativoDatabase, vault: VaultService): 
   const elevenOk = secrets.has("elevenlabs_api_key") || secrets.has("ELEVENLABS_API_KEY");
   const fishOk = secrets.has("fish_audio_api_key") || secrets.has("FISH_AUDIO_API_KEY");
 
-  const waStatus = waRow?.status === "conectado" ? "conectado" : waRow?.status === "aguardando_qr" ? "atencao" : "desconectado";
+  const connectedAccounts = waAccounts.filter((a) => a.status === "conectado");
+  const awaitingAccounts = waAccounts.filter(
+    (a) => a.status === "aguardando_qrcode" || a.status === "aguardando_qr"
+  );
+  const waStatus: ConectorIntegracaoInfo["status"] =
+    waAccounts.length > 0
+      ? connectedAccounts.length > 0
+        ? "conectado"
+        : awaitingAccounts.length > 0
+          ? "atencao"
+          : "desconectado"
+      : waRow?.status === "conectado"
+        ? "conectado"
+        : waRow?.status === "aguardando_qrcode" || waRow?.status === "aguardando_qr"
+          ? "atencao"
+          : "desconectado";
+
+  const waResumo =
+    waAccounts.length > 0
+      ? connectedAccounts.length > 0
+        ? `${connectedAccounts.length} de ${waAccounts.length} conta(s) conectada(s)`
+        : awaitingAccounts.length > 0
+          ? "Aguardando pareamento (QR Code ou código)"
+          : `${waAccounts.length} conta(s) configurada(s) · desconectado`
+      : waStatus === "conectado"
+        ? "Aparelho pareado e pronto para comandos"
+        : waStatus === "atencao"
+          ? "Aguardando leitura do QR Code"
+          : "Não conectado";
+
+  const waDetalhes =
+    waAccounts.length > 0
+      ? waAccounts.map((acc) => ({
+          chave: acc.conta_id,
+          rotulo: `${acc.rotulo}${acc.numero_telefone ? ` (${acc.numero_telefone})` : ""} · ${
+            acc.modo_operacao === "ownNumber" ? "Número próprio" : "Dedicado"
+          }`,
+          configurado: acc.status === "conectado",
+        }))
+      : [{ chave: "whatsapp_pairing", rotulo: "Pareamento Baileys", configurado: waStatus === "conectado" }];
 
   return [
     {
       id: "whatsapp",
       nome: "WhatsApp",
       categoria: "mensageria",
-      descricao: "Receba áudios e briefings pelo WhatsApp (Baileys QR Code) e aprove prévias com a palavra '1'.",
-      subtitulo: "Canal direto do Studio no celular",
+      descricao: "Receba áudios, imagens e briefings pelo WhatsApp (multi-número, QR Code ou código) e aprove prévias com '1'.",
+      subtitulo:
+        waAccounts.length > 1
+          ? `${connectedAccounts.length}/${waAccounts.length} contas WhatsApp conectadas`
+          : "Canal direto do Studio no celular",
       status: waStatus,
-      resumo_estado:
-        waStatus === "conectado"
-          ? "Aparelho pareado e pronto para comandos"
-          : waStatus === "atencao"
-            ? "Aguardando leitura do QR Code"
-            : "Não conectado",
+      resumo_estado: waResumo,
       cor_marca: "#25D366",
-      agente_orquestrador_id: orquestradores.whatsapp ?? "estrategista",
-      detalhes: [
-        { chave: "whatsapp_pairing", rotulo: "Pareamento Baileys", configurado: waStatus === "conectado" },
-      ],
+      agente_orquestrador_id:
+        orquestradores.whatsapp ?? waAccounts[0]?.agente_orquestrador_id ?? "estrategista",
+      detalhes: waDetalhes,
     },
     {
       id: "instagram",
@@ -780,7 +957,7 @@ export function buildConnectorsList(db: CriativoDatabase, vault: VaultService): 
       id: "mcp",
       nome: "Servidores MCP (Model Context Protocol)",
       categoria: "sistema",
-      descricao: "Conecte servidores de ferramentas externas (WordPress, Elementor, CRM, bancos de dados) aos 15 agentes.",
+      descricao: "Conecte servidores de ferramentas externas (STDIO, Streamable HTTP e OAuth 2.1) aos agentes do estúdio.",
       subtitulo: `${mcpCountRow?.total ?? 0} servidor(es) ativo(s)`,
       status: Number(mcpCountRow?.total ?? 0) > 0 ? "conectado" : "desconectado",
       resumo_estado:
@@ -788,11 +965,20 @@ export function buildConnectorsList(db: CriativoDatabase, vault: VaultService): 
           ? mcpServers.map((m) => m.nome).join(", ")
           : "Nenhum servidor MCP externo cadastrado",
       cor_marca: "#74B9FF",
-      detalhes: mcpServers.map((m) => ({
-        chave: m.mcp_id,
-        rotulo: `${m.nome} (${m.comando})`,
-        configurado: m.ativo === 1,
-      })),
+      detalhes: mcpServers.map((m) => {
+        const transportLabel = m.transporte === "http" ? (m.url ?? "HTTP") : m.comando;
+        const oauthState = oauthStatusMap.get(m.mcp_id);
+        const oauthSuffix = oauthState ? ` · OAuth ${oauthState}` : "";
+        const toolsSuffix =
+          typeof m.qtd_ferramentas === "number" && m.qtd_ferramentas > 0
+            ? ` · ${m.qtd_ferramentas} tools`
+            : "";
+        return {
+          chave: m.mcp_id,
+          rotulo: `${m.nome} (${transportLabel})${oauthSuffix}${toolsSuffix}`,
+          configurado: m.ativo === 1,
+        };
+      }),
     },
   ];
 }

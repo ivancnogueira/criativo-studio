@@ -4,8 +4,18 @@ import type {
   ToolCallRequest,
   ToolDefinition,
 } from "@criativo/contracts";
+import type { WhatsAppOrchestrator, WhatsAppSessionManager } from "@criativo/whatsapp";
 import type { CriativoDatabase } from "../../database/client.ts";
+import type { CatalogService } from "../../marketplace/catalog-service.ts";
+import type { SkillsManager } from "../../marketplace/skills-manager.ts";
+import type { McpGateway, McpOAuthRequiredNotice } from "../../mcp/mcp-gateway.ts";
+import { redactMcpPayload, redactMcpSecrets } from "../../mcp/mcp-redaction.ts";
 import type { FifoQueueManager } from "../../queue/fifo-queue.ts";
+import {
+  executeStudioExtensionTool,
+  isPhase10ExtensionTool,
+  PHASE10_TOOL_DEFINITIONS,
+} from "../../server/studio-tools-bridge.ts";
 import type { WebSocketHub } from "../../server/websocket-hub.ts";
 import type { VaultService } from "../../vault/vault-service.ts";
 import type { McpClient } from "../providers/mcp-client.ts";
@@ -35,6 +45,12 @@ export interface AgentRunnerOptions {
   wsHub?: WebSocketHub;
   skillLoader?: SkillLoader;
   mcpClients?: McpClient[];
+  mcpGateway?: McpGateway;
+  whatsappManager?: WhatsAppSessionManager;
+  whatsappOrchestrator?: WhatsAppOrchestrator;
+  catalogService?: CatalogService;
+  skillsManager?: SkillsManager;
+  workspaceRoot?: string;
   maxTurns?: number;
   customTools?: Record<string, CustomToolExecutor>;
 }
@@ -166,6 +182,12 @@ export class AgentRunner {
   private readonly handoffBus: HandoffBus;
   private readonly browserService: BrowserAutomationService;
   private readonly mcpClients: McpClient[];
+  private readonly mcpGateway?: McpGateway;
+  private readonly whatsappManager?: WhatsAppSessionManager;
+  private readonly whatsappOrchestrator?: WhatsAppOrchestrator;
+  private readonly catalogService?: CatalogService;
+  private readonly skillsManager?: SkillsManager;
+  private readonly workspaceRoot?: string;
   private readonly maxTurns: number;
   private readonly customTools: Record<string, CustomToolExecutor>;
 
@@ -176,11 +198,17 @@ export class AgentRunner {
     this.providers = options.providers;
     this.providerConnection = options.providerConnection;
     this.wsHub = options.wsHub;
-    this.skillLoader = options.skillLoader ?? new SkillLoader();
+    this.skillLoader = options.skillLoader ?? new SkillLoader([], options.workspaceRoot);
     this.memoryManager = new MemoryManager(options.db);
     this.handoffBus = new HandoffBus(options.db, options.queue);
     this.browserService = new BrowserAutomationService(options.db);
     this.mcpClients = options.mcpClients ?? [];
+    this.mcpGateway = options.mcpGateway;
+    this.whatsappManager = options.whatsappManager;
+    this.whatsappOrchestrator = options.whatsappOrchestrator;
+    this.catalogService = options.catalogService;
+    this.skillsManager = options.skillsManager;
+    this.workspaceRoot = options.workspaceRoot;
     this.maxTurns = options.maxTurns ?? 8;
     this.customTools = options.customTools ?? {};
 
@@ -302,10 +330,66 @@ export class AgentRunner {
       return await metaPublishTool(args, { vault: this.vault });
     }
 
+    if (isPhase10ExtensionTool(call.name)) {
+      return await executeStudioExtensionTool(call.name, call.arguments, {
+        db: this.db,
+        vault: this.vault,
+        wsHub: this.wsHub,
+        workspaceRoot: this.workspaceRoot,
+        agenteId: context.agenteId,
+        canalId: null,
+        mcpGateway: this.mcpGateway,
+        catalogService: this.catalogService,
+        skillsManager: this.skillsManager,
+        whatsappManager: this.whatsappManager,
+        whatsappOrchestrator: this.whatsappOrchestrator,
+      });
+    }
+
     for (const mcp of this.mcpClients) {
       if (call.name.startsWith(`mcp_${mcp.serverId}_`)) {
         return await mcp.callTool(call.name, call.arguments);
       }
+    }
+
+    if (call.name.startsWith("mcp_") && this.mcpGateway) {
+      const gatewayResult = await this.mcpGateway.callMcpTool(call.name, call.arguments, {
+        agentId: context.agenteId,
+      });
+
+      if (
+        gatewayResult &&
+        typeof gatewayResult === "object" &&
+        (gatewayResult as { action?: unknown }).action === "sign_in"
+      ) {
+        const notice = gatewayResult as McpOAuthRequiredNotice;
+        const sanitizedReason = redactMcpSecrets(notice.motivo, []);
+        this.wsHub?.broadcast("mcp.oauth_solicitado", {
+          mcp_id: notice.mcpId,
+          nome: notice.nome,
+          app_slug: notice.appSlug ?? null,
+          authorize_url: notice.authorizeUrl ?? null,
+          canal_id: null,
+          agente_id: context.agenteId,
+          motivo: sanitizedReason,
+        });
+        return redactMcpPayload(
+          {
+            ok: false,
+            action: "sign_in",
+            mcpId: notice.mcpId,
+            nome: notice.nome,
+            appSlug: notice.appSlug ?? null,
+            authorizeUrl: notice.authorizeUrl ?? null,
+            motivo: sanitizedReason,
+            instrucao:
+              "Oriente o usuário a clicar no cartão de autenticação OAuth no chat para conectar este servidor MCP.",
+          },
+          []
+        );
+      }
+
+      return redactMcpPayload(gatewayResult, []);
     }
 
     throw new Error(`Ferramenta desconhecida: ${call.name}`);
@@ -324,9 +408,17 @@ export class AgentRunner {
 
     try {
       const memories = this.memoryManager.listMemories(agenteId, 10).map((m) => m.texto);
+      const linkedSkills = this.skillLoader.loadLinkedAgentSkills(this.db, agenteId);
       const compiledSkill = this.skillLoader.loadAgentSkill(agenteId, {
+        db: this.db,
         memoriaContexto: memories,
       });
+      const systemPrompt =
+        linkedSkills.length > 0 && !compiledSkill.linkedSkills
+          ? `${compiledSkill.systemPrompt}\n\n${linkedSkills
+              .map((s) => `## Habilidade Vinculada: ${s.name} (${s.slug})\n${s.body}`)
+              .join("\n\n")}`
+          : compiledSkill.systemPrompt;
       const model = this.getAgentModel(agenteId);
       let client: ReturnType<ProviderRegistry["getClientForModel"]> | null = null;
       try {
@@ -335,8 +427,20 @@ export class AgentRunner {
         client = null;
       }
 
-      const mcpTools = this.mcpClients.flatMap((c) => c.tools);
-      const availableTools = [...NATIVE_TOOLS_SCHEMA, ...mcpTools];
+      const legacyMcpTools = this.mcpClients.flatMap((c) => c.tools);
+      const gatewayTools = this.mcpGateway ? await this.mcpGateway.getToolsForAgent(agenteId) : [];
+      const availableToolsMap = new Map<string, ToolDefinition>();
+      for (const tool of [
+        ...NATIVE_TOOLS_SCHEMA,
+        ...PHASE10_TOOL_DEFINITIONS,
+        ...legacyMcpTools,
+        ...gatewayTools,
+      ]) {
+        if (!availableToolsMap.has(tool.name)) {
+          availableToolsMap.set(tool.name, tool);
+        }
+      }
+      const availableTools = Array.from(availableToolsMap.values());
 
       const messages: ConversationMessage[] = [
         {
@@ -355,27 +459,30 @@ export class AgentRunner {
           role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
           text: m.content,
         }));
+        const effectiveAgentId = tarefa.agente_id ?? agenteId;
 
         if (provName === "opencode") {
           const ocRes = await this.providerConnection.getOpenCodeService().executePrompt({
             modelId: model,
-            systemPrompt: compiledSkill.systemPrompt,
+            systemPrompt,
             messages: promptMessages,
+            agentId: effectiveAgentId,
           });
           finalText = ocRes.text;
         } else if (provName === "claude" || provName === "openai") {
           const cliRes = await this.providerConnection.getCliOAuthService().executeTurn({
             provedor: provName,
             modelId: model,
-            systemPrompt: compiledSkill.systemPrompt,
+            systemPrompt,
             messages: promptMessages,
           });
           finalText = cliRes.text;
         } else {
           const agRes = await this.providerConnection.getAntigravityService().executeCodeAssistGenerate({
             model,
-            systemPrompt: compiledSkill.systemPrompt,
+            systemPrompt,
             messages: promptMessages,
+            agentId: effectiveAgentId,
           });
           finalText = agRes.text;
         }
@@ -390,7 +497,7 @@ export class AgentRunner {
         const turnResult = await client.streamTurn(
           {
             model,
-            systemPrompt: compiledSkill.systemPrompt,
+            systemPrompt,
             messages,
             tools: availableTools,
           },
