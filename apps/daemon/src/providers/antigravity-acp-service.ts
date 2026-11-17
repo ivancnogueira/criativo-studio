@@ -67,6 +67,10 @@ export interface AcpAuthTokenSnapshot {
   expiryIso: string | null;
 }
 
+export type McpServersResolver = (
+  agentId?: string | null
+) => Promise<unknown[]> | unknown[];
+
 export interface AcpPromptExecutionInput {
   geminiDir: string;
   cwd: string;
@@ -74,6 +78,8 @@ export interface AcpPromptExecutionInput {
   modelId?: string;
   imagePaths?: string[];
   timeoutMs?: number;
+  agentId?: string | null;
+  mcpServers?: unknown[];
   onDelta?: (chunk: string) => void;
 }
 
@@ -419,17 +425,21 @@ class AcpProcessConnection {
     }
   }
 
-  public async discoverSessionModels(timeoutMs = 30_000): Promise<{
+  public async discoverSessionModels(
+    timeoutMs = 30_000,
+    mcpServers?: unknown[]
+  ): Promise<{
     models: AcpDiscoveredModel[];
     defaultModelId: string | null;
   }> {
     await this.ensureInitializedAndAuthenticated(timeoutMs);
 
+    const resolvedMcpServers = Array.isArray(mcpServers) ? mcpServers : [];
     const sessionRes = await this.request<AcpSessionNewResult>(
       "session/new",
       {
         cwd: resolve(this.geminiDir),
-        mcpServers: [],
+        mcpServers: resolvedMcpServers,
         _meta: { antigravity: { disabledTools: ["schedule", "run_workflow"] } },
       },
       timeoutMs
@@ -485,15 +495,18 @@ class AcpProcessConnection {
     modelId?: string;
     imagePaths?: string[];
     timeoutMs: number;
+    agentId?: string | null;
+    mcpServers?: unknown[];
     onDelta?: (chunk: string) => void;
   }): Promise<AcpPromptExecutionOutput> {
     await this.ensureInitializedAndAuthenticated(30_000);
 
+    const resolvedMcpServers = Array.isArray(input.mcpServers) ? input.mcpServers : [];
     const sessionRes = await this.request<AcpSessionNewResult>(
       "session/new",
       {
         cwd: input.cwd,
-        mcpServers: [],
+        mcpServers: resolvedMcpServers,
         _meta: { antigravity: { disabledTools: ["schedule", "run_workflow"] } },
       },
       30_000
@@ -624,15 +637,36 @@ export class AntigravityAcpService {
   >();
   private readonly executableOverride?: string;
   private readonly spawnArgsFactory?: (geminiDir: string) => string[];
+  private mcpServersResolver?: McpServersResolver;
 
   constructor(options?: {
     appDataDir?: string;
     executableOverride?: string;
     spawnArgsFactory?: (geminiDir: string) => string[];
+    mcpServersResolver?: McpServersResolver;
   }) {
     this.appDataDir = options?.appDataDir;
     this.executableOverride = options?.executableOverride;
     this.spawnArgsFactory = options?.spawnArgsFactory;
+    this.mcpServersResolver = options?.mcpServersResolver;
+  }
+
+  public setMcpServersResolver(resolver?: McpServersResolver): void {
+    this.mcpServersResolver = resolver;
+  }
+
+  private async resolveMcpServers(
+    agentId?: string | null,
+    explicitServers?: unknown[]
+  ): Promise<unknown[]> {
+    if (Array.isArray(explicitServers)) {
+      return explicitServers;
+    }
+    if (!this.mcpServersResolver) {
+      return [];
+    }
+    const resolved = await this.mcpServersResolver(agentId);
+    return Array.isArray(resolved) ? resolved : [];
   }
 
   private readonly appDataDir?: string;
@@ -774,15 +808,20 @@ export class AntigravityAcpService {
 
   public async listAvailableModels(
     accountKey: string,
-    geminiDir: string
+    geminiDir: string,
+    agentId?: string | null
   ): Promise<{ models: AcpDiscoveredModel[]; defaultModelId: string | null }> {
-    return this.withAccountWorker(accountKey, geminiDir, (conn) => conn.discoverSessionModels(30_000));
+    const resolvedMcpServers = await this.resolveMcpServers(agentId);
+    return this.withAccountWorker(accountKey, geminiDir, (conn) =>
+      conn.discoverSessionModels(30_000, resolvedMcpServers)
+    );
   }
 
   public async executePrompt(
     accountKey: string,
     input: AcpPromptExecutionInput
   ): Promise<AcpPromptExecutionOutput> {
+    const resolvedMcpServers = await this.resolveMcpServers(input.agentId, input.mcpServers);
     return this.withAccountWorker(accountKey, input.geminiDir, (conn) =>
       conn.runPrompt({
         cwd: input.cwd,
@@ -790,6 +829,8 @@ export class AntigravityAcpService {
         modelId: input.modelId,
         imagePaths: input.imagePaths,
         timeoutMs: input.timeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS,
+        agentId: input.agentId,
+        mcpServers: resolvedMcpServers,
         onDelta: input.onDelta,
       })
     );

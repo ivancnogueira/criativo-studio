@@ -10,6 +10,7 @@ import type {
   PoolContasConfig,
 } from "@criativo/contracts";
 import type { CriativoDatabase } from "../database/client.ts";
+import type { McpGateway } from "../mcp/mcp-gateway.ts";
 import { AntigravityAcpService, type AcpDiscoveredModel } from "./antigravity-acp-service.ts";
 import {
   formatResetCountdownPtBr,
@@ -96,6 +97,7 @@ export interface CodeAssistGenerateInput {
   imagePaths?: string[];
   generateImage?: boolean;
   preferredAccountId?: string | null;
+  agentId?: string | null;
   onDelta?: (chunk: string) => void;
 }
 
@@ -310,6 +312,7 @@ export class AntigravityLiveService {
   private readonly fetchImpl: typeof fetch;
   private readonly acpService: AntigravityAcpService;
   private readonly allowAutoAcpDiscovery: boolean;
+  private mcpGateway?: McpGateway;
   private snapshotCache: { expiresAt: number; data: AntigravityLiveSnapshot } | null = null;
   private acpModelsCache: {
     accountId: string;
@@ -325,6 +328,7 @@ export class AntigravityLiveService {
     workspaceCwd?: string;
     fetchImpl?: typeof fetch;
     acpService?: AntigravityAcpService;
+    mcpGateway?: McpGateway;
   }) {
     this.db = options?.db;
     this.workspaceCwd = resolve(options?.workspaceCwd ?? process.cwd());
@@ -333,11 +337,25 @@ export class AntigravityLiveService {
     );
     this.fetchImpl = options?.fetchImpl ?? fetch;
     this.allowAutoAcpDiscovery = Boolean(options?.acpService || !options?.fetchImpl);
+    this.mcpGateway = options?.mcpGateway;
     this.acpService =
       options?.acpService ??
       new AntigravityAcpService({
         appDataDir: options?.appDataDir,
+        mcpServersResolver: (agentId) => this.mcpGateway?.getAcpMcpServers(agentId) ?? [],
       });
+    if (options?.mcpGateway && options?.acpService) {
+      this.acpService.setMcpServersResolver(
+        (agentId) => this.mcpGateway?.getAcpMcpServers(agentId) ?? []
+      );
+    }
+  }
+
+  public setMcpGateway(gateway: McpGateway): void {
+    this.mcpGateway = gateway;
+    this.acpService.setMcpServersResolver(
+      (agentId) => this.mcpGateway?.getAcpMcpServers(agentId) ?? []
+    );
   }
 
   public getCliExecutable(): string | null {
@@ -1044,7 +1062,7 @@ export class AntigravityLiveService {
 
     const cliAvailable = Boolean(this.acpService.getCliExecutable());
 
-    // 1. Chamadas de TEXTO/CHAT preferem o protocolo ACP aquecido (renova token sozinho, zero bloat de MCPs)
+    // 1. Chamadas de TEXTO/CHAT preferem o protocolo ACP aquecido (renova token sozinho e injeta MCPs autorizados ao agente)
     //    com retry automático e fallback transparente para Code Assist REST se a sessão ACP oscilar.
     let acpLastError: unknown = null;
     if (!input.generateImage && cliAvailable && (chosenEntry.hasRefreshToken || !chosenEntry.tokenValid)) {
@@ -1074,6 +1092,7 @@ export class AntigravityLiveService {
             promptText: combinedPrompt,
             modelId: attempt === 0 ? input.model : undefined,
             imagePaths: input.imagePaths,
+            agentId: input.agentId,
             onDelta: attempt === 0 ? input.onDelta : undefined,
           });
 

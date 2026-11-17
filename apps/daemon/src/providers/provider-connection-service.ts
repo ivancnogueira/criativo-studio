@@ -12,6 +12,7 @@ import type {
   UsoProvedoresSnapshot,
 } from "@criativo/contracts";
 import type { CriativoDatabase } from "../database/client.ts";
+import type { McpGateway } from "../mcp/mcp-gateway.ts";
 import type { VaultService } from "../vault/vault-service.ts";
 import { AntigravityLiveService } from "./antigravity-live-service.ts";
 import { CliOAuthAccountsService, resolveCliBinaryForProvider } from "./cli-oauth-accounts-service.ts";
@@ -269,6 +270,7 @@ export class ProviderConnectionService {
   private readonly antigravityLive: AntigravityLiveService;
   private readonly cliOAuth: CliOAuthAccountsService;
   private readonly opencodeLive: OpenCodeLiveService;
+  private mcpGateway?: McpGateway;
   private cliCache: {
     expiresAt: number;
     data: Record<ProviderName, { found: boolean; version: string | null; executable: string | null }>;
@@ -281,9 +283,11 @@ export class ProviderConnectionService {
     antigravityLive?: AntigravityLiveService;
     cliOAuth?: CliOAuthAccountsService;
     opencodeLive?: OpenCodeLiveService;
+    mcpGateway?: McpGateway;
   }) {
     this.db = options.db;
     this.vault = options.vault;
+    this.mcpGateway = options.mcpGateway;
     const baseWorkspace = resolve(options.workspaceRoot ?? process.cwd());
     const daemonDadosContas = join(baseWorkspace, "apps", "daemon", "dados", "contas");
     const daemonDadosDir = join(baseWorkspace, "apps", "daemon", "dados");
@@ -297,6 +301,7 @@ export class ProviderConnectionService {
         db: this.db,
         workspaceCwd: baseWorkspace,
         accountsRootDir: join(accountsRoot, "gemini"),
+        mcpGateway: options.mcpGateway,
       });
 
     this.cliOAuth =
@@ -312,7 +317,18 @@ export class ProviderConnectionService {
       new OpenCodeLiveService({
         vault: this.vault,
         workspaceCwd: baseWorkspace,
+        mcpServersResolver: (agentId) => this.mcpGateway?.getAcpMcpServers(agentId) ?? [],
       });
+
+    if (options.mcpGateway) {
+      this.attachMcpGateway(options.mcpGateway);
+    }
+  }
+
+  public attachMcpGateway(gateway: McpGateway): void {
+    this.mcpGateway = gateway;
+    this.antigravityLive.setMcpGateway(gateway);
+    this.opencodeLive.setMcpServersResolver((agentId) => this.mcpGateway?.getAcpMcpServers(agentId) ?? []);
   }
 
   public getAntigravityService(): AntigravityLiveService {

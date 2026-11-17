@@ -221,6 +221,8 @@ class OpenCodeAcpConnection {
     promptText: string;
     modelId: string;
     timeoutMs: number;
+    agentId?: string | null;
+    mcpServers?: unknown[];
     onDelta?: (chunk: string) => void;
   }): Promise<{
     text: string;
@@ -240,9 +242,10 @@ class OpenCodeAcpConnection {
       this.initialized = true;
     }
 
+    const resolvedMcpServers = Array.isArray(input.mcpServers) ? input.mcpServers : [];
     const sess = await this.request<{ sessionId: string; configOptions?: OpenCodeConfigOption[] }>(
       "session/new",
-      { cwd: input.cwd, mcpServers: [] },
+      { cwd: input.cwd, mcpServers: resolvedMcpServers },
       25_000
     );
 
@@ -315,6 +318,10 @@ class OpenCodeAcpConnection {
   }
 }
 
+export type OpenCodeMcpServersResolver = (
+  agentId?: string | null
+) => Promise<unknown[]> | unknown[];
+
 /**
  * Descobre e executa os modelos gratuitos e ativos do OpenCode CLI instalado na máquina.
  */
@@ -322,13 +329,24 @@ export class OpenCodeLiveService {
   private readonly vault?: VaultService;
   private readonly workspaceCwd: string;
   private readonly appDataDir?: string;
+  private mcpServersResolver?: OpenCodeMcpServersResolver;
   private modelsCache: { expiresAt: number; data: ModeloProvedorInfo[]; version: string | null; executable: string | null } | null = null;
   private worker: { conn: OpenCodeAcpConnection; idleTimer: NodeJS.Timeout | null; queue: Promise<unknown> } | null = null;
 
-  constructor(options?: { vault?: VaultService; workspaceCwd?: string; appDataDir?: string }) {
+  constructor(options?: {
+    vault?: VaultService;
+    workspaceCwd?: string;
+    appDataDir?: string;
+    mcpServersResolver?: OpenCodeMcpServersResolver;
+  }) {
     this.vault = options?.vault;
     this.workspaceCwd = resolve(options?.workspaceCwd ?? process.cwd());
     this.appDataDir = options?.appDataDir;
+    this.mcpServersResolver = options?.mcpServersResolver;
+  }
+
+  public setMcpServersResolver(resolver?: OpenCodeMcpServersResolver): void {
+    this.mcpServersResolver = resolver;
   }
 
   public async getLiveCatalog(forceRefresh = false): Promise<{
@@ -446,6 +464,8 @@ export class OpenCodeLiveService {
     systemPrompt?: string;
     messages: Array<{ role: "user" | "assistant"; text: string }>;
     timeoutMs?: number;
+    agentId?: string | null;
+    mcpServers?: unknown[];
     onDelta?: (chunk: string) => void;
   }): Promise<{
     text: string;
@@ -460,6 +480,9 @@ export class OpenCodeLiveService {
     const sandboxCwd = resolve(this.workspaceCwd, "dados", "opencode-sandbox");
     mkdirSync(sandboxCwd, { recursive: true });
     const apiKey = this.vault?.getSecret("opencode_api_key");
+    const resolvedMcpServers = Array.isArray(input.mcpServers)
+      ? input.mcpServers
+      : ((await this.mcpServersResolver?.(input.agentId)) ?? []);
 
     const promptParts: string[] = [];
     if (input.systemPrompt) {
@@ -486,6 +509,8 @@ export class OpenCodeLiveService {
           promptText: fullPrompt,
           modelId: targetModel,
           timeoutMs: input.timeoutMs ?? EXEC_TIMEOUT_MS,
+          agentId: input.agentId,
+          mcpServers: resolvedMcpServers,
           onDelta: input.onDelta,
         })
       );
