@@ -3,6 +3,12 @@
  * Define tipos de provedores de IA, fila FIFO, eventos WebSocket e agentes.
  */
 
+import type { McpOAuthStatus } from "./mcp-contracts.ts";
+import type {
+  WhatsAppMensagemRegistro,
+  WhatsAppPairingRequest,
+} from "./whatsapp-contracts.ts";
+
 export type ProviderName = "gemini" | "claude" | "openai" | "grok" | "opencode" | "ollama";
 
 export type FrenteAgente = "conteudo" | "bonus" | "video" | "custom";
@@ -205,6 +211,52 @@ export type WebSocketEventMap = {
   "provider:auth_url": {
     provedor: "gemini" | "claude" | "openai";
     url: string;
+  };
+  "whatsapp.conta_atualizada": {
+    conta_id: string;
+    status: StatusMensageria;
+    qrcode_base64: string | null;
+    pairing_code: string | null;
+    numero_telefone: string | null;
+    ultimo_erro?: string | null;
+  };
+  "whatsapp.pairing_solicitado": {
+    conta_id: string;
+    request: WhatsAppPairingRequest;
+  };
+  "whatsapp.mensagem_recebida": {
+    conta_id: string;
+    mensagem: WhatsAppMensagemRegistro;
+  };
+  "mcp.status_atualizado": {
+    mcp_id: string;
+    ativo: boolean;
+    oauth_status: McpOAuthStatus;
+    qtd_ferramentas: number;
+    ultimo_erro?: string | null;
+  };
+  "mcp.oauth_solicitado": {
+    mcp_id: string;
+    nome: string;
+    app_slug?: string | null;
+    authorize_url?: string | null;
+    canal_id?: string | null;
+    agente_id?: string | null;
+    motivo: string;
+  };
+  "mcp.oauth_concluido": {
+    mcp_id: string;
+    sucesso: boolean;
+    conta_chave?: string | null;
+    erro?: string | null;
+  };
+  "loja.skill_atualizada": {
+    skill_id: string;
+    acao: "criada" | "instalada" | "atualizada" | "vinculada" | "removida";
+  };
+  "loja.agente_instalado": {
+    agente_id: string;
+    slug: string;
   };
 };
 
@@ -546,3 +598,7 @@ export interface WebSocketEnvelope<K extends keyof WebSocketEventMap = keyof Web
   data: WebSocketEventMap[K];
   timestamp: string;
 }
+
+export * from "./whatsapp-contracts.ts";
+export * from "./mcp-contracts.ts";
+export * from "./marketplace-contracts.ts";
