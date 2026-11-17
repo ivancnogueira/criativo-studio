@@ -136,6 +136,14 @@ export const SCHEMA_TABLES: readonly { nome: string; sql: string }[] = [
         qrcode_base64 TEXT,
         sessao_dados_json TEXT,
         notificar_aprovacoes INTEGER NOT NULL DEFAULT 1,
+        numero_telefone TEXT,
+        rotulo TEXT,
+        modo_operacao TEXT NOT NULL DEFAULT 'dedicated' CHECK(modo_operacao IN ('ownNumber', 'dedicated')),
+        pairing_code TEXT,
+        codigo_autorizacao_obrigatorio INTEGER NOT NULL DEFAULT 1 CHECK(codigo_autorizacao_obrigatorio IN (0, 1)),
+        grupo_auto_responder INTEGER NOT NULL DEFAULT 0 CHECK(grupo_auto_responder IN (0, 1)),
+        ultimo_erro TEXT,
+        conectado_em TEXT,
         atualizado_em TEXT NOT NULL
       );
     `,
@@ -157,10 +165,22 @@ export const SCHEMA_TABLES: readonly { nome: string; sql: string }[] = [
       CREATE TABLE IF NOT EXISTS projecao_mcp_servidores (
         mcp_id TEXT PRIMARY KEY,
         nome TEXT NOT NULL,
-        comando TEXT NOT NULL,
-        args_json TEXT NOT NULL DEFAULT '[]',
-        env_json TEXT NOT NULL DEFAULT '{}',
+        transporte TEXT NOT NULL DEFAULT 'stdio' CHECK(transporte IN ('stdio', 'http')),
+        comando TEXT NOT NULL DEFAULT '',
+        args_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(args_json)),
+        env_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(env_json)),
+        env_passthrough_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(env_passthrough_json)),
+        working_directory TEXT,
+        url TEXT,
+        headers_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(headers_json)),
+        acesso_json TEXT NOT NULL DEFAULT '{"mode":"everyone","agentIds":[]}' CHECK(json_valid(acesso_json)),
+        origem_app_slug TEXT,
+        conta_rotulo TEXT,
+        posicao INTEGER NOT NULL DEFAULT 0,
         ativo INTEGER NOT NULL DEFAULT 1 CHECK(ativo IN (0, 1)),
+        ultimo_teste_em TEXT,
+        ultimo_erro TEXT,
+        qtd_ferramentas INTEGER NOT NULL DEFAULT 0,
         atualizado_em TEXT NOT NULL
       );
     `,
@@ -295,6 +315,159 @@ export const SCHEMA_TABLES: readonly { nome: string; sql: string }[] = [
       CREATE INDEX IF NOT EXISTS idx_uso_skills_data ON projecao_uso_skills (occurred_at DESC);
     `,
   },
+  {
+    nome: "whatsapp_contas",
+    sql: `
+      CREATE TABLE IF NOT EXISTS whatsapp_contas (
+        conta_id TEXT PRIMARY KEY,
+        rotulo TEXT NOT NULL DEFAULT 'Número Principal',
+        numero_telefone TEXT,
+        jid_proprio TEXT,
+        modo_operacao TEXT NOT NULL DEFAULT 'dedicated' CHECK(modo_operacao IN ('ownNumber', 'dedicated')),
+        status TEXT NOT NULL DEFAULT 'desconectado',
+        qrcode_base64 TEXT,
+        pairing_code TEXT,
+        sessao_dados_json TEXT,
+        notificar_aprovacoes INTEGER NOT NULL DEFAULT 1 CHECK(notificar_aprovacoes IN (0, 1)),
+        codigo_autorizacao_obrigatorio INTEGER NOT NULL DEFAULT 1 CHECK(codigo_autorizacao_obrigatorio IN (0, 1)),
+        grupo_auto_responder INTEGER NOT NULL DEFAULT 0 CHECK(grupo_auto_responder IN (0, 1)),
+        agente_orquestrador_id TEXT DEFAULT 'estrategista',
+        regras_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(regras_json)),
+        ultimo_erro TEXT,
+        conectado_em TEXT,
+        atualizado_em TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    nome: "whatsapp_contatos_autorizados",
+    sql: `
+      CREATE TABLE IF NOT EXISTS whatsapp_contatos_autorizados (
+        autorizacao_id TEXT PRIMARY KEY,
+        conta_id TEXT NOT NULL,
+        tipo TEXT NOT NULL CHECK(tipo IN ('contato', 'grupo')),
+        identificador_jid TEXT NOT NULL,
+        telefone_normalizado TEXT,
+        variantes_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(variantes_json)),
+        nome_exibicao TEXT,
+        permitido INTEGER NOT NULL DEFAULT 1 CHECK(permitido IN (0, 1)),
+        somente_mencao INTEGER NOT NULL DEFAULT 1 CHECK(somente_mencao IN (0, 1)),
+        origem TEXT NOT NULL DEFAULT 'manual' CHECK(origem IN ('manual', 'pareamento', 'auto_chat')),
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL,
+        UNIQUE (conta_id, identificador_jid),
+        FOREIGN KEY (conta_id) REFERENCES whatsapp_contas(conta_id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_wpp_contatos_conta_tel
+        ON whatsapp_contatos_autorizados(conta_id, telefone_normalizado);
+    `,
+  },
+  {
+    nome: "whatsapp_pairing_requests",
+    sql: `
+      CREATE TABLE IF NOT EXISTS whatsapp_pairing_requests (
+        request_id TEXT PRIMARY KEY,
+        conta_id TEXT NOT NULL,
+        codigo TEXT NOT NULL,
+        remetente_jid TEXT NOT NULL,
+        remetente_pn TEXT,
+        nome_contato TEXT,
+        status TEXT NOT NULL DEFAULT 'pendente' CHECK(status IN ('pendente', 'aprovado', 'recusado', 'expirado')),
+        criado_em TEXT NOT NULL,
+        expira_em TEXT NOT NULL,
+        resolvido_em TEXT,
+        FOREIGN KEY (conta_id) REFERENCES whatsapp_contas(conta_id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_wpp_pairing_pendentes
+        ON whatsapp_pairing_requests(conta_id, status, expira_em);
+    `,
+  },
+  {
+    nome: "whatsapp_historico_mensagens",
+    sql: `
+      CREATE TABLE IF NOT EXISTS whatsapp_historico_mensagens (
+        mensagem_id TEXT PRIMARY KEY,
+        conta_id TEXT NOT NULL,
+        chat_jid TEXT NOT NULL,
+        remetente_jid TEXT NOT NULL,
+        remetente_nome TEXT,
+        direcao TEXT NOT NULL CHECK(direcao IN ('entrada', 'saida')),
+        tipo_conteudo TEXT NOT NULL DEFAULT 'texto' CHECK(tipo_conteudo IN ('texto', 'imagem', 'documento', 'audio', 'video', 'sistema')),
+        texto TEXT,
+        midia_caminho TEXT,
+        midia_mime TEXT,
+        midia_tamanho_bytes INTEGER DEFAULT 0,
+        eh_grupo INTEGER NOT NULL DEFAULT 0 CHECK(eh_grupo IN (0, 1)),
+        ack_status TEXT DEFAULT 'enviado',
+        metadados_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(metadados_json)),
+        ocorrido_em TEXT NOT NULL,
+        expira_em TEXT NOT NULL,
+        FOREIGN KEY (conta_id) REFERENCES whatsapp_contas(conta_id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_wpp_hist_chat_data
+        ON whatsapp_historico_mensagens(conta_id, chat_jid, ocorrido_em DESC);
+      CREATE INDEX IF NOT EXISTS idx_wpp_hist_expira
+        ON whatsapp_historico_mensagens(expira_em);
+    `,
+  },
+  {
+    nome: "projecao_mcp_oauth_tokens",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_mcp_oauth_tokens (
+        conta_chave TEXT PRIMARY KEY,
+        mcp_id TEXT NOT NULL,
+        app_slug TEXT,
+        servidor_url TEXT NOT NULL,
+        issuer_url TEXT,
+        escopos_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(escopos_json)),
+        discovery_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(discovery_json)),
+        payload_criptografado TEXT NOT NULL,
+        iv TEXT NOT NULL,
+        expira_em TEXT,
+        obtido_em TEXT NOT NULL,
+        perdido_em TEXT,
+        atualizado_em TEXT NOT NULL,
+        FOREIGN KEY (mcp_id) REFERENCES projecao_mcp_servidores(mcp_id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_mcp_oauth_mcp_id
+        ON projecao_mcp_oauth_tokens(mcp_id);
+    `,
+  },
+  {
+    nome: "projecao_habilidades_catalogo",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_habilidades_catalogo (
+        skill_id TEXT PRIMARY KEY,
+        slug TEXT NOT NULL UNIQUE,
+        nome TEXT NOT NULL,
+        descricao TEXT NOT NULL,
+        categoria TEXT NOT NULL DEFAULT 'operacoes',
+        origem TEXT NOT NULL CHECK(origem IN ('nativa', 'loja', 'github', 'personalizada')),
+        fonte_rotulo TEXT,
+        repositorio_url TEXT,
+        commit_sha TEXT,
+        caminho_pasta TEXT NOT NULL,
+        verificada INTEGER NOT NULL DEFAULT 0 CHECK(verificada IN (0, 1)),
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    nome: "projecao_agente_habilidades",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_agente_habilidades (
+        agente_id TEXT NOT NULL,
+        skill_id TEXT NOT NULL,
+        habilitada INTEGER NOT NULL DEFAULT 1 CHECK(habilitada IN (0, 1)),
+        instalada_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL,
+        PRIMARY KEY (agente_id, skill_id),
+        FOREIGN KEY (agente_id) REFERENCES projecao_agentes(agente_id) ON DELETE CASCADE,
+        FOREIGN KEY (skill_id) REFERENCES projecao_habilidades_catalogo(skill_id) ON DELETE CASCADE
+      );
+    `,
+  },
 ];
 
 export const SCHEMA_TABLE_NAMES = [
@@ -316,4 +489,11 @@ export const SCHEMA_TABLE_NAMES = [
   "projecao_arquivos",
   "projecao_uso_registros",
   "projecao_uso_skills",
+  "whatsapp_contas",
+  "whatsapp_contatos_autorizados",
+  "whatsapp_pairing_requests",
+  "whatsapp_historico_mensagens",
+  "projecao_mcp_oauth_tokens",
+  "projecao_habilidades_catalogo",
+  "projecao_agente_habilidades",
 ] as const;

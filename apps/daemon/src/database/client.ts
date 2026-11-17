@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { runPhase10Migrations } from "./migrations.ts";
 import { SCHEMA_TABLES } from "./schema.ts";
 
 export interface DatabaseClientOptions {
@@ -42,6 +43,7 @@ export class CriativoDatabase {
       for (const item of SCHEMA_TABLES) {
         this.connection.exec(item.sql);
       }
+      runPhase10Migrations(this.connection);
     });
   }
 
