@@ -3,3 +3,7 @@ export * from "./auth-store.ts";
 export * from "./client.ts";
 export * from "./message-handler.ts";
 export * from "./approval-notifier.ts";
+export * from "./session-manager.ts";
+export * from "./sender-rules.ts";
+export * from "./media-archive.ts";
+export * from "./orchestrator.ts";

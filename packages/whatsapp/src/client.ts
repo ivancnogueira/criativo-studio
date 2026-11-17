@@ -632,7 +632,10 @@ export class WhatsAppStudioClient {
 
       // Socket silencioso por > 90_000ms -> força reconexão limpa
       this.dropCurrentSocket(new Error("watchdog_silence"));
-      this.scheduleReconnect("Silêncio prolongado na conexão WhatsApp (watchdog 90s).", 200);
+      this.scheduleReconnect(
+        "Silêncio prolongado na conexão WhatsApp (watchdog 90s).",
+        Math.min(500, this.baseReconnectDelayMs)
+      );
     }, this.watchdogIntervalMs);
     this.watchdogTimer.unref?.();
   }
