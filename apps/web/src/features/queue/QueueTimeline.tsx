@@ -1,7 +1,17 @@
 import { useState, type FormEvent } from "react";
 import type { StatusTarefa, TarefaRegistro } from "@criativo/contracts";
 import { ListFilter, Plus, X } from "lucide-react";
+import { CarbonSelect } from "../../components/ui/CarbonControls";
 import { TaskCard } from "./TaskCard";
+
+const STATUS_OPTIONS = [
+  { value: "todos", label: "Todos os status" },
+  { value: "executando", label: "Executando" },
+  { value: "aguardando_aprovacao", label: "Aguardando Aprovação" },
+  { value: "pendente", label: "Pendente" },
+  { value: "concluido", label: "Concluído" },
+  { value: "falha", label: "Falha" },
+] as const;
 
 interface QueueTimelineProps {
   tarefas: TarefaRegistro[];
@@ -77,21 +87,13 @@ export function QueueTimeline({
         </div>
 
         <div className="flex items-center gap-2">
-          <select
+          <CarbonSelect<"todos" | StatusTarefa>
             id="queue-status-filter"
-            name="queue_status_filter"
-            aria-label="Filtrar por status"
+            ariaLabel="Filtrar por status"
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as "todos" | StatusTarefa)}
-            className="rounded-xl border border-white/10 bg-[#141414] px-3 py-1.5 text-xs text-white focus:border-white/30 focus:outline-none"
-          >
-            <option value="todos">Todos os status</option>
-            <option value="executando">Executando</option>
-            <option value="aguardando_aprovacao">Aguardando Aprovação</option>
-            <option value="pendente">Pendente</option>
-            <option value="concluido">Concluído</option>
-            <option value="falha">Falha</option>
-          </select>
+            options={STATUS_OPTIONS as ReadonlyArray<{ value: "todos" | StatusTarefa; label: string }>}
+            onChange={(val) => setStatusFilter(val)}
+          />
 
           <button
             type="button"
@@ -121,20 +123,13 @@ export function QueueTimeline({
               onChange={(e) => setTitulo(e.target.value)}
               className="sm:col-span-2 rounded-xl border border-white/10 bg-[#212121] px-3 py-1.5 text-xs text-white placeholder-[#6A6A6A] focus:border-white/30 focus:outline-none"
             />
-            <select
+            <CarbonSelect
               id="queue-new-type"
-              name="queue_new_type"
-              aria-label="Formato criativo"
+              ariaLabel="Formato criativo"
               value={tipo}
-              onChange={(e) => setTipo(e.target.value)}
-              className="rounded-xl border border-white/10 bg-[#212121] px-2.5 py-1.5 text-xs text-white focus:border-white/30 focus:outline-none"
-            >
-              {TIPOS_CRIACAO.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
+              options={TIPOS_CRIACAO}
+              onChange={(val) => setTipo(val)}
+            />
           </div>
 
           <textarea

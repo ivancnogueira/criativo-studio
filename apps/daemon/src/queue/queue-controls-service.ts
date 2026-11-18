@@ -80,6 +80,11 @@ export class QueueControlsService {
     return `${agenteId}:${normalized}`;
   }
 
+  public hasActiveTurn(agenteId: string, threadId: string | null): boolean {
+    const normalized = this.normalizeThreadId(threadId);
+    return this.activeTurnsByLane.has(QueueControlsService.buildLaneKey(agenteId, normalized));
+  }
+
   private normalizeThreadId(threadId: string | null | undefined): string | null {
     return threadId && !threadId.startsWith("main:") ? threadId : null;
   }

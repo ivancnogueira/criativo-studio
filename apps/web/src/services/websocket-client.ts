@@ -640,22 +640,38 @@ export const daemonApi = {
   async sendAgentMessage(
     agenteId: string,
     conteudo: string,
-    anexos: AnexoChat[]
+    anexos: AnexoChat[],
+    clientMessageId?: string
   ): Promise<{
+    enfileirada?: boolean;
+    steered?: boolean;
+    entrega?: FilaChatEntrega;
     mensagem_usuario: MensagemChat;
-    mensagem_agente: MensagemChat;
+    mensagem_agente?: MensagemChat;
     mensagens_handoff?: MensagemChat[];
   }> {
     const res = await fetch(`/api/agentes/${encodeURIComponent(agenteId)}/mensagens`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conteudo, anexos }),
+      body: JSON.stringify({
+        conteudo,
+        anexos,
+        ...(clientMessageId ? { client_message_id: clientMessageId } : {}),
+      }),
     });
-    return (await res.json()) as {
+    const json = (await res.json()) as {
+      erro?: string;
+      enfileirada?: boolean;
+      steered?: boolean;
+      entrega?: FilaChatEntrega;
       mensagem_usuario: MensagemChat;
-      mensagem_agente: MensagemChat;
+      mensagem_agente?: MensagemChat;
       mensagens_handoff?: MensagemChat[];
     };
+    if (!res.ok) {
+      throw new DaemonHttpError(json.erro ?? "Falha ao enviar mensagem ao agente.", res.status);
+    }
+    return json;
   },
 
   async listAgentMemories(
@@ -2142,6 +2158,7 @@ export const daemonApi = {
     clientMessageId?: string
   ): Promise<{
     enfileirada?: boolean;
+    steered?: boolean;
     entrega?: FilaChatEntrega;
     mensagem_usuario?: MensagemChat;
     mensagem_agente?: MensagemChat;

@@ -288,11 +288,11 @@ export const TasksQueuePage: React.FC<TasksQueuePageProps> = ({
       let section: UnifiedTaskItem["section"] = "read";
       if (th.arquivada_em) {
         section = "archived";
-      } else if (tk?.status === "aguardando_aprovacao" || th.desfecho === "falha") {
+      } else if (tk?.status === "aguardando_aprovacao" || th.desfecho === "falha" || th.hold !== null) {
         section = "needs_you";
       } else if (th.estado === "executando" || th.turno_ativo_id !== null) {
         section = "running";
-      } else if (th.estado === "enfileirada" || th.hold !== null || th.mensagens_enfileiradas.length > 0) {
+      } else if (th.estado === "enfileirada" || th.mensagens_enfileiradas.length > 0) {
         section = "waiting";
       } else if (th.desfecho !== null && !th.ultima_mensagem_lida_id) {
         section = "unread";

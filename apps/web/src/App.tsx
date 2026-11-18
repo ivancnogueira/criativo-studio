@@ -1,16 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
+  AgenteEspera,
   AgenteRegistro,
+  AgenteThreadBranch,
+  AgenteThreadRegistro,
+  AgenteThreadsSnapshot,
   AnexoChat,
   ArquivoStudio,
   AvatarShape,
   CanalEquipe,
   ConectorIntegracaoInfo,
+  FilaChatEntrega,
+  FilaChatSnapshot,
   HabilidadeInstaladaInfo,
   MensagemChat,
+  MensagemFixada,
   NivelEsforco,
   OnboardingEstado,
   PacoteUpgradeInfo,
+  PaginaConversaThread,
   PassoChat,
   ProvedorStatusInfo,
   ProviderName,
@@ -31,6 +39,7 @@ import { WorkspaceRail, type StudioNavSection } from "./components/WorkspaceRail
 import { NewAgentScreen, type NewAgentPayload } from "./features/agents/NewAgentScreen";
 import {
   AgentConversationView,
+  type ChatLiveRunState,
   type McpSignInCardState,
 } from "./features/chat/AgentConversationView";
 import { RightInspectorPanel } from "./features/inspector/RightInspectorPanel";
@@ -56,8 +65,13 @@ type AgenteEnriquecido = AgenteRegistro & {
 
 type AgentCenterMode =
   | { type: "agent"; agenteId: string }
+  | { type: "thread"; agenteId: string; threadId: string }
   | { type: "channel"; canalId: string }
   | { type: "new_agent" };
+
+function getThreadLaneKey(agenteId: string, threadId?: string | null): string {
+  return `${agenteId}:${threadId ?? "main"}`;
+}
 
 function getAgentAvatar(ag?: AgenteRegistro | null): { shape: AvatarShape; color: string } {
   if (!ag) return { shape: "blob", color: "#38bdf8" };
@@ -169,6 +183,23 @@ export function App() {
   >([]);
   const [activeSideThreadId, setActiveSideThreadId] = useState<string | null>(null);
 
+  // Fase 13 — Sub-threads paralelas, branches, esperas, fila, paginação e fixações
+  const [threadsByAgent, setThreadsByAgent] = useState<Record<string, AgenteThreadsSnapshot>>({});
+  const [allThreads, setAllThreads] = useState<AgenteThreadRegistro[]>([]);
+  const [threadChatById, setThreadChatById] = useState<Record<string, MensagemChat[]>>({});
+  const [threadPaginationById, setThreadPaginationById] = useState<
+    Record<string, PaginaConversaThread & { loading_older?: boolean }>
+  >({});
+  const [liveRunByThread, setLiveRunByThread] = useState<Record<string, ChatLiveRunState>>({});
+  const [waitsByAgent, setWaitsByAgent] = useState<Record<string, AgenteEspera[]>>({});
+  const [queueByLane, setQueueByLane] = useState<Record<string, FilaChatSnapshot>>({});
+  const [pinsByAgent, setPinsByAgent] = useState<Record<string, MensagemFixada[]>>({});
+  const [activeThreadIdByAgent, setActiveThreadIdByAgent] = useState<Record<string, string | null>>({});
+  const [editingQueueByLane, setEditingQueueByLane] = useState<
+    Record<string, { entrega: FilaChatEntrega; editId: string } | null>
+  >({});
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+
   const refreshRoutineCounts = useCallback(async () => {
     try {
       const all = await daemonApi.listAllRoutines();
@@ -181,6 +212,40 @@ export function App() {
       setRoutineCountsByAgent(counts);
     } catch {
       // Silencioso caso endpoint ainda não responda
+    }
+  }, []);
+
+  const refreshAgentThreadsState = useCallback(async (agenteId: string, threadId: string | null = null) => {
+    try {
+      const [threadsSnap, waits, pins, queueSnap] = await Promise.all([
+        daemonApi.listAgentThreads(agenteId).catch(() => null),
+        daemonApi.listWaits(agenteId).catch(() => null),
+        daemonApi.listPins(agenteId).catch(() => null),
+        daemonApi.listChatQueue(agenteId, threadId).catch(() => null),
+      ]);
+      if (threadsSnap) {
+        setThreadsByAgent((prev) => ({ ...prev, [agenteId]: threadsSnap }));
+        setAllThreads((prev) => {
+          const others = prev.filter((t) => t.agente_id !== agenteId);
+          return [...others, ...threadsSnap.threads].sort((a, b) =>
+            b.atualizado_em.localeCompare(a.atualizado_em)
+          );
+        });
+      }
+      if (waits) {
+        setWaitsByAgent((prev) => ({ ...prev, [agenteId]: waits }));
+      }
+      if (pins) {
+        setPinsByAgent((prev) => ({ ...prev, [agenteId]: pins }));
+      }
+      if (queueSnap) {
+        setQueueByLane((prev) => ({
+          ...prev,
+          [getThreadLaneKey(agenteId, threadId)]: queueSnap,
+        }));
+      }
+    } catch {
+      // silencioso
     }
   }, []);
 
@@ -202,6 +267,7 @@ export function App() {
         fileList,
         keys,
         waAccountsList,
+        threadsList,
       ] = await Promise.all([
         daemonApi.getOnboarding(),
         daemonApi.listAgents(),
@@ -218,6 +284,7 @@ export function App() {
         daemonApi.listFiles(),
         daemonApi.getVaultStatus(),
         daemonApi.listWhatsAppAccounts().catch(() => [] as WhatsAppContaResumo[]),
+        daemonApi.listAllThreads().catch(() => [] as AgenteThreadRegistro[]),
       ]);
 
       setOnboarding(onb);
@@ -236,6 +303,7 @@ export function App() {
       setArquivos(fileList);
       setVaultKeys(keys);
       setWhatsappAccounts(waAccountsList);
+      setAllThreads(threadsList);
       void refreshRoutineCounts();
 
       if (tList.length > 0) {
@@ -248,15 +316,19 @@ export function App() {
     } finally {
       setBootLoading(false);
     }
-  }, []);
+  }, [refreshRoutineCounts]);
 
   useEffect(() => {
     void hydrateAll();
   }, [hydrateAll]);
 
-  // Carrega mensagens da conversa ativa
+  // Carrega mensagens e metadados Fase 13 da conversa ativa
   useEffect(() => {
-    if (activeSideThreadId && activeSideThreadId.startsWith("rotina:") && centerMode.type === "agent") {
+    if (
+      activeSideThreadId &&
+      activeSideThreadId.startsWith("rotina:") &&
+      (centerMode.type === "agent" || centerMode.type === "thread")
+    ) {
       const rotinaId = activeSideThreadId.slice("rotina:".length);
       void daemonApi.listRoutineThreadMessages(centerMode.agenteId, rotinaId).then((msgs) => {
         setChatByKey((prev) => ({ ...prev, [activeSideThreadId]: msgs }));
@@ -264,23 +336,45 @@ export function App() {
       return;
     }
 
-    if (centerMode.type === "agent") {
+    if (centerMode.type === "thread") {
+      const { agenteId, threadId } = centerMode;
+      void daemonApi
+        .readThreadMessages(threadId, { limit: 50 })
+        .then((pagina) => {
+          setThreadChatById((prev) => ({ ...prev, [threadId]: pagina.mensagens }));
+          setThreadPaginationById((prev) => ({ ...prev, [threadId]: pagina }));
+          const lastId = pagina.mensagens[pagina.mensagens.length - 1]?.mensagem_id;
+          void daemonApi.markThreadRead(threadId, lastId).catch(() => null);
+        })
+        .catch(() => {});
+      void refreshAgentThreadsState(agenteId, threadId);
+    } else if (centerMode.type === "agent") {
       const key = `agente:${centerMode.agenteId}`;
-      void daemonApi.listAgentMessages(centerMode.agenteId).then((msgs) => {
-        setChatByKey((prev) => ({ ...prev, [key]: msgs }));
-      });
+      const mainKey = `main:${centerMode.agenteId}`;
+      void daemonApi
+        .readAgentMessagesPage(centerMode.agenteId, { limit: 50 })
+        .then((pagina) => {
+          setChatByKey((prev) => ({ ...prev, [key]: pagina.mensagens }));
+          setThreadPaginationById((prev) => ({ ...prev, [mainKey]: pagina }));
+        })
+        .catch(() => {
+          void daemonApi.listAgentMessages(centerMode.agenteId).then((msgs) => {
+            setChatByKey((prev) => ({ ...prev, [key]: msgs }));
+          });
+        });
       void daemonApi.markAgentRead(centerMode.agenteId).then(() => {
         setAgentes((prev) =>
           prev.map((a) => (a.agente_id === centerMode.agenteId ? { ...a, nao_lidas: 0 } : a))
         );
       });
+      void refreshAgentThreadsState(centerMode.agenteId, null);
     } else if (centerMode.type === "channel") {
       const key = centerMode.canalId;
       void daemonApi.listChannelMessages(centerMode.canalId).then((msgs) => {
         setChatByKey((prev) => ({ ...prev, [key]: msgs }));
       });
     }
-  }, [centerMode, activeSideThreadId]);
+  }, [centerMode, activeSideThreadId, refreshAgentThreadsState]);
 
   // Assinatura WebSocket ao vivo
   useEffect(() => {
@@ -333,6 +427,9 @@ export function App() {
           ...prev,
           [evt.canal_id]: mergeUniqueMessages(prev[evt.canal_id] ?? [], [evt.mensagem]),
         }));
+        return;
+      }
+      if (evt.mensagem.thread_id && !evt.mensagem.thread_id.startsWith("main:")) {
         return;
       }
       setChatByKey((prev) => {
@@ -494,6 +591,104 @@ export function App() {
       }));
     });
 
+    // Fase 13 — Eventos reativos isolados por thread/fila/espera/fixação/reset
+    const unsubThreadsChanged = ws.on("threads:changed", (evt) => {
+      setThreadsByAgent((prev) => ({ ...prev, [evt.agente_id]: evt.snapshot }));
+      setAllThreads((prev) => {
+        const others = prev.filter((t) => t.agente_id !== evt.agente_id);
+        return [...others, ...evt.snapshot.threads].sort((a, b) =>
+          b.atualizado_em.localeCompare(a.atualizado_em)
+        );
+      });
+    });
+
+    const unsubThreadMessage = ws.on("thread:message", (evt) => {
+      setThreadChatById((prev) => {
+        const cleaned = (prev[evt.thread_id] ?? []).filter(
+          (m) =>
+            !(
+              m.mensagem_id.startsWith("temp-") &&
+              m.autor === evt.mensagem.autor &&
+              m.conteudo_markdown === evt.mensagem.conteudo_markdown
+            )
+        );
+        return {
+          ...prev,
+          [evt.thread_id]: mergeUniqueMessages(cleaned, [evt.mensagem]),
+        };
+      });
+      if (evt.mensagem.autor === "agente") {
+        setLiveRunByThread((prev) => {
+          if (!prev[evt.thread_id]) return prev;
+          const copy = { ...prev };
+          delete copy[evt.thread_id];
+          return copy;
+        });
+      }
+    });
+
+    const unsubThreadProgress = ws.on("thread:progress", (evt) => {
+      setLiveRunByThread((prev) => {
+        if (evt.fase === "concluido" || evt.fase === "erro") {
+          if (!prev[evt.thread_id]) return prev;
+          const copy = { ...prev };
+          delete copy[evt.thread_id];
+          return copy;
+        }
+        const existing = prev[evt.thread_id] ?? {
+          agenteId: evt.agente_id,
+          agenteNome: "Sub-tarefa",
+          startedAt: Date.now(),
+          statusText: evt.mensagem_status ?? "Executando em paralelo...",
+          steps: [],
+          streamingText: "",
+        };
+        let nextSteps = existing.steps;
+        if (evt.step) {
+          const step = evt.step;
+          const idx = existing.steps.findIndex((s) => s.id === step.id);
+          nextSteps =
+            idx >= 0
+              ? existing.steps.map((s, sIdx) => (sIdx === idx ? step : s))
+              : [...existing.steps, step];
+        }
+        return {
+          ...prev,
+          [evt.thread_id]: {
+            ...existing,
+            statusText: evt.mensagem_status ?? existing.statusText,
+            steps: nextSteps,
+            streamingText: evt.delta
+              ? existing.streamingText + evt.delta
+              : existing.streamingText,
+          },
+        };
+      });
+    });
+
+    const unsubWaitsChanged = ws.on("waits:changed", (evt) => {
+      setWaitsByAgent((prev) => ({ ...prev, [evt.agente_id]: evt.esperas }));
+    });
+
+    const unsubChatQueueChanged = ws.on("chat_queue:changed", (evt) => {
+      setQueueByLane((prev) => ({
+        ...prev,
+        [getThreadLaneKey(evt.agente_id, evt.thread_id)]: evt.snapshot,
+      }));
+    });
+
+    const unsubPinsChanged = ws.on("pins:changed", (evt) => {
+      setPinsByAgent((prev) => ({ ...prev, [evt.agente_id]: evt.pins }));
+    });
+
+    const unsubContextReset = ws.on("context:reset", (evt) => {
+      const key = `agente:${evt.agente_id}`;
+      setChatByKey((prev) => ({
+        ...prev,
+        [key]: mergeUniqueMessages(prev[key] ?? [], [evt.mensagem_divisor]),
+      }));
+    });
+
     ws.connect();
     return () => {
       unsubConn();
@@ -522,6 +717,13 @@ export function App() {
       unsubWorkflowUpdated();
       unsubWorkflowRunUpdated();
       unsubWorkflowStepUpdated();
+      unsubThreadsChanged();
+      unsubThreadMessage();
+      unsubThreadProgress();
+      unsubWaitsChanged();
+      unsubChatQueueChanged();
+      unsubPinsChanged();
+      unsubContextReset();
       ws.disconnect();
     };
   }, [refreshRoutineCounts]);
@@ -535,6 +737,7 @@ export function App() {
 
   const handleSelectAgent = (agenteId: string) => {
     setActiveSideThreadId(null);
+    setActiveThreadIdByAgent((prev) => ({ ...prev, [agenteId]: null }));
     const ag = agentes.find((a) => a.agente_id === agenteId);
     const vis = getAgentAvatar(ag);
     ensureAndActivateTab(
@@ -542,6 +745,83 @@ export function App() {
       { type: "agent", agenteId }
     );
   };
+
+  const handleSelectThreadInAgent = useCallback(
+    (agenteId: string, threadId: string | null) => {
+      setActiveSideThreadId(null);
+      if (!threadId || threadId.startsWith("main:")) {
+        setActiveThreadIdByAgent((prev) => ({ ...prev, [agenteId]: null }));
+        const ag = agentes.find((a) => a.agente_id === agenteId);
+        const vis = getAgentAvatar(ag);
+        ensureAndActivateTab(
+          {
+            id: `agent:${agenteId}`,
+            titulo: ag?.nome ?? agenteId,
+            shape: vis.shape,
+            color: vis.color,
+          },
+          { type: "agent", agenteId }
+        );
+        return;
+      }
+
+      setActiveThreadIdByAgent((prev) => ({ ...prev, [agenteId]: threadId }));
+      const ag = agentes.find((a) => a.agente_id === agenteId);
+      const vis = getAgentAvatar(ag);
+      const th =
+        threadsByAgent[agenteId]?.threads.find((t) => t.thread_id === threadId) ??
+        allThreads.find((t) => t.thread_id === threadId);
+      ensureAndActivateTab(
+        {
+          id: `thread:${agenteId}:${threadId}`,
+          titulo: th?.titulo ?? `Sub-tarefa`,
+          shape: vis.shape,
+          color: vis.color,
+        },
+        { type: "thread", agenteId, threadId }
+      );
+    },
+    [agentes, allThreads, ensureAndActivateTab, threadsByAgent]
+  );
+
+  const handleOpenThreadInChat = useCallback(
+    async (thread: AgenteThreadRegistro) => {
+      let targetThread = thread;
+      if (thread.arquivada_em) {
+        try {
+          targetThread = await daemonApi.reopenThread(thread.thread_id);
+          await refreshAgentThreadsState(thread.agente_id, thread.thread_id);
+        } catch {
+          // segue mesmo se já reaberta concorrentemente
+        }
+      }
+      handleSelectThreadInAgent(targetThread.agente_id, targetThread.thread_id);
+    },
+    [handleSelectThreadInAgent, refreshAgentThreadsState]
+  );
+
+  const handleDismissThreadTab = useCallback(
+    async (agenteId: string, threadId: string) => {
+      try {
+        await daemonApi.archiveThread(threadId);
+        await refreshAgentThreadsState(agenteId, null);
+      } catch {
+        // Caso thread ainda esteja em execução, apenas recolhe a aba da DynamicIsland
+      }
+      const tabId = `thread:${agenteId}:${threadId}`;
+      setOpenTabs((prev) => prev.filter((t) => t.id !== tabId));
+      if (centerMode.type === "thread" && centerMode.threadId === threadId) {
+        setActiveThreadIdByAgent((prev) => ({ ...prev, [agenteId]: null }));
+        const ag = agentes.find((a) => a.agente_id === agenteId);
+        const vis = getAgentAvatar(ag);
+        ensureAndActivateTab(
+          { id: `agent:${agenteId}`, titulo: ag?.nome ?? agenteId, shape: vis.shape, color: vis.color },
+          { type: "agent", agenteId }
+        );
+      }
+    },
+    [agentes, centerMode, ensureAndActivateTab, refreshAgentThreadsState]
+  );
 
   const handleSelectChannel = (canalId: string) => {
     setActiveSideThreadId(null);
@@ -566,8 +846,19 @@ export function App() {
       setCenterMode({ type: "new_agent" });
     } else if (tabId.startsWith("channel:")) {
       setCenterMode({ type: "channel", canalId: tabId.slice("channel:".length) });
+    } else if (tabId.startsWith("thread:")) {
+      const rest = tabId.slice("thread:".length);
+      const sep = rest.indexOf(":");
+      if (sep > 0) {
+        const agenteId = rest.slice(0, sep);
+        const threadId = rest.slice(sep + 1);
+        setActiveThreadIdByAgent((prev) => ({ ...prev, [agenteId]: threadId }));
+        setCenterMode({ type: "thread", agenteId, threadId });
+      }
     } else if (tabId.startsWith("agent:")) {
-      setCenterMode({ type: "agent", agenteId: tabId.slice("agent:".length) });
+      const agenteId = tabId.slice("agent:".length);
+      setActiveThreadIdByAgent((prev) => ({ ...prev, [agenteId]: null }));
+      setCenterMode({ type: "agent", agenteId });
     }
   };
 
@@ -590,7 +881,7 @@ export function App() {
   };
 
   const activeAgent = useMemo(() => {
-    if (centerMode.type !== "agent") return null;
+    if (centerMode.type !== "agent" && centerMode.type !== "thread") return null;
     return agentes.find((a) => a.agente_id === centerMode.agenteId) ?? agentes[0] ?? null;
   }, [agentes, centerMode]);
 
@@ -599,16 +890,61 @@ export function App() {
     return canais.find((c) => c.canal_id === centerMode.canalId) ?? null;
   }, [canais, centerMode]);
 
+  const activeThread = useMemo(() => {
+    if (!activeAgent) return null;
+    const threadId =
+      centerMode.type === "thread"
+        ? centerMode.threadId
+        : activeThreadIdByAgent[activeAgent.agente_id] ?? null;
+    if (!threadId || threadId.startsWith("main:")) return null;
+    return (
+      threadsByAgent[activeAgent.agente_id]?.threads.find((t) => t.thread_id === threadId) ??
+      allThreads.find((t) => t.thread_id === threadId) ??
+      null
+    );
+  }, [activeAgent, activeThreadIdByAgent, allThreads, centerMode, threadsByAgent]);
+
+  const activeThreadKey =
+    centerMode.type === "thread"
+      ? centerMode.threadId
+      : activeAgent
+        ? `main:${activeAgent.agente_id}`
+        : "";
+
   const activeChatKey =
     activeSideThreadId && activeSideThreadId.startsWith("rotina:")
       ? activeSideThreadId
-      : centerMode.type === "channel"
-        ? centerMode.canalId
-        : centerMode.type === "agent"
-          ? `agente:${activeAgent?.agente_id ?? "estrategista"}`
-          : "";
+      : centerMode.type === "thread"
+        ? `thread:${centerMode.threadId}`
+        : centerMode.type === "channel"
+          ? centerMode.canalId
+          : centerMode.type === "agent"
+            ? `agente:${activeAgent?.agente_id ?? "estrategista"}`
+            : "";
 
-  const activeMessages = activeChatKey ? chatByKey[activeChatKey] ?? [] : [];
+  const activeMessages =
+    activeSideThreadId && activeSideThreadId.startsWith("rotina:")
+      ? chatByKey[activeSideThreadId] ?? []
+      : centerMode.type === "thread"
+        ? threadChatById[centerMode.threadId] ?? []
+        : activeChatKey
+          ? chatByKey[activeChatKey] ?? []
+          : [];
+
+  const activeLiveRun: ChatLiveRunState | null =
+    activeSideThreadId && activeSideThreadId.startsWith("rotina:")
+      ? liveRunByChat[activeSideThreadId] ?? null
+      : centerMode.type === "thread"
+        ? liveRunByThread[centerMode.threadId] ?? null
+        : activeChatKey
+          ? liveRunByChat[activeChatKey] ?? null
+          : null;
+
+  const activePaginationState = activeThreadKey ? threadPaginationById[activeThreadKey] : undefined;
+  const activeLaneThreadId = centerMode.type === "thread" ? centerMode.threadId : null;
+  const activeLaneKeyStr = activeAgent ? getThreadLaneKey(activeAgent.agente_id, activeLaneThreadId) : "";
+  const activeQueueSnapshot = activeLaneKeyStr ? queueByLane[activeLaneKeyStr] ?? null : null;
+  const activeEditingEntry = activeLaneKeyStr ? editingQueueByLane[activeLaneKeyStr] ?? null : null;
 
   const runningCount = useMemo(
     () => tarefas.filter((t) => t.status === "executando").length,
@@ -640,6 +976,80 @@ export function App() {
   };
 
   const handleSendChatMessage = async (conteudo: string, anexos: AnexoChat[]) => {
+    if (centerMode.type === "thread" && activeAgent) {
+      const threadId = centerMode.threadId;
+      const optimisticId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const optimisticMsg: MensagemChat = {
+        mensagem_id: optimisticId,
+        canal_id: `thread:${threadId}`,
+        thread_id: threadId,
+        agente_id: activeAgent.agente_id,
+        autor: "usuario",
+        autor_nome: "Você",
+        conteudo_markdown: conteudo || "Referências enviadas para sub-tarefa.",
+        anexos,
+        steps: [],
+        tarefa_id: null,
+        lida: true,
+        criado_em: new Date().toISOString(),
+      };
+      setThreadChatById((prev) => ({
+        ...prev,
+        [threadId]: mergeUniqueMessages(prev[threadId] ?? [], [optimisticMsg]),
+      }));
+      const hadExistingRun = Boolean(liveRunByThread[threadId]);
+      if (!hadExistingRun) {
+        setLiveRunByThread((prev) => ({
+          ...prev,
+          [threadId]: {
+            agenteId: activeAgent.agente_id,
+            agenteNome: activeAgent.nome,
+            startedAt: Date.now(),
+            statusText: "Enviando para sub-thread paralela...",
+            steps: [],
+            streamingText: "",
+          },
+        }));
+      }
+      setSendingChat(true);
+      let keepLiveRun = hadExistingRun;
+      try {
+        const res = await daemonApi.sendThreadMessage(threadId, conteudo, anexos);
+        if (res.enfileirada || res.steered) {
+          keepLiveRun = true;
+          setThreadChatById((prev) => ({
+            ...prev,
+            [threadId]: mergeUniqueMessages(
+              (prev[threadId] ?? []).filter((m) => m.mensagem_id !== optimisticId),
+              res.mensagem_usuario ? [res.mensagem_usuario] : []
+            ),
+          }));
+          await refreshAgentThreadsState(activeAgent.agente_id, threadId);
+        } else {
+          setThreadChatById((prev) => ({
+            ...prev,
+            [threadId]: mergeUniqueMessages(
+              (prev[threadId] ?? []).filter((m) => m.mensagem_id !== optimisticId),
+              [res.mensagem_usuario, res.mensagem_agente].filter(
+                (x): x is MensagemChat => Boolean(x)
+              )
+            ),
+          }));
+        }
+      } finally {
+        if (!keepLiveRun) {
+          setLiveRunByThread((prev) => {
+            if (!prev[threadId]) return prev;
+            const copy = { ...prev };
+            delete copy[threadId];
+            return copy;
+          });
+        }
+        setSendingChat(false);
+      }
+      return;
+    }
+
     const targetKey =
       centerMode.type === "channel" && activeChannel
         ? activeChannel.canal_id
@@ -663,27 +1073,30 @@ export function App() {
       criado_em: new Date().toISOString(),
     };
 
-    // Mostra imediatamente a mensagem enviada e o feedback visual do agente trabalhando
+    const hadExistingRun = Boolean(liveRunByChat[targetKey]);
     setChatByKey((prev) => ({
       ...prev,
       [targetKey]: mergeUniqueMessages(prev[targetKey] ?? [], [optimisticMsg]),
     }));
-    setLiveRunByChat((prev) => ({
-      ...prev,
-      [targetKey]: {
-        agenteId: activeAgent?.agente_id ?? null,
-        agenteNome:
-          centerMode.type === "channel" && activeChannel
-            ? activeChannel.nome
-            : activeAgent?.nome ?? "Agente",
-        startedAt: Date.now(),
-        statusText: "Enviando briefing e carregando contexto...",
-        steps: [],
-        streamingText: "",
-      },
-    }));
+    if (!hadExistingRun) {
+      setLiveRunByChat((prev) => ({
+        ...prev,
+        [targetKey]: {
+          agenteId: activeAgent?.agente_id ?? null,
+          agenteNome:
+            centerMode.type === "channel" && activeChannel
+              ? activeChannel.nome
+              : activeAgent?.nome ?? "Agente",
+          startedAt: Date.now(),
+          statusText: "Enviando briefing e carregando contexto...",
+          steps: [],
+          streamingText: "",
+        },
+      }));
+    }
 
     setSendingChat(true);
+    let keepLiveRun = hadExistingRun;
     try {
       if (centerMode.type === "channel" && activeChannel) {
         const res = await daemonApi.sendChannelMessage(activeChannel.canal_id, conteudo, anexos);
@@ -699,17 +1112,35 @@ export function App() {
         });
       } else if (activeAgent) {
         const res = await daemonApi.sendAgentMessage(activeAgent.agente_id, conteudo, anexos);
-        setChatByKey((prev) => {
-          const withoutTemp = (prev[targetKey] ?? []).filter((m) => m.mensagem_id !== optimisticId);
-          return {
-            ...prev,
-            [targetKey]: mergeUniqueMessages(withoutTemp, [
-              res.mensagem_usuario,
-              res.mensagem_agente,
-              ...(res.mensagens_handoff ?? []),
-            ]),
-          };
-        });
+        if (res.enfileirada || res.steered) {
+          keepLiveRun = true;
+          setChatByKey((prev) => {
+            const withoutTemp = (prev[targetKey] ?? []).filter(
+              (m) => m.mensagem_id !== optimisticId
+            );
+            return {
+              ...prev,
+              [targetKey]: mergeUniqueMessages(
+                withoutTemp,
+                res.mensagem_usuario ? [res.mensagem_usuario] : []
+              ),
+            };
+          });
+          await refreshAgentThreadsState(activeAgent.agente_id, null);
+        } else {
+          setChatByKey((prev) => {
+            const withoutTemp = (prev[targetKey] ?? []).filter(
+              (m) => m.mensagem_id !== optimisticId
+            );
+            const extras = [res.mensagem_usuario, res.mensagem_agente, ...(res.mensagens_handoff ?? [])].filter(
+              (x): x is MensagemChat => Boolean(x)
+            );
+            return {
+              ...prev,
+              [targetKey]: mergeUniqueMessages(withoutTemp, extras),
+            };
+          });
+        }
       }
       const [nextTasks, nextUsage, nextAnalytics, nextFiles] = await Promise.all([
         daemonApi.listTasks(),
@@ -722,13 +1153,249 @@ export function App() {
       setAnalyticsUso(nextAnalytics);
       setArquivos(nextFiles);
     } finally {
-      setLiveRunByChat((prev) => {
-        if (!prev[targetKey]) return prev;
-        const copy = { ...prev };
-        delete copy[targetKey];
-        return copy;
-      });
+      if (!keepLiveRun) {
+        setLiveRunByChat((prev) => {
+          if (!prev[targetKey]) return prev;
+          const copy = { ...prev };
+          delete copy[targetKey];
+          return copy;
+        });
+      }
       setSendingChat(false);
+    }
+  };
+
+  // Fase 13 — Paginação, Ramificação, Fixação, Pergunta Lateral, Reset, Esperas & Controle da Fila
+  const handleLoadOlderMessages = async () => {
+    if (!activeAgent || !activeThreadKey) return;
+    const currentPag = threadPaginationById[activeThreadKey];
+    if (!currentPag?.has_older || !currentPag.older_cursor) return;
+
+    setThreadPaginationById((prev) => ({
+      ...prev,
+      [activeThreadKey]: { ...currentPag, loading_older: true },
+    }));
+    try {
+      const older =
+        centerMode.type === "thread"
+          ? await daemonApi.readThreadMessages(centerMode.threadId, {
+              limit: 50,
+              beforeCursor: currentPag.older_cursor,
+            })
+          : await daemonApi.readAgentMessagesPage(activeAgent.agente_id, {
+              limit: 50,
+              beforeCursor: currentPag.older_cursor,
+            });
+      if (centerMode.type === "thread") {
+        setThreadChatById((prev) => ({
+          ...prev,
+          [centerMode.threadId]: mergeUniqueMessages(older.mensagens, prev[centerMode.threadId] ?? []),
+        }));
+      } else {
+        const key = `agente:${activeAgent.agente_id}`;
+        setChatByKey((prev) => ({
+          ...prev,
+          [key]: mergeUniqueMessages(older.mensagens, prev[key] ?? []),
+        }));
+      }
+      setThreadPaginationById((prev) => ({
+        ...prev,
+        [activeThreadKey]: { ...older, loading_older: false },
+      }));
+    } catch {
+      setThreadPaginationById((prev) => ({
+        ...prev,
+        [activeThreadKey]: { ...currentPag, loading_older: false },
+      }));
+    }
+  };
+
+  const handleJumpToLatest = async () => {
+    if (!activeAgent || !activeThreadKey) return;
+    if (centerMode.type === "thread") {
+      const pagina = await daemonApi.readThreadMessages(centerMode.threadId, { limit: 50 });
+      setThreadChatById((prev) => ({ ...prev, [centerMode.threadId]: pagina.mensagens }));
+      setThreadPaginationById((prev) => ({ ...prev, [centerMode.threadId]: pagina }));
+    } else {
+      const pagina = await daemonApi.readAgentMessagesPage(activeAgent.agente_id, { limit: 50 });
+      const key = `agente:${activeAgent.agente_id}`;
+      setChatByKey((prev) => ({ ...prev, [key]: pagina.mensagens }));
+      setThreadPaginationById((prev) => ({ ...prev, [activeThreadKey]: pagina }));
+    }
+    setHighlightedMessageId(null);
+  };
+
+  const handleJumpToMessage = async (targetThreadId: string, mensagemId: string) => {
+    if (!activeAgent) return;
+    const isMain = targetThreadId.startsWith("main:");
+    if (isMain) {
+      const pagina = await daemonApi.readAgentMessagesPage(activeAgent.agente_id, {
+        limit: 50,
+        aroundMessageId: mensagemId,
+      });
+      setChatByKey((prev) => ({ ...prev, [`agente:${activeAgent.agente_id}`]: pagina.mensagens }));
+      setThreadPaginationById((prev) => ({ ...prev, [targetThreadId]: pagina }));
+      handleSelectAgent(activeAgent.agente_id);
+    } else {
+      const pagina = await daemonApi.readThreadMessages(targetThreadId, {
+        limit: 50,
+        aroundMessageId: mensagemId,
+      });
+      setThreadChatById((prev) => ({ ...prev, [targetThreadId]: pagina.mensagens }));
+      setThreadPaginationById((prev) => ({ ...prev, [targetThreadId]: pagina }));
+      handleSelectThreadInAgent(activeAgent.agente_id, targetThreadId);
+    }
+    setHighlightedMessageId(mensagemId);
+  };
+
+  const handleNavigateBranchOrigin = async (branch: AgenteThreadBranch) => {
+    if (branch.origem_excluida) return;
+    await handleJumpToMessage(branch.origem_thread_id, branch.origem_mensagem_id);
+  };
+
+  const handleBranchFromMessage = async (mensagemId: string) => {
+    if (!activeAgent) return;
+    const created = await daemonApi.branchConversation(activeAgent.agente_id, {
+      thread_id: centerMode.type === "thread" ? centerMode.threadId : null,
+      mensagem_id: mensagemId,
+      request_id: `branch-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+    });
+    await refreshAgentThreadsState(activeAgent.agente_id, created.thread_id);
+    handleSelectThreadInAgent(activeAgent.agente_id, created.thread_id);
+  };
+
+  const handleTogglePinMessage = async (mensagem: MensagemChat, pinned: boolean) => {
+    if (!activeAgent) return;
+    const threadId = mensagem.thread_id ?? activeThreadKey ?? `main:${activeAgent.agente_id}`;
+    const updatedPins = await daemonApi.setMessagePinned(activeAgent.agente_id, {
+      thread_id: threadId,
+      mensagem_id: mensagem.mensagem_id,
+      pinned,
+    });
+    setPinsByAgent((prev) => ({ ...prev, [activeAgent.agente_id]: updatedPins }));
+  };
+
+  const handleAskSideQuestion = async (
+    pergunta: string,
+    historico: Array<{ pergunta: string; resposta: string }>
+  ): Promise<string> => {
+    if (!activeAgent) return "Nenhum agente selecionado.";
+    const res = await daemonApi.askSideQuestion(activeAgent.agente_id, {
+      pergunta,
+      historico_lateral: historico,
+      thread_id: centerMode.type === "thread" ? centerMode.threadId : null,
+    });
+    return res.resposta;
+  };
+
+  const handleStartNewChat = async () => {
+    if (!activeAgent) return;
+    const res = await daemonApi.startNewChat(activeAgent.agente_id);
+    const key = `agente:${activeAgent.agente_id}`;
+    setChatByKey((prev) => ({
+      ...prev,
+      [key]: mergeUniqueMessages(prev[key] ?? [], [res.mensagem_divisor]),
+    }));
+  };
+
+  const handleCloseWait = async (esperaId: string) => {
+    if (!activeAgent) return;
+    await daemonApi.cancelWait(activeAgent.agente_id, esperaId);
+    await refreshAgentThreadsState(activeAgent.agente_id, activeLaneThreadId);
+  };
+
+  const handleBeginEditQueueItem = async (entrega: FilaChatEntrega) => {
+    if (!activeAgent) return;
+    const editId = `edit-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
+    const snapshot = await daemonApi.editChatQueue(activeAgent.agente_id, {
+      thread_id: activeLaneThreadId,
+      entrega_id: entrega.entrega_id,
+      acao: "begin",
+      edit_id: editId,
+    });
+    setQueueByLane((prev) => ({ ...prev, [activeLaneKeyStr]: snapshot }));
+    setEditingQueueByLane((prev) => ({ ...prev, [activeLaneKeyStr]: { entrega, editId } }));
+  };
+
+  const handleSaveEditQueueItem = async (
+    entregaId: string,
+    conteudo: string,
+    anexos: AnexoChat[]
+  ) => {
+    if (!activeAgent) return;
+    const editId = editingQueueByLane[activeLaneKeyStr]?.editId ?? "";
+    const snapshot = await daemonApi.editChatQueue(activeAgent.agente_id, {
+      thread_id: activeLaneThreadId,
+      entrega_id: entregaId,
+      acao: "save",
+      edit_id: editId,
+      conteudo,
+      anexos,
+    });
+    setQueueByLane((prev) => ({ ...prev, [activeLaneKeyStr]: snapshot }));
+    setEditingQueueByLane((prev) => ({ ...prev, [activeLaneKeyStr]: null }));
+  };
+
+  const handleDiscardEditQueueItem = async (entregaId: string) => {
+    if (!activeAgent) return;
+    const editId = editingQueueByLane[activeLaneKeyStr]?.editId ?? "";
+    try {
+      const snapshot = await daemonApi.editChatQueue(activeAgent.agente_id, {
+        thread_id: activeLaneThreadId,
+        entrega_id: entregaId,
+        acao: "cancel",
+        edit_id: editId,
+      });
+      setQueueByLane((prev) => ({ ...prev, [activeLaneKeyStr]: snapshot }));
+    } finally {
+      setEditingQueueByLane((prev) => ({ ...prev, [activeLaneKeyStr]: null }));
+    }
+  };
+
+  const handleCancelOrDeleteQueueItem = async (entregaId: string, deleteAfter = false) => {
+    if (!activeAgent) return;
+    const snapshot = await daemonApi.cancelChatQueue(activeAgent.agente_id, {
+      thread_id: activeLaneThreadId,
+      entrega_id: entregaId,
+      delete_after: deleteAfter,
+    });
+    setQueueByLane((prev) => ({ ...prev, [activeLaneKeyStr]: snapshot }));
+  };
+
+  const handleReorderQueue = async (ids: string[]) => {
+    if (!activeAgent) return;
+    const snapshot = await daemonApi.reorderChatQueue(activeAgent.agente_id, {
+      thread_id: activeLaneThreadId,
+      entrega_ids: ids,
+    });
+    setQueueByLane((prev) => ({ ...prev, [activeLaneKeyStr]: snapshot }));
+  };
+
+  const handleSteerQueueItem = async (entregaId: string) => {
+    if (!activeAgent) return;
+    const res = await daemonApi.steerChatQueue(activeAgent.agente_id, {
+      thread_id: activeLaneThreadId,
+      entrega_id: entregaId,
+    });
+    setQueueByLane((prev) => ({ ...prev, [activeLaneKeyStr]: res.snapshot }));
+  };
+
+  const handleMoveQueueItemToTask = async (entregaId: string) => {
+    if (!activeAgent) return;
+    const res = await daemonApi.runQueuedAsTask(activeAgent.agente_id, {
+      thread_id: activeLaneThreadId,
+      entrega_id: entregaId,
+    });
+    setQueueByLane((prev) => ({ ...prev, [activeLaneKeyStr]: res.snapshot }));
+    await refreshAgentThreadsState(activeAgent.agente_id, activeLaneThreadId);
+  };
+
+  const handleInterruptTurn = async () => {
+    if (!activeAgent) return;
+    if (centerMode.type === "thread") {
+      await daemonApi.stopThread(centerMode.threadId);
+    } else {
+      await daemonApi.interruptTurn(activeAgent.agente_id, null);
     }
   };
 
@@ -868,7 +1535,11 @@ export function App() {
                 <Sidebar
                   agentes={agentes}
                   canais={canais}
-                  selectedAgentId={centerMode.type === "agent" ? activeAgent?.agente_id ?? null : null}
+                  selectedAgentId={
+                    centerMode.type === "agent" || centerMode.type === "thread"
+                      ? activeAgent?.agente_id ?? null
+                      : null
+                  }
                   selectedChannelId={centerMode.type === "channel" ? activeChannel?.canal_id ?? null : null}
                   onSelectAgent={handleSelectAgent}
                   onSelectChannel={handleSelectChannel}
@@ -932,7 +1603,7 @@ export function App() {
                         mensagens={activeMessages}
                         provedores={provedores}
                         sending={sendingChat}
-                        liveRun={activeChatKey ? liveRunByChat[activeChatKey] ?? null : null}
+                        liveRun={activeLiveRun}
                         inspectorOpen={inspectorOpen}
                         onToggleInspector={() => setInspectorOpen((o) => !o)}
                         onSendMessage={async (conteudo, anexos) => {
@@ -995,6 +1666,49 @@ export function App() {
                           );
                         }}
                         onOpenConnectors={() => setActiveSection("conexoes")}
+                        threads={activeAgent ? threadsByAgent[activeAgent.agente_id]?.threads ?? [] : []}
+                        activeThread={activeThread}
+                        onSelectThread={(threadId) => {
+                          if (!activeAgent) return;
+                          handleSelectThreadInAgent(activeAgent.agente_id, threadId);
+                        }}
+                        onCreateQuickThread={() => setActiveSection("tarefas")}
+                        onDismissThreadTab={(threadId) => {
+                          if (!activeAgent) return;
+                          void handleDismissThreadTab(activeAgent.agente_id, threadId);
+                        }}
+                        pagination={
+                          activePaginationState
+                            ? {
+                                has_older: activePaginationState.has_older,
+                                older_count: activePaginationState.older_count,
+                                has_newer: activePaginationState.has_newer,
+                                loading_older: activePaginationState.loading_older,
+                              }
+                            : undefined
+                        }
+                        highlightedMessageId={highlightedMessageId}
+                        onLoadOlderMessages={handleLoadOlderMessages}
+                        onJumpToLatest={handleJumpToLatest}
+                        onJumpToMessage={handleJumpToMessage}
+                        onNavigateBranchOrigin={handleNavigateBranchOrigin}
+                        esperas={activeAgent ? waitsByAgent[activeAgent.agente_id] ?? [] : []}
+                        filaSnapshot={activeQueueSnapshot}
+                        editingQueueItem={activeEditingEntry?.entrega ?? null}
+                        onCloseWait={handleCloseWait}
+                        onBeginEditQueueItem={handleBeginEditQueueItem}
+                        onSaveEditQueueItem={handleSaveEditQueueItem}
+                        onDiscardEditQueueItem={handleDiscardEditQueueItem}
+                        onCancelOrDeleteQueueItem={handleCancelOrDeleteQueueItem}
+                        onReorderQueue={handleReorderQueue}
+                        onSteerQueueItem={handleSteerQueueItem}
+                        onMoveQueueItemToTask={handleMoveQueueItemToTask}
+                        onInterruptTurn={handleInterruptTurn}
+                        pins={activeAgent ? pinsByAgent[activeAgent.agente_id] ?? [] : []}
+                        onBranchFromMessage={handleBranchFromMessage}
+                        onTogglePinMessage={handleTogglePinMessage}
+                        onAskSideQuestion={handleAskSideQuestion}
+                        onStartNewChat={handleStartNewChat}
                       />
                     </div>
                   )}
@@ -1122,6 +1836,8 @@ export function App() {
           {activeSection === "tarefas" && (
             <TasksQueuePage
               tarefas={tarefas}
+              agentes={agentes}
+              threads={allThreads}
               selectedTaskId={selectedTaskId}
               steps={steps}
               thoughtStream={thoughtStream}
@@ -1133,6 +1849,26 @@ export function App() {
                   prioridade: input.prioridade,
                   payload: { prompt: input.prompt },
                 });
+                setTarefas(await daemonApi.listTasks());
+              }}
+              onCreateThread={async (input) => {
+                const res = await daemonApi.createAgentThread(input.agenteId, {
+                  titulo: input.titulo,
+                  conteudo: input.conteudo,
+                  anexos: input.anexos,
+                  client_message_id: input.clientMessageId,
+                });
+                await refreshAgentThreadsState(input.agenteId, res.thread.thread_id);
+                setTarefas(await daemonApi.listTasks());
+                return res.thread;
+              }}
+              onOpenInChat={(thread) => {
+                void handleOpenThreadInChat(thread);
+              }}
+              onUploadFile={handleUploadFile}
+              onRefreshThreads={async () => {
+                const threadsList = await daemonApi.listAllThreads();
+                setAllThreads(threadsList);
                 setTarefas(await daemonApi.listTasks());
               }}
               onRetryTask={(id) => {

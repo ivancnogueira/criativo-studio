@@ -306,6 +306,11 @@ export async function tryHandleThreadsRoute(
   const threadSingleMatch = path.match(/^\/api\/threads\/([^/]+)$/);
   if (threadSingleMatch) {
     const threadId = decodeURIComponent(threadSingleMatch[1]);
+    if (method === "GET") {
+      const thread = threadStore.getThread(threadId);
+      sendJson(res, thread ? 200 : 404, thread ? { thread } : { erro: "Thread não encontrada." });
+      return true;
+    }
     if (method === "PUT") {
       try {
         const body = await readJsonBody(req);

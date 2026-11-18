@@ -50,15 +50,14 @@ export class SideQuestionService {
 
     const agente = this.db.connection
       .prepare(
-        "SELECT agente_id, nome, cargo, modelo_padrao, prompt_sistema, config_json FROM projecao_agentes WHERE agente_id = ?;",
+        "SELECT agente_id, nome, papel, modelo_padrao, config_json FROM projecao_agentes WHERE agente_id = ?;",
       )
       .get(input.agenteId) as
       | {
           agente_id: string;
           nome: string;
-          cargo: string;
+          papel: string;
           modelo_padrao: string;
-          prompt_sistema: string;
           config_json: string;
         }
       | undefined;
@@ -68,10 +67,17 @@ export class SideQuestionService {
     }
 
     let cutoffAt: string | null = null;
+    let promptBase = "";
     try {
-      const cfg = JSON.parse(agente.config_json) as { context_cutoff_at?: unknown };
+      const cfg = JSON.parse(agente.config_json) as {
+        context_cutoff_at?: unknown;
+        prompt_base?: unknown;
+      };
       if (typeof cfg.context_cutoff_at === "string" && cfg.context_cutoff_at.length > 0) {
         cutoffAt = cfg.context_cutoff_at;
+      }
+      if (typeof cfg.prompt_base === "string") {
+        promptBase = cfg.prompt_base;
       }
     } catch {
       // ignora config inválida
@@ -163,8 +169,8 @@ export class SideQuestionService {
         : "(Sem mensagens anteriores no contexto atual desta conversa.)";
 
     const systemPrompt = [
-      `Você é ${agente.nome} (${agente.cargo}).`,
-      agente.prompt_sistema,
+      `Você é ${agente.nome} (${agente.papel}).`,
+      promptBase,
       "Modo PERGUNTA LATERAL EFÊMERA:",
       "- Responda apenas à dúvida paralela do usuário com base no recorte da conversa abaixo e em seu conhecimento.",
       "- Você NÃO possui ferramentas disponíveis neste painel (tools: []): não execute ações, não altere arquivos e não simule tool calls.",

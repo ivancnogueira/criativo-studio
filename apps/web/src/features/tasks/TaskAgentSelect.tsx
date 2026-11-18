@@ -10,6 +10,7 @@ export interface TaskAgentSelectProps {
   disabled?: boolean;
   compact?: boolean;
   ariaLabel?: string;
+  defaultOpen?: boolean;
 }
 
 /**
@@ -17,14 +18,15 @@ export interface TaskAgentSelectProps {
  * substituindo controles nativos do navegador em toda a UI de tarefas.
  */
 export const TaskAgentSelect: React.FC<TaskAgentSelectProps> = ({
-  agentes,
+  agentes = [],
   selectedAgentId,
   onSelectAgent,
   disabled = false,
   compact = false,
   ariaLabel = "Selecionar agente especialista",
+  defaultOpen = false,
 }) => {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [query, setQuery] = useState("");
   const [highlightedIdx, setHighlightedIdx] = useState(0);
   const containerRef = useRef<HTMLDivElement | null>(null);

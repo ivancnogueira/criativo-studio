@@ -1,10 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AgenteEspera,
   AgenteRegistro,
+  AgenteThreadBranch,
+  AgenteThreadRegistro,
   AnexoChat,
   AvatarShape,
   CanalEquipe,
+  FilaChatEntrega,
+  FilaChatSnapshot,
   MensagemChat,
+  MensagemFixada,
   NivelEsforco,
   PassoChat,
   ProvedorStatusInfo,
@@ -13,15 +19,24 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Copy,
+  CornerUpLeft,
   Download,
   FileText,
+  GitBranch,
   Image as ImageIcon,
   Loader2,
+  MessageCircleQuestion,
   Mic,
+  MoreHorizontal,
   PanelRight,
+  Pin,
+  PinOff,
   Plus,
+  RotateCcw,
   Send,
+  Square,
   Wrench,
   X,
 } from "lucide-react";
@@ -36,6 +51,12 @@ import {
 } from "../../components/ModelProviderPopover";
 import { ProviderLogo } from "../../components/ProviderLogo";
 import { AppBrandIcon } from "../../components/ui/CarbonControls";
+import { BranchDivider } from "./BranchDivider";
+import { OpenWaitsCard } from "./OpenWaitsCard";
+import { PinnedMessagesPopover } from "./PinnedMessagesPopover";
+import { QueuePanel } from "./QueuePanel";
+import { SideQuestionPanel } from "./SideQuestionPanel";
+import { ThreadTabsBar } from "./ThreadTabsBar";
 
 export interface McpSignInCardState {
   mcpId: string;
@@ -187,6 +208,43 @@ interface AgentConversationViewProps {
   onOpenStoreApp?: (appSlug: string) => void;
   onRetryMcpContinue?: (mcpId: string) => void;
   prefilledDraft?: string | null;
+  // Fase 13 — Threads, Branch, Esperas, Fila, Paginação, Pins, Reset & Pergunta Lateral
+  threads?: AgenteThreadRegistro[];
+  activeThread?: AgenteThreadRegistro | null;
+  onSelectThread?: (threadId: string | null) => void;
+  onCreateQuickThread?: () => void;
+  onDismissThreadTab?: (threadId: string) => void;
+  pagination?: {
+    has_older: boolean;
+    older_count?: number;
+    has_newer?: boolean;
+    loading_older?: boolean;
+  };
+  highlightedMessageId?: string | null;
+  onLoadOlderMessages?: () => Promise<void>;
+  onJumpToLatest?: () => Promise<void>;
+  onJumpToMessage?: (threadId: string, mensagemId: string) => Promise<void>;
+  onNavigateBranchOrigin?: (branch: AgenteThreadBranch) => Promise<void>;
+  esperas?: AgenteEspera[];
+  filaSnapshot?: FilaChatSnapshot | null;
+  editingQueueItem?: FilaChatEntrega | null;
+  onCloseWait?: (esperaId: string) => Promise<void>;
+  onBeginEditQueueItem?: (entrega: FilaChatEntrega) => Promise<void>;
+  onSaveEditQueueItem?: (entregaId: string, conteudo: string, anexos: AnexoChat[]) => Promise<void>;
+  onDiscardEditQueueItem?: (entregaId: string) => Promise<void>;
+  onCancelOrDeleteQueueItem?: (entregaId: string, deleteAfter?: boolean) => Promise<void>;
+  onReorderQueue?: (ids: string[]) => Promise<void>;
+  onSteerQueueItem?: (entregaId: string) => Promise<void>;
+  onMoveQueueItemToTask?: (entregaId: string) => Promise<void>;
+  onInterruptTurn?: () => Promise<void>;
+  pins?: MensagemFixada[];
+  onBranchFromMessage?: (mensagemId: string) => Promise<void>;
+  onTogglePinMessage?: (mensagem: MensagemChat, pinned: boolean) => Promise<void>;
+  onAskSideQuestion?: (
+    pergunta: string,
+    historico: Array<{ pergunta: string; resposta: string }>
+  ) => Promise<string>;
+  onStartNewChat?: () => Promise<void>;
 }
 
 const EFFORT_LABELS: Record<NivelEsforco, string> = {
@@ -486,6 +544,34 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
   onOpenStoreApp,
   onRetryMcpContinue,
   prefilledDraft,
+  threads = [],
+  activeThread = null,
+  onSelectThread,
+  onCreateQuickThread,
+  onDismissThreadTab,
+  pagination,
+  highlightedMessageId = null,
+  onLoadOlderMessages,
+  onJumpToLatest,
+  onJumpToMessage,
+  onNavigateBranchOrigin,
+  esperas = [],
+  filaSnapshot = null,
+  editingQueueItem = null,
+  onCloseWait,
+  onBeginEditQueueItem,
+  onSaveEditQueueItem,
+  onDiscardEditQueueItem,
+  onCancelOrDeleteQueueItem,
+  onReorderQueue,
+  onSteerQueueItem,
+  onMoveQueueItemToTask,
+  onInterruptTurn,
+  pins = [],
+  onBranchFromMessage,
+  onTogglePinMessage,
+  onAskSideQuestion,
+  onStartNewChat,
 }) => {
   const [draft, setDraft] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<AnexoChat[]>([]);
@@ -495,16 +581,34 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
       setDraft(prefilledDraft);
     }
   }, [prefilledDraft]);
+
+  useEffect(() => {
+    if (editingQueueItem) {
+      setDraft(editingQueueItem.conteudo_markdown);
+      setPendingAttachments(editingQueueItem.anexos ?? []);
+    }
+  }, [editingQueueItem]);
+
   const [uploading, setUploading] = useState(false);
   const [popoverOpen, setPopoverOpen] = useState(false);
+  const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+  const [sidePanelOpen, setSidePanelOpen] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [openMessageMenuId, setOpenMessageMenuId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
   const [listeningVoice, setListeningVoice] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const prevScrollHeightRef = useRef<number | null>(null);
 
-  const isWorking = Boolean(liveRun || sending);
+  const isWorking = Boolean(liveRun || sending || activeThread?.estado === "executando");
+  const currentThreadId =
+    activeThread?.thread_id ?? `main:${agente?.agente_id ?? "estrategista"}`;
+  const allowNewChat = (agente?.config as Record<string, unknown> | undefined)?.allow_new_chat !== false;
 
   useEffect(() => {
     if (!isWorking) {
@@ -519,8 +623,22 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
   }, [isWorking, liveRun?.startedAt]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [mensagens.length, liveRun?.steps.length, liveRun?.streamingText, isWorking]);
+    if (prevScrollHeightRef.current !== null && messagesScrollRef.current) {
+      const diff = messagesScrollRef.current.scrollHeight - prevScrollHeightRef.current;
+      messagesScrollRef.current.scrollTop += diff;
+      prevScrollHeightRef.current = null;
+      return;
+    }
+    if (!highlightedMessageId) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }, [mensagens.length, liveRun?.steps.length, liveRun?.streamingText, isWorking, highlightedMessageId]);
+
+  useEffect(() => {
+    if (!highlightedMessageId || typeof document === "undefined") return;
+    const el = document.getElementById(`msg-anchor-${highlightedMessageId}`);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [highlightedMessageId, mensagens.length]);
 
   const agentConfig = (agente?.config ?? {}) as Record<string, unknown>;
   const fallbackVisual = getDefaultMascotForAgent(agente?.agente_id ?? "estrategista");
@@ -580,8 +698,33 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
   };
 
   const handleSend = async () => {
-    if (sending || uploading) return;
+    if (uploading) return;
     if (!draft.trim() && pendingAttachments.length === 0) return;
+
+    if (editingQueueItem && onSaveEditQueueItem) {
+      setSavingEdit(true);
+      setEditError(null);
+      try {
+        await onSaveEditQueueItem(
+          editingQueueItem.entrega_id,
+          draft.trim(),
+          [...pendingAttachments]
+        );
+        setDraft("");
+        setPendingAttachments([]);
+      } catch (err) {
+        setEditError(
+          err instanceof Error
+            ? err.message
+            : "Não foi possível salvar a edição; seu texto foi mantido no rascunho."
+        );
+      } finally {
+        setSavingEdit(false);
+      }
+      return;
+    }
+
+    if (mode === "channel" && sending) return;
     const textToSend = draft.trim();
     const filesToSend = [...pendingAttachments];
     setDraft("");
@@ -626,62 +769,153 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
   };
 
   return (
-    <div className="flex-1 min-w-0 h-full bg-[#1A1A1A] flex flex-col overflow-hidden">
-      {/* Cabeçalho da conversa com botão central de Modelo + Esforço (Screenshot 5) */}
-      <div className="h-[48px] shrink-0 border-b border-white/[0.06] px-4 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5 min-w-0">
-          {mode === "channel" ? (
-            <ChannelMascoteCluster members={channelMembers} size={30} />
-          ) : (
-            <MascoteAvatar
-              shape={avatarShape}
-              color={avatarColor}
-              size={30}
-              mood={isWorking ? "working" : "idle"}
-              animated={isWorking}
-            />
-          )}
-          <div className="min-w-0">
-            <div className="text-[13.5px] font-semibold text-white truncate">{titleName}</div>
-            <div className="text-[11px] text-[#6A6A6A] truncate">
-              {mode === "channel"
-                ? `${canal?.membros_agentes.length ?? 0} agentes coordenados`
-                : agente?.papel}
+    <div className="flex-1 min-w-0 h-full bg-[#1A1A1A] flex overflow-hidden">
+      <div className="flex-1 min-w-0 h-full flex flex-col overflow-hidden">
+        {mode === "agent" && onSelectThread && onCreateQuickThread && (
+          <ThreadTabsBar
+            threads={threads}
+            activeThreadId={activeThread?.thread_id ?? null}
+            onSelectThread={onSelectThread}
+            onStartNewTaskTab={onCreateQuickThread}
+            onDismissThreadTab={onDismissThreadTab}
+          />
+        )}
+
+        {/* Cabeçalho da conversa com botão central de Modelo + Esforço (Screenshot 5) */}
+        <div className="h-[48px] shrink-0 border-b border-white/[0.06] px-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            {mode === "channel" ? (
+              <ChannelMascoteCluster members={channelMembers} size={30} />
+            ) : (
+              <MascoteAvatar
+                shape={avatarShape}
+                color={avatarColor}
+                size={30}
+                mood={isWorking ? "working" : "idle"}
+                animated={isWorking}
+              />
+            )}
+            <div className="min-w-0">
+              <div className="text-[13.5px] font-semibold text-white truncate">
+                {activeThread ? `${titleName} · ${activeThread.titulo}` : titleName}
+              </div>
+              <div className="text-[11px] text-[#6A6A6A] truncate">
+                {mode === "channel"
+                  ? `${canal?.membros_agentes.length ?? 0} agentes coordenados`
+                  : agente?.papel}
+              </div>
             </div>
+          </div>
+
+          {/* Botão central estilo '[Icon] Modelo · Esforço ⌄' */}
+          <button
+            type="button"
+            onClick={() => setPopoverOpen(true)}
+            aria-label="Trocar provedor, modelo e esforço"
+            className="inline-flex items-center gap-2 rounded-full bg-[#212121] hover:bg-[#2A2A2A] border border-white/10 px-3.5 py-1.5 text-[12px] font-medium text-white transition-colors shrink-0"
+          >
+            <ProviderLogo provider={currentProvider} size={14} />
+            <span className="max-w-[150px] truncate">{currentModel}</span>
+            <span className="text-[#6A6A6A]">·</span>
+            <span className="text-[#979797]">{EFFORT_LABELS[currentEffort]}</span>
+            <ChevronDown className="h-3.5 w-3.5 text-[#979797]" />
+          </button>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {mode === "agent" && onTogglePinMessage && onJumpToMessage && (
+              <PinnedMessagesPopover
+                pins={pins}
+                currentThreadId={currentThreadId}
+                onJumpToPin={async (pin) => {
+                  await onJumpToMessage(pin.thread_id, pin.mensagem_id);
+                }}
+                onUnpin={async (pin) => {
+                  await onTogglePinMessage(
+                    {
+                      mensagem_id: pin.mensagem_id,
+                      canal_id: pin.thread_id,
+                      agente_id: agente?.agente_id ?? null,
+                      autor: pin.autor,
+                      conteudo_markdown: pin.conteudo_resumo,
+                      anexos: [],
+                      steps: [],
+                      thread_id: pin.thread_id,
+                      lida: true,
+                      criado_em: pin.criado_em,
+                    },
+                    false
+                  );
+                }}
+              />
+            )}
+
+            {mode === "agent" && onAskSideQuestion && (
+              <button
+                type="button"
+                onClick={() => setSidePanelOpen((s) => !s)}
+                className={`inline-flex h-8 items-center gap-1 rounded-lg border px-2 text-[12px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7] ${
+                  sidePanelOpen
+                    ? "border-[#007CF7] bg-[#2A2A2A] text-white"
+                    : "border-white/[0.06] bg-[#212121] text-[#DCDCDC] hover:bg-[#242424] hover:text-white"
+                }`}
+              >
+                <MessageCircleQuestion className="h-3.5 w-3.5" />
+                <span>Perguntar ao lado</span>
+              </button>
+            )}
+
+            {mode === "agent" && !activeThread && allowNewChat && onStartNewChat && (
+              <button
+                type="button"
+                onClick={() => void onStartNewChat()}
+                className="inline-flex h-8 items-center gap-1 rounded-lg border border-white/[0.06] bg-[#212121] px-2 text-[12px] font-semibold text-[#DCDCDC] transition hover:bg-[#242424] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span>Reiniciar contexto</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={onToggleInspector}
+              title={inspectorOpen ? "Recolher painel direito" : "Abrir inspetor lateral"}
+              aria-label="Alternar inspetor lateral"
+              className={`h-8 w-8 rounded-lg flex items-center justify-center transition-colors ${
+                inspectorOpen
+                  ? "bg-[#2A2A2A] text-white"
+                  : "text-[#979797] hover:bg-[#212121] hover:text-white"
+              }`}
+            >
+              <PanelRight className="h-4 w-4" />
+            </button>
           </div>
         </div>
 
-        {/* Botão central estilo '[Icon] Modelo · Esforço ⌄' */}
-        <button
-          type="button"
-          onClick={() => setPopoverOpen(true)}
-          aria-label="Trocar provedor, modelo e esforço"
-          className="inline-flex items-center gap-2 rounded-full bg-[#212121] hover:bg-[#2A2A2A] border border-white/10 px-3.5 py-1.5 text-[12px] font-medium text-white transition-colors shrink-0"
+        {/* Área de mensagens rolável */}
+        <div
+          ref={messagesScrollRef}
+          className="relative flex-1 overflow-y-auto px-5 py-5 space-y-5"
         >
-          <ProviderLogo provider={currentProvider} size={14} />
-          <span className="max-w-[150px] truncate">{currentModel}</span>
-          <span className="text-[#6A6A6A]">·</span>
-          <span className="text-[#979797]">{EFFORT_LABELS[currentEffort]}</span>
-          <ChevronDown className="h-3.5 w-3.5 text-[#979797]" />
-        </button>
-
-        <button
-          type="button"
-          onClick={onToggleInspector}
-          title={inspectorOpen ? "Recolher painel direito" : "Abrir inspetor lateral"}
-          aria-label="Alternar inspetor lateral"
-          className={`h-8 w-8 rounded-lg flex items-center justify-center transition-colors ${
-            inspectorOpen
-              ? "bg-[#2A2A2A] text-white"
-              : "text-[#979797] hover:bg-[#212121] hover:text-white"
-          }`}
-        >
-          <PanelRight className="h-4 w-4" />
-        </button>
-      </div>
-
-      {/* Área de mensagens rolável */}
-      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
+          {pagination?.has_older && onLoadOlderMessages && (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                disabled={pagination.loading_older}
+                onClick={async () => {
+                  if (messagesScrollRef.current) {
+                    prevScrollHeightRef.current = messagesScrollRef.current.scrollHeight;
+                  }
+                  await onLoadOlderMessages();
+                }}
+                className="inline-flex items-center gap-1 rounded-full border border-white/[0.06] bg-[#212121] px-4 py-1 text-[12px] font-semibold text-[#DCDCDC] transition hover:bg-[#2A2A2A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
+              >
+                <ChevronUp className="h-3.5 w-3.5" />
+                <span>
+                  {pagination.loading_older ? "Carregando anteriores..." : "Carregar anteriores"}
+                </span>
+              </button>
+            </div>
+          )}
         {mensagens.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto">
             {mode === "channel" ? (
@@ -698,14 +932,38 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
           </div>
         ) : (
           mensagens.map((msg) => {
+            if (msg.item_type === "context_reset") {
+              return (
+                <div
+                  key={msg.mensagem_id}
+                  id={`msg-anchor-${msg.mensagem_id}`}
+                  className="my-4 flex items-center gap-4 max-w-[820px] mx-auto"
+                >
+                  <div className="h-px flex-1 bg-white/[0.06]" />
+                  <span className="rounded-full border border-white/[0.06] bg-[#212121] px-4 py-1 text-[12px] font-normal text-[#979797]">
+                    Novo chat iniciado — contexto do modelo reiniciado · histórico visual preservado
+                  </span>
+                  <div className="h-px flex-1 bg-white/[0.06]" />
+                </div>
+              );
+            }
+
             const isUser = msg.autor === "usuario";
             const blocks = splitMarkdownBlocks(msg.conteudo_markdown);
+            const isHighlighted = highlightedMessageId === msg.mensagem_id;
+            const isPinned = pins.some((p) => p.mensagem_id === msg.mensagem_id);
+            const isBranchCutoff =
+              Boolean(activeThread?.branch) &&
+              activeThread?.branch?.ate_mensagem_id === msg.mensagem_id;
 
             return (
-              <div
-                key={msg.mensagem_id}
-                className={`flex gap-3 max-w-[820px] ${isUser ? "ml-auto justify-end" : "mr-auto"}`}
-              >
+              <React.Fragment key={msg.mensagem_id}>
+                <div
+                  id={`msg-anchor-${msg.mensagem_id}`}
+                  className={`group relative flex gap-3 max-w-[820px] rounded-2xl p-1 transition ${
+                    isUser ? "ml-auto justify-end" : "mr-auto"
+                  } ${isHighlighted ? "ring-2 ring-[#007CF7] bg-[#007CF7]/10" : ""}`}
+                >
                 {!isUser && (
                   <div className="pt-1 shrink-0">
                     <MascoteAvatar shape={avatarShape} color={avatarColor} size={28} />
@@ -923,8 +1181,81 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                       })}
                     </div>
                   )}
+
+                  {mode === "agent" && msg.status !== "streaming" && (
+                    <div className="mt-2 flex items-center gap-2 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+                      {onBranchFromMessage && (
+                        <button
+                          type="button"
+                          onClick={() => void onBranchFromMessage(msg.mensagem_id)}
+                          className="inline-flex items-center gap-1 rounded-lg bg-[#212121] px-2 py-1 text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#2A2A2A] hover:text-white"
+                        >
+                          <GitBranch className="h-3 w-3" />
+                          <span>Ramificar conversa</span>
+                        </button>
+                      )}
+
+                      {onTogglePinMessage && (
+                        <button
+                          type="button"
+                          onClick={() => void onTogglePinMessage(msg, !isPinned)}
+                          className="inline-flex items-center gap-1 rounded-lg bg-[#212121] px-2 py-1 text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#2A2A2A] hover:text-white"
+                        >
+                          {isPinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
+                          <span>{isPinned ? "Desafixar mensagem" : "Fixar mensagem"}</span>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => void handleCopy(msg.mensagem_id, msg.conteudo_markdown)}
+                        className="inline-flex items-center gap-1 rounded-lg bg-[#212121] px-2 py-1 text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#2A2A2A] hover:text-white"
+                      >
+                        <Copy className="h-3 w-3" />
+                        <span>Copiar texto</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDraft((prev) =>
+                            `> ${msg.conteudo_markdown.slice(0, 120).replace(/\n/g, " ")}\n\n${prev}`
+                          )
+                        }
+                        className="inline-flex items-center gap-1 rounded-lg bg-[#212121] px-2 py-1 text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#2A2A2A] hover:text-white"
+                      >
+                        <CornerUpLeft className="h-3 w-3" />
+                        <span>Responder mensagem</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        aria-label="Mais ações"
+                        onClick={() =>
+                          setOpenMessageMenuId((cur) =>
+                            cur === msg.mensagem_id ? null : msg.mensagem_id
+                          )
+                        }
+                        className="rounded-lg bg-[#212121] p-1 text-[#979797] hover:text-white"
+                      >
+                        <MoreHorizontal className="h-3 w-3" />
+                      </button>
+                      {openMessageMenuId === msg.mensagem_id && (
+                        <span className="text-[12px] font-normal text-[#979797]">
+                          {isPinned ? "Fixada" : ""}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
+              {isBranchCutoff && activeThread?.branch && (
+                <BranchDivider
+                  branch={activeThread.branch}
+                  onNavigateToOrigin={onNavigateBranchOrigin}
+                />
+              )}
+              </React.Fragment>
             );
           })
         )}
@@ -1060,10 +1391,93 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
           </div>
         )}
         <div ref={messagesEndRef} />
+
+        {pagination?.has_newer && onJumpToLatest && (
+          <div className="sticky bottom-2 flex justify-center pointer-events-none">
+            <button
+              type="button"
+              onClick={() => void onJumpToLatest()}
+              className="pointer-events-auto inline-flex items-center gap-1 rounded-full border border-[#007CF7] bg-[#212121] px-4 py-1 text-[12px] font-semibold text-white shadow-lg hover:bg-[#2A2A2A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
+            >
+              <span>Voltar ao fim</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Composer arredondado #212121 (Screenshot 5) */}
       <div className="px-5 pb-4 pt-2 shrink-0">
+        <div className="max-w-[820px] mx-auto">
+          {mode === "agent" && onCloseWait && (
+            <OpenWaitsCard
+              esperas={esperas}
+              onViewOriginPedido={(w) => {
+                if (onJumpToMessage && w.entrega_origem_id) {
+                  void onJumpToMessage(currentThreadId, w.entrega_origem_id);
+                }
+              }}
+              onCloseWait={onCloseWait}
+            />
+          )}
+
+          {mode === "agent" &&
+            filaSnapshot &&
+            filaSnapshot.entregas.length > 0 &&
+            onBeginEditQueueItem &&
+            onCancelOrDeleteQueueItem &&
+            onReorderQueue &&
+            onSteerQueueItem &&
+            onMoveQueueItemToTask && (
+              <QueuePanel
+                entregas={filaSnapshot.entregas}
+                suportaSteerNativo={filaSnapshot.suporta_steer_nativo}
+                onBeginEdit={onBeginEditQueueItem}
+                onCancelOrDelete={onCancelOrDeleteQueueItem}
+                onReorder={onReorderQueue}
+                onSteer={onSteerQueueItem}
+                onMoveToTask={onMoveQueueItemToTask}
+              />
+            )}
+
+          {editingQueueItem && (
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#007CF7]/40 bg-[#242424] px-4 py-2">
+              <div className="min-w-0">
+                <div className="text-[12px] font-semibold text-[#42A0FF]">
+                  Editando mensagem na fila (travada contra consumo automático)
+                </div>
+                {editError && (
+                  <div className="text-[12px] font-normal text-[#FD2F3B]">{editError}</div>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {onDiscardEditQueueItem && (
+                  <button
+                    type="button"
+                    disabled={savingEdit}
+                    onClick={async () => {
+                      setEditError(null);
+                      await onDiscardEditQueueItem(editingQueueItem.entrega_id);
+                      setDraft("");
+                      setPendingAttachments([]);
+                    }}
+                    className="rounded-lg border border-white/[0.06] bg-[#141414] px-2 py-1 text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#2A2A2A]"
+                  >
+                    Descartar edição
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={savingEdit || !draft.trim()}
+                  onClick={() => void handleSend()}
+                  className="rounded-lg bg-[#F0F0F0] px-3 py-1 text-[12px] font-semibold text-[#141414] hover:bg-white disabled:opacity-40"
+                >
+                  {savingEdit ? "Aplicando edição..." : "Aplicar edição"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
         <div className="max-w-[820px] mx-auto rounded-[22px] bg-[#212121] border border-white/10 px-3 py-2 shadow-lg">
           {pendingAttachments.length > 0 && (
             <div className="flex flex-wrap gap-2 px-2 pb-2 mb-2 border-b border-white/[0.06]">
@@ -1112,16 +1526,51 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                 e.currentTarget.value = "";
               }}
             />
-            <button
-              type="button"
-              disabled={uploading}
-              onClick={() => fileInputRef.current?.click()}
-              title="Anexar foto, logo ou referência facial (ImagePaths)"
-              aria-label="Anexar referência ImagePaths"
-              className="h-9 w-9 rounded-full flex items-center justify-center text-[#979797] hover:text-white hover:bg-[#2A2A2A] transition-colors shrink-0"
-            >
-              <Plus className="h-4 w-4" />
-            </button>
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                disabled={uploading}
+                onClick={() => {
+                  if (mode === "agent" && onAskSideQuestion) {
+                    setPlusMenuOpen((prev) => !prev);
+                  } else {
+                    fileInputRef.current?.click();
+                  }
+                }}
+                title="Anexar foto, logo ou referência facial (ImagePaths)"
+                aria-label="Anexar referência ImagePaths"
+                className="h-9 w-9 rounded-full flex items-center justify-center text-[#979797] hover:text-white hover:bg-[#2A2A2A] transition-colors shrink-0"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+
+              {plusMenuOpen && (
+                <div className="absolute bottom-full left-0 z-40 mb-2 w-48 rounded-xl border border-white/[0.06] bg-[#141414] p-1 shadow-xl">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPlusMenuOpen(false);
+                      fileInputRef.current?.click();
+                    }}
+                    className="block w-full rounded-lg px-2 py-2 text-left text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#242424]"
+                  >
+                    Anexar arquivo
+                  </button>
+                  {onAskSideQuestion && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPlusMenuOpen(false);
+                        setSidePanelOpen(true);
+                      }}
+                      className="block w-full rounded-lg px-2 py-2 text-left text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#242424]"
+                    >
+                      Perguntar ao lado
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
 
             <textarea
               id="composer-message-input"
@@ -1156,9 +1605,25 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
               <Mic className="h-4 w-4" />
             </button>
 
+            {isWorking && onInterruptTurn && mode === "agent" && (
+              <button
+                type="button"
+                onClick={() => void onInterruptTurn()}
+                aria-label="Interromper turno"
+                className="inline-flex h-9 items-center gap-1 rounded-full border border-[#FD2F3B]/60 bg-[#FD2F3B]/15 px-3 text-[12px] font-semibold text-[#FD2F3B] transition hover:bg-[#FD2F3B]/25 shrink-0"
+              >
+                <Square className="h-3 w-3 fill-current" />
+                <span>Interromper turno</span>
+              </button>
+            )}
+
             <button
               type="button"
-              disabled={sending || uploading || (!draft.trim() && pendingAttachments.length === 0)}
+              disabled={
+                (mode === "channel" && sending) ||
+                uploading ||
+                (!draft.trim() && pendingAttachments.length === 0)
+              }
               onClick={() => void handleSend()}
               aria-label="Enviar mensagem"
               className="h-9 w-9 rounded-full bg-[#F0F0F0] hover:bg-white disabled:opacity-40 text-[#141414] flex items-center justify-center transition-colors shrink-0"
@@ -1169,17 +1634,29 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
         </div>
       </div>
 
-      <ModelProviderPopover
-        open={popoverOpen}
-        onClose={() => setPopoverOpen(false)}
-        provedores={provedores}
-        selectedModel={currentModel}
-        selectedEffort={currentEffort}
-        onSelectModelAndEffort={(m, eff) => {
-          void onUpdateModelAndEffort(m, eff);
-        }}
-        onOpenConnectors={onOpenConnectors}
-      />
+        <ModelProviderPopover
+          open={popoverOpen}
+          onClose={() => setPopoverOpen(false)}
+          provedores={provedores}
+          selectedModel={currentModel}
+          selectedEffort={currentEffort}
+          onSelectModelAndEffort={(m, eff) => {
+            void onUpdateModelAndEffort(m, eff);
+          }}
+          onOpenConnectors={onOpenConnectors}
+        />
+      </div>
+
+      {mode === "agent" && onAskSideQuestion && (
+        <SideQuestionPanel
+          open={sidePanelOpen}
+          agenteNome={titleName}
+          agenteAvatar={{ shape: avatarShape, color: avatarColor }}
+          threadId={activeThread?.thread_id ?? null}
+          onAsk={onAskSideQuestion}
+          onClose={() => setSidePanelOpen(false)}
+        />
+      )}
     </div>
   );
 };

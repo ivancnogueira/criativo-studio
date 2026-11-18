@@ -10,6 +10,7 @@ export interface QueuePanelProps {
   onReorder: (orderedIds: string[]) => Promise<void>;
   onSteer: (entregaId: string) => Promise<void>;
   onMoveToTask: (entregaId: string) => Promise<void>;
+  initialConfirmRemoveId?: string | null;
 }
 
 /**
@@ -24,9 +25,10 @@ export const QueuePanel: React.FC<QueuePanelProps> = ({
   onReorder,
   onSteer,
   onMoveToTask,
+  initialConfirmRemoveId = null,
 }) => {
   const [draggedId, setDraggedId] = useState<string | null>(null);
-  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(initialConfirmRemoveId);
   const [announcement, setAnnouncement] = useState("");
 
   const activeItems = entregas.filter(

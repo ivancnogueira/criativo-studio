@@ -656,7 +656,7 @@ export async function createDaemonServer(
   const drainChatLane = async (agenteId: string, threadId: string | null): Promise<void> => {
     const normalizedThread = threadId && !threadId.startsWith("main:") ? threadId : null;
     const laneKey = QueueControlsService.buildLaneKey(agenteId, normalizedThread);
-    if (activeLaneKeys.has(laneKey)) return;
+    if (activeLaneKeys.has(laneKey) || queueControls.hasActiveTurn(agenteId, normalizedThread)) return;
 
     const totalRunning = activeLaneKeys.size + activeFifoTaskIds.size;
     if (totalRunning >= MAX_CONCURRENT_LANE_TURNS) return;
