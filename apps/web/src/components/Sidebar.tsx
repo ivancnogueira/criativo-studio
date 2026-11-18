@@ -6,6 +6,7 @@ import type {
   StatusMensageria,
 } from "@criativo/contracts";
 import {
+  Bot,
   ChevronDown,
   ChevronRight,
   Plus,
@@ -13,6 +14,7 @@ import {
   Smartphone,
   Sparkles,
   Users,
+  Workflow,
 } from "lucide-react";
 import {
   ChannelMascoteCluster,
@@ -38,6 +40,9 @@ export interface SidebarProps {
   onCreateChannel?: () => void;
   whatsappStatus?: StatusMensageria;
   onOpenWhatsAppModal?: () => void;
+  viewMode?: "agents" | "routines";
+  onChangeViewMode?: (mode: "agents" | "routines") => void;
+  routineCountsByAgent?: Record<string, number>;
 }
 
 function getAgentVisual(ag: AgenteRegistro): { shape: AvatarShape; color: string } {
@@ -92,11 +97,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCreateChannel,
   whatsappStatus = "desconectado",
   onOpenWhatsAppModal,
+  viewMode,
+  onChangeViewMode,
+  routineCountsByAgent = {},
 }) => {
   const [search, setSearch] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [dismissWhatsAppCard, setDismissWhatsAppCard] = useState(false);
   const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({});
+  const [internalViewMode, setInternalViewMode] = useState<"agents" | "routines">("agents");
+  const effectiveMode = viewMode ?? internalViewMode;
+  const setMode = (nextMode: "agents" | "routines") => {
+    setInternalViewMode(nextMode);
+    onChangeViewMode?.(nextMode);
+  };
 
   const toggleFolder = (key: string) => {
     setCollapsedFolders((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -177,6 +191,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const selected = selectedAgentId === ag.agente_id && !selectedChannelId;
     const isWorking = ag.status === "trabalhando";
     const timeLabel = formatHour(ag.ultima_mensagem_em);
+    const routineCount = routineCountsByAgent[ag.agente_id] ?? 0;
+    const routineCountLabel =
+      routineCount === 1 ? "1 rotina" : `${routineCount} rotinas`;
     return (
       <button
         key={`${keyPrefix}${ag.agente_id}`}
@@ -211,14 +228,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <span className="text-[13.5px] font-medium text-white truncate">
               {ag.nome}
             </span>
-            {timeLabel && (
-              <span className="text-[11px] text-[#737378] tabular-nums shrink-0">
-                {timeLabel}
-              </span>
+            {effectiveMode === "routines" ? (
+              routineCount > 0 ? (
+                <span className="text-[11px] font-semibold text-[#42A0FF] bg-[#007CF7]/15 px-1.5 py-0.5 rounded-full tabular-nums shrink-0">
+                  {routineCount}
+                </span>
+              ) : null
+            ) : (
+              timeLabel && (
+                <span className="text-[11px] text-[#737378] tabular-nums shrink-0">
+                  {timeLabel}
+                </span>
+              )
             )}
           </div>
           <p className="text-[12px] text-[#8E8E93] truncate mt-0.5">
-            {stripMarkdownPreview(ag.ultima_mensagem) || ag.papel}
+            {effectiveMode === "routines"
+              ? routineCount > 0
+                ? routineCountLabel
+                : "Nenhuma rotina configurada"
+              : stripMarkdownPreview(ag.ultima_mensagem) || ag.papel}
           </p>
         </div>
       </button>
@@ -288,9 +317,47 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
+      {/* Switch Agentes | Rotinas */}
+      <div className="px-2.5 pb-2">
+        <div
+          role="tablist"
+          aria-label="Alternar entre agentes e rotinas"
+          className="p-1 rounded-xl bg-[#141414] border border-white/[0.06] grid grid-cols-2 gap-1"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={effectiveMode === "agents"}
+            onClick={() => setMode("agents")}
+            className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-[12px] font-semibold transition-colors border-b-2 ${
+              effectiveMode === "agents"
+                ? "bg-[#2A2A2A] text-[#F0F0F0] border-[#007CF7]"
+                : "text-[#979797] hover:text-white border-transparent"
+            }`}
+          >
+            <Bot className="h-3.5 w-3.5" />
+            <span>Agentes</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={effectiveMode === "routines"}
+            onClick={() => setMode("routines")}
+            className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-[12px] font-semibold transition-colors border-b-2 ${
+              effectiveMode === "routines"
+                ? "bg-[#2A2A2A] text-[#F0F0F0] border-[#007CF7]"
+                : "text-[#979797] hover:text-white border-transparent"
+            }`}
+          >
+            <Workflow className="h-3.5 w-3.5" />
+            <span>Rotinas</span>
+          </button>
+        </div>
+      </div>
+
       {/* Lista rolável por seções e pastas */}
       <div className="flex-1 overflow-y-auto px-2 pb-3 space-y-3">
-        {unreadAgents.length > 0 && (
+        {effectiveMode === "agents" && unreadAgents.length > 0 && (
           <div>
             <div className="px-2 pb-1 flex items-center justify-between text-[11px] font-medium text-[#7A7A80]">
               <span>Não lidas</span>
@@ -302,8 +369,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         )}
 
-        {/* Canais em Equipe (Multi-agente) */}
-        {filteredChannels.length > 0 && (
+        {/* Canais em Equipe (Multi-agente) — oculto em modo Rotinas */}
+        {effectiveMode === "agents" && filteredChannels.length > 0 && (
           <div>
             <button
               type="button"

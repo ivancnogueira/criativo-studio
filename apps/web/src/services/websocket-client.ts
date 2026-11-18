@@ -1,11 +1,13 @@
 import type {
   AgenteRegistro,
+  AgentRoutine,
   AnexoChat,
   ArquivoStudio,
   AvatarShape,
   CanalEquipe,
   ConectorIntegracaoInfo,
   ContaProvedorInfo,
+  EventFilter,
   GithubImportPreview,
   HabilidadeInstaladaInfo,
   IdentidadeMarcaStudio,
@@ -29,9 +31,22 @@ import type {
   ProvedorStatusInfo,
   ProviderName,
   RelatorioAnalyticsHost,
+  RoutineCalendar,
+  RoutineDestinationOption,
+  RoutineFlowCanvas,
+  RoutineFlowLink,
+  RoutineOwnerKind,
+  RoutineResultDelivery,
+  RoutineResultDestination,
+  RoutineRun,
+  RoutineWebhookConfig,
+  SaveAgentRoutineInput,
   StatusMensageria,
   TarefaRegistro,
+  UpdateAgentRoutineInput,
   UsoProvedoresSnapshot,
+  WebhookReceipt,
+  WebhookTestResult,
   WebSocketEnvelope,
   WebSocketEventMap,
   WhatsAppContaResumo,
@@ -1438,5 +1453,346 @@ export const daemonApi = {
       const json = (await res.json().catch(() => ({}))) as { erro?: string };
       throw new Error(json.erro ?? "Falha ao remover habilidade.");
     }
+  },
+
+  // --- Fase 11: Rotinas, Agenda, Webhooks & Fluxos de Rotinas ---
+
+  async listAllRoutines(): Promise<AgentRoutine[]> {
+    const res = await fetch("/api/rotinas?owner_kind=all");
+    const json = (await res.json()) as { rotinas?: AgentRoutine[]; erro?: string };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao listar rotinas.");
+    }
+    return json.rotinas ?? [];
+  },
+
+  async listOwnerRoutines(
+    ownerKind: RoutineOwnerKind,
+    ownerId: string
+  ): Promise<AgentRoutine[]> {
+    const base =
+      ownerKind === "canal"
+        ? `/api/canais/${encodeURIComponent(ownerId)}/rotinas`
+        : `/api/agentes/${encodeURIComponent(ownerId)}/rotinas`;
+    const res = await fetch(base);
+    const json = (await res.json()) as { rotinas?: AgentRoutine[]; erro?: string };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao listar rotinas do proprietário.");
+    }
+    return json.rotinas ?? [];
+  },
+
+  async saveRoutine(
+    input: SaveAgentRoutineInput | ({ rotina_id: string } & UpdateAgentRoutineInput)
+  ): Promise<{ rotina: AgentRoutine; secret: string | null }> {
+    const hasId = "rotina_id" in input && Boolean(input.rotina_id);
+    const endpoint = hasId
+      ? `/api/rotinas/gerenciar/${encodeURIComponent(input.rotina_id)}`
+      : "/api/rotinas/gerenciar";
+    const res = await fetch(endpoint, {
+      method: hasId ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const json = (await res.json()) as {
+      rotina?: AgentRoutine;
+      secret?: string | null;
+      erro?: string;
+    };
+    if (!res.ok || !json.rotina) {
+      throw new Error(json.erro ?? "Falha ao salvar rotina.");
+    }
+    return { rotina: json.rotina, secret: json.secret ?? null };
+  },
+
+  async deleteRoutine(rotinaId: string): Promise<void> {
+    const res = await fetch(`/api/rotinas/gerenciar/${encodeURIComponent(rotinaId)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const json = (await res.json().catch(() => ({}))) as { erro?: string };
+      throw new Error(json.erro ?? "Falha ao excluir rotina.");
+    }
+  },
+
+  async testRoutine(rotinaId: string, instrucao?: string): Promise<RoutineRun> {
+    const res = await fetch(`/api/rotinas/gerenciar/${encodeURIComponent(rotinaId)}/testar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(instrucao ? { instrucao } : {}),
+    });
+    const json = (await res.json()) as { execucao?: RoutineRun; erro?: string };
+    if (!res.ok || !json.execucao) {
+      throw new Error(json.erro ?? "Falha ao disparar teste da rotina.");
+    }
+    return json.execucao;
+  },
+
+  async stopRoutineRun(rotinaId: string, execucaoId: string): Promise<void> {
+    const res = await fetch(
+      `/api/rotinas/gerenciar/${encodeURIComponent(rotinaId)}/execucoes/${encodeURIComponent(execucaoId)}/parar`,
+      { method: "POST" }
+    );
+    if (!res.ok) {
+      const json = (await res.json().catch(() => ({}))) as { erro?: string };
+      throw new Error(json.erro ?? "Falha ao interromper execução.");
+    }
+  },
+
+  async listRoutineRuns(
+    rotinaId: string,
+    options?: { limit?: number; withSkipped?: boolean }
+  ): Promise<RoutineRun[]> {
+    const qs = new URLSearchParams();
+    if (options?.limit) qs.set("limit", String(options.limit));
+    if (options?.withSkipped) qs.set("with_skipped", "true");
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    const res = await fetch(
+      `/api/rotinas/gerenciar/${encodeURIComponent(rotinaId)}/execucoes${suffix}`
+    );
+    const json = (await res.json()) as { execucoes?: RoutineRun[]; erro?: string };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao listar execuções da rotina.");
+    }
+    return json.execucoes ?? [];
+  },
+
+  async listRoutineDestinationOptions(): Promise<RoutineDestinationOption[]> {
+    const res = await fetch("/api/rotinas/destinos-opcoes");
+    const json = (await res.json()) as { opcoes?: RoutineDestinationOption[]; erro?: string };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao carregar opções de entrega.");
+    }
+    return json.opcoes ?? [];
+  },
+
+  async updateRoutineDestination(
+    rotinaId: string,
+    destino: RoutineResultDestination
+  ): Promise<AgentRoutine> {
+    const res = await fetch(`/api/rotinas/gerenciar/${encodeURIComponent(rotinaId)}/destino`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ destino }),
+    });
+    const json = (await res.json()) as { rotina?: AgentRoutine; erro?: string };
+    if (!res.ok || !json.rotina) {
+      throw new Error(json.erro ?? "Falha ao atualizar destino da rotina.");
+    }
+    return json.rotina;
+  },
+
+  async listRoutineDeliveries(rotinaId: string): Promise<RoutineResultDelivery[]> {
+    const res = await fetch(`/api/rotinas/gerenciar/${encodeURIComponent(rotinaId)}/entregas`);
+    const json = (await res.json()) as { entregas?: RoutineResultDelivery[]; erro?: string };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao listar entregas.");
+    }
+    return json.entregas ?? [];
+  },
+
+  async resendRoutineDelivery(
+    rotinaId: string,
+    execucaoId: string
+  ): Promise<RoutineResultDelivery | null> {
+    const res = await fetch(
+      `/api/rotinas/gerenciar/${encodeURIComponent(rotinaId)}/entregas/${encodeURIComponent(execucaoId)}/reenviar`,
+      { method: "POST" }
+    );
+    const json = (await res.json()) as { entrega?: RoutineResultDelivery | null; erro?: string };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao reenviar entrega.");
+    }
+    return json.entrega ?? null;
+  },
+
+  async rotateWebhookSecret(
+    rotinaId: string
+  ): Promise<{ secret: string; webhook: RoutineWebhookConfig; rotina?: AgentRoutine | null }> {
+    const res = await fetch(
+      `/api/rotinas/gerenciar/${encodeURIComponent(rotinaId)}/webhook/rotacionar-segredo`,
+      { method: "POST" }
+    );
+    const json = (await res.json()) as {
+      secret?: string;
+      webhook?: RoutineWebhookConfig;
+      rotina?: AgentRoutine | null;
+      erro?: string;
+    };
+    if (!res.ok || !json.secret || !json.webhook) {
+      throw new Error(json.erro ?? "Falha ao rotacionar segredo do webhook.");
+    }
+    return { secret: json.secret, webhook: json.webhook, rotina: json.rotina ?? null };
+  },
+
+  async setCustomWebhookSecret(
+    rotinaId: string,
+    secret: string
+  ): Promise<{ webhook: RoutineWebhookConfig; rotina?: AgentRoutine | null }> {
+    const res = await fetch(
+      `/api/rotinas/gerenciar/${encodeURIComponent(rotinaId)}/webhook/segredo`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ secret }),
+      }
+    );
+    const json = (await res.json()) as {
+      webhook?: RoutineWebhookConfig;
+      rotina?: AgentRoutine | null;
+      erro?: string;
+    };
+    if (!res.ok || !json.webhook) {
+      throw new Error(json.erro ?? "Falha ao aplicar segredo externo.");
+    }
+    return { webhook: json.webhook, rotina: json.rotina ?? null };
+  },
+
+  async testWebhookRoutine(
+    rotinaId: string,
+    payload?: { type?: string; data?: unknown }
+  ): Promise<WebhookTestResult> {
+    const res = await fetch(
+      `/api/rotinas/gerenciar/${encodeURIComponent(rotinaId)}/webhook/testar`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload ?? {}),
+      }
+    );
+    const json = (await res.json()) as { resultado?: WebhookTestResult; erro?: string };
+    if (!res.ok || !json.resultado) {
+      throw new Error(json.erro ?? "Falha ao testar webhook.");
+    }
+    return json.resultado;
+  },
+
+  async listWebhookReceipts(rotinaId: string): Promise<WebhookReceipt[]> {
+    const res = await fetch(
+      `/api/rotinas/gerenciar/${encodeURIComponent(rotinaId)}/webhook/recibos`
+    );
+    const json = (await res.json()) as { recibos?: WebhookReceipt[]; erro?: string };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao carregar recibos do webhook.");
+    }
+    return json.recibos ?? [];
+  },
+
+  async getAgenda(fromIso: string, toIso: string): Promise<RoutineCalendar> {
+    const qs = new URLSearchParams({ from: fromIso, to: toIso });
+    const res = await fetch(`/api/agenda?${qs.toString()}`);
+    const json = (await res.json()) as RoutineCalendar & { erro?: string };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao carregar agenda de rotinas.");
+    }
+    return {
+      rotinas: json.rotinas ?? [],
+      execucoes: json.execucoes ?? [],
+    };
+  },
+
+  async getRoutineFlowCanvas(agenteId: string): Promise<RoutineFlowCanvas> {
+    const res = await fetch(`/api/fluxos-rotinas/${encodeURIComponent(agenteId)}`);
+    const json = (await res.json()) as { canvas?: RoutineFlowCanvas; erro?: string };
+    if (!res.ok || !json.canvas) {
+      throw new Error(json.erro ?? "Falha ao carregar canvas de fluxos de rotinas.");
+    }
+    return json.canvas;
+  },
+
+  async saveRoutineFlowPosition(
+    agenteId: string,
+    nodeKey: string,
+    x: number,
+    y: number
+  ): Promise<void> {
+    const res = await fetch(
+      `/api/fluxos-rotinas/${encodeURIComponent(agenteId)}/posicoes/${encodeURIComponent(nodeKey)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ x, y }),
+      }
+    );
+    if (!res.ok) {
+      const json = (await res.json().catch(() => ({}))) as { erro?: string };
+      throw new Error(json.erro ?? "Falha ao salvar posição do nó.");
+    }
+  },
+
+  async deleteRoutineFlowPosition(agenteId: string, nodeKey: string): Promise<void> {
+    const res = await fetch(
+      `/api/fluxos-rotinas/${encodeURIComponent(agenteId)}/posicoes/${encodeURIComponent(nodeKey)}`,
+      { method: "DELETE" }
+    );
+    if (!res.ok) {
+      const json = (await res.json().catch(() => ({}))) as { erro?: string };
+      throw new Error(json.erro ?? "Falha ao remover nó do fluxo.");
+    }
+  },
+
+  async createRoutineFlowLink(input: {
+    rotina_id: string;
+    owner_id: string;
+    from_agent_id: string;
+    to_agent_id: string;
+    instrucao?: string;
+  }): Promise<RoutineFlowLink> {
+    const res = await fetch("/api/fluxos-rotinas/links", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const json = (await res.json()) as { link?: RoutineFlowLink; erro?: string };
+    if (!res.ok || !json.link) {
+      throw new Error(json.erro ?? "Falha ao conectar agentes no fluxo.");
+    }
+    return json.link;
+  },
+
+  async updateRoutineFlowLink(linkId: string, instrucao: string): Promise<RoutineFlowLink> {
+    const res = await fetch(`/api/fluxos-rotinas/links/${encodeURIComponent(linkId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instrucao }),
+    });
+    const json = (await res.json()) as { link?: RoutineFlowLink; erro?: string };
+    if (!res.ok || !json.link) {
+      throw new Error(json.erro ?? "Falha ao atualizar instrução da conexão.");
+    }
+    return json.link;
+  },
+
+  async deleteRoutineFlowLink(linkId: string, ownerId: string): Promise<{ deletedLinkIds: string[] }> {
+    const res = await fetch(
+      `/api/fluxos-rotinas/links/${encodeURIComponent(linkId)}?owner_id=${encodeURIComponent(ownerId)}`,
+      { method: "DELETE" }
+    );
+    const json = (await res.json()) as { deletedLinkIds?: string[]; erro?: string };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao remover conexão do fluxo.");
+    }
+    return { deletedLinkIds: json.deletedLinkIds ?? [linkId] };
+  },
+
+  async stopRoutineFlowRun(execucaoId: string): Promise<void> {
+    const res = await fetch(`/api/fluxos-rotinas/runs/${encodeURIComponent(execucaoId)}/parar`, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      const json = (await res.json().catch(() => ({}))) as { erro?: string };
+      throw new Error(json.erro ?? "Falha ao parar execução do fluxo.");
+    }
+  },
+
+  async listRoutineThreadMessages(agenteId: string, rotinaId: string): Promise<MensagemChat[]> {
+    const res = await fetch(
+      `/api/agentes/${encodeURIComponent(agenteId)}/rotinas/${encodeURIComponent(rotinaId)}/mensagens`
+    );
+    const json = (await res.json()) as { mensagens?: MensagemChat[]; erro?: string };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao carregar conversa da rotina.");
+    }
+    return json.mensagens ?? [];
   },
 };

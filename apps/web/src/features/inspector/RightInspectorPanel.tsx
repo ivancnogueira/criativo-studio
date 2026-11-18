@@ -3,6 +3,7 @@ import type {
   AgenteRegistro,
   ArquivoStudio,
   AvatarShape,
+  CanalEquipe,
   NivelEsforco,
   TarefaRegistro,
 } from "@criativo/contracts";
@@ -10,6 +11,7 @@ import {
   ArrowLeft,
   AudioLines,
   Brain,
+  CalendarClock,
   FolderOpen,
   Settings,
   Smartphone,
@@ -19,15 +21,25 @@ import {
 import { MascoteAppearancePicker } from "../../components/MascoteAvatar";
 import { ApprovalBridge } from "../preview/ApprovalBridge";
 import { InstagramMobilePreview } from "../preview/InstagramMobilePreview";
+import { AgentRoutinesSettings } from "../routines/AgentRoutinesSettings";
 
 interface RightInspectorPanelProps {
   open: boolean;
   agente: AgenteRegistro | null;
   arquivos: ArquivoStudio[];
+  canais?: CanalEquipe[];
+  routineCount?: number;
+  routineFocusSignal?: {
+    subView?: "routines";
+    rotinaId?: string | null;
+    nonce: number;
+  } | null;
   previewTarefa: TarefaRegistro | null;
   onClose: () => void;
   onOpenFilesPage: () => void;
   onOpenWhatsAppModal: () => void;
+  onOpenRoutineThread?: (canalId: string) => void;
+  onRoutinesChanged?: () => void;
   onSaveAgentSettings: (
     agenteId: string,
     patch: {
@@ -56,10 +68,15 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   open,
   agente,
   arquivos,
+  canais = [],
+  routineCount = 0,
+  routineFocusSignal = null,
   previewTarefa,
   onClose,
   onOpenFilesPage,
   onOpenWhatsAppModal,
+  onOpenRoutineThread,
+  onRoutinesChanged,
   onSaveAgentSettings,
   onRestoreAgentDefaults,
   onAddMemory,
@@ -67,7 +84,9 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   onApproveTask,
   onRequestRevision,
 }) => {
-  const [subView, setSubView] = useState<"hub" | "config" | "preview" | "files">("hub");
+  const [subView, setSubView] = useState<"hub" | "config" | "preview" | "files" | "routines">(
+    routineFocusSignal?.subView === "routines" ? "routines" : "hub"
+  );
   const [nomeDraft, setNomeDraft] = useState(agente?.nome ?? "");
   const [promptDraft, setPromptDraft] = useState("");
   const [shapeDraft, setShapeDraft] = useState<AvatarShape>("blob");
@@ -77,6 +96,12 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   const [memories, setMemories] = useState<
     Array<{ memoria_id: string; texto: string; criado_em: string }>
   >([]);
+
+  useEffect(() => {
+    if (routineFocusSignal?.subView === "routines") {
+      setSubView("routines");
+    }
+  }, [routineFocusSignal?.nonce, routineFocusSignal?.subView]);
 
   useEffect(() => {
     if (!agente) return;
@@ -129,9 +154,11 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
       ? `Arquivos (${arquivos.length})`
       : subView === "config"
         ? "Configurações do agente"
-        : subView === "preview"
-          ? "Preview Instagram"
-          : "";
+        : subView === "routines"
+          ? "Rotinas do agente"
+          : subView === "preview"
+            ? "Preview Instagram"
+            : "";
 
   return (
     <aside
@@ -185,6 +212,18 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
               >
                 <Settings className="h-4 w-4 text-[#979797]" />
                 <span>Abrir Configurações do agente</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={!agente}
+                onClick={() => setSubView("routines")}
+                className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors disabled:opacity-40"
+              >
+                <CalendarClock className="h-4 w-4 text-[#42A0FF]" />
+                <span>
+                  {routineCount > 0 ? `Gerenciar rotinas (${routineCount})` : "Gerenciar rotinas"}
+                </span>
               </button>
 
               <button
@@ -299,6 +338,19 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
               </div>
             )}
           </div>
+        )}
+
+        {subView === "routines" && agente && (
+          <AgentRoutinesSettings
+            ownerKind="agente"
+            ownerId={agente.agente_id}
+            ownerName={agente.nome}
+            canais={canais}
+            initialSelectedRoutineId={routineFocusSignal?.rotinaId ?? null}
+            onBackToHub={() => setSubView("hub")}
+            onOpenThreadOrChat={onOpenRoutineThread}
+            onRoutinesChanged={onRoutinesChanged}
+          />
         )}
 
         {subView === "config" && agente && (

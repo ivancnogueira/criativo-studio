@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import {
   Activity,
   Bot,
+  CalendarClock,
   FolderOpen,
   GitBranch,
   HelpCircle,
@@ -26,6 +27,7 @@ export type StudioNavSection =
   | "agentes"
   | "fluxos"
   | "tarefas"
+  | "agenda"
   | "uso"
   | "arquivos"
   | "loja"
@@ -52,6 +54,7 @@ const RAIL_ITEMS: Array<{
   { id: "agentes", label: "Agentes e Chats", Icon: Bot },
   { id: "fluxos", label: "Fluxos de Trabalho", Icon: GitBranch },
   { id: "tarefas", label: "Fila e Tarefas", Icon: WalletCards },
+  { id: "agenda", label: "Agenda", Icon: CalendarClock },
   { id: "uso", label: "Uso e Cotas", Icon: Activity },
   { id: "arquivos", label: "Arquivos e ImagePaths", Icon: FolderOpen },
   { id: "loja", label: "Loja de Apps, Agentes e Habilidades", Icon: Store },
