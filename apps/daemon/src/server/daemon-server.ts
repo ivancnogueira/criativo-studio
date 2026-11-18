@@ -33,7 +33,7 @@ import { ControlSocketServer } from "./control-socket.ts";
 import { importOpenBotTelemetryIfAvailable } from "./analytics-skills-service.ts";
 import { tryHandleStudioRoute } from "./studio-routes.ts";
 import { WebSocketHub } from "./websocket-hub.ts";
-import type { WhatsAppStudioClient } from "@criativo/whatsapp";
+import type { WaVersionFetcher, WhatsAppStudioClient } from "@criativo/whatsapp";
 
 export interface TaskExecutorHook {
   execute(tarefa: TarefaRegistro): Promise<void>;
@@ -55,6 +55,7 @@ export interface DaemonServerOptions {
   onApproveAndPublishHook?: (tarefa: TarefaRegistro) => Promise<{ permalink?: string }>;
   taskExecutor?: TaskExecutorHook;
   whatsappSocketFactory?: SocketFactory;
+  whatsappVersionFetcher?: WaVersionFetcher;
 }
 
 export interface DaemonRuntime {
@@ -217,6 +218,7 @@ export async function createDaemonServer(
   const whatsappManager = new WhatsAppSessionManager({
     db: db.connection,
     socketFactory: options.whatsappSocketFactory,
+    versionFetcher: options.whatsappVersionFetcher,
     onStatusChange: (contaId, snapshot) => {
       wsHub.broadcast("whatsapp.conta_atualizada", {
         conta_id: contaId,

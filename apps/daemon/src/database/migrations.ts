@@ -54,6 +54,7 @@ export function ensureColumn(
 }
 
 function ensureLegacyMessagingColumns(connection: DatabaseSync): void {
+  ensureColumn(connection, "projecao_conexoes_mensageria", "qrcode_base64", "TEXT");
   ensureColumn(connection, "projecao_conexoes_mensageria", "numero_telefone", "TEXT");
   ensureColumn(connection, "projecao_conexoes_mensageria", "rotulo", "TEXT");
   ensureColumn(
