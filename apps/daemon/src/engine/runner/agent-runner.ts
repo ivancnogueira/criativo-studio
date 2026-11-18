@@ -14,12 +14,16 @@ import type { FifoQueueManager } from "../../queue/fifo-queue.ts";
 import {
   buildPhase13SystemGuidance,
   executePhase13Tool,
+  executePhase14ToolCall,
   executeStudioExtensionTool,
   isPhase10ExtensionTool,
   isPhase13ToolName,
+  isPhase14ToolName,
   PHASE10_TOOL_DEFINITIONS,
   PHASE13_TOOLS_SCHEMA,
+  PHASE14_TOOLS_SCHEMA,
   type Phase13ToolServices,
+  type Phase14ToolServices,
 } from "../../server/studio-tools-bridge.ts";
 import {
   executeRoutineToolCall,
@@ -43,7 +47,12 @@ import { metaPublishTool, type MetaPublishParams } from "../tools/meta-publish.t
 import { executeRemotionRender, type RemotionRenderParams } from "../tools/remotion-bridge.ts";
 import { processImageMarginsAndCrop, type TargetAspect } from "../tools/sharp-pipeline.ts";
 import { HandoffBus } from "./handoff-bus.ts";
+import { HistorySearchService } from "./history-search-service.ts";
+import { LibraryFoldersService } from "./library-folders-service.ts";
 import { MemoryManager } from "./memory-manager.ts";
+import { ChatVisualPreviewService } from "./chat-visual-preview-service.ts";
+import { UiBlockRegistry } from "./ui-block-registry.ts";
+import { ApiKeysBridge } from "../../vault/api-keys-bridge.ts";
 import { seedDefaultAgents } from "./roster-defaults.ts";
 import { SkillLoader } from "./skill-loader.ts";
 
@@ -79,6 +88,9 @@ export interface AgentRunnerOptions {
   workflowToolExecutor?: WorkflowToolExecutor;
   includeWorkflowTools?: boolean;
   phase13Services?: Phase13ToolServices;
+  memoryManager?: MemoryManager;
+  handoffBus?: HandoffBus;
+  phase14Services?: Phase14ToolServices;
 }
 
 export interface AgentRunRuntimeContext {
@@ -229,6 +241,7 @@ export class AgentRunner {
   private workflowToolExecutor?: WorkflowToolExecutor;
   private readonly includeWorkflowTools: boolean;
   private phase13Services?: Phase13ToolServices;
+  private phase14Services: Phase14ToolServices;
 
   constructor(options: AgentRunnerOptions) {
     this.db = options.db;
@@ -238,8 +251,8 @@ export class AgentRunner {
     this.providerConnection = options.providerConnection;
     this.wsHub = options.wsHub;
     this.skillLoader = options.skillLoader ?? new SkillLoader([], options.workspaceRoot);
-    this.memoryManager = new MemoryManager(options.db);
-    this.handoffBus = new HandoffBus(options.db, options.queue);
+    this.memoryManager = options.memoryManager ?? new MemoryManager(options.db);
+    this.handoffBus = options.handoffBus ?? new HandoffBus(options.db, options.queue, options.wsHub);
     this.browserService = new BrowserAutomationService(options.db);
     this.mcpClients = options.mcpClients ?? [];
     this.mcpGateway = options.mcpGateway;
@@ -255,11 +268,44 @@ export class AgentRunner {
     this.includeWorkflowTools = options.includeWorkflowTools ?? true;
     this.phase13Services = options.phase13Services;
 
+    const defaultApiKeysBridge =
+      options.phase14Services?.apiKeysBridge ?? new ApiKeysBridge(this.vault);
+    const effectiveWorkspaceRoot = options.workspaceRoot ?? process.cwd();
+    this.phase14Services = options.phase14Services ?? {
+      db: this.db,
+      wsHub: this.wsHub,
+      memoryManager: this.memoryManager,
+      handoffBus: this.handoffBus,
+      apiKeysBridge: defaultApiKeysBridge,
+      historySearch: new HistorySearchService({
+        db: this.db,
+        redactSecrets: (t) => defaultApiKeysBridge.redactSecretValues(t),
+      }),
+      libraryFolders: new LibraryFoldersService({
+        db: this.db,
+        workspaceRoot: effectiveWorkspaceRoot,
+        wsHub: this.wsHub,
+      }),
+      visualPreview: new ChatVisualPreviewService({
+        db: this.db,
+        workspaceRoot: effectiveWorkspaceRoot,
+      }),
+      uiBlockRegistry: new UiBlockRegistry({
+        db: this.db,
+        wsHub: this.wsHub,
+        apiKeysBridge: defaultApiKeysBridge,
+      }),
+    };
+
     seedDefaultAgents(this.db);
   }
 
   public setPhase13Services(services: Phase13ToolServices): void {
     this.phase13Services = services;
+  }
+
+  public setPhase14Services(services: Phase14ToolServices): void {
+    this.phase14Services = services;
   }
 
   public setRoutineToolsDeps(deps: RoutineToolsDeps): void {
@@ -316,6 +362,45 @@ export class AgentRunner {
       wokenWaitsBlock?: string | null;
     }
   ): Promise<unknown> {
+    if (isPhase14ToolName(call.name)) {
+      const payloadRec = (context.tarefa.payload ?? {}) as Record<string, unknown>;
+      const resolvedThread =
+        context.runtimeContext?.threadId ??
+        context.tarefa.thread_id ??
+        (typeof payloadRec.thread_id === "string" ? payloadRec.thread_id : null);
+      const canalId =
+        resolvedThread && !resolvedThread.startsWith("main:")
+          ? `thread:${resolvedThread}`
+          : `agente:${context.agenteId}`;
+      const origemTurno =
+        context.routineCtx?.turnOrigin === "webhook"
+          ? "webhook"
+          : context.routineCtx?.turnOrigin === "routine" ||
+              context.routineCtx?.turnOrigin === "flow"
+            ? "rotina"
+            : payloadRec.inter_agent_origin
+              ? "inter_agente"
+              : "usuario_local";
+      const hopDepth =
+        typeof payloadRec.hop_depth === "number" ? payloadRec.hop_depth : 0;
+
+      return await executePhase14ToolCall(
+        call.name,
+        call.arguments,
+        {
+          agenteId: context.agenteId,
+          canalId,
+          threadId: resolvedThread ?? `main:${context.agenteId}`,
+          tarefaId: context.tarefa.tarefa_id,
+          turnId: context.tarefa.tarefa_id,
+          origemTurno,
+          isOneToOneUserChat: canalId === `agente:${context.agenteId}` && origemTurno === "usuario_local",
+          hopDepth,
+          generatedArtifacts: context.generatedArtifacts,
+        },
+        this.phase14Services,
+      );
+    }
     if (isPhase13ToolName(call.name) && this.phase13Services) {
       const payloadRec = (context.tarefa.payload ?? {}) as Record<string, unknown>;
       const pedidoTexto =
@@ -570,7 +655,13 @@ export class AgentRunner {
     let stepIndex = 0;
 
     try {
-      const memories = this.memoryManager.listMemories(agenteId, 10).map((m) => m.texto);
+      const essentialSnap = this.memoryManager.getEssentialContextSnapshot(agenteId);
+      const memories =
+        essentialSnap.memorias.length > 0
+          ? essentialSnap.memorias.map((m) =>
+              m.escopo_site ? `[site:${m.escopo_site}] ${m.texto}` : m.texto,
+            )
+          : this.memoryManager.listMemories(agenteId, 10).map((m) => m.texto);
       const linkedSkills = this.skillLoader.loadLinkedAgentSkills(this.db, agenteId);
       const compiledSkill = this.skillLoader.loadAgentSkill(agenteId, {
         db: this.db,
@@ -582,9 +673,12 @@ export class AgentRunner {
               .map((s) => `## Habilidade Vinculada: ${s.name} (${s.slug})\n${s.body}`)
               .join("\n\n")}`
           : compiledSkill.systemPrompt;
-      const systemPrompt = this.phase13Services || wokenWaitsBlock
-        ? `${baseCompiledPrompt}\n\n${buildPhase13SystemGuidance({ allowStartTask: !effectiveThreadId || Boolean(payloadRec.rotina_execucao_id), wokenWaitsBlock })}`
+      const baseWithMemories = essentialSnap.contextBlock
+        ? `${baseCompiledPrompt}\n\n${essentialSnap.contextBlock}`
         : baseCompiledPrompt;
+      const systemPrompt = this.phase13Services || wokenWaitsBlock
+        ? `${baseWithMemories}\n\n${buildPhase13SystemGuidance({ allowStartTask: !effectiveThreadId || Boolean(payloadRec.rotina_execucao_id), wokenWaitsBlock })}`
+        : baseWithMemories;
       const model = this.getAgentModel(agenteId);
       let client: ReturnType<ProviderRegistry["getClientForModel"]> | null = null;
       try {
@@ -600,6 +694,7 @@ export class AgentRunner {
         ...NATIVE_TOOLS_SCHEMA,
         ...PHASE10_TOOL_DEFINITIONS,
         ...PHASE13_TOOLS_SCHEMA,
+        ...PHASE14_TOOLS_SCHEMA,
         ...ROUTINE_AGENT_TOOLS_SCHEMA,
         ...(this.includeWorkflowTools ? WORKFLOW_TOOL_DEFINITIONS : []),
         ...legacyMcpTools,
@@ -798,11 +893,17 @@ export class AgentRunner {
         });
       }
 
+      this.memoryManager.commitTurnMutations(tarefa.tarefa_id, "completed");
       this.memoryManager.addMemory(
         agenteId,
         `Tarefa '${tarefa.titulo}' (${tarefa.tipo}) concluída com ${generatedArtifacts.length} artefatos.`,
         "automatica"
       );
+      this.phase14Services.memoryReview?.recordCompletedTurn({
+        agenteId,
+        threadId: effectiveThreadId,
+        lastMessageId: tarefa.tarefa_id,
+      });
 
       if (
         (!effectiveThreadId || effectiveThreadId.startsWith("main:")) &&
@@ -825,6 +926,7 @@ export class AgentRunner {
         failureReason,
       };
     } catch (err) {
+      this.memoryManager.commitTurnMutations(tarefa.tarefa_id, "failed");
       const errMsg = err instanceof Error ? err.message : String(err);
       if (rotinaExecucaoId && !flowStepId && this.routineToolsDeps) {
         await this.routineToolsDeps.executionService

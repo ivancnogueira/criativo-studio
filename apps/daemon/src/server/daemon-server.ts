@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { StatusTarefa, TarefaRegistro } from "@criativo/contracts";
@@ -57,6 +58,17 @@ import { QueueControlsService } from "../queue/queue-controls-service.ts";
 import { SideQuestionService } from "../chat/side-question-service.ts";
 import { ContextResetService } from "../chat/context-reset-service.ts";
 import { MessagePinsService } from "../chat/message-pins-service.ts";
+import { SharedTablesService } from "../agent-data/shared-tables-service.ts";
+import { MemoryManager } from "../engine/runner/memory-manager.ts";
+import { MemoryReviewService } from "../engine/runner/memory-review-service.ts";
+import { SkillLearningService } from "../engine/runner/skill-learning-service.ts";
+import { HistorySearchService } from "../engine/runner/history-search-service.ts";
+import { LibraryFoldersService } from "../engine/runner/library-folders-service.ts";
+import { HandoffBus } from "../engine/runner/handoff-bus.ts";
+import { ChatVisualPreviewService } from "../engine/runner/chat-visual-preview-service.ts";
+import { UiBlockRegistry } from "../engine/runner/ui-block-registry.ts";
+import { ApiKeysBridge } from "../vault/api-keys-bridge.ts";
+import type { Phase14ToolServices } from "./studio-tools-bridge.ts";
 import type { WaVersionFetcher, WhatsAppStudioClient } from "@criativo/whatsapp";
 
 export interface TaskExecutorHook {
@@ -117,6 +129,16 @@ export interface DaemonRuntime {
   queueControls: QueueControlsService;
   pinsService: MessagePinsService;
   contextReset: ContextResetService;
+  sharedTables: SharedTablesService;
+  memoryManager: MemoryManager;
+  memoryReview: MemoryReviewService;
+  skillLearning: SkillLearningService;
+  historySearch: HistorySearchService;
+  libraryFolders: LibraryFoldersService;
+  handoffBus: HandoffBus;
+  visualPreview: ChatVisualPreviewService;
+  uiBlockRegistry: UiBlockRegistry;
+  apiKeysBridge: ApiKeysBridge;
   port: number;
   close(): Promise<void>;
 }
@@ -385,6 +407,48 @@ export async function createDaemonServer(
     DEFAULT_WHATSAPP_ACCOUNT_ID
   );
 
+  const memoryManager = new MemoryManager(db);
+  const handoffBus = new HandoffBus(db, queue, wsHub);
+  const apiKeysBridge = new ApiKeysBridge(vault);
+  const ephemeralSharedDbPath =
+    db.dbPath === ":memory:"
+      ? join(tmpdir(), `criativo-shared-tables-${randomUUID()}.db`)
+      : null;
+  const sharedTables = new SharedTablesService({
+    operationalDbPath: db.dbPath,
+    ...(ephemeralSharedDbPath ? { sharedDbPath: ephemeralSharedDbPath } : {}),
+    onTableChanged: (evt) => {
+      wsHub.broadcast("shared_table:changed", evt);
+    },
+  });
+  const skillLearning = new SkillLearningService({
+    db,
+    workspaceRoot: resolvedWorkspaceRoot,
+    providers,
+    providerConnection,
+    wsHub,
+    redactSecrets: (t) => apiKeysBridge.redactSecretValues(t),
+  });
+  const historySearch = new HistorySearchService({
+    db,
+    redactSecrets: (t) => apiKeysBridge.redactSecretValues(t),
+  });
+  const libraryFolders = new LibraryFoldersService({
+    db,
+    workspaceRoot: resolvedWorkspaceRoot,
+    wsHub,
+  });
+  const visualPreview = new ChatVisualPreviewService({
+    db,
+    workspaceRoot: resolvedWorkspaceRoot,
+  });
+  const uiBlockRegistry = new UiBlockRegistry({
+    db,
+    wsHub,
+    apiKeysBridge,
+    getDefaultPlanStartAfterMs: () => skillLearning.getLearningConfig().plan_start_after_ms,
+  });
+
   const runner = new AgentRunner({
     db,
     queue,
@@ -399,6 +463,8 @@ export async function createDaemonServer(
     skillsManager,
     workspaceRoot: resolvedWorkspaceRoot,
     customTools: options.customTools,
+    memoryManager,
+    handoffBus,
   });
   const threadStore = new AgentThreadStore(db);
   const pagination = new ConversationPaginationReader(db);
@@ -606,6 +672,141 @@ export async function createDaemonServer(
     else activeTurnsByAgent.set(agenteId, cur - 1);
   };
 
+  const memoryReview = new MemoryReviewService({
+    db,
+    memoryManager,
+    skillLearning,
+    providers,
+    providerConnection,
+    wsHub,
+    redactSecrets: (t) => apiKeysBridge.redactSecretValues(t),
+    isInteractiveSlotBusy: () => activeLaneKeys.size > 0 || activeFifoTaskIds.size > 0,
+  });
+
+  const phase14Services: Phase14ToolServices = {
+    db,
+    wsHub,
+    sharedTables,
+    memoryManager,
+    memoryReview,
+    skillLearning,
+    historySearch,
+    libraryFolders,
+    handoffBus,
+    visualPreview,
+    uiBlockRegistry,
+    apiKeysBridge,
+    isAgentBusy: (agId) => {
+      const busy =
+        (activeTurnsByAgent.get(agId) ?? 0) > 0 || queueControls.isLaneBusy(agId, null);
+      const snap = queueControls.getLaneSnapshot(agId, null);
+      return { busy, policy: snap.modo_ocupado };
+    },
+    onDispatchQueuedInterAgent: (recipientId, row, _nextHopDepth) => {
+      queueMicrotask(() => {
+        void (async () => {
+          const targetAg = db.connection
+            .prepare("SELECT * FROM projecao_agentes WHERE agente_id = ? LIMIT 1;")
+            .get(recipientId) as
+            | {
+                agente_id: string;
+                nome: string;
+                papel: string;
+                modelo_padrao: string;
+                config_json: string;
+              }
+            | undefined;
+          if (!targetAg) return;
+
+          try {
+            const turnOut = await executeAgentConversationTurn({
+              deps: {
+                ...baseStudioDepsForLanes,
+                phase13: phase13Bundle,
+                sharedTables,
+                memoryManager,
+                memoryReview,
+                skillLearning,
+                historySearch,
+                libraryFolders,
+                handoffBus,
+                visualPreview,
+                uiBlockRegistry,
+                apiKeysBridge,
+                phase14: phase14Services,
+              },
+              agente: targetAg,
+              userPrompt: `[Mensagem assíncrona de @${row.de_agente_id} — ID: ${row.mensagem_id}]\n${row.conteudo}`,
+              threadId: `main:${recipientId}`,
+              turnoId: `ia-${randomUUID().slice(0, 8)}`,
+              isHandoff: true,
+              originalUserPrompt: row.conteudo,
+            });
+
+            if (row.expects_reply === 1 && row.thread_origem_id) {
+              handoffBus.markRequestAnswered(row.mensagem_id);
+              const originCanalId = row.thread_origem_id.startsWith("agente:") ||
+                row.thread_origem_id.startsWith("canal-") ||
+                row.thread_origem_id.startsWith("thread:")
+                ? row.thread_origem_id
+                : row.thread_origem_id.startsWith("main:")
+                  ? `agente:${row.thread_origem_id.slice(5)}`
+                  : `thread:${row.thread_origem_id}`;
+
+              const returnMsgId = `msg-${randomUUID()}`;
+              const returnIso = new Date().toISOString();
+              const returnMarkdown = `**Retorno de ${targetAg.nome} (\`@${recipientId}\`):**\n\n${turnOut.agentMsg.conteudo_markdown}`;
+
+              db.connection
+                .prepare(
+                  `INSERT INTO projecao_conversas_chat (
+                    mensagem_id, canal_id, agente_id, autor, autor_nome,
+                    conteudo_markdown, anexos_json, steps_json, tarefa_id,
+                    lida, criado_em, thread_id, item_type, status, resposta_para_mensagem_id
+                  ) VALUES (?, ?, ?, 'agente', ?, ?, ?, '[]', NULL, 1, ?, ?, 'mensagem', 'completed', ?);`,
+                )
+                .run(
+                  returnMsgId,
+                  originCanalId,
+                  recipientId,
+                  targetAg.nome,
+                  returnMarkdown,
+                  JSON.stringify(turnOut.agentMsg.anexos ?? []),
+                  returnIso,
+                  row.thread_origem_id,
+                  row.mensagem_id,
+                );
+
+              wsHub.broadcast("chat:message", {
+                canal_id: originCanalId,
+                agente_id: recipientId,
+                mensagem: {
+                  mensagem_id: returnMsgId,
+                  canal_id: originCanalId,
+                  agente_id: recipientId,
+                  autor: "agente",
+                  autor_nome: targetAg.nome,
+                  conteudo_markdown: returnMarkdown,
+                  anexos: turnOut.agentMsg.anexos ?? [],
+                  steps: [],
+                  thread_id: row.thread_origem_id,
+                  item_type: "mensagem",
+                  status: "completed",
+                  resposta_para_mensagem_id: row.mensagem_id,
+                  lida: true,
+                  criado_em: returnIso,
+                },
+              });
+            }
+          } catch {
+            // Falha isolada não derruba o loop principal do daemon
+          }
+        })();
+      });
+    },
+  };
+  runner.setPhase14Services(phase14Services);
+
   const baseStudioDepsForLanes = {
     db,
     queue,
@@ -628,6 +829,17 @@ export async function createDaemonServer(
     workflowTriggers,
     telegramBot,
     readRawBody,
+    sharedTables,
+    memoryManager,
+    memoryReview,
+    skillLearning,
+    historySearch,
+    libraryFolders,
+    handoffBus,
+    visualPreview,
+    uiBlockRegistry,
+    apiKeysBridge,
+    phase14: phase14Services,
   };
 
   const scheduleLaneDrain = (agenteId: string, threadId: string | null): void => {
@@ -1024,6 +1236,17 @@ export async function createDaemonServer(
           telegramBot,
           readRawBody,
           phase13: phase13Bundle,
+          sharedTables,
+          memoryManager,
+          memoryReview,
+          skillLearning,
+          historySearch,
+          libraryFolders,
+          handoffBus,
+          visualPreview,
+          uiBlockRegistry,
+          apiKeysBridge,
+          phase14: phase14Services,
         })
       ) {
         return;
@@ -1484,10 +1707,22 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
     queueControls,
     pinsService,
     contextReset,
+    sharedTables,
+    memoryManager,
+    memoryReview,
+    skillLearning,
+    historySearch,
+    libraryFolders,
+    handoffBus,
+    visualPreview,
+    uiBlockRegistry,
+    apiKeysBridge,
     port: resolvedPort,
     async close(): Promise<void> {
       cron.stop();
       routineTimer.dispose();
+      memoryReview.dispose();
+      uiBlockRegistry.dispose();
       await workflowEngine.dispose();
       whatsappArchiveService.stopPeriodicCleanup();
       whatsappOrchestrator.stop();
@@ -1500,6 +1735,16 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
       }
       await whatsappManager.shutdownAll();
       await mcpGateway.close();
+      await sharedTables.close();
+      if (ephemeralSharedDbPath) {
+        for (const suffix of ["", "-wal", "-shm"]) {
+          try {
+            rmSync(`${ephemeralSharedDbPath}${suffix}`, { force: true });
+          } catch {
+            // ignora falha de limpeza efêmera
+          }
+        }
+      }
       providerConnection.close();
       wsHub.closeAll();
       httpServer.closeAllConnections?.();

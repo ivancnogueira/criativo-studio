@@ -4,14 +4,21 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, extname, relative, resolve, sep } from "node:path";
 import type {
   AnexoChat,
+  AprendizadoConfig,
   ArquivoStudio,
   CanalEquipe,
+  ChatVisualMeta,
   ConversationMessage,
+  ConversationUiBlock,
+  MemoriaInclusao,
+  MemoryReviewAlteracao,
   MensagemChat,
   OnboardingEstado,
   PassoChat,
   ProviderName,
+  SkillSugestaoItem,
   ToolDefinition,
+  UiBlockSubmitPayload,
   WorkflowAresta,
   WorkflowNo,
   WorkflowTraco,
@@ -52,22 +59,36 @@ import {
   buildStudioLiveContext,
   executeChatWorkflowTool,
   executePhase13Tool,
+  executePhase14ToolCall,
   executeStudioExtensionTool,
   executeStudioRoutineTool,
   getChatWorkflowToolCatalog,
   isPhase10ExtensionTool,
   isPhase13ToolName,
+  isPhase14ToolName,
   isRoutineToolName,
   isUpgradeUnlocked,
   isWorkflowToolName,
   PHASE10_TOOL_DEFINITIONS,
   PHASE13_TOOLS_SCHEMA,
+  PHASE14_TOOLS_SCHEMA,
   readAgentContextCutoffAt,
   ROUTINE_AGENT_TOOLS_SCHEMA,
   syncWorkspaceFilesToDatabase,
   validateMetaIntegration,
+  type Phase14ToolServices,
 } from "./studio-tools-bridge.ts";
 import { tryHandleThreadsRoute, type Phase13ServicesBundle } from "./threads-routes.ts";
+import type { SharedTablesService } from "../agent-data/shared-tables-service.ts";
+import { SharedTablesError } from "../agent-data/shared-tables-service.ts";
+import { MemoryManager } from "../engine/runner/memory-manager.ts";
+import type { MemoryReviewService } from "../engine/runner/memory-review-service.ts";
+import type { SkillLearningService } from "../engine/runner/skill-learning-service.ts";
+import type { HistorySearchService } from "../engine/runner/history-search-service.ts";
+import type { LibraryFoldersService } from "../engine/runner/library-folders-service.ts";
+import type { ChatVisualPreviewService } from "../engine/runner/chat-visual-preview-service.ts";
+import { UiBlockHttpError, type UiBlockRegistry } from "../engine/runner/ui-block-registry.ts";
+import type { ApiKeysBridge } from "../vault/api-keys-bridge.ts";
 import type { RoutineToolsDeps } from "../routines/routine-agent-tools.ts";
 import type { TelegramNotificationBot } from "../messaging/telegram-bot.ts";
 import type { WorkflowEngine } from "../workflows/workflow-engine.ts";
@@ -98,6 +119,17 @@ export interface StudioRoutesDeps {
   workflowTriggers?: WorkflowTriggers;
   telegramBot?: TelegramNotificationBot;
   phase13?: Phase13ServicesBundle;
+  sharedTables?: SharedTablesService;
+  memoryManager?: MemoryManager;
+  memoryReview?: MemoryReviewService;
+  skillLearning?: SkillLearningService;
+  historySearch?: HistorySearchService;
+  libraryFolders?: LibraryFoldersService;
+  handoffBus?: HandoffBus;
+  uiBlockRegistry?: UiBlockRegistry;
+  apiKeysBridge?: ApiKeysBridge;
+  visualPreview?: ChatVisualPreviewService;
+  phase14?: Phase14ToolServices;
 }
 
 const RAW_MIME_MAP: Record<string, string> = {
@@ -111,10 +143,24 @@ const RAW_MIME_MAP: Record<string, string> = {
   ".webm": "video/webm",
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
+  ".ogg": "audio/ogg",
   ".srt": "text/plain; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
   ".csv": "text/csv; charset=utf-8",
+  ".tsv": "text/tab-separated-values; charset=utf-8",
   ".md": "text/markdown; charset=utf-8",
+  ".mmd": "text/plain; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".yml": "text/yaml; charset=utf-8",
+  ".yaml": "text/yaml; charset=utf-8",
+  ".ts": "text/plain; charset=utf-8",
+  ".tsx": "text/plain; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".sql": "text/plain; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".sh": "text/plain; charset=utf-8",
+  ".py": "text/plain; charset=utf-8",
   ".pdf": "application/pdf",
 };
 
@@ -151,27 +197,79 @@ function inferTipoUso(mime: string, requested?: string): ArquivoStudio["tipo_uso
   return "documento";
 }
 
-function mapChatRow(row: {
-  mensagem_id: string;
-  canal_id: string;
-  agente_id: string | null;
-  autor: string;
-  autor_nome: string | null;
-  conteudo_markdown: string;
-  anexos_json: string | null;
-  steps_json: string | null;
-  tarefa_id: string | null;
-  lida: number;
-  criado_em: string;
-  thread_id?: string | null;
-  turno_id?: string | null;
-  item_type?: string | null;
-  status?: string | null;
-  resposta_para_mensagem_id?: string | null;
-  ordinal?: number | null;
-  branch_origem_mensagem_id?: string | null;
-  metadados_json?: string | null;
-}): MensagemChat {
+function mapChatRow(
+  row: {
+    mensagem_id: string;
+    canal_id: string;
+    agente_id: string | null;
+    autor: string;
+    autor_nome: string | null;
+    conteudo_markdown: string;
+    anexos_json: string | null;
+    steps_json: string | null;
+    tarefa_id: string | null;
+    lida: number;
+    criado_em: string;
+    thread_id?: string | null;
+    turno_id?: string | null;
+    item_type?: string | null;
+    status?: string | null;
+    resposta_para_mensagem_id?: string | null;
+    ordinal?: number | null;
+    branch_origem_mensagem_id?: string | null;
+    metadados_json?: string | null;
+    ui_block_json?: string | null;
+    reacao_emoji?: string | null;
+  },
+  db?: CriativoDatabase | number,
+): MensagemChat {
+  const metadados = row.metadados_json
+    ? safeJsonParse<Record<string, unknown>>(row.metadados_json, {})
+    : undefined;
+  const uiBlock = row.ui_block_json
+    ? safeJsonParse<ConversationUiBlock | null>(row.ui_block_json, null)
+    : null;
+
+  let skillSugestao: SkillSugestaoItem | null =
+    metadados?.skill_sugestao && typeof metadados.skill_sugestao === "object"
+      ? (metadados.skill_sugestao as SkillSugestaoItem)
+      : null;
+
+  const validDb =
+    db && typeof db === "object" && "connection" in db ? (db as CriativoDatabase) : undefined;
+
+  if (validDb && (skillSugestao || row.item_type?.startsWith("skill-suggestion:"))) {
+    try {
+      const sugRow = validDb.connection
+        .prepare("SELECT * FROM projecao_skill_sugestoes WHERE mensagem_id = ? LIMIT 1;")
+        .get(row.mensagem_id) as SkillSugestaoItem | undefined;
+      if (sugRow) {
+        skillSugestao = sugRow;
+      }
+    } catch {
+      // ignora caso tabela ainda não exista
+    }
+  }
+
+  let visualPage: ChatVisualMeta | null =
+    metadados?.visual_page && typeof metadados.visual_page === "object"
+      ? (metadados.visual_page as ChatVisualMeta)
+      : null;
+  if (!visualPage && row.item_type?.startsWith("visual-reply:") && metadados) {
+    const heightNum = Number(row.item_type.split(":")[1]);
+    if (typeof metadados.arquivo_id === "string") {
+      visualPage = {
+        arquivo_id: metadados.arquivo_id,
+        titulo: typeof metadados.titulo === "string" ? metadados.titulo : "Painel Interativo",
+        altura_inicial: Number.isFinite(heightNum) ? heightNum : undefined,
+      };
+    }
+  }
+
+  const memoryChanges: MemoryReviewAlteracao[] | null = Array.isArray(metadados?.memory_changes)
+    ? (metadados.memory_changes as MemoryReviewAlteracao[])
+    : null;
+
   return {
     mensagem_id: row.mensagem_id,
     canal_id: row.canal_id,
@@ -193,9 +291,12 @@ function mapChatRow(row: {
     ...(row.branch_origem_mensagem_id !== undefined
       ? { branch_origem_mensagem_id: row.branch_origem_mensagem_id }
       : {}),
-    ...(row.metadados_json
-      ? { metadados: safeJsonParse<Record<string, unknown>>(row.metadados_json, {}) }
-      : {}),
+    ...(metadados ? { metadados } : {}),
+    ...(uiBlock ? { ui_block: uiBlock } : {}),
+    ...(row.reacao_emoji ? { reacao_emoji: row.reacao_emoji } : {}),
+    ...(skillSugestao ? { skill_sugestao: skillSugestao } : {}),
+    ...(visualPage ? { visual_page: visualPage } : {}),
+    ...(memoryChanges ? { memory_changes: memoryChanges } : {}),
     lida: row.lida !== 0,
     criado_em: row.criado_em,
   };
@@ -237,7 +338,12 @@ function parseWorkflowTextToolCalls(text: string): ParsedTextToolCall[] {
         name?: unknown;
         arguments?: unknown;
       };
-      if (typeof parsed.name === "string" && (isWorkflowToolName(parsed.name) || isPhase13ToolName(parsed.name))) {
+      if (
+        typeof parsed.name === "string" &&
+        (isWorkflowToolName(parsed.name) ||
+          isPhase13ToolName(parsed.name) ||
+          isPhase14ToolName(parsed.name))
+      ) {
         calls.push({
           name: parsed.name,
           arguments:
@@ -276,7 +382,8 @@ async function runTextModelWorkflowToolLoop(params: {
   let currentText = params.initialText;
   const hasWorkflow = Boolean(params.deps.workflowStore && params.deps.workflowEngine);
   const hasPhase13 = Boolean(params.deps.phase13);
-  if (!hasWorkflow && !hasPhase13) {
+  const hasPhase14 = Boolean(params.deps.phase14);
+  if (!hasWorkflow && !hasPhase13 && !hasPhase14) {
     return currentText;
   }
 
@@ -295,7 +402,26 @@ async function runTextModelWorkflowToolLoop(params: {
       let out: unknown;
       let failed = false;
       try {
-        if (isPhase13ToolName(call.name) && params.deps.phase13) {
+        if (isPhase14ToolName(call.name) && params.deps.phase14) {
+          const canalId =
+            params.threadId && !params.threadId.startsWith("main:")
+              ? `thread:${params.threadId}`
+              : `agente:${params.agenteId}`;
+          out = await executePhase14ToolCall(
+            call.name,
+            call.arguments,
+            {
+              agenteId: params.agenteId,
+              canalId,
+              threadId: params.threadId ?? `main:${params.agenteId}`,
+              turnId: params.turnId,
+              origemTurno: params.isRoutine ? "rotina" : "usuario_local",
+              isOneToOneUserChat: !params.isRoutine && canalId === `agente:${params.agenteId}`,
+              lastUserMessageId: params.entregaOrigemId ?? null,
+            },
+            params.deps.phase14,
+          );
+        } else if (isPhase13ToolName(call.name) && params.deps.phase13) {
           const p13 = await executePhase13Tool(
             call.name,
             call.arguments,
@@ -566,6 +692,8 @@ async function generateAgentChatReply(
     vault: deps.vault,
     providerConnection: deps.providerConnection,
     workspaceRoot,
+    agenteId: agente.agente_id,
+    memoryManager: deps.memoryManager,
   });
 
   const promptBaseParts = [
@@ -656,11 +784,13 @@ async function generateAgentChatReply(
   const studioWorkflowTools =
     deps.workflowStore && deps.workflowEngine ? getChatWorkflowToolCatalog() : [];
   const studioPhase13Tools = deps.phase13 ? PHASE13_TOOLS_SCHEMA : [];
+  const studioPhase14Tools = deps.phase14 ? PHASE14_TOOLS_SCHEMA : [];
   for (const t of [
     ...PHASE10_TOOL_DEFINITIONS,
     ...studioRoutineTools,
     ...studioWorkflowTools,
     ...studioPhase13Tools,
+    ...studioPhase14Tools,
     ...mcpTools,
   ]) {
     if (!availableChatToolsMap.has(t.name)) {
@@ -1262,6 +1392,34 @@ async function generateAgentChatReply(
                 agenteId: agente.agente_id,
                 requestSeed: turnId,
               });
+            } else if (isPhase14ToolName(call.name) && deps.phase14) {
+              const effectiveCanal =
+                options?.threadId && !options.threadId.startsWith("main:")
+                  ? `thread:${options.threadId}`
+                  : `agente:${agente.agente_id}`;
+              toolOutput = await executePhase14ToolCall(
+                call.name,
+                call.arguments,
+                {
+                  agenteId: agente.agente_id,
+                  canalId: effectiveCanal,
+                  threadId: options?.threadId ?? `main:${agente.agente_id}`,
+                  tarefaId: tarefaCriadaId,
+                  turnId,
+                  origemTurno: options?.isRoutine
+                    ? "rotina"
+                    : options?.isHandoff
+                      ? "inter_agente"
+                      : "usuario_local",
+                  isOneToOneUserChat:
+                    !options?.isRoutine &&
+                    !options?.isHandoff &&
+                    effectiveCanal === `agente:${agente.agente_id}`,
+                  lastUserMessageId: options?.entregaOrigemId ?? null,
+                  generatedAnexos: anexosGerados,
+                },
+                deps.phase14,
+              );
             } else if (isPhase13ToolName(call.name) && deps.phase13) {
               const p13 = await executePhase13Tool(
                 call.name,
@@ -1666,24 +1824,30 @@ export async function executeAgentConversationTurn(params: {
     }
   };
 
-  const reply = await generateAgentChatReply(
-    deps,
-    agente,
-    params.userPrompt,
-    params.anexos ?? [],
-    history,
-    progressEmitter,
-    {
-      isHandoff: params.isHandoff,
-      originalUserPrompt: params.originalUserPrompt,
-      threadId: effectiveThreadId,
-      turnoId: params.turnoId,
-      signal: params.signal,
-      wokenWaitsBlock: params.wokenWaitsBlock,
-      entregaOrigemId: params.entregaOrigemId,
-      isRoutine: params.isRoutine,
-    },
-  );
+  let reply: Awaited<ReturnType<typeof generateAgentChatReply>>;
+  try {
+    reply = await generateAgentChatReply(
+      deps,
+      agente,
+      params.userPrompt,
+      params.anexos ?? [],
+      history,
+      progressEmitter,
+      {
+        isHandoff: params.isHandoff,
+        originalUserPrompt: params.originalUserPrompt,
+        threadId: effectiveThreadId,
+        turnoId: params.turnoId,
+        signal: params.signal,
+        wokenWaitsBlock: params.wokenWaitsBlock,
+        entregaOrigemId: params.entregaOrigemId,
+        isRoutine: params.isRoutine,
+      },
+    );
+  } catch (err) {
+    deps.memoryManager?.commitTurnMutations(params.turnoId, "failed");
+    throw err;
+  }
 
   if (isSubThread) {
     deps.wsHub.broadcast("thread:progress", {
@@ -1769,6 +1933,15 @@ export async function executeAgentConversationTurn(params: {
       mensagem: agentMsg,
     });
   }
+
+  deps.memoryManager?.commitTurnMutations(params.turnoId, "completed");
+  deps.memoryReview?.recordCompletedTurn({
+    agenteId: agente.agente_id,
+    threadId: isSubThread ? effectiveThreadId : null,
+    canalId,
+    lastMessageId: agentMsg.mensagem_id,
+    workSteps: reply.steps,
+  });
 
   if (!isSubThread && deps.phase13?.contextReset.hasPendingReset(agente.agente_id)) {
     deps.phase13.contextReset.flushPendingResetIfIdle(agente.agente_id, params.entregaOrigemId);
@@ -2338,17 +2511,118 @@ export async function tryHandleStudioRoute(
     return true;
   }
 
-  // Memórias do agente
+  // Páginas visuais interativas (Generative UI — html_render)
+  const visualPageMatch = path.match(/^\/api\/agentes\/([^/]+)\/visual-pages\/([^/]+)$/);
+  if (method === "GET" && visualPageMatch) {
+    const arquivoId = decodeURIComponent(visualPageMatch[2]);
+    if (!deps.visualPreview) {
+      sendJson(res, 503, { erro: "ChatVisualPreviewService não inicializado neste daemon." });
+      return true;
+    }
+    const theme = url.searchParams.get("theme") === "light" ? "light" : "dark";
+    const page = deps.visualPreview.getCompiledPage(arquivoId, theme);
+    if (!page) {
+      sendJson(res, 404, { erro: `Página visual '${arquivoId}' não encontrada.` });
+      return true;
+    }
+    if (url.searchParams.get("raw") === "1") {
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Access-Control-Allow-Origin": "*",
+        "Content-Security-Policy": "sandbox allow-scripts allow-forms;",
+      });
+      res.end(page.html);
+      return true;
+    }
+    sendJson(res, 200, { ok: true, ...page });
+    return true;
+  }
+
+  // Memórias do agente (Fase 14 — FTS5, orçamento 8.192 bytes, edição manual e revisão imediata)
+  const agentMemoriesReviewMatch = path.match(/^\/api\/agentes\/([^/]+)\/memorias\/revisar$/);
+  if (method === "POST" && agentMemoriesReviewMatch) {
+    const agenteId = decodeURIComponent(agentMemoriesReviewMatch[1]);
+    if (!deps.memoryReview) {
+      sendJson(res, 503, { erro: "MemoryReviewService não inicializado neste daemon." });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    const threadId = typeof body.thread_id === "string" ? body.thread_id : null;
+    const alteracoes = await deps.memoryReview.triggerNow(agenteId, threadId);
+    sendJson(res, 200, { ok: true, alteracoes });
+    return true;
+  }
+
+  const agentMemoryItemMatch = path.match(/^\/api\/agentes\/([^/]+)\/memorias\/([^/]+)$/);
+  if (agentMemoryItemMatch && (method === "PUT" || method === "DELETE")) {
+    const agenteId = decodeURIComponent(agentMemoryItemMatch[1]);
+    const memoriaId = decodeURIComponent(agentMemoryItemMatch[2]);
+    const memMgr = deps.memoryManager ?? new MemoryManager(db);
+
+    if (method === "DELETE") {
+      const removed = memMgr.deleteMemory(agenteId, memoriaId, true);
+      if (!removed) {
+        sendJson(res, 404, { erro: `Memória '${memoriaId}' não encontrada.` });
+        return true;
+      }
+      sendJson(res, 200, { ok: true, memoria_id: memoriaId, snapshot: memMgr.getMemoriesSnapshot(agenteId) });
+      return true;
+    }
+
+    const body = await readJsonBody(req);
+    try {
+      const updated = memMgr.updateManualMemory(agenteId, memoriaId, {
+        texto: typeof body.texto === "string" ? body.texto : undefined,
+        categoria:
+          body.categoria === "essential" || body.categoria === "searchable"
+            ? body.categoria
+            : undefined,
+        escopo_site:
+          typeof body.escopo_site === "string" || body.escopo_site === null
+            ? body.escopo_site
+            : undefined,
+      });
+      sendJson(res, 200, { ok: true, memoria: updated, snapshot: memMgr.getMemoriesSnapshot(agenteId) });
+    } catch (err) {
+      sendJson(res, 400, { erro: err instanceof Error ? err.message : String(err) });
+    }
+    return true;
+  }
+
   const agentMemoriesMatch = path.match(/^\/api\/agentes\/([^/]+)\/memorias$/);
   if (agentMemoriesMatch && (method === "GET" || method === "POST")) {
     const agenteId = decodeURIComponent(agentMemoriesMatch[1]);
+    const memMgr = deps.memoryManager ?? new MemoryManager(db);
+
     if (method === "GET") {
-      const memorias = db.connection
-        .prepare(
-          `SELECT * FROM projecao_agente_memorias WHERE agente_id = ? ORDER BY criado_em DESC LIMIT 40;`
-        )
-        .all(agenteId);
-      sendJson(res, 200, { memorias });
+      const snap = memMgr.getMemoriesSnapshot(agenteId);
+      const rawCat = url.searchParams.get("categoria");
+      const categoria: MemoriaInclusao | undefined =
+        rawCat === "essential" || rawCat === "searchable" ? rawCat : undefined;
+      const site = url.searchParams.get("site");
+      const busca = url.searchParams.get("busca") ?? undefined;
+      const after = url.searchParams.get("after") ?? undefined;
+
+      if (categoria || site || busca || after) {
+        const filtered = memMgr.listMemoriesPaginated(agenteId, {
+          categoria,
+          site,
+          busca,
+          after,
+          limit: 100,
+        });
+        sendJson(res, 200, {
+          memorias: filtered.items,
+          nextCursor: filtered.nextCursor,
+          usedBytes: snap.usedBytes,
+          budgetBytes: snap.budgetBytes,
+          total: snap.total,
+          limit: snap.limit,
+        });
+        return true;
+      }
+
+      sendJson(res, 200, snap);
       return true;
     }
 
@@ -2357,15 +2631,25 @@ export async function tryHandleStudioRoute(
       sendJson(res, 400, { erro: "Campo obrigatório: 'texto'." });
       return true;
     }
-    const memId = `mem-${randomUUID()}`;
-    const agora = new Date().toISOString();
-    db.connection
-      .prepare(
-        `INSERT INTO projecao_agente_memorias (memoria_id, agente_id, texto, origem, criado_em)
-         VALUES (?, ?, ?, 'manual', ?);`
-      )
-      .run(memId, agenteId, body.texto.trim(), agora);
-    sendJson(res, 201, { memoria_id: memId, texto: body.texto.trim(), criado_em: agora });
+    const rawCat = body.categoria;
+    const categoria: MemoriaInclusao =
+      rawCat === "searchable" ? "searchable" : "essential";
+    const escopoSite = typeof body.escopo_site === "string" ? body.escopo_site : null;
+    const added = memMgr.addMemory(agenteId, body.texto.trim(), "manual", {
+      categoria,
+      escopoSite,
+    });
+    if (!added) {
+      sendJson(res, 400, { erro: "Não foi possível registrar a memória." });
+      return true;
+    }
+    sendJson(res, 201, {
+      memoria_id: added.memoria_id,
+      texto: added.texto,
+      criado_em: added.criado_em,
+      memoria: added,
+      snapshot: memMgr.getMemoriesSnapshot(agenteId),
+    });
     return true;
   }
 
@@ -2439,9 +2723,11 @@ export async function tryHandleStudioRoute(
           `SELECT * FROM projecao_conversas_chat WHERE canal_id = ? ORDER BY criado_em ASC, COALESCE(ordinal, 0) ASC, mensagem_id ASC LIMIT 120;`
         )
         .all(canalId) as Array<Parameters<typeof mapChatRow>[0]>;
-      sendJson(res, 200, { mensagens: rows.map(mapChatRow) });
+      sendJson(res, 200, { mensagens: rows.map((r) => mapChatRow(r, db)) });
       return true;
     }
+
+    deps.uiBlockRegistry?.expirePendingBlocksForCanal(canalId, "skipped");
 
     const agente = db.connection
       .prepare(`SELECT * FROM projecao_agentes WHERE agente_id = ?;`)
@@ -3614,8 +3900,10 @@ export async function tryHandleStudioRoute(
     return true;
   }
 
-  if (method === "GET" && path === "/api/arquivos/raw") {
-    const requestedRel = url.searchParams.get("path") ?? "";
+  if (method === "GET" && (path === "/api/arquivos/raw" || path.startsWith("/api/arquivos/raw/"))) {
+    const requestedRel = path.startsWith("/api/arquivos/raw/")
+      ? decodeURIComponent(path.slice("/api/arquivos/raw/".length))
+      : (url.searchParams.get("path") ?? "");
     if (!requestedRel || requestedRel.includes("..") || requestedRel.startsWith("/") || requestedRel.startsWith("\\")) {
       sendJson(res, 403, { erro: "Caminho não permitido." });
       return true;
@@ -3650,6 +3938,306 @@ export async function tryHandleStudioRoute(
       "Cache-Control": "private, max-age=300",
     });
     res.end(readFileSync(resolvedTarget));
+    return true;
+  }
+
+  // =========================================================================
+  // 7. Fase 14 — Shared Tables, Biblioteca Hierárquica, UI Blocks, SSE & Cofre
+  // =========================================================================
+
+  // 7.1 Shared Tables (/api/tabelas-compartilhadas)
+  if (method === "GET" && path === "/api/tabelas-compartilhadas") {
+    if (!deps.sharedTables) {
+      sendJson(res, 503, { erro: "SharedTablesService não inicializado neste daemon." });
+      return true;
+    }
+    const tables = await deps.sharedTables.listTablesForCockpit();
+    sendJson(res, 200, { tables });
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/tabelas-compartilhadas/query") {
+    if (!deps.sharedTables) {
+      sendJson(res, 503, { erro: "SharedTablesService não inicializado neste daemon." });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    const sql = typeof body.sql === "string" ? body.sql : "";
+    const params = Array.isArray(body.params) ? body.params : undefined;
+    try {
+      const result = await deps.sharedTables.runCockpitReadQuery(sql, params);
+      sendJson(res, 200, result);
+    } catch (err) {
+      const status = err instanceof SharedTablesError ? 400 : 500;
+      sendJson(res, status, { erro: err instanceof Error ? err.message : String(err) });
+    }
+    return true;
+  }
+
+  const sharedTableExportMatch = path.match(/^\/api\/tabelas-compartilhadas\/([^/]+)\/export$/);
+  if (method === "GET" && sharedTableExportMatch) {
+    if (!deps.sharedTables) {
+      sendJson(res, 503, { erro: "SharedTablesService não inicializado neste daemon." });
+      return true;
+    }
+    const tableName = decodeURIComponent(sharedTableExportMatch[1]);
+    const formato = url.searchParams.get("formato") === "json" ? "json" : "csv";
+    try {
+      const exported = await deps.sharedTables.exportTable(tableName, formato);
+      res.writeHead(200, {
+        "Content-Type": exported.mimeType,
+        "Content-Disposition": `attachment; filename="${exported.filename}"`,
+        "X-Truncated": exported.truncated ? "1" : "0",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "Content-Disposition, X-Truncated",
+      });
+      res.end(exported.content);
+    } catch (err) {
+      const status = err instanceof SharedTablesError ? 400 : 500;
+      sendJson(res, status, { erro: err instanceof Error ? err.message : String(err) });
+    }
+    return true;
+  }
+
+  const sharedTableItemMatch = path.match(/^\/api\/tabelas-compartilhadas\/([^/]+)$/);
+  if (sharedTableItemMatch && (method === "GET" || method === "DELETE")) {
+    if (!deps.sharedTables) {
+      sendJson(res, 503, { erro: "SharedTablesService não inicializado neste daemon." });
+      return true;
+    }
+    const tableName = decodeURIComponent(sharedTableItemMatch[1]);
+    try {
+      if (method === "DELETE") {
+        const deleted = await deps.sharedTables.removeTableAsUser(tableName);
+        sendJson(res, 200, { ok: true, ...deleted });
+        return true;
+      }
+      const limit = Number(url.searchParams.get("limit") ?? "100");
+      const offset = Number(url.searchParams.get("offset") ?? "0");
+      const busca = url.searchParams.get("busca") ?? "";
+      const detail = await deps.sharedTables.inspectTableForCockpit(tableName, {
+        limit: Number.isFinite(limit) ? limit : 100,
+        offset: Number.isFinite(offset) ? offset : 0,
+        busca,
+      });
+      sendJson(res, 200, detail);
+    } catch (err) {
+      const status = err instanceof SharedTablesError ? 400 : 500;
+      sendJson(res, status, { erro: err instanceof Error ? err.message : String(err) });
+    }
+    return true;
+  }
+
+  // 7.2 Biblioteca Hierárquica de Pastas (/api/bibliotecas/pastas)
+  if (method === "GET" && path === "/api/bibliotecas/pastas") {
+    if (!deps.libraryFolders) {
+      sendJson(res, 503, { erro: "LibraryFoldersService não inicializado neste daemon." });
+      return true;
+    }
+    sendJson(res, 200, deps.libraryFolders.getSnapshot());
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/bibliotecas/pastas/mover") {
+    if (!deps.libraryFolders) {
+      sendJson(res, 503, { erro: "LibraryFoldersService não inicializado neste daemon." });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    const arquivoIds = Array.isArray(body.arquivo_ids)
+      ? body.arquivo_ids.filter((id): id is string => typeof id === "string")
+      : [];
+    const pastaId = typeof body.pasta_id === "string" && body.pasta_id.trim() ? body.pasta_id.trim() : null;
+    try {
+      const moved = deps.libraryFolders.moveFilesToFolder(arquivoIds, pastaId);
+      sendJson(res, 200, { ok: true, ...moved, snapshot: deps.libraryFolders.getSnapshot() });
+    } catch (err) {
+      sendJson(res, 400, { erro: err instanceof Error ? err.message : String(err) });
+    }
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/bibliotecas/pastas") {
+    if (!deps.libraryFolders) {
+      sendJson(res, 503, { erro: "LibraryFoldersService não inicializado neste daemon." });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    const agenteId = typeof body.agente_id === "string" ? body.agente_id.trim() : "";
+    const nome = typeof body.nome === "string" ? body.nome : "";
+    const parentId = typeof body.parent_id === "string" && body.parent_id.trim() ? body.parent_id.trim() : null;
+    if (!agenteId || !nome.trim()) {
+      sendJson(res, 400, { erro: "Campos obrigatórios: 'agente_id' e 'nome'." });
+      return true;
+    }
+    try {
+      const pasta = deps.libraryFolders.createFolder({ agenteId, nome, parentId });
+      sendJson(res, 201, { ok: true, pasta, snapshot: deps.libraryFolders.getSnapshot() });
+    } catch (err) {
+      sendJson(res, 400, { erro: err instanceof Error ? err.message : String(err) });
+    }
+    return true;
+  }
+
+  const libraryFolderItemMatch = path.match(/^\/api\/bibliotecas\/pastas\/([^/]+)$/);
+  if (libraryFolderItemMatch && (method === "PATCH" || method === "DELETE")) {
+    if (!deps.libraryFolders) {
+      sendJson(res, 503, { erro: "LibraryFoldersService não inicializado neste daemon." });
+      return true;
+    }
+    const pastaId = decodeURIComponent(libraryFolderItemMatch[1]);
+    try {
+      if (method === "DELETE") {
+        const out = deps.libraryFolders.deleteFolder(pastaId);
+        sendJson(res, 200, { ok: true, ...out, snapshot: deps.libraryFolders.getSnapshot() });
+        return true;
+      }
+      const body = await readJsonBody(req);
+      const pasta = deps.libraryFolders.renameOrMoveFolder(pastaId, {
+        nome: typeof body.nome === "string" ? body.nome : undefined,
+        parentId:
+          body.parent_id === null || typeof body.parent_id === "string"
+            ? body.parent_id
+            : undefined,
+      });
+      sendJson(res, 200, { ok: true, pasta, snapshot: deps.libraryFolders.getSnapshot() });
+    } catch (err) {
+      sendJson(res, 400, { erro: err instanceof Error ? err.message : String(err) });
+    }
+    return true;
+  }
+
+  // 7.3 Chat Interativo, UI Blocks, SSE & Skill Learning (/api/chat/...)
+  if (method === "GET" && path === "/api/chat/stream") {
+    wsHub.registerSseClient(res, {
+      canalId: url.searchParams.get("canal_id"),
+      agenteId: url.searchParams.get("agente_id"),
+      threadId: url.searchParams.get("thread_id"),
+    });
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/chat/ui-response") {
+    if (!deps.uiBlockRegistry) {
+      sendJson(res, 503, { erro: "UiBlockRegistry não inicializado neste daemon." });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    try {
+      const outcome = deps.uiBlockRegistry.submitUiResponse(
+        body as unknown as UiBlockSubmitPayload,
+      );
+      sendJson(res, 200, { ok: true, ...outcome });
+    } catch (err) {
+      const status = err instanceof UiBlockHttpError ? err.statusCode : 400;
+      sendJson(res, status, { erro: err instanceof Error ? err.message : String(err) });
+    }
+    return true;
+  }
+
+  const skillSuggestionActionMatch = path.match(
+    /^\/api\/chat\/skill-sugestao\/([^/]+)\/(salvar|dispensar)$/,
+  );
+  if (method === "POST" && skillSuggestionActionMatch) {
+    if (!deps.skillLearning) {
+      sendJson(res, 503, { erro: "SkillLearningService não inicializado neste daemon." });
+      return true;
+    }
+    const mensagemId = decodeURIComponent(skillSuggestionActionMatch[1]);
+    const acao = skillSuggestionActionMatch[2];
+    if (acao === "dispensar") {
+      const sugestao = deps.skillLearning.dismissSuggestionByMessageId(mensagemId);
+      if (!sugestao) {
+        sendJson(res, 404, { erro: "Sugestão de habilidade não encontrada." });
+        return true;
+      }
+      sendJson(res, 200, { ok: true, sugestao });
+      return true;
+    }
+
+    const saved = await deps.skillLearning.saveSuggestionByMessageId(mensagemId);
+    sendJson(res, saved.ok ? 200 : 400, saved);
+    return true;
+  }
+
+  // 7.4 Cofre de API Keys (/api/cofre/api-keys)
+  if (method === "GET" && path === "/api/cofre/api-keys") {
+    if (!deps.apiKeysBridge) {
+      sendJson(res, 503, { erro: "ApiKeysBridge não inicializado neste daemon." });
+      return true;
+    }
+    const agenteId = url.searchParams.get("agente_id");
+    sendJson(res, 200, { keys: deps.apiKeysBridge.listApiKeys(agenteId) });
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/cofre/api-keys") {
+    if (!deps.apiKeysBridge) {
+      sendJson(res, 503, { erro: "ApiKeysBridge não inicializado neste daemon." });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    const name = typeof body.name === "string" ? body.name : typeof body.nome === "string" ? body.nome : "";
+    const value = typeof body.value === "string" ? body.value : typeof body.valor === "string" ? body.valor : "";
+    const scope = body.scope === "agente_especifico" ? "agente_especifico" : "todos_agentes";
+    const agenteId = typeof body.agente_id === "string" ? body.agente_id : null;
+    try {
+      const saved = deps.apiKeysBridge.saveApiKey({
+        name,
+        value,
+        scope,
+        agenteId,
+        origemTurno: "usuario_local",
+      });
+      sendJson(res, 201, { ok: true, ...saved });
+    } catch (err) {
+      sendJson(res, 400, { erro: err instanceof Error ? err.message : String(err) });
+    }
+    return true;
+  }
+
+  const cofreKeyDeleteMatch = path.match(/^\/api\/cofre\/api-keys\/([^/]+)$/);
+  if (method === "DELETE" && cofreKeyDeleteMatch) {
+    if (!deps.apiKeysBridge) {
+      sendJson(res, 503, { erro: "ApiKeysBridge não inicializado neste daemon." });
+      return true;
+    }
+    const keyName = decodeURIComponent(cofreKeyDeleteMatch[1]);
+    const rawScope = url.searchParams.get("scope");
+    const scope =
+      rawScope === "agente_especifico"
+        ? "agente_especifico"
+        : rawScope === "todos_agentes"
+          ? "todos_agentes"
+          : undefined;
+    const agenteId = url.searchParams.get("agente_id");
+    try {
+      const out = deps.apiKeysBridge.removeApiKey({
+        name: keyName,
+        scope,
+        agenteId,
+        byUser: true,
+      });
+      sendJson(res, 200, { ok: true, ...out });
+    } catch (err) {
+      sendJson(res, 400, { erro: err instanceof Error ? err.message : String(err) });
+    }
+    return true;
+  }
+
+  // 7.5 Configurações Globais de Aprendizado (/api/configuracoes/aprendizado)
+  if (path === "/api/configuracoes/aprendizado" && (method === "GET" || method === "PUT")) {
+    if (!deps.skillLearning) {
+      sendJson(res, 503, { erro: "SkillLearningService não inicializado neste daemon." });
+      return true;
+    }
+    if (method === "GET") {
+      sendJson(res, 200, { configuracao: deps.skillLearning.getLearningConfig() });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    const updated = deps.skillLearning.updateLearningConfig(body as Partial<AprendizadoConfig>);
+    sendJson(res, 200, { ok: true, configuracao: updated });
     return true;
   }
 

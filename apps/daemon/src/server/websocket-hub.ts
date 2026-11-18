@@ -102,12 +102,16 @@ export class WebSocketHub {
     res: ServerResponse;
     agenteId?: string | null;
     threadId?: string | null;
+    canalId?: string | null;
     keepalive: NodeJS.Timeout;
   }>();
 
   public registerSseClient(
     res: ServerResponse,
-    filter?: { agenteId?: string | null; threadId?: string | null },
+    filter?:
+      | string
+      | null
+      | { agenteId?: string | null; threadId?: string | null; canalId?: string | null },
   ): () => void {
     res.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
@@ -127,10 +131,16 @@ export class WebSocketHub {
     }, 15_000);
     keepalive.unref?.();
 
+    const parsedFilter =
+      typeof filter === "string"
+        ? { canalId: filter }
+        : filter ?? {};
+
     const entry = {
       res,
-      agenteId: filter?.agenteId ?? null,
-      threadId: filter?.threadId ?? null,
+      agenteId: parsedFilter.agenteId ?? null,
+      threadId: parsedFilter.threadId ?? null,
+      canalId: parsedFilter.canalId ?? null,
       keepalive,
     };
     this.sseListeners.add(entry);
@@ -177,12 +187,16 @@ export class WebSocketHub {
       const payloadRec = (data && typeof data === "object" ? data : {}) as {
         agente_id?: string | null;
         thread_id?: string | null;
+        canal_id?: string | null;
       };
       const sseFrame = `event: ${event}\ndata: ${JSON.stringify(envelope)}\n\n`;
       for (const sse of this.sseListeners) {
         if (sse.res.writableEnded || sse.res.destroyed) {
           clearInterval(sse.keepalive);
           this.sseListeners.delete(sse);
+          continue;
+        }
+        if (sse.canalId && payloadRec.canal_id && payloadRec.canal_id !== sse.canalId) {
           continue;
         }
         if (sse.agenteId && payloadRec.agente_id && payloadRec.agente_id !== sse.agenteId) {

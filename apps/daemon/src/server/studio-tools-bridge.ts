@@ -5,10 +5,15 @@ import {
   mcpConfigErrors,
   normalizeMcpConfig,
   whatsAppNumberForms,
+  type AnexoChat,
   type ArquivoStudio,
+  type AskUserQuestion,
+  type ChatVisualMeta,
   type MarketplaceSourceFilter,
   type McpAcessoAgentes,
   type McpServidorConfig,
+  type MemoriaInclusao,
+  type MensagemChat,
   type ToolDefinition,
 } from "@criativo/contracts";
 import {
@@ -48,6 +53,16 @@ import type { AgentWaitsService } from "../waits/agent-waits-service.ts";
 import type { QueueControlsService } from "../queue/queue-controls-service.ts";
 import type { ContextResetService } from "../chat/context-reset-service.ts";
 import type { MessagePinsService } from "../chat/message-pins-service.ts";
+import type { SharedTablesService } from "../agent-data/shared-tables-service.ts";
+import { MemoryManager } from "../engine/runner/memory-manager.ts";
+import type { MemoryReviewService } from "../engine/runner/memory-review-service.ts";
+import type { SkillLearningService } from "../engine/runner/skill-learning-service.ts";
+import type { HistorySearchService } from "../engine/runner/history-search-service.ts";
+import type { LibraryFoldersService } from "../engine/runner/library-folders-service.ts";
+import type { CanalMensagemRow, HandoffBus } from "../engine/runner/handoff-bus.ts";
+import type { ChatVisualPreviewService } from "../engine/runner/chat-visual-preview-service.ts";
+import type { UiBlockRegistry } from "../engine/runner/ui-block-registry.ts";
+import type { ApiKeysBridge, OrigemTurnoApiKey } from "../vault/api-keys-bridge.ts";
 import type { WorkflowStore } from "../workflows/workflow-store.ts";
 import type { VaultService } from "../vault/vault-service.ts";
 import type { WebSocketHub } from "./websocket-hub.ts";
@@ -428,6 +443,8 @@ export function buildStudioLiveContext(deps: {
   vault?: VaultService;
   providerConnection: ProviderConnectionService;
   workspaceRoot: string;
+  agenteId?: string | null;
+  memoryManager?: MemoryManager;
 }): string {
   syncWorkspaceFilesToDatabase(deps.db, deps.workspaceRoot);
 
@@ -533,6 +550,23 @@ export function buildStudioLiveContext(deps: {
     }
   } catch {
     // Tabela opcional em contextos legados
+  }
+
+  try {
+    if (deps.agenteId) {
+      const memMgr = deps.memoryManager ?? new MemoryManager(deps.db);
+      const snap = memMgr.getEssentialContextSnapshot(deps.agenteId);
+      const xmlBlock =
+        snap.contextBlock || `<agent_memories count="${snap.memorias.length}"></agent_memories>`;
+      lines.push(
+        "",
+        "### Memórias Essenciais, Shared Tables e Generative UI",
+        xmlBlock,
+        "- Use `remember` / `forget_memory` para gravar decisões duráveis, `memory_recall` para buscar memórias `searchable` via FTS5, `list_tables` / `query_data` / `execute_data` para o banco SQL compartilhado entre agentes, `html_render` para painéis interativos em sandbox e `ask_user` / `ask_ui` / `acknowledge_request` / `request_api_key` para cards bloqueantes.",
+      );
+    }
+  } catch {
+    // Ignora caso tabela de memórias não esteja pronta em ambiente mínimo
   }
 
   return lines.join("\n");
@@ -1783,4 +1817,1254 @@ export function buildPhase13SystemGuidance(options?: {
     parts.push("", options.wokenWaitsBlock);
   }
   return parts.join("\n");
+}
+
+
+// ============================================================================
+// Fase 14 — 21 Ferramentas Nativas (+ Aliases Compatíveis):
+// Memória/FTS5, Histórico, Shared SQL, Generative UI, Cards/API Keys,
+// Biblioteca Hierárquica, Reação Emoji 1:1 e send_message Inter-Agentes
+// ============================================================================
+
+export const PHASE14_TOOLS_SCHEMA: ToolDefinition[] = [
+  {
+    name: "remember",
+    description:
+      "Registra ou atualiza uma memória de longo prazo no agente atual (em staging até a conclusão do turno). Respeita o orçamento de 8.192 bytes para 'essential' e protege memórias manuais do usuário.",
+    parameters: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "Texto conciso da regra, preferência ou aprendizado durável." },
+        memoryId: { type: "string", description: "ID opcional de memória anterior a atualizar." },
+        inclusion: {
+          type: "string",
+          enum: ["essential", "searchable"],
+          description: "'essential' entra sempre no prompt vivo; 'searchable' fica disponível via memory_recall.",
+        },
+        site: { type: "string", description: "Domínio opcional associado à memória (ex.: instagram.com)." },
+      },
+      required: ["text"],
+    },
+  },
+  {
+    name: "forget_memory",
+    description:
+      "Agenda a remoção de uma memória automática obsoleta ao concluir o turno (memórias manuais controladas pelo usuário são protegidas).",
+    parameters: {
+      type: "object",
+      properties: {
+        memoryId: { type: "string", description: "ID da memória a esquecer." },
+        text: { type: "string", description: "Texto exato alternativo caso não possua o ID." },
+      },
+    },
+  },
+  {
+    name: "memory_recall",
+    description:
+      "Busca memórias via SQLite FTS5 BM25 ('search'), lista memórias paginadas ('list') ou ajusta inclusão ('set_inclusion').",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["search", "list", "set_inclusion"],
+          description: "Operação desejada (padrão: 'search' quando query presente, senão 'list').",
+        },
+        query: { type: "string", description: "Termos de busca FTS5." },
+        site: { type: "string", description: "Domínio opcional para filtrar memórias." },
+        limit: { type: "number", description: "Limite de itens retornados (1 a 50)." },
+        after: { type: "string", description: "Cursor temporal ISO para paginação em 'list'." },
+        changes: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              memoryId: { type: "string" },
+              inclusion: { type: "string", enum: ["essential", "searchable"] },
+            },
+            required: ["memoryId", "inclusion"],
+          },
+        },
+      },
+    },
+  },
+  {
+    name: "search_memories",
+    description: "Alias direto para buscar memórias do agente via FTS5 BM25.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        site: { type: "string" },
+        limit: { type: "number" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "list_memories",
+    description: "Alias direto para listar memórias paginadas do agente.",
+    parameters: {
+      type: "object",
+      properties: {
+        inclusion: { type: "string", enum: ["essential", "searchable"] },
+        site: { type: "string" },
+        after: { type: "string" },
+        limit: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "set_memory_inclusion",
+    description: "Altera a categoria ('essential' | 'searchable') de memórias automáticas do agente.",
+    parameters: {
+      type: "object",
+      properties: {
+        changes: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              memoryId: { type: "string" },
+              inclusion: { type: "string", enum: ["essential", "searchable"] },
+            },
+            required: ["memoryId", "inclusion"],
+          },
+        },
+      },
+      required: ["changes"],
+    },
+  },
+  {
+    name: "history_search",
+    description:
+      "Pesquisa conversas, threads e mensagens anteriores do agente com filtro temporal ('24h', '7d', 'YYYY-MM-DD') ou lê trecho contextual ao redor de uma mensagem.",
+    parameters: {
+      type: "object",
+      properties: {
+        taskId: { type: "string", description: "ID opcional da tarefa ou thread para restringir a busca." },
+        query: { type: "string", description: "Texto a localizar nas mensagens anteriores." },
+        after: { type: "string", description: "Filtro temporal relativo ('24h', '7d') ou data ISO." },
+        cursor: { type: "string", description: "Cursor base64url retornado em nextCursor." },
+        limit: { type: "number", description: "Quantidade máxima de resultados (1 a 50)." },
+        messageId: { type: "string", description: "Se informado, lê trecho de mensagens até este messageId." },
+        before: { type: "string", description: "Timestamp ISO opcional para ler mensagens anteriores." },
+        offset: { type: "number" },
+        includeWorkSteps: { type: "boolean" },
+        workStepsOffset: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "history_read",
+    description: "Lê um trecho cronológico de mensagens anteriores de uma conversa ou thread do agente.",
+    parameters: {
+      type: "object",
+      properties: {
+        canalId: { type: "string" },
+        messageId: { type: "string" },
+        before: { type: "string" },
+        offset: { type: "number" },
+        limit: { type: "number" },
+        includeWorkSteps: { type: "boolean" },
+        workStepsOffset: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "list_tables",
+    description:
+      "Lista todas as tabelas SQL colaborativas em shared-tables.db com schema CREATE TABLE, contagem de linhas e agente proprietário.",
+    parameters: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
+    name: "query_data",
+    description:
+      "Executa uma única consulta SQL somente-leitura (SELECT, VALUES ou EXPLAIN) no banco compartilhado entre agentes.",
+    parameters: {
+      type: "object",
+      properties: {
+        sql: { type: "string", description: "Instrução SQL SELECT/VALUES única." },
+        params: {
+          type: "array",
+          items: { type: ["string", "number", "boolean", "null"] as unknown as "string" },
+          description: "Parâmetros posicionais opcionais (?).",
+        },
+      },
+      required: ["sql"],
+    },
+  },
+  {
+    name: "execute_data",
+    description:
+      "Executa uma única instrução DML/DDL (CREATE, INSERT, UPDATE, DELETE, ALTER, DROP) no banco SQL compartilhado respeitando posse por agente.",
+    parameters: {
+      type: "object",
+      properties: {
+        sql: { type: "string", description: "Instrução SQL DML/DDL única." },
+        params: {
+          type: "array",
+          items: { type: ["string", "number", "boolean", "null"] as unknown as "string" },
+          description: "Parâmetros posicionais opcionais (?).",
+        },
+      },
+      required: ["sql"],
+    },
+  },
+  {
+    name: "delete_table",
+    description: "Remove uma tabela do banco SQL compartilhado caso pertença ao agente atual.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Nome exato da tabela a excluir." },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "html_render",
+    description:
+      "Renderiza um widget, gráfico, calculadora ou painel HTML interativo em iframe sandboxed no chat com suporte à ponte window.criativoPage.",
+    parameters: {
+      type: "object",
+      properties: {
+        html: { type: "string", description: "Código HTML completo ou fragmento (até 512.000 caracteres)." },
+        title: { type: "string", description: "Título curto exibido no cabeçalho do painel." },
+        height: { type: "number", description: "Altura inicial sugerida em pixels (80 a 2000)." },
+      },
+      required: ["html", "title"],
+    },
+  },
+  {
+    name: "html_preview",
+    description:
+      "Valida e pré-renderiza fora de vista um documento HTML antes de exibi-lo ao usuário, retornando altura medida e mensagens de console.",
+    parameters: {
+      type: "object",
+      properties: {
+        html: { type: "string" },
+        width: { type: "number", description: "Largura da viewport de teste (240 a 1600, padrão 728)." },
+        appearance: { type: "string", enum: ["dark", "light"] },
+      },
+      required: ["html"],
+    },
+  },
+  {
+    name: "ask_user",
+    description:
+      "Exibe um cartão interativo com 1 a 3 perguntas estruturadas (opções, múltipla escolha ou entrada secreta mascarada) e aguarda a resposta do usuário.",
+    parameters: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        questions: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              header: { type: "string" },
+              question: { type: "string" },
+              detail: { type: "string" },
+              isSecret: { type: "boolean" },
+              multiSelect: { type: "boolean" },
+              options: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    label: { type: "string" },
+                    description: { type: "string" },
+                  },
+                  required: ["label"],
+                },
+              },
+            },
+            required: ["question"],
+          },
+        },
+      },
+      required: ["questions"],
+    },
+  },
+  {
+    name: "ask_ui",
+    description:
+      "Exibe um cartão de aprovação, formulário estruturado ou confirmação crítica (com suporte a confirmHold para ações destrutivas) e suspende o turno até decisão.",
+    parameters: {
+      type: "object",
+      properties: {
+        blockId: { type: "string" },
+        block: {
+          type: "object",
+          properties: {
+            type: { type: "string" },
+            variant: {
+              type: "string",
+              enum: ["confirm", "quick_replies", "choice", "form", "approval", "progress", "block_run"],
+            },
+            title: { type: "string" },
+            description: { type: "string" },
+            preview: { type: "string" },
+            markdownPreview: { type: "string" },
+            danger: { type: "boolean" },
+            confirmHold: { type: ["number", "boolean", "object"] as unknown as "object" },
+            fields: { type: "array", items: { type: "object" } },
+            actions: { type: "array", items: { type: "object" } },
+          },
+          required: ["title"],
+        },
+      },
+      required: ["block"],
+    },
+  },
+  {
+    name: "acknowledge_request",
+    description:
+      "Apresenta um plano prévio resumido em etapas com contagem regressiva opcional (planStartAfterMs) antes de iniciar uma execução longa.",
+    parameters: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        message: { type: "string" },
+        summaryMarkdown: { type: "string" },
+        steps: { type: "array", items: { type: "string" }, description: "De 1 a 4 etapas resumidas." },
+        startLabel: { type: "string" },
+        cancelLabel: { type: "string" },
+        alternativeLabel: { type: "string" },
+        planStartAfterMs: { type: "number" },
+      },
+      required: ["steps"],
+    },
+  },
+  {
+    name: "request_api_key",
+    description:
+      "Solicita ao usuário uma chave de API através de um cartão seguro cifrado diretamente no Cofre AES-256-GCM (sem expor o segredo ao histórico).",
+    parameters: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "Identificador em maiúsculas (/^[A-Z][A-Z0-9_]{0,63}$/, ex.: ELEVENLABS_API_KEY).",
+        },
+        title: { type: "string" },
+        label: { type: "string" },
+        description: { type: "string" },
+        docsUrl: { type: "string" },
+        placeholder: { type: "string" },
+        submit: { type: "string" },
+        defaultScope: { type: "string", enum: ["todos_agentes", "agente_especifico"] },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "list_api_keys",
+    description:
+      "Lista apenas os nomes e escopos das chaves de API configuradas no Cofre visíveis ao agente (jamais retorna valores).",
+    parameters: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
+    name: "save_api_key",
+    description:
+      "Salva uma chave de API cifrada no Cofre AES-256-GCM (permitido exclusivamente em turnos iniciados diretamente pelo usuário local).",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        key: { type: "string" },
+        scope: { type: "string", enum: ["todos_agentes", "agente_especifico"] },
+        notes: { type: "string" },
+      },
+      required: ["name", "key"],
+    },
+  },
+  {
+    name: "remove_api_key",
+    description:
+      "Remove uma chave de API exclusiva deste agente no Cofre (chaves globais compartilhadas só podem ser removidas pelo usuário).",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "list_library_folders",
+    description:
+      "Lista a árvore de pastas hierárquicas da Biblioteca do agente, seus arquivos (até 200) e contagem de itens sem pasta.",
+    parameters: {
+      type: "object",
+      properties: {
+        folder: { type: "string", description: "Caminho ou ID opcional da pasta para filtrar." },
+      },
+    },
+  },
+  {
+    name: "attach_files_to_response",
+    description:
+      "Anexa arquivos gerados/existentes de recursos/, conteudos/, saidas/ ou previas/ na resposta do chat e opcionalmente os organiza em uma pasta hierárquica.",
+    parameters: {
+      type: "object",
+      properties: {
+        paths: {
+          type: "array",
+          items: { type: "string" },
+          description: "Caminhos relativos dos arquivos dentro do workspace.",
+        },
+        folder: {
+          type: "string",
+          description: "Caminho hierárquico opcional (até 4 níveis, ex.: 'Campanha Outono/Carrossel').",
+        },
+      },
+      required: ["paths"],
+    },
+  },
+  {
+    name: "react_to_user_message",
+    description:
+      "Adiciona exatamente 1 grafema emoji Unicode à mensagem atual do usuário (disponível apenas em chat 1:1 com o usuário).",
+    parameters: {
+      type: "object",
+      properties: {
+        emoji: { type: "string", description: "Exatamente 1 emoji Unicode (ex.: '🔥', '✅', '🎯')." },
+      },
+      required: ["emoji"],
+    },
+  },
+  {
+    name: "send_message",
+    description:
+      "Envia mensagem assíncrona estruturada para 1 a 32 colegas agentes com correlação por replyToMessageId, expectsReply e roteamento steer vs queue.",
+    parameters: {
+      type: "object",
+      properties: {
+        recipientAgentIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Lista de 1 a 32 IDs de agentes destinatários distintos.",
+        },
+        text: { type: "string", description: "Mensagem ou instrução completa para os destinatários." },
+        paths: {
+          type: "array",
+          items: { type: "string" },
+          description: "Até 10 caminhos relativos seguros do workspace para anexar.",
+        },
+        replyToMessageId: {
+          type: "string",
+          description: "ID da mensagem inter-agente anterior que está sendo respondida.",
+        },
+        expectsReply: {
+          type: "boolean",
+          description: "Se true (padrão), aguarda retorno na conversa de origem; se false, entrega informativa final.",
+        },
+      },
+      required: ["recipientAgentIds", "text"],
+    },
+  },
+];
+
+export const PHASE14_TOOL_NAMES: ReadonlySet<string> = new Set(
+  PHASE14_TOOLS_SCHEMA.map((t) => t.name),
+);
+
+export function isPhase14ToolName(name: string): boolean {
+  return PHASE14_TOOL_NAMES.has(name);
+}
+
+export interface Phase14ToolServices {
+  db: CriativoDatabase;
+  wsHub?: WebSocketHub;
+  sharedTables?: SharedTablesService;
+  memoryManager?: MemoryManager;
+  memoryReview?: MemoryReviewService;
+  skillLearning?: SkillLearningService;
+  historySearch?: HistorySearchService;
+  libraryFolders?: LibraryFoldersService;
+  handoffBus?: HandoffBus;
+  visualPreview?: ChatVisualPreviewService;
+  uiBlockRegistry?: UiBlockRegistry;
+  apiKeysBridge?: ApiKeysBridge;
+  isAgentBusy?: (agenteId: string) => { busy: boolean; policy: "steer" | "queue" };
+  onSteerMessage?: (recipientId: string, row: CanalMensagemRow) => void;
+  onDispatchQueuedInterAgent?: (
+    recipientId: string,
+    row: CanalMensagemRow,
+    nextHopDepth: number,
+  ) => void;
+}
+
+export interface Phase14ToolContext {
+  agenteId: string;
+  canalId: string;
+  threadId?: string | null;
+  tarefaId?: string | null;
+  turnId: string;
+  origemTurno: OrigemTurnoApiKey;
+  isOneToOneUserChat: boolean;
+  lastUserMessageId?: string | null;
+  hopDepth?: number;
+  generatedArtifacts?: string[];
+  generatedAnexos?: AnexoChat[];
+  persistVisualMessage?: boolean;
+  onVisualMessage?: (meta: ChatVisualMeta, itemType: string) => void;
+}
+
+function validateSingleEmojiGrapheme(rawEmoji: string): string {
+  const trimmed = String(rawEmoji ?? "").trim();
+  if (!trimmed) {
+    throw new Error("Informe um emoji não vazio em 'emoji'.");
+  }
+  const segmenter = new Intl.Segmenter("pt-BR", { granularity: "grapheme" });
+  const graphemes = Array.from(segmenter.segment(trimmed));
+  if (graphemes.length !== 1) {
+    throw new Error(
+      `react_to_user_message aceita exatamente 1 grafema emoji Unicode (recebidos: ${graphemes.length}).`,
+    );
+  }
+  const single = graphemes[0]!.segment;
+  if (!/\p{Extended_Pictographic}/u.test(single)) {
+    throw new Error(`O caractere '${single}' não é um pictograma emoji Unicode válido.`);
+  }
+  return single;
+}
+
+/**
+ * Roteador unificado para todas as 21 ferramentas (+ aliases) da Fase 14,
+ * usado tanto pelo AgentRunner quanto pelo loop interativo do Chat.
+ */
+export async function executePhase14ToolCall(
+  toolName: string,
+  args: Record<string, unknown>,
+  ctx: Phase14ToolContext,
+  services: Phase14ToolServices,
+): Promise<unknown> {
+  const memMgr = services.memoryManager ?? new MemoryManager(services.db);
+  const redact = (text: string): string =>
+    services.apiKeysBridge ? services.apiKeysBridge.redactSecretValues(text) : text;
+
+  switch (toolName) {
+    // -------------------------------------------------------------------------
+    // 1. Memória & Histórico (LRN-01, LRN-02)
+    // -------------------------------------------------------------------------
+    case "remember": {
+      const rawText = readStringArg(args, "text", "texto") ?? "";
+      if (!rawText) {
+        throw new Error("Informe o texto da memória em 'text'.");
+      }
+      const safeText = redact(rawText);
+      const memoryId = readStringArg(args, "memoryId", "memoriaId", "memoria_id");
+      const rawInclusion = readStringArg(args, "inclusion", "categoria");
+      const inclusion: MemoriaInclusao =
+        rawInclusion === "essential" ? "essential" : "searchable";
+      const site = readStringArg(args, "site", "escopoSite", "escopo_site") ?? null;
+
+      const staged = memMgr.stageTurnMutation(ctx.turnId, ctx.agenteId, {
+        action: "remember",
+        memoriaId: memoryId,
+        texto: safeText,
+        categoria: inclusion,
+        escopoSite: site,
+      });
+      return staged;
+    }
+
+    case "forget_memory": {
+      const memoryId = readStringArg(args, "memoryId", "memoriaId", "memoria_id");
+      const text = readStringArg(args, "text", "texto");
+      if (!memoryId && !text) {
+        throw new Error("Informe 'memoryId' ou 'text' da memória a esquecer.");
+      }
+      return memMgr.stageTurnMutation(ctx.turnId, ctx.agenteId, {
+        action: "forget",
+        memoriaId: memoryId,
+        texto: text,
+      });
+    }
+
+    case "search_memories": {
+      const query = readStringArg(args, "query", "busca") ?? "";
+      const site = readStringArg(args, "site") ?? null;
+      const limit = typeof args.limit === "number" ? args.limit : 15;
+      const items = memMgr.searchMemoriesFts(ctx.agenteId, query, {
+        limit,
+        site,
+        redact,
+      });
+      return { action: "search", count: items.length, memories: items };
+    }
+
+    case "list_memories": {
+      const rawCat = readStringArg(args, "inclusion", "categoria");
+      const categoria: MemoriaInclusao | undefined =
+        rawCat === "essential" || rawCat === "searchable" ? rawCat : undefined;
+      const site = readStringArg(args, "site") ?? null;
+      const after = readStringArg(args, "after");
+      const limit = typeof args.limit === "number" ? args.limit : 30;
+      const listed = memMgr.listMemoriesPaginated(ctx.agenteId, {
+        categoria,
+        site,
+        after,
+        limit,
+      });
+      return {
+        action: "list",
+        memories: listed.items.map((m) => ({ ...m, texto: redact(m.texto) })),
+        nextCursor: listed.nextCursor,
+      };
+    }
+
+    case "set_memory_inclusion": {
+      const rawChanges = Array.isArray(args.changes) ? args.changes : [];
+      const parsedChanges: Array<{ memoriaId: string; categoria: MemoriaInclusao }> = [];
+      for (const item of rawChanges) {
+        if (!item || typeof item !== "object") continue;
+        const rec = item as Record<string, unknown>;
+        const id = readStringArg(rec, "memoryId", "memoriaId", "memoria_id");
+        const inc = readStringArg(rec, "inclusion", "categoria");
+        if (id && (inc === "essential" || inc === "searchable")) {
+          parsedChanges.push({ memoriaId: id, categoria: inc });
+        }
+      }
+      if (parsedChanges.length === 0) {
+        throw new Error("Informe ao menos um item válido em 'changes'.");
+      }
+      const snap = memMgr.setMemoryInclusion(ctx.agenteId, parsedChanges, false);
+      return {
+        action: "set_inclusion",
+        usedBytes: snap.usedBytes,
+        budgetBytes: snap.budgetBytes,
+        updated: parsedChanges.length,
+      };
+    }
+
+    case "memory_recall": {
+      const query = readStringArg(args, "query", "busca");
+      const explicitAction = readStringArg(args, "action");
+      const effectiveAction =
+        explicitAction ??
+        (Array.isArray(args.changes)
+          ? "set_inclusion"
+          : query
+            ? "search"
+            : "list");
+
+      if (effectiveAction === "set_inclusion") {
+        return await executePhase14ToolCall("set_memory_inclusion", args, ctx, services);
+      }
+      if (effectiveAction === "search") {
+        return await executePhase14ToolCall(
+          "search_memories",
+          { ...args, query: query ?? "" },
+          ctx,
+          services,
+        );
+      }
+      return await executePhase14ToolCall("list_memories", args, ctx, services);
+    }
+
+    case "history_read": {
+      if (!services.historySearch) {
+        throw new Error("HistorySearchService não inicializado neste daemon.");
+      }
+      return services.historySearch.readConversationExcerpt({
+        agenteId: ctx.agenteId,
+        canalId: readStringArg(args, "canalId", "canal_id") ?? null,
+        messageId: readStringArg(args, "messageId", "mensagem_id") ?? null,
+        before: readStringArg(args, "before") ?? null,
+        offset: typeof args.offset === "number" ? args.offset : 0,
+        limit: typeof args.limit === "number" ? args.limit : 20,
+        includeWorkSteps: Boolean(args.includeWorkSteps),
+        workStepsOffset: typeof args.workStepsOffset === "number" ? args.workStepsOffset : 0,
+      });
+    }
+
+    case "history_search": {
+      if (!services.historySearch) {
+        throw new Error("HistorySearchService não inicializado neste daemon.");
+      }
+      const messageId = readStringArg(args, "messageId", "mensagem_id");
+      const before = readStringArg(args, "before");
+      if (messageId || before || args.includeWorkSteps === true) {
+        return services.historySearch.readConversationExcerpt({
+          agenteId: ctx.agenteId,
+          canalId: readStringArg(args, "taskId", "canalId") ?? null,
+          messageId: messageId ?? null,
+          before: before ?? null,
+          offset: typeof args.offset === "number" ? args.offset : 0,
+          limit: typeof args.limit === "number" ? args.limit : 20,
+          includeWorkSteps: Boolean(args.includeWorkSteps),
+          workStepsOffset: typeof args.workStepsOffset === "number" ? args.workStepsOffset : 0,
+        });
+      }
+      return services.historySearch.searchHistory({
+        agenteId: ctx.agenteId,
+        taskId: readStringArg(args, "taskId", "threadId") ?? null,
+        query: readStringArg(args, "query", "busca") ?? null,
+        after: readStringArg(args, "after") ?? null,
+        cursor: readStringArg(args, "cursor") ?? null,
+        limit: typeof args.limit === "number" ? args.limit : 20,
+      });
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. Banco SQL Compartilhado (Shared Tables — LRN-03)
+    // -------------------------------------------------------------------------
+    case "list_tables": {
+      if (!services.sharedTables) {
+        throw new Error("SharedTablesService não inicializado neste daemon.");
+      }
+      const tables = await services.sharedTables.listTables();
+      return { tables };
+    }
+
+    case "query_data": {
+      if (!services.sharedTables) {
+        throw new Error("SharedTablesService não inicializado neste daemon.");
+      }
+      const sql = typeof args.sql === "string" ? args.sql : "";
+      const params = Array.isArray(args.params) ? args.params : undefined;
+      return await services.sharedTables.queryData(sql, params, ctx.agenteId);
+    }
+
+    case "execute_data": {
+      if (!services.sharedTables) {
+        throw new Error("SharedTablesService não inicializado neste daemon.");
+      }
+      const sql = typeof args.sql === "string" ? args.sql : "";
+      const params = Array.isArray(args.params) ? args.params : undefined;
+      return await services.sharedTables.executeData(sql, params, ctx.agenteId);
+    }
+
+    case "delete_table": {
+      if (!services.sharedTables) {
+        throw new Error("SharedTablesService não inicializado neste daemon.");
+      }
+      const name = readStringArg(args, "name", "tableName", "nome") ?? "";
+      return await services.sharedTables.deleteTable(name, ctx.agenteId);
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. Generative UI em Sandbox (CHAT-01)
+    // -------------------------------------------------------------------------
+    case "html_render": {
+      if (!services.visualPreview) {
+        throw new Error("ChatVisualPreviewService não inicializado neste daemon.");
+      }
+      const html = typeof args.html === "string" ? args.html : "";
+      const title = readStringArg(args, "title", "titulo") ?? "Painel Interativo";
+      const height = typeof args.height === "number" ? args.height : undefined;
+
+      const rendered = services.visualPreview.renderAndPersistPage({
+        agenteId: ctx.agenteId,
+        canalId: ctx.canalId,
+        html,
+        title,
+        height,
+        tarefaId: ctx.tarefaId ?? null,
+      });
+
+      const visualMeta: ChatVisualMeta = {
+        arquivo_id: rendered.arquivoId,
+        titulo: rendered.title,
+        altura_inicial: rendered.height,
+        url: rendered.url,
+      };
+
+      ctx.generatedArtifacts?.push(rendered.relPath);
+      ctx.onVisualMessage?.(visualMeta, rendered.itemType);
+
+      if (ctx.persistVisualMessage !== false) {
+        const msgId = randomUUID();
+        const agora = new Date().toISOString();
+        const threadId =
+          ctx.threadId ??
+          (ctx.canalId.startsWith("agente:") ? `main:${ctx.agenteId}` : ctx.canalId);
+        const agentRow = services.db.connection
+          .prepare("SELECT nome FROM projecao_agentes WHERE agente_id = ? LIMIT 1;")
+          .get(ctx.agenteId) as { nome?: string } | undefined;
+        const autorNome = agentRow?.nome ?? ctx.agenteId;
+
+        services.db.connection
+          .prepare(
+            `INSERT INTO projecao_conversas_chat (
+              mensagem_id, canal_id, agente_id, autor, autor_nome,
+              conteudo_markdown, anexos_json, steps_json, tarefa_id,
+              thread_id, turno_id, item_type, status, metadados_json, lida, criado_em
+            ) VALUES (?, ?, ?, 'agente', ?, ?, '[]', '[]', ?, ?, ?, ?, 'completed', ?, 1, ?);`,
+          )
+          .run(
+            msgId,
+            ctx.canalId,
+            ctx.agenteId,
+            autorNome,
+            `Painel visual: **${rendered.title}**`,
+            ctx.tarefaId ?? null,
+            threadId,
+            ctx.turnId,
+            rendered.itemType,
+            JSON.stringify({ visual_page: visualMeta }),
+            agora,
+          );
+
+        const chatMsg: MensagemChat = {
+          mensagem_id: msgId,
+          canal_id: ctx.canalId,
+          agente_id: ctx.agenteId,
+          autor: "agente",
+          autor_nome: autorNome,
+          conteudo_markdown: `Painel visual: **${rendered.title}**`,
+          anexos: [],
+          steps: [],
+          tarefa_id: ctx.tarefaId ?? null,
+          thread_id: threadId,
+          turno_id: ctx.turnId,
+          item_type: rendered.itemType,
+          status: "completed",
+          visual_page: visualMeta,
+          metadados: { visual_page: visualMeta },
+          lida: true,
+          criado_em: agora,
+        };
+        services.wsHub?.broadcast("chat:message", {
+          canal_id: ctx.canalId,
+          agente_id: ctx.agenteId,
+          mensagem: chatMsg,
+        });
+      }
+
+      return {
+        ok: true,
+        arquivoId: rendered.arquivoId,
+        title: rendered.title,
+        height: rendered.height,
+        url: rendered.url,
+      };
+    }
+
+    case "html_preview": {
+      if (!services.visualPreview) {
+        throw new Error("ChatVisualPreviewService não inicializado neste daemon.");
+      }
+      const html = typeof args.html === "string" ? args.html : "";
+      const width = typeof args.width === "number" ? args.width : undefined;
+      const appearance = args.appearance === "light" ? "light" : "dark";
+      return await services.visualPreview.previewHtmlOffscreen({
+        html,
+        width,
+        appearance,
+      });
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. Cards Bloqueantes & Cofre de API Keys (CHAT-02)
+    // -------------------------------------------------------------------------
+    case "ask_user": {
+      if (!services.uiBlockRegistry) {
+        throw new Error("UiBlockRegistry não inicializado neste daemon.");
+      }
+      const rawQuestions = Array.isArray(args.questions) ? args.questions : [];
+      if (rawQuestions.length < 1 || rawQuestions.length > 3) {
+        throw new Error("ask_user requer entre 1 e 3 perguntas em 'questions'.");
+      }
+
+      const questions: AskUserQuestion[] = rawQuestions.map((q, idx) => {
+        const rec = (q && typeof q === "object" ? q : {}) as Record<string, unknown>;
+        const questionText = readStringArg(rec, "question", "pergunta") ?? "";
+        if (!questionText) {
+          throw new Error(`A pergunta #${idx + 1} de ask_user não possui texto em 'question'.`);
+        }
+        const rawOptions = Array.isArray(rec.options) ? rec.options : undefined;
+        return {
+          id: readStringArg(rec, "id") ?? `q${idx + 1}`,
+          header: readStringArg(rec, "header", "cabecalho"),
+          question: questionText,
+          detail: readStringArg(rec, "detail", "detalhe"),
+          isSecret: Boolean(rec.isSecret),
+          multiSelect: Boolean(rec.multiSelect),
+          options: rawOptions
+            ?.map((opt) => {
+              if (typeof opt === "string") return { label: opt };
+              if (opt && typeof opt === "object") {
+                const oRec = opt as Record<string, unknown>;
+                const label = readStringArg(oRec, "label", "value") ?? "";
+                return label
+                  ? { label, description: readStringArg(oRec, "description") }
+                  : null;
+              }
+              return null;
+            })
+            .filter((x): x is NonNullable<typeof x> => x !== null),
+        };
+      });
+
+      const title = readStringArg(args, "title", "titulo");
+      return await services.uiBlockRegistry.openBlockingBlock({
+        agenteId: ctx.agenteId,
+        canalId: ctx.canalId,
+        threadId: ctx.threadId,
+        turnoId: ctx.turnId,
+        tipoFerramenta: "ask_user",
+        spec: {
+          kind: "ask_user",
+          ...(title ? { title } : {}),
+          questions,
+        },
+        conteudoMarkdown: title ?? questions[0]!.question,
+      });
+    }
+
+    case "ask_ui": {
+      if (!services.uiBlockRegistry) {
+        throw new Error("UiBlockRegistry não inicializado neste daemon.");
+      }
+      const rawBlock =
+        args.block && typeof args.block === "object" && !Array.isArray(args.block)
+          ? (args.block as Record<string, unknown>)
+          : args;
+
+      const title = readStringArg(rawBlock, "title", "titulo") ?? "Confirmação Necessária";
+      const rawVariant = readStringArg(rawBlock, "variant", "type") ?? "confirm";
+      const markdownPreview = readStringArg(rawBlock, "markdownPreview", "preview");
+      const description = readStringArg(rawBlock, "description", "descricao");
+      const danger = Boolean(rawBlock.danger);
+
+      let confirmHold: { label?: string; durationMs?: number } | boolean | undefined;
+      if (typeof rawBlock.confirmHold === "number") {
+        confirmHold = {
+          durationMs: Math.max(400, Math.min(3000, Math.round(rawBlock.confirmHold))),
+        };
+      } else if (typeof rawBlock.confirmHold === "boolean") {
+        confirmHold = rawBlock.confirmHold;
+      } else if (rawBlock.confirmHold && typeof rawBlock.confirmHold === "object") {
+        const ch = rawBlock.confirmHold as Record<string, unknown>;
+        const dur =
+          typeof ch.durationMs === "number"
+            ? Math.max(400, Math.min(3000, Math.round(ch.durationMs)))
+            : 1200;
+        confirmHold = {
+          label: readStringArg(ch, "label"),
+          durationMs: dur,
+        };
+      }
+
+      const rawActions = Array.isArray(rawBlock.actions) ? rawBlock.actions.slice(0, 4) : [];
+      const actions =
+        rawActions.length > 0
+          ? rawActions.map((a, idx) => {
+              const ar = (a && typeof a === "object" ? a : {}) as Record<string, unknown>;
+              return {
+                id: readStringArg(ar, "id") ?? `action_${idx + 1}`,
+                label: readStringArg(ar, "label") ?? `Ação ${idx + 1}`,
+                tone: readStringArg(ar, "tone") ?? (idx === 0 ? (danger ? "danger" : "primary") : "default"),
+                ...(ar.confirmHold !== undefined ? { confirmHold: ar.confirmHold } : {}),
+              };
+            })
+          : [
+              {
+                id: "confirm",
+                label: danger ? "Confirmar exclusão" : "Aprovar e continuar",
+                tone: danger ? "danger" : "primary",
+                ...(confirmHold ? { confirmHold } : {}),
+              },
+              { id: "cancel", label: "Cancelar operação", tone: "default" },
+            ];
+
+      return await services.uiBlockRegistry.openBlockingBlock({
+        agenteId: ctx.agenteId,
+        canalId: ctx.canalId,
+        threadId: ctx.threadId,
+        turnoId: ctx.turnId,
+        tipoFerramenta: "ask_ui",
+        spec: {
+          kind: "ask_ui",
+          variant: rawVariant,
+          title,
+          ...(description ? { description } : {}),
+          ...(markdownPreview ? { markdownPreview } : {}),
+          danger,
+          ...(confirmHold !== undefined ? { confirmHold } : {}),
+          ...(Array.isArray(rawBlock.options) ? { options: rawBlock.options } : {}),
+          ...(typeof rawBlock.multiSelect === "boolean"
+            ? { multiSelect: rawBlock.multiSelect }
+            : {}),
+          ...(Array.isArray(rawBlock.fields) ? { fields: rawBlock.fields } : {}),
+          actions,
+        },
+        conteudoMarkdown: title,
+      });
+    }
+
+    case "acknowledge_request": {
+      if (!services.uiBlockRegistry) {
+        throw new Error("UiBlockRegistry não inicializado neste daemon.");
+      }
+      const steps = readStringArrayArg(args, "steps", "etapas").slice(0, 4);
+      if (steps.length === 0) {
+        throw new Error("acknowledge_request requer de 1 a 4 etapas em 'steps'.");
+      }
+      const title = readStringArg(args, "title", "titulo") ?? "Plano de Execução";
+      const summaryMarkdown =
+        readStringArg(args, "summaryMarkdown", "message", "resumo") ?? title;
+      const startLabel = readStringArg(args, "startLabel") ?? "Iniciar plano";
+      const cancelLabel = readStringArg(args, "cancelLabel") ?? "Cancelar plano";
+      const alternativeLabel = readStringArg(args, "alternativeLabel");
+      const autoStartAfterMs =
+        typeof args.planStartAfterMs === "number" ? args.planStartAfterMs : undefined;
+
+      return await services.uiBlockRegistry.openBlockingBlock({
+        agenteId: ctx.agenteId,
+        canalId: ctx.canalId,
+        threadId: ctx.threadId,
+        turnoId: ctx.turnId,
+        tipoFerramenta: "acknowledge_request",
+        autoStartAfterMs,
+        spec: {
+          kind: "acknowledge_request",
+          title,
+          summaryMarkdown,
+          steps,
+          startLabel,
+          cancelLabel,
+          ...(alternativeLabel ? { alternativeLabel } : {}),
+        },
+        conteudoMarkdown: title,
+      });
+    }
+
+    case "request_api_key": {
+      if (!services.uiBlockRegistry || !services.apiKeysBridge) {
+        throw new Error("UiBlockRegistry / ApiKeysBridge não inicializados neste daemon.");
+      }
+      const rawName = readStringArg(args, "name", "nome") ?? "";
+      const validName = services.apiKeysBridge.validateKeyName(rawName);
+      const label = readStringArg(args, "label", "title", "titulo") ?? `Configurar ${validName}`;
+      const description = readStringArg(args, "description", "descricao");
+      const docsUrl = readStringArg(args, "docsUrl");
+      const placeholder = readStringArg(args, "placeholder");
+      const submit = readStringArg(args, "submit") ?? "Salvar no Cofre";
+      const defaultScope =
+        args.defaultScope === "agente_especifico" ? "agente_especifico" : "todos_agentes";
+
+      return await services.uiBlockRegistry.openBlockingBlock({
+        agenteId: ctx.agenteId,
+        canalId: ctx.canalId,
+        threadId: ctx.threadId,
+        turnoId: ctx.turnId,
+        tipoFerramenta: "request_api_key",
+        spec: {
+          kind: "request_api_key",
+          name: validName,
+          label,
+          ...(description ? { description } : {}),
+          ...(docsUrl ? { docsUrl } : {}),
+          ...(placeholder ? { placeholder } : {}),
+          submit,
+          defaultScope,
+        },
+        conteudoMarkdown: label,
+      });
+    }
+
+    case "list_api_keys": {
+      if (!services.apiKeysBridge) {
+        throw new Error("ApiKeysBridge não inicializado neste daemon.");
+      }
+      return {
+        keys: services.apiKeysBridge.listApiKeys(ctx.agenteId),
+      };
+    }
+
+    case "save_api_key": {
+      if (!services.apiKeysBridge) {
+        throw new Error("ApiKeysBridge não inicializado neste daemon.");
+      }
+      const name = readStringArg(args, "name", "nome") ?? "";
+      const key = typeof args.key === "string" ? args.key : typeof args.value === "string" ? args.value : "";
+      const scope =
+        args.scope === "agente_especifico" ? "agente_especifico" : "todos_agentes";
+      return services.apiKeysBridge.saveApiKey({
+        name,
+        value: key,
+        scope,
+        agenteId: ctx.agenteId,
+        origemTurno: ctx.origemTurno,
+      });
+    }
+
+    case "remove_api_key": {
+      if (!services.apiKeysBridge) {
+        throw new Error("ApiKeysBridge não inicializado neste daemon.");
+      }
+      const name = readStringArg(args, "name", "nome") ?? "";
+      return services.apiKeysBridge.removeApiKey({
+        name,
+        agenteId: ctx.agenteId,
+        byUser: false,
+      });
+    }
+
+    // -------------------------------------------------------------------------
+    // 5. Biblioteca Hierárquica & Reação Emoji 1:1 (CHAT-03)
+    // -------------------------------------------------------------------------
+    case "list_library_folders": {
+      if (!services.libraryFolders) {
+        throw new Error("LibraryFoldersService não inicializado neste daemon.");
+      }
+      const folder = readStringArg(args, "folder", "pasta");
+      return services.libraryFolders.listLibraryFoldersForAgent(ctx.agenteId, folder);
+    }
+
+    case "attach_files_to_response": {
+      if (!services.libraryFolders) {
+        throw new Error("LibraryFoldersService não inicializado neste daemon.");
+      }
+      const paths = readStringArrayArg(args, "paths", "arquivos");
+      if (paths.length === 0) {
+        throw new Error("Informe ao menos 1 caminho relativo em 'paths'.");
+      }
+      const folder = readStringArg(args, "folder", "pasta") ?? null;
+      const resolved = services.libraryFolders.resolveSafeWorkspaceFiles(paths, {
+        agenteId: ctx.agenteId,
+        tarefaId: ctx.tarefaId ?? null,
+        folderPath: folder,
+      });
+
+      for (const arq of resolved) {
+        ctx.generatedArtifacts?.push(arq.caminho_relativo);
+        ctx.generatedAnexos?.push({
+          nome: arq.nome_original,
+          caminho_relativo: arq.caminho_relativo,
+          url: arq.url || `/api/arquivos/raw/${encodeURIComponent(arq.caminho_relativo)}`,
+          mime_type: arq.mime_type,
+          tamanho_bytes: arq.tamanho_bytes,
+          tipo_uso: arq.tipo_uso,
+        });
+      }
+
+      return {
+        ok: true,
+        attachedCount: resolved.length,
+        files: resolved.map((a) => ({
+          arquivo_id: a.arquivo_id,
+          nome: a.nome_original,
+          caminho_relativo: a.caminho_relativo,
+          folder_path: a.folder_path ?? null,
+        })),
+      };
+    }
+
+    case "react_to_user_message": {
+      if (!ctx.isOneToOneUserChat) {
+        return {
+          ok: false,
+          erro: "react_to_user_message é permitido exclusivamente em conversas 1:1 diretas com o usuário.",
+        };
+      }
+      const validEmoji = validateSingleEmojiGrapheme(
+        typeof args.emoji === "string" ? args.emoji : "",
+      );
+
+      let targetMsgId = ctx.lastUserMessageId ?? null;
+      if (!targetMsgId) {
+        const lastRow = services.db.connection
+          .prepare(
+            `SELECT mensagem_id FROM projecao_conversas_chat
+             WHERE canal_id = ? AND autor = 'usuario'
+             ORDER BY criado_em DESC
+             LIMIT 1;`,
+          )
+          .get(ctx.canalId) as { mensagem_id?: string } | undefined;
+        targetMsgId = lastRow?.mensagem_id ?? null;
+      }
+
+      if (!targetMsgId) {
+        return {
+          ok: false,
+          erro: "Nenhuma mensagem do usuário encontrada nesta conversa para reagir.",
+        };
+      }
+
+      services.db.connection
+        .prepare("UPDATE projecao_conversas_chat SET reacao_emoji = ? WHERE mensagem_id = ?;")
+        .run(validEmoji, targetMsgId);
+
+      services.wsHub?.broadcast("chat:reaction", {
+        canal_id: ctx.canalId,
+        mensagem_id: targetMsgId,
+        emoji: validEmoji,
+        agente_id: ctx.agenteId,
+      });
+
+      return {
+        ok: true,
+        mensagem_id: targetMsgId,
+        emoji: validEmoji,
+      };
+    }
+
+    // -------------------------------------------------------------------------
+    // 6. Mensageria Assíncrona Multi-Agente (send_message — CHAT-04)
+    // -------------------------------------------------------------------------
+    case "send_message": {
+      if (!services.handoffBus) {
+        throw new Error("HandoffBus não inicializado neste daemon.");
+      }
+      const recipientAgentIds = readStringArrayArg(
+        args,
+        "recipientAgentIds",
+        "para_agentes",
+        "recipients",
+      );
+      const text = readStringArg(args, "text", "texto", "instrucao") ?? "";
+      const rawPaths = readStringArrayArg(args, "paths", "artefatos");
+
+      let safePaths: string[] = [];
+      if (rawPaths.length > 0) {
+        if (services.libraryFolders) {
+          const checked = services.libraryFolders.resolveSafeWorkspaceFiles(rawPaths, {
+            agenteId: ctx.agenteId,
+            tarefaId: ctx.tarefaId ?? null,
+          });
+          safePaths = checked.map((c) => c.caminho_relativo);
+        } else {
+          safePaths = rawPaths;
+        }
+      }
+
+      const replyToMessageId =
+        readStringArg(args, "replyToMessageId", "reply_to_message_id") ?? null;
+      const expectsReply = typeof args.expectsReply === "boolean" ? args.expectsReply : true;
+
+      return services.handoffBus.sendMessageAsync({
+        senderAgentId: ctx.agenteId,
+        sourceCanalId: ctx.canalId,
+        sourceThreadId: ctx.threadId ?? null,
+        tarefaId: ctx.tarefaId ?? null,
+        hopDepth: ctx.hopDepth ?? 0,
+        recipientAgentIds,
+        text,
+        paths: safePaths,
+        replyToMessageId,
+        expectsReply,
+        wsHub: services.wsHub,
+        isAgentBusy: services.isAgentBusy,
+        onSteerMessage: services.onSteerMessage,
+        onDispatchQueued: services.onDispatchQueuedInterAgent,
+      });
+    }
+
+    default:
+      throw new Error(`Ferramenta da Fase 14 desconhecida: ${toolName}`);
+  }
 }

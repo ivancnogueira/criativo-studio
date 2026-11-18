@@ -103,7 +103,8 @@ export class CriativoDatabase {
       );
     `);
 
-    // 2. projecao_arquivos — pastas hierárquicas da Biblioteca
+    // 2. projecao_arquivos — pastas hierárquicas da Biblioteca e URL de páginas visuais
+    this.ensureColumn("projecao_arquivos", "url", "TEXT");
     this.ensureColumn(
       "projecao_arquivos",
       "pasta_id",
