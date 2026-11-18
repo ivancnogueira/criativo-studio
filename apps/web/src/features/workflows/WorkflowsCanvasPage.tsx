@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   canConnectPorts,
   normalizeWorkflowGraph,
+  normalizeWorkflowNode,
   workflowLoopEdges,
   type AgenteRegistro,
   type ArquivoStudio,
@@ -34,6 +35,7 @@ import {
   Pencil,
   Play,
   Plus,
+  Save,
   Search,
   Square,
   StickyNote,
@@ -121,10 +123,17 @@ export interface WorkflowsCanvasPageProps {
   onUploadFile?: (file: File) => Promise<void>;
 }
 
-const TRIGGER_PRESETS: Array<{ titulo: string; triggerKind: WorkflowNo["triggerKind"] }> = [
+const TRIGGER_PRESETS: Array<{
+  titulo: string;
+  triggerKind: WorkflowNo["triggerKind"];
+  conectorId?: string;
+}> = [
   { titulo: "Gatilho Agendado", triggerKind: "schedule" },
   { titulo: "Webhook Externo", triggerKind: "webhook" },
   { titulo: "WhatsApp Recebido", triggerKind: "whatsapp" },
+  { titulo: "Menção no Slack", triggerKind: "conector", conectorId: "slack" },
+  { titulo: "Comando Discord", triggerKind: "conector", conectorId: "discord" },
+  { titulo: "Evento GitHub", triggerKind: "conector", conectorId: "github" },
   { titulo: "Disparo Manual", triggerKind: "manual" },
 ];
 
@@ -515,7 +524,7 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
         ? Math.max(...displayNos.map((n) => n.x)) + 360
         : 220;
     const y = displayNos.length > 0 ? displayNos[0].y : 180;
-    const newNode: WorkflowNo = {
+    const rawNode: WorkflowNo = {
       id: `no_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
       tipo,
       titulo: extra?.titulo ?? defaultTitleForNodeType(tipo),
@@ -524,6 +533,7 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
       config: extra?.config ?? {},
       ...extra,
     };
+    const newNode = normalizeWorkflowNode(rawNode);
     const nextNos = [...localNos, newNode];
     setLocalNos(nextNos);
     setSelectedNodeId(newNode.id);
@@ -1024,7 +1034,12 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
                           handleAddNode("gatilho", {
                             titulo: preset.titulo,
                             triggerKind: preset.triggerKind,
-                            config: { triggerKind: preset.triggerKind },
+                            config: preset.conectorId
+                              ? {
+                                  triggerKind: preset.triggerKind,
+                                  conectorId: preset.conectorId,
+                                }
+                              : { triggerKind: preset.triggerKind },
                           })
                         }
                         className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-[14px] text-[#DCDCDC] hover:bg-[#2A2A2A]"
@@ -1189,6 +1204,29 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
               </div>
             )}
           </div>
+
+          {!isReadOnly && currentWf && (
+            <button
+              type="button"
+              onClick={async () => {
+                pendingSavePayloadRef.current = {
+                  workflowId: currentWf.workflow_id,
+                  nome: currentWf.nome,
+                  descricao: currentWf.descricao ?? "",
+                  nos: localNos,
+                  arestas: localArestas,
+                  tracos: localTracos,
+                  ativo: currentWf.ativo,
+                };
+                await flushQueuedSave();
+                setStatusFeedback("Fluxo salvo no banco local.");
+              }}
+              className="flex items-center gap-1.5 rounded-xl border border-white/[0.12] bg-[#212121] px-3 py-2 text-[14px] font-semibold text-[#DCDCDC] shadow-2xl hover:bg-[#2A2A2A]"
+            >
+              <Save className="h-4 w-4 text-[#31CF76]" />
+              <span>Salvar fluxo</span>
+            </button>
+          )}
 
           <button
             type="button"

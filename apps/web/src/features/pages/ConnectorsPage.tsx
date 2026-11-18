@@ -6,6 +6,7 @@ import type {
   PacoteUpgradeInfo,
   ProvedorStatusInfo,
   ProviderName,
+  ShowcaseSiteSummary,
   StatusMensageria,
 } from "@criativo/contracts";
 import {
@@ -15,8 +16,12 @@ import {
   Check,
   ChevronDown,
   Code2,
+  Copy,
   Cpu,
+  ExternalLink,
   FlaskConical,
+  GitBranch,
+  Globe,
   Hash,
   Image as ImageIcon,
   KeyRound,
@@ -30,6 +35,7 @@ import {
   ShieldCheck,
   Smartphone,
   Sparkles,
+  Trash2,
   Volume2,
   X,
 } from "lucide-react";
@@ -88,9 +94,29 @@ interface ConnectorsPageProps {
   ) => Promise<{ ok: boolean; mensagem: string; detalhes?: unknown }>;
   upgrades?: PacoteUpgradeInfo[];
   onInstallUpgrade?: (pacote: "bonus" | "video") => Promise<void>;
+  showcaseSites?: ShowcaseSiteSummary[];
+  onPublishShowcase?: (payload: {
+    slug: string;
+    titulo: string;
+    descricao?: string;
+    sourceDir: string;
+    spaFallback?: boolean;
+    aprovadoPorHumano: boolean;
+  }) => Promise<{ ok: boolean; requiresApproval?: boolean; site?: ShowcaseSiteSummary; erro?: string }>;
+  onReplaceShowcase?: (
+    siteId: string,
+    payload: {
+      sourceDir: string;
+      titulo?: string;
+      descricao?: string;
+      spaFallback?: boolean;
+      aprovadoPorHumano: boolean;
+    }
+  ) => Promise<{ ok: boolean; requiresApproval?: boolean; site?: ShowcaseSiteSummary; erro?: string }>;
+  onDeleteShowcase?: (siteId: string) => Promise<void>;
 }
 
-type HubSectionTab = "provedores" | "apps" | "habilidades" | "cofre";
+type HubSectionTab = "provedores" | "apps" | "habilidades" | "showcase" | "cofre";
 
 const BrandTile: React.FC<{ id: ConectorIntegracaoInfo["id"]; color: string }> = ({ id, color }) => {
   const iconMap: Record<ConectorIntegracaoInfo["id"], React.ReactNode> = {
@@ -166,7 +192,8 @@ const AgentCustomPicker: React.FC<{
 /**
  * Central OpenBot de Conexões:
  * - Provedores de IA (multi-contas, Pool toggle, CLI version, modelos dinâmicos e cotas)
- * - Apps & Canais (WhatsApp, Instagram, Telegram, Voz e MCP sem nenhum <select> nativo)
+ * - Apps & Canais (WhatsApp, Instagram, Telegram, Slack, Discord, GitHub, Voz e MCP sem dropdown nativo)
+ * - Showcase Local (Publicação aprovada de entregáveis estáticos em /showcase/:slug/)
  * - Habilidades (leitura ao vivo de SKILL.md instalados na máquina)
  */
 export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
@@ -198,6 +225,10 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
   onTestConnector,
   upgrades = [],
   onInstallUpgrade,
+  showcaseSites = [],
+  onPublishShowcase,
+  onReplaceShowcase,
+  onDeleteShowcase,
 }) => {
   const [hubTab, setHubTab] = useState<HubSectionTab>("provedores");
   const [sidebarSearch, setSidebarSearch] = useState("");
@@ -232,6 +263,17 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
   const [skillQuery, setSkillQuery] = useState("");
   const [skillFilter, setSkillFilter] = useState<"todas" | "criativo" | "sistema">("todas");
   const [inspectedSkill, setInspectedSkill] = useState<HabilidadeInstaladaInfo | null>(null);
+  const [copiedWebhookId, setCopiedWebhookId] = useState<string | null>(null);
+  const [showcaseSlug, setShowcaseSlug] = useState("");
+  const [showcaseTitle, setShowcaseTitle] = useState("");
+  const [showcaseDesc, setShowcaseDesc] = useState("");
+  const [showcaseSourceDir, setShowcaseSourceDir] = useState("saidas/");
+  const [showcaseSpa, setShowcaseSpa] = useState(true);
+  const [pendingPublishApproval, setPendingPublishApproval] = useState(false);
+  const [replacingSite, setReplacingSite] = useState<ShowcaseSiteSummary | null>(null);
+  const [replaceSourceDir, setReplaceSourceDir] = useState("");
+  const [confirmDeleteSiteId, setConfirmDeleteSiteId] = useState<string | null>(null);
+  const [showcaseBusy, setShowcaseBusy] = useState(false);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -314,6 +356,52 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
         resumo_estado: "Nenhum servidor externo",
         cor_marca: "#74B9FF",
         detalhes: [],
+      },
+      {
+        id: "slack",
+        nome: "Slack",
+        categoria: "mensageria",
+        descricao: "Menções, eventos e notificações em canais via Bot Token e Signing Secret.",
+        subtitulo: "Events API + Notificações",
+        status: hasKey("slack_bot_token") && hasKey("slack_signing_secret") ? "conectado" : "desconectado",
+        resumo_estado: hasKey("slack_bot_token") ? "Credenciais no Cofre" : "Não configurado",
+        cor_marca: "#E01E5A",
+        agente_orquestrador_id: "estrategista",
+        detalhes: [
+          { chave: "slack_bot_token", rotulo: "Slack Bot Token (xoxb-...)", configurado: hasKey("slack_bot_token") },
+          { chave: "slack_signing_secret", rotulo: "Slack Signing Secret", configurado: hasKey("slack_signing_secret") },
+        ],
+      },
+      {
+        id: "discord",
+        nome: "Discord",
+        categoria: "mensageria",
+        descricao: "Comandos, interações Ed25519 e entregas via Bot Token ou Webhook.",
+        subtitulo: "Interactions & Webhook",
+        status: hasKey("discord_bot_token") || hasKey("discord_webhook_url") ? "conectado" : "desconectado",
+        resumo_estado: hasKey("discord_bot_token") || hasKey("discord_webhook_url") ? "Credenciais no Cofre" : "Não configurado",
+        cor_marca: "#5865F2",
+        agente_orquestrador_id: "estrategista",
+        detalhes: [
+          { chave: "discord_bot_token", rotulo: "Discord Bot Token", configurado: hasKey("discord_bot_token") },
+          { chave: "discord_public_key", rotulo: "Discord Public Key (Ed25519)", configurado: hasKey("discord_public_key") },
+          { chave: "discord_webhook_url", rotulo: "Discord Webhook URL", configurado: hasKey("discord_webhook_url") },
+        ],
+      },
+      {
+        id: "github",
+        nome: "GitHub",
+        categoria: "sistema",
+        descricao: "Webhooks HMAC-SHA256 de push/release/issue e automações via PAT.",
+        subtitulo: "Repos, Issues & Releases",
+        status: hasKey("github_token") ? "conectado" : "desconectado",
+        resumo_estado: hasKey("github_token") ? "Credenciais no Cofre" : "Não configurado",
+        cor_marca: "#F0F0F0",
+        agente_orquestrador_id: "estrategista",
+        detalhes: [
+          { chave: "github_token", rotulo: "GitHub Personal Access Token", configurado: hasKey("github_token") },
+          { chave: "github_webhook_secret", rotulo: "GitHub Webhook Secret", configurado: hasKey("github_webhook_secret") },
+        ],
       },
     ];
   }, [conectores, vaultKeys, whatsappStatus]);
@@ -430,6 +518,13 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
       keywords: "habilidades skills carrossel reels copywriter criativo gsd",
       contagem: habilidades.length,
       icone: <Sparkles className="h-4 w-4 shrink-0" />,
+    },
+    {
+      key: "showcase",
+      rotulo: "Showcase Local",
+      keywords: "showcase sites estaticos entregaveis html deploy local",
+      contagem: showcaseSites.length,
+      icone: <Globe className="h-4 w-4 shrink-0" />,
     },
     {
       key: "cofre",
@@ -742,7 +837,41 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
                   </div>
                 )}
 
-                {/* Campos dedicados por conector (ZERO <select>) */}
+                {/* Campos dedicados por conector (sem dropdown nativo) */}
+                {(activeConnector.id === "slack" ||
+                  activeConnector.id === "discord" ||
+                  activeConnector.id === "github") && (
+                  <div className="rounded-xl bg-[#161616] border border-white/[0.06] p-3.5 flex flex-wrap items-center justify-between gap-2.5">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-[#979797]">
+                        Endpoint local do Webhook ({activeConnector.nome})
+                      </div>
+                      <code className="block truncate font-mono text-[11.5px] text-[#42A0FF] mt-0.5">
+                        {`${typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:4190"}/api/conectores/${activeConnector.id}/webhook`}
+                      </code>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const url = `${typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:4190"}/api/conectores/${activeConnector.id}/webhook`;
+                        if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+                          await navigator.clipboard.writeText(url);
+                        }
+                        setCopiedWebhookId(activeConnector.id);
+                        setTimeout(() => setCopiedWebhookId(null), 2000);
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#242424] px-3 py-1.5 text-[11.5px] font-semibold text-white hover:bg-[#2A2A2A]"
+                    >
+                      <Copy className="h-3.5 w-3.5 text-[#42A0FF]" />
+                      <span>
+                        {copiedWebhookId === activeConnector.id
+                          ? "Endpoint copiado!"
+                          : "Copiar endpoint"}
+                      </span>
+                    </button>
+                  </div>
+                )}
+
                 {activeConnector.id !== "whatsapp" && activeConnector.id !== "mcp" && (
                   <div className="space-y-3">
                     {activeConnector.detalhes.map((det) => (
@@ -836,7 +965,7 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
                   </div>
                 )}
 
-                {/* Seletor customizado de Agente Orquestrador (sem <select>) */}
+                {/* Seletor customizado de Agente Orquestrador */}
                 {agentes.length > 0 && (
                   <div className="space-y-1.5">
                     <span className="block text-[12px] font-medium text-[#DCDCDC]">
@@ -880,7 +1009,7 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
                       className="openbot-btn-secondary px-4 py-2 text-[12px] inline-flex items-center gap-1.5"
                     >
                       <FlaskConical className="h-3.5 w-3.5" />
-                      {testingConnector ? "Testando..." : "Testar Conexão Real"}
+                      {testingConnector ? "Testando..." : "Testar conector"}
                     </button>
                   )}
                   <button
@@ -888,7 +1017,7 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
                     onClick={() => void handleSaveConnector(activeConnector)}
                     className="openbot-btn-primary px-5 py-2 text-[12px]"
                   >
-                    Salvar no Cofre AES-256-GCM
+                    Salvar credenciais
                   </button>
                 </div>
               </div>
@@ -1025,6 +1154,335 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
             )}
           </div>
         )}
+
+            {/* ABA SHOWCASE LOCAL */}
+            {hubTab === "showcase" && (
+              <div className="space-y-5 pb-6">
+                <div className="rounded-2xl bg-[#18181A] border border-white/[0.07] p-5 space-y-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h2 className="text-[16px] font-semibold text-white">
+                        Publicar entregável no Showcase Local
+                      </h2>
+                      <p className="text-[12px] text-[#979797] mt-0.5">
+                        Hospede páginas estáticas ou prévias HTML aprovadas localmente na rota{" "}
+                        <code className="text-[#42A0FF]">/showcase/:slug/</code> sem expor pastas do sistema.
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-[#007CF7]/15 px-3 py-1 text-[11px] font-semibold text-[#42A0FF]">
+                      Aprovação humana obrigatória
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label htmlFor="showcase-slug" className="text-[11.5px] font-medium text-[#DCDCDC]">
+                        Slug da URL pública local
+                      </label>
+                      <input
+                        id="showcase-slug"
+                        type="text"
+                        value={showcaseSlug}
+                        onChange={(e) => setShowcaseSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-_]/g, "-"))}
+                        placeholder="ex: campanha-lancamento"
+                        className="w-full rounded-xl bg-[#141414] border border-white/10 px-3 py-2 text-[12.5px] text-white placeholder-[#6A6A6A]"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label htmlFor="showcase-title" className="text-[11.5px] font-medium text-[#DCDCDC]">
+                        Título do site
+                      </label>
+                      <input
+                        id="showcase-title"
+                        type="text"
+                        value={showcaseTitle}
+                        onChange={(e) => setShowcaseTitle(e.target.value)}
+                        placeholder="ex: Landing Page Campanha"
+                        className="w-full rounded-xl bg-[#141414] border border-white/10 px-3 py-2 text-[12.5px] text-white placeholder-[#6A6A6A]"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label htmlFor="showcase-source-dir" className="text-[11.5px] font-medium text-[#DCDCDC]">
+                        Pasta aprovada de origem
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          id="showcase-source-dir"
+                          type="text"
+                          value={showcaseSourceDir}
+                          onChange={(e) => setShowcaseSourceDir(e.target.value)}
+                          placeholder="saidas/ ou previas/"
+                          className="flex-1 rounded-xl bg-[#141414] border border-white/10 px-3 py-2 font-mono text-[12px] text-white placeholder-[#6A6A6A]"
+                        />
+                        {["saidas/", "previas/"].map((preset) => (
+                          <button
+                            key={preset}
+                            type="button"
+                            onClick={() => setShowcaseSourceDir(preset)}
+                            className={`rounded-lg border px-2.5 py-2 font-mono text-[11px] ${
+                              showcaseSourceDir === preset
+                                ? "border-[#007CF7] bg-[#007CF7]/15 text-[#42A0FF]"
+                                : "border-white/10 bg-[#141414] text-[#979797] hover:text-white"
+                            }`}
+                          >
+                            {preset}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label htmlFor="showcase-desc" className="text-[11.5px] font-medium text-[#DCDCDC]">
+                        Descrição
+                      </label>
+                      <input
+                        id="showcase-desc"
+                        type="text"
+                        value={showcaseDesc}
+                        onChange={(e) => setShowcaseDesc(e.target.value)}
+                        placeholder="Resumo opcional do entregável"
+                        className="w-full rounded-xl bg-[#141414] border border-white/10 px-3 py-2 text-[12.5px] text-white placeholder-[#6A6A6A]"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={showcaseSpa}
+                      onClick={() => setShowcaseSpa((v) => !v)}
+                      className="inline-flex items-center gap-2 text-[12px] text-[#DCDCDC]"
+                    >
+                      <span
+                        className={`inline-flex h-5 w-9 rounded-full border transition-colors ${
+                          showcaseSpa ? "border-[#007CF7] bg-[#007CF7]" : "border-white/15 bg-[#141414]"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3.5 w-3.5 translate-y-0.5 rounded-full bg-white transition-transform ${
+                            showcaseSpa ? "translate-x-4" : "translate-x-0.5"
+                          }`}
+                        />
+                      </span>
+                      <span>Fallback SPA (`index.html` para rotas internas)</span>
+                    </button>
+
+                    {!pendingPublishApproval ? (
+                      <button
+                        type="button"
+                        disabled={!showcaseSlug.trim() || !showcaseTitle.trim() || !showcaseSourceDir.trim() || !onPublishShowcase}
+                        onClick={() => setPendingPublishApproval(true)}
+                        className="rounded-xl bg-[#F0F0F0] hover:bg-white text-[#141414] px-4 py-2 text-[12.5px] font-semibold disabled:opacity-40"
+                      >
+                        Publicar showcase
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-2 rounded-xl border border-[#FF9412]/50 bg-[#FF9412]/10 px-3 py-2">
+                        <span className="text-[12px] text-[#FF9412]">
+                          Confirmar publicação de <strong>/showcase/{showcaseSlug}/</strong>?
+                        </span>
+                        <button
+                          type="button"
+                          disabled={showcaseBusy}
+                          onClick={async () => {
+                            if (!onPublishShowcase) return;
+                            setShowcaseBusy(true);
+                            try {
+                              const res = await onPublishShowcase({
+                                slug: showcaseSlug.trim(),
+                                titulo: showcaseTitle.trim(),
+                                descricao: showcaseDesc.trim() || undefined,
+                                sourceDir: showcaseSourceDir.trim(),
+                                spaFallback: showcaseSpa,
+                                aprovadoPorHumano: true,
+                              });
+                              if (res.ok) {
+                                setShowcaseSlug("");
+                                setShowcaseTitle("");
+                                setShowcaseDesc("");
+                                setPendingPublishApproval(false);
+                                showToast("Site publicado com sucesso no Showcase Local.");
+                              } else {
+                                showToast(res.erro || "Não foi possível publicar o showcase.");
+                              }
+                            } finally {
+                              setShowcaseBusy(false);
+                            }
+                          }}
+                          className="rounded-lg bg-[#31CF76] px-3 py-1 text-[11.5px] font-semibold text-[#141414]"
+                        >
+                          Confirmar publicação
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPendingPublishApproval(false)}
+                          className="rounded-lg bg-[#2A2A2A] px-2.5 py-1 text-[11.5px] text-white"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {showcaseSites.length === 0 ? (
+                  <div className="rounded-2xl bg-[#18181A] border border-white/[0.07] p-8 text-center space-y-2">
+                    <Globe className="h-7 w-7 text-[#42A0FF] mx-auto" />
+                    <p className="text-[13px] text-[#979797]">
+                      Nenhum site publicado localmente. Publique uma pasta de entregáveis aprovada.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {showcaseSites.map((site) => (
+                      <div
+                        key={site.site_id}
+                        className="rounded-2xl bg-[#18181A] border border-white/[0.07] p-4 space-y-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[14px] font-semibold text-white truncate">
+                                {site.titulo}
+                              </span>
+                              <span className="rounded-full bg-[#31CF76]/15 px-2 py-0.5 text-[10.5px] font-semibold text-[#31CF76]">
+                                {site.ativo ? "Ativo" : "Inativo"}
+                              </span>
+                            </div>
+                            <div className="text-[11.5px] font-mono text-[#42A0FF] truncate">
+                              {site.url_local || `/showcase/${site.slug}/`}
+                            </div>
+                            {site.descricao && (
+                              <p className="text-[12px] text-[#979797] mt-0.5">{site.descricao}</p>
+                            )}
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <a
+                              href={site.url_local || `/showcase/${site.slug}/`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 rounded-lg bg-[#242424] hover:bg-[#2A2A2A] border border-white/10 px-3 py-1.5 text-[12px] font-semibold text-white"
+                            >
+                              <ExternalLink className="h-3.5 w-3.5 text-[#42A0FF]" />
+                              <span>Abrir showcase</span>
+                            </a>
+                            {onReplaceShowcase && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setReplacingSite(site);
+                                  setReplaceSourceDir(site.source_dir || "saidas/");
+                                }}
+                                className="inline-flex items-center gap-1 rounded-lg bg-[#242424] hover:bg-[#2A2A2A] border border-white/10 px-3 py-1.5 text-[12px] font-semibold text-[#DCDCDC]"
+                              >
+                                <RefreshCw className="h-3.5 w-3.5" />
+                                <span>Substituir arquivos</span>
+                              </button>
+                            )}
+                            {onDeleteShowcase && (
+                              confirmDeleteSiteId === site.site_id ? (
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    disabled={showcaseBusy}
+                                    onClick={async () => {
+                                      setShowcaseBusy(true);
+                                      try {
+                                        await onDeleteShowcase(site.site_id);
+                                        setConfirmDeleteSiteId(null);
+                                        showToast("Site despublicado do Showcase Local.");
+                                      } finally {
+                                        setShowcaseBusy(false);
+                                      }
+                                    }}
+                                    className="rounded-lg bg-[#FD2F3B] px-2.5 py-1.5 text-[11.5px] font-semibold text-white"
+                                  >
+                                    Confirmar despublicação
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteSiteId(null)}
+                                    className="rounded-lg bg-[#2A2A2A] px-2.5 py-1.5 text-[11.5px] text-white"
+                                  >
+                                    Cancelar
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteSiteId(site.site_id)}
+                                  className="inline-flex items-center gap-1 rounded-lg border border-[#FD2F3B]/30 bg-[#FD2F3B]/10 px-3 py-1.5 text-[12px] font-semibold text-[#FF7675] hover:bg-[#FD2F3B]/20"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                  <span>Despublicar site</span>
+                                </button>
+                              )
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-4 text-[11px] font-mono text-[#787878] border-t border-white/[0.05] pt-2">
+                          <span>Origem: {site.source_dir}</span>
+                          <span>Arquivos: {site.arquivos_count ?? 0}</span>
+                          {typeof site.tamanho_bytes === "number" && (
+                            <span>{(site.tamanho_bytes / 1024).toFixed(1)} KB</span>
+                          )}
+                        </div>
+
+                        {replacingSite?.site_id === site.site_id && onReplaceShowcase && (
+                          <div className="rounded-xl border border-[#007CF7]/40 bg-[#141414] p-3 flex flex-wrap items-center gap-2">
+                            <input
+                              type="text"
+                              value={replaceSourceDir}
+                              onChange={(e) => setReplaceSourceDir(e.target.value)}
+                              aria-label="Nova pasta aprovada para substituição"
+                              placeholder="saidas/..."
+                              className="flex-1 rounded-lg bg-[#212121] border border-white/10 px-3 py-1.5 font-mono text-[12px] text-white"
+                            />
+                            <button
+                              type="button"
+                              disabled={showcaseBusy || !replaceSourceDir.trim()}
+                              onClick={async () => {
+                                setShowcaseBusy(true);
+                                try {
+                                  const res = await onReplaceShowcase(site.site_id, {
+                                    sourceDir: replaceSourceDir.trim(),
+                                    aprovadoPorHumano: true,
+                                  });
+                                  if (res.ok) {
+                                    setReplacingSite(null);
+                                    showToast("Arquivos do Showcase substituídos.");
+                                  } else {
+                                    showToast(res.erro || "Falha ao substituir arquivos.");
+                                  }
+                                } finally {
+                                  setShowcaseBusy(false);
+                                }
+                              }}
+                              className="rounded-lg bg-[#007CF7] px-3 py-1.5 text-[11.5px] font-semibold text-white"
+                            >
+                              Confirmar substituição
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setReplacingSite(null)}
+                              className="rounded-lg bg-[#2A2A2A] px-2.5 py-1.5 text-[11.5px] text-white"
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* ABA 4: COFRE (Vault AES-256-GCM) */}
             {hubTab === "cofre" && (

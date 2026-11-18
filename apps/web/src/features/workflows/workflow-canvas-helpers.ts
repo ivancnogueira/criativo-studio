@@ -117,7 +117,7 @@ export function getWorkflowNodeWidth(node: WorkflowNo): number {
 }
 
 export interface WorkflowLibraryItem {
-  tipo: TipoNoWorkflowExecutavel | TipoNoWorkflowAnotacao;
+  tipo: TipoNoWorkflow;
   categoria: "gatilhos" | "processamento" | "midia" | "fluxo" | "anotacao";
   titulo: string;
   descricao: string;
@@ -183,6 +183,24 @@ export const WORKFLOW_NODE_LIBRARY: readonly WorkflowLibraryItem[] = [
     categoria: "fluxo",
     titulo: "Entrega de Saída",
     descricao: "Envia para Canal, WhatsApp, Telegram, Arquivo ou Instagram",
+  },
+  {
+    tipo: "slack_notificar",
+    categoria: "fluxo",
+    titulo: "Notificar no Slack",
+    descricao: "Enviar resumo ou aprovação em canal Slack",
+  },
+  {
+    tipo: "discord_notificar",
+    categoria: "fluxo",
+    titulo: "Publicar no Discord",
+    descricao: "Enviar entrega via bot ou webhook no Discord",
+  },
+  {
+    tipo: "github_acao",
+    categoria: "fluxo",
+    titulo: "Ação no GitHub",
+    descricao: "Abrir issue ou comentar release no repositório",
   },
   {
     tipo: "nota",
@@ -406,6 +424,8 @@ export function formatStepDuration(startIso?: string | null, endIso?: string | n
 }
 
 export function defaultTitleForNodeType(tipo: TipoNoWorkflow): string {
+  const exact = WORKFLOW_NODE_LIBRARY.find((i) => i.tipo === tipo)?.titulo;
+  if (exact) return exact;
   const norm = normalizeNodeKind(tipo);
   return WORKFLOW_NODE_LIBRARY.find((i) => i.tipo === norm)?.titulo ?? "Etapa do Fluxo";
 }

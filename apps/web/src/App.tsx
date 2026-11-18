@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AgenteEspera,
   AgenteRegistro,
@@ -8,8 +8,16 @@ import type {
   AnexoChat,
   ArquivoStudio,
   AvatarShape,
+  BackupModelChoice,
   BibliotecasPastasSnapshot,
+  BrowserProfileInfo,
+  BrowserProfileProxyPayload,
+  BrowserProxyConfig,
+  BrowserSecretRequest,
+  BrowserStatusReport,
+  BrowserTakeoverSession,
   CanalEquipe,
+  CaptureScreenConsentRequest,
   ConectorIntegracaoInfo,
   FilaChatEntrega,
   FilaChatSnapshot,
@@ -24,16 +32,24 @@ import type {
   ProvedorStatusInfo,
   ProviderName,
   RelatorioAnalyticsHost,
+  ShowcaseSiteSummary,
+  SidebarLayoutMutation,
+  SidebarLayoutSnapshot,
   StatusMensageria,
+  StorageUsageSnapshot,
+  StudioUserSettings,
   TarefaRegistro,
   UiBlockSubmitPayload,
+  UsageLimitAskPayload,
+  UserBrowsingStep,
   UsoProvedoresSnapshot,
   WhatsAppContaResumo,
+  WhatsNewReleaseInfo,
   WorkflowAresta,
   WorkflowNo,
   WorkflowVisual,
 } from "@criativo/contracts";
-import { Users, X } from "lucide-react";
+import { PanelLeft, Settings, Users, X } from "lucide-react";
 import { DynamicIsland, type StudioTabItem } from "./components/DynamicIsland";
 import { getDefaultMascotForAgent } from "./components/MascoteAvatar";
 import { Sidebar } from "./components/Sidebar";
@@ -61,9 +77,51 @@ import { RoutineFlowsCanvas } from "./features/routines/RoutineFlowsCanvas";
 import { SchedulePage } from "./features/schedule/SchedulePage";
 import type { AgentStepLog } from "./features/trace/AgentStepsWaterfall";
 import { WhatsAppPairingModal } from "./features/whatsapp/WhatsAppPairingModal";
+import { BrowserTakeoverModal } from "./features/browser/BrowserTakeoverModal";
+import { UserBrowsingLogInspector } from "./features/browser/BrowserTeachBar";
+import {
+  LiveVoiceBar,
+  QuickAgentDrawer,
+} from "./features/settings/LiveVoiceAndQuickDrawer";
+import {
+  DEFAULT_FRONTEND_USER_SETTINGS,
+  SettingsModal,
+  applyUserSettingsToDocument,
+} from "./features/settings/SettingsModal";
 import type { WorkflowEventSignal } from "./features/workflows/WorkflowsCanvasPage";
 import { WorkflowsCanvasPage } from "./features/workflows/WorkflowsCanvasPage";
 import { daemonApi, WebSocketClient } from "./services/websocket-client";
+
+const USER_SETTINGS_STORAGE_KEY = "criativo_user_settings";
+const LAST_TAB_STORAGE_KEY = "criativo_last_tab_id";
+
+function readCachedUserSettings(): StudioUserSettings {
+  if (typeof window === "undefined") return DEFAULT_FRONTEND_USER_SETTINGS;
+  try {
+    const raw = window.localStorage.getItem(USER_SETTINGS_STORAGE_KEY);
+    if (!raw) return DEFAULT_FRONTEND_USER_SETTINGS;
+    const parsed = JSON.parse(raw) as Partial<StudioUserSettings>;
+    return {
+      geral: { ...DEFAULT_FRONTEND_USER_SETTINGS.geral, ...(parsed.geral ?? {}) },
+      aparencia: { ...DEFAULT_FRONTEND_USER_SETTINGS.aparencia, ...(parsed.aparencia ?? {}) },
+      comportamento: {
+        ...DEFAULT_FRONTEND_USER_SETTINGS.comportamento,
+        ...(parsed.comportamento ?? {}),
+      },
+      notificacoes: {
+        ...DEFAULT_FRONTEND_USER_SETTINGS.notificacoes,
+        ...(parsed.notificacoes ?? {}),
+      },
+      voz: { ...DEFAULT_FRONTEND_USER_SETTINGS.voz, ...(parsed.voz ?? {}) },
+      atualizado_em:
+        typeof parsed.atualizado_em === "string"
+          ? parsed.atualizado_em
+          : DEFAULT_FRONTEND_USER_SETTINGS.atualizado_em,
+    };
+  } catch {
+    return DEFAULT_FRONTEND_USER_SETTINGS;
+  }
+}
 
 type AgenteEnriquecido = AgenteRegistro & {
   nao_lidas?: number;
@@ -215,6 +273,69 @@ export function App() {
   const [lightboxImage, setLightboxImage] = useState<{ url: string; alt?: string } | null>(null);
   const [foldersSnapshot, setFoldersSnapshot] = useState<BibliotecasPastasSnapshot | null>(null);
 
+  // Fase 15 — Navegador CDP, Takeover, Captura de Tela, Sidebar, Settings, Voz Contínua & Showcase Local
+  const [userSettings, setUserSettings] = useState<StudioUserSettings>(() => {
+    const initial = readCachedUserSettings();
+    applyUserSettingsToDocument(initial);
+    return initial;
+  });
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [sidebarLayout, setSidebarLayout] = useState<SidebarLayoutSnapshot | null>(null);
+  const [browserStatus, setBrowserStatus] = useState<BrowserStatusReport | null>(null);
+  const [browserProfiles, setBrowserProfiles] = useState<BrowserProfileInfo[]>([]);
+  const [browserProxies, setBrowserProxies] = useState<BrowserProxyConfig[]>([]);
+  const [takeoverByAgent, setTakeoverByAgent] = useState<Record<string, BrowserTakeoverSession>>({});
+  const [secretRequestByAgent, setSecretRequestByAgent] = useState<Record<string, BrowserSecretRequest>>({});
+  const [captureByAgent, setCaptureByAgent] = useState<Record<string, CaptureScreenConsentRequest>>({});
+  const [usageLimitAskByAgent, setUsageLimitAskByAgent] = useState<Record<string, UsageLimitAskPayload>>({});
+  const [activeTakeoverModal, setActiveTakeoverModal] = useState<BrowserTakeoverSession | null>(null);
+  const [activeTakeoverFrame, setActiveTakeoverFrame] = useState<{
+    tabId: string;
+    dataUrl: string;
+    width: number;
+    height: number;
+    url: string;
+    title: string;
+    userControl: boolean;
+    agenteId?: string | null;
+    perfilId?: string | null;
+  } | null>(null);
+  const [teachStatusByTab, setTeachStatusByTab] = useState<
+    Record<string, { recording: boolean; startedAt: number | null; stepsCount: number }>
+  >({});
+  const [browsingLogInspector, setBrowsingLogInspector] = useState<{
+    agenteId: string;
+    agentName: string;
+    steps: UserBrowsingStep[];
+    recordedTaskText: string;
+  } | null>(null);
+  const [storageUsage, setStorageUsage] = useState<StorageUsageSnapshot | null>(null);
+  const [whatsNew, setWhatsNew] = useState<WhatsNewReleaseInfo | null>(null);
+  const [showcaseSites, setShowcaseSites] = useState<ShowcaseSiteSummary[]>([]);
+  const [liveVoiceActive, setLiveVoiceActive] = useState(false);
+  const restoredLastTabRef = useRef(false);
+
+  useEffect(() => {
+    applyUserSettingsToDocument(userSettings);
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.setItem(USER_SETTINGS_STORAGE_KEY, JSON.stringify(userSettings));
+      } catch {
+        // Ignore quota errors
+      }
+    }
+  }, [userSettings]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!userSettings.comportamento.restaurar_ultima_aba) return;
+    try {
+      window.localStorage.setItem(LAST_TAB_STORAGE_KEY, activeTabId);
+    } catch {
+      // Ignore quota errors
+    }
+  }, [activeTabId, userSettings.comportamento.restaurar_ultima_aba]);
+
   const refreshLibraryFolders = useCallback(async () => {
     try {
       const [snap, fileList] = await Promise.all([
@@ -297,6 +418,14 @@ export function App() {
         waAccountsList,
         threadsList,
         foldersSnap,
+        remoteUserSettings,
+        remoteSidebarLayout,
+        remoteBrowserProfiles,
+        remoteBrowserProxies,
+        remoteBrowserStatus,
+        remoteShowcaseSites,
+        remoteStorageUsage,
+        remoteWhatsNew,
       ] = await Promise.all([
         daemonApi.getOnboarding(),
         daemonApi.listAgents(),
@@ -315,6 +444,14 @@ export function App() {
         daemonApi.listWhatsAppAccounts().catch(() => [] as WhatsAppContaResumo[]),
         daemonApi.listAllThreads().catch(() => [] as AgenteThreadRegistro[]),
         daemonApi.listLibraryFolders().catch(() => null),
+        daemonApi.getUserSettings().catch(() => null),
+        daemonApi.getSidebarLayout().catch(() => null),
+        daemonApi.listBrowserProfiles().catch(() => [] as BrowserProfileInfo[]),
+        daemonApi.listBrowserProxies().catch(() => [] as BrowserProxyConfig[]),
+        daemonApi.getBrowserStatus().catch(() => null),
+        daemonApi.listShowcaseSites().catch(() => [] as ShowcaseSiteSummary[]),
+        daemonApi.getStorageUsage().catch(() => null),
+        daemonApi.getWhatsNew().catch(() => null),
       ]);
 
       setOnboarding(onb);
@@ -335,6 +472,17 @@ export function App() {
       setWhatsappAccounts(waAccountsList);
       setAllThreads(threadsList);
       if (foldersSnap) setFoldersSnapshot(foldersSnap);
+      if (remoteUserSettings) {
+        setUserSettings(remoteUserSettings);
+        applyUserSettingsToDocument(remoteUserSettings);
+      }
+      if (remoteSidebarLayout) setSidebarLayout(remoteSidebarLayout);
+      setBrowserProfiles(remoteBrowserProfiles);
+      setBrowserProxies(remoteBrowserProxies);
+      if (remoteBrowserStatus) setBrowserStatus(remoteBrowserStatus);
+      setShowcaseSites(remoteShowcaseSites);
+      if (remoteStorageUsage) setStorageUsage(remoteStorageUsage);
+      if (remoteWhatsNew) setWhatsNew(remoteWhatsNew);
       void refreshRoutineCounts();
 
       if (tList.length > 0) {
@@ -343,6 +491,57 @@ export function App() {
           tList.find((t) => t.status === "executando") ??
           tList[0];
         setSelectedTaskId((prev) => prev ?? pending.tarefa_id);
+      }
+
+      if (!restoredLastTabRef.current && typeof window !== "undefined") {
+        restoredLastTabRef.current = true;
+        const shouldRestore =
+          (remoteUserSettings ?? readCachedUserSettings()).comportamento.restaurar_ultima_aba;
+        if (shouldRestore) {
+          const savedTabId = window.localStorage.getItem(LAST_TAB_STORAGE_KEY);
+          if (savedTabId && savedTabId.startsWith("agent:")) {
+            const agId = savedTabId.slice("agent:".length);
+            const agMatch = agList.find((a) => a.agente_id === agId);
+            if (agMatch) {
+              const vis = getAgentAvatar(agMatch);
+              setOpenTabs((prev) =>
+                prev.some((t) => t.id === savedTabId)
+                  ? prev
+                  : [
+                      ...prev,
+                      {
+                        id: savedTabId,
+                        titulo: agMatch.nome,
+                        shape: vis.shape,
+                        color: vis.color,
+                      },
+                    ]
+              );
+              setActiveTabId(savedTabId);
+              setCenterMode({ type: "agent", agenteId: agId });
+            }
+          } else if (savedTabId && savedTabId.startsWith("channel:")) {
+            const cId = savedTabId.slice("channel:".length);
+            const chMatch = chList.find((c) => c.canal_id === cId);
+            if (chMatch) {
+              setOpenTabs((prev) =>
+                prev.some((t) => t.id === savedTabId)
+                  ? prev
+                  : [
+                      ...prev,
+                      {
+                        id: savedTabId,
+                        titulo: chMatch.nome,
+                        shape: "hex",
+                        color: "#42A0FF",
+                      },
+                    ]
+              );
+              setActiveTabId(savedTabId);
+              setCenterMode({ type: "channel", canalId: cId });
+            }
+          }
+        }
       }
     } finally {
       setBootLoading(false);
@@ -830,6 +1029,66 @@ export function App() {
         .catch(() => {});
     });
 
+    // Fase 15 — Navegador CDP, Takeover, Captura de Tela, Sidebar, Settings & Showcase
+    const unsubBrowserFrame = ws.on("browser:frame", (evt) => {
+      setActiveTakeoverFrame(evt);
+      setActiveTakeoverModal((prev) =>
+        prev && prev.tabId === evt.tabId
+          ? { ...prev, url: evt.url, title: evt.title, previewDataUrl: evt.dataUrl }
+          : prev
+      );
+    });
+
+    const unsubTakeoverReq = ws.on("browser:takeover_requested", (evt) => {
+      const agKey = evt.agenteId ?? "global";
+      setTakeoverByAgent((prev) => ({ ...prev, [agKey]: evt }));
+    });
+
+    const unsubTakeoverRes = ws.on("browser:takeover_resolved", (evt) => {
+      setTakeoverByAgent((prev) => {
+        const next: Record<string, BrowserTakeoverSession> = {};
+        for (const [k, s] of Object.entries(prev)) {
+          if (s.tabId !== evt.tabId) next[k] = s;
+        }
+        return next;
+      });
+      setActiveTakeoverModal((prev) => (prev && prev.tabId === evt.tabId ? null : prev));
+    });
+
+    const unsubTeachStatus = ws.on("browser:teach_status", (evt) => {
+      setTeachStatusByTab((prev) => ({
+        ...prev,
+        [evt.tabId]: {
+          recording: evt.recording,
+          startedAt: evt.startedAt,
+          stepsCount: evt.stepsCount,
+        },
+      }));
+    });
+
+    const unsubScreenCapture = ws.on("screen:capture_requested", (evt) => {
+      setCaptureByAgent((prev) => ({ ...prev, [evt.agenteId]: evt }));
+    });
+
+    const unsubSidebarUpdated = ws.on("sidebar:updated", () => {
+      void daemonApi.getSidebarLayout().then(setSidebarLayout).catch(() => {});
+      void daemonApi.listAgents().then(setAgentes).catch(() => {});
+    });
+
+    const unsubSettingsUpdated = ws.on("settings:updated", () => {
+      void daemonApi
+        .getUserSettings()
+        .then((s) => {
+          setUserSettings(s);
+          applyUserSettingsToDocument(s);
+        })
+        .catch(() => {});
+    });
+
+    const unsubShowcaseUpdated = ws.on("showcase:updated", () => {
+      void daemonApi.listShowcaseSites().then(setShowcaseSites).catch(() => {});
+    });
+
     ws.connect();
     return () => {
       unsubConn();
@@ -872,6 +1131,14 @@ export function App() {
       unsubLibraryFoldersChanged();
       unsubSharedTableChanged();
       unsubAgentMessageQueued();
+      unsubBrowserFrame();
+      unsubTakeoverReq();
+      unsubTakeoverRes();
+      unsubTeachStatus();
+      unsubScreenCapture();
+      unsubSidebarUpdated();
+      unsubSettingsUpdated();
+      unsubShowcaseUpdated();
       ws.disconnect();
     };
   }, [refreshAgentThreadsState, refreshRoutineCounts]);
@@ -1381,6 +1648,16 @@ export function App() {
               [targetKey]: mergeUniqueMessages(withoutTemp, extras),
             };
           });
+          const agentReplyMeta = (
+            res.mensagem_agente as unknown as { metadados?: { usage_limit_ask?: UsageLimitAskPayload } } | undefined
+          )?.metadados;
+          if (agentReplyMeta?.usage_limit_ask) {
+            const askPayload = agentReplyMeta.usage_limit_ask;
+            setUsageLimitAskByAgent((prev) => ({
+              ...prev,
+              [activeAgent.agente_id]: askPayload,
+            }));
+          }
         }
       }
       const [nextTasks, nextUsage, nextAnalytics, nextFiles] = await Promise.all([
@@ -1743,30 +2020,53 @@ export function App() {
         whatsappStatus={whatsappStatus}
         pendingCount={pendingCount + runningCount}
         onOpenWhatsAppModal={() => setWhatsappModalOpen(true)}
-        onOpenSettings={() => setActiveSection("conexoes")}
+        onOpenSettings={() => setSettingsModalOpen(true)}
         onOpenHelp={() => setHelpModalOpen(true)}
       />
 
       {/* Shell principal à direita do Rail */}
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-        <DynamicIsland
-          wsConnected={wsConnected}
-          runningCount={runningCount}
-          pendingCount={pendingCount}
-          awaitingApprovalCount={awaitingApprovalCount}
-          whatsappStatus={whatsappStatus}
-          onOpenWhatsAppModal={() => setWhatsappModalOpen(true)}
-          onOpenVaultModal={() => setActiveSection("conexoes")}
-          tabs={openTabs}
-          activeTabId={activeTabId}
-          onSelectTab={handleSelectTab}
-          onCloseTab={handleCloseTab}
-          onNewTab={handleOpenNewAgentTab}
-          sidebarCollapsed={!sidebarOpen}
-          onToggleSidebar={() => setSidebarOpen((s) => !s)}
-          onNavigateBack={() => stepHistoryTab(-1)}
-          onNavigateForward={() => stepHistoryTab(1)}
-        />
+        {userSettings.comportamento.exibir_dynamic_island !== false ? (
+          <DynamicIsland
+            wsConnected={wsConnected}
+            runningCount={runningCount}
+            pendingCount={pendingCount}
+            awaitingApprovalCount={awaitingApprovalCount}
+            whatsappStatus={whatsappStatus}
+            onOpenWhatsAppModal={() => setWhatsappModalOpen(true)}
+            onOpenVaultModal={() => setActiveSection("conexoes")}
+            tabs={openTabs}
+            activeTabId={activeTabId}
+            onSelectTab={handleSelectTab}
+            onCloseTab={handleCloseTab}
+            onNewTab={handleOpenNewAgentTab}
+            sidebarCollapsed={!sidebarOpen}
+            onToggleSidebar={() => setSidebarOpen((s) => !s)}
+            onNavigateBack={() => stepHistoryTab(-1)}
+            onNavigateForward={() => stepHistoryTab(1)}
+          />
+        ) : (
+          <div className="h-[36px] shrink-0 border-b border-white/[0.06] bg-[#0D0D0D] px-3 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setSidebarOpen((s) => !s)}
+              aria-label="Alternar barra lateral"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#212121] px-2.5 py-1 text-[11.5px] font-medium text-[#DCDCDC] hover:bg-[#2A2A2A]"
+            >
+              <PanelLeft className="h-3.5 w-3.5 text-[#42A0FF]" />
+              <span>{sidebarOpen ? "Recolher barra" : "Mostrar barra"}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSettingsModalOpen(true)}
+              aria-label="Abrir configurações"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#212121] px-2.5 py-1 text-[11.5px] font-medium text-[#DCDCDC] hover:bg-[#2A2A2A]"
+            >
+              <Settings className="h-3.5 w-3.5 text-[#979797]" />
+              <span>Configurações</span>
+            </button>
+          </div>
+        )}
 
         {/* Área de conteúdo por seção da Rail */}
         <main className="flex-1 min-h-0 flex overflow-hidden">
@@ -1791,6 +2091,28 @@ export function App() {
                   viewMode={sidebarViewMode}
                   onChangeViewMode={setSidebarViewMode}
                   routineCountsByAgent={routineCountsByAgent}
+                  sidebarLayout={sidebarLayout}
+                  sortMode={
+                    userSettings.geral.ordenacao_sidebar === "alfabetica"
+                      ? "alphabetical"
+                      : userSettings.geral.ordenacao_sidebar === "recente"
+                        ? "recent"
+                        : "custom"
+                  }
+                  onMutateSidebar={async (mutation: SidebarLayoutMutation) => {
+                    const nextLayout = await daemonApi.mutateSidebarLayout(mutation);
+                    setSidebarLayout(nextLayout);
+                  }}
+                  onReorderPins={async (pins: string[]) => {
+                    const nextLayout = await daemonApi.updateSidebarPins(pins);
+                    setSidebarLayout(nextLayout);
+                  }}
+                  onDuplicateAgent={async (agenteId: string) => {
+                    const res = await daemonApi.duplicateAgent(agenteId);
+                    setSidebarLayout(res.layout);
+                    setAgentes(await daemonApi.listAgents());
+                    handleSelectAgent(res.agente.agente_id);
+                  }}
                 />
               )}
 
@@ -1956,6 +2278,152 @@ export function App() {
                         onTogglePinMessage={handleTogglePinMessage}
                         onAskSideQuestion={handleAskSideQuestion}
                         onStartNewChat={handleStartNewChat}
+                        takeoverSession={
+                          activeAgent ? takeoverByAgent[activeAgent.agente_id] ?? null : null
+                        }
+                        secretRequest={
+                          activeAgent ? secretRequestByAgent[activeAgent.agente_id] ?? null : null
+                        }
+                        captureRequest={
+                          activeAgent && captureByAgent[activeAgent.agente_id]
+                            ? {
+                                captureId: captureByAgent[activeAgent.agente_id].captureId,
+                                purpose: captureByAgent[activeAgent.agente_id].purpose,
+                                targetHint:
+                                  captureByAgent[activeAgent.agente_id].targetHint ?? undefined,
+                              }
+                            : null
+                        }
+                        usageLimitAsk={
+                          activeAgent ? usageLimitAskByAgent[activeAgent.agente_id] ?? null : null
+                        }
+                        sendShortcut={userSettings.geral.atalho_envio}
+                        compactActions={userSettings.geral.acoes_compactas}
+                        showAgentSteps={userSettings.geral.exibir_passos_agente}
+                        liveVoiceEnabled={userSettings.voz.live_voice_habilitada}
+                        liveVoiceActive={liveVoiceActive}
+                        onOpenTakeover={(tabId) => {
+                          const existing =
+                            (activeAgent && takeoverByAgent[activeAgent.agente_id]) ||
+                            Object.values(takeoverByAgent).find((s) => s.tabId === tabId);
+                          setActiveTakeoverModal(
+                            existing ?? {
+                              takeoverId: `tk_${tabId}`,
+                              tabId,
+                              agenteId: activeAgent?.agente_id ?? null,
+                              reason: "manual",
+                              url: activeTakeoverFrame?.url ?? "about:blank",
+                              title: activeTakeoverFrame?.title ?? "Navegador Assistido",
+                              status: "active",
+                              previewDataUrl: activeTakeoverFrame?.dataUrl ?? null,
+                              criadoEm: new Date().toISOString(),
+                            }
+                          );
+                        }}
+                        onCancelTakeover={async (tabId) => {
+                          await daemonApi.respondBrowserTakeover(tabId, "cancel");
+                          setTakeoverByAgent((prev) => {
+                            const next: Record<string, BrowserTakeoverSession> = {};
+                            for (const [k, s] of Object.entries(prev)) {
+                              if (s.tabId !== tabId) next[k] = s;
+                            }
+                            return next;
+                          });
+                        }}
+                        onSubmitSecret={async (tabId, payload) => {
+                          const req = activeAgent
+                            ? secretRequestByAgent[activeAgent.agente_id]
+                            : undefined;
+                          await daemonApi.submitBrowserSecret(tabId, {
+                            method: req?.method ?? "password",
+                            targets: req?.targets ?? [],
+                            loginId: req?.loginId ?? null,
+                            username: payload.username ?? req?.username ?? null,
+                            secret: payload.secret,
+                            saveToVault: payload.saveToVault,
+                            loginLabel: payload.loginLabel,
+                            submission: req?.submission ?? "enter",
+                            submitTarget: req?.submitTarget ?? null,
+                          });
+                          if (activeAgent) {
+                            setSecretRequestByAgent((prev) => {
+                              const copy = { ...prev };
+                              delete copy[activeAgent.agente_id];
+                              return copy;
+                            });
+                          }
+                        }}
+                        onAuthorizeScreenCapture={async (captureId, payload) => {
+                          await daemonApi.respondScreenCapture(captureId, {
+                            decision: "granted",
+                            dataUrl: payload.dataUrl,
+                            width: payload.width,
+                            height: payload.height,
+                          });
+                          setCaptureByAgent((prev) => {
+                            const next: Record<string, CaptureScreenConsentRequest> = {};
+                            for (const [k, c] of Object.entries(prev)) {
+                              if (c.captureId !== captureId) next[k] = c;
+                            }
+                            return next;
+                          });
+                        }}
+                        onDeclineScreenCapture={async (captureId, reason) => {
+                          await daemonApi.respondScreenCapture(captureId, {
+                            decision: "declined",
+                            reason,
+                          });
+                          setCaptureByAgent((prev) => {
+                            const next: Record<string, CaptureScreenConsentRequest> = {};
+                            for (const [k, c] of Object.entries(prev)) {
+                              if (c.captureId !== captureId) next[k] = c;
+                            }
+                            return next;
+                          });
+                        }}
+                        onResolveUsageLimit={async (payload) => {
+                          if (!activeAgent) return;
+                          if (payload.action === "switch" && payload.choice) {
+                            const res = await daemonApi.respondUsageLimit(activeAgent.agente_id, {
+                              askId: payload.askId,
+                              choice: payload.choice,
+                              remember: payload.remember,
+                            });
+                            if (res.mensagem) {
+                              const targetKey = `agente:${activeAgent.agente_id}`;
+                              setChatByKey((prev) => ({
+                                ...prev,
+                                [targetKey]: mergeUniqueMessages(prev[targetKey] ?? [], [
+                                  res.mensagem as MensagemChat,
+                                ]),
+                              }));
+                            }
+                          }
+                          setUsageLimitAskByAgent((prev) => {
+                            const copy = { ...prev };
+                            delete copy[activeAgent.agente_id];
+                            return copy;
+                          });
+                        }}
+                        onToggleLiveVoice={() => setLiveVoiceActive((v) => !v)}
+                      />
+
+                      <LiveVoiceBar
+                        active={liveVoiceActive}
+                        agentName={activeAgent?.nome ?? activeChannel?.nome ?? "Agente"}
+                        processing={sendingChat || Boolean(activeLiveRun)}
+                        lastAssistantReply={
+                          activeMessages
+                            .slice()
+                            .reverse()
+                            .find((m) => m.autor === "agente")?.conteudo_markdown ?? null
+                        }
+                        speechRate={userSettings.voz.velocidade}
+                        autoRead={userSettings.voz.leitura_automatica}
+                        onSendTranscript={async (texto) => {
+                          await handleSendChatMessage(texto, []);
+                        }}
+                        onClose={() => setLiveVoiceActive(false)}
                       />
                     </div>
                   )}
@@ -1966,6 +2434,10 @@ export function App() {
                       agente={activeAgent}
                       arquivos={arquivos}
                       canais={canais}
+                      provedores={provedores}
+                      browserProfiles={browserProfiles}
+                      browserProxies={browserProxies}
+                      activeBrowserTabsCount={browserStatus?.activeTabs ?? 0}
                       routineCount={
                         activeAgent ? routineCountsByAgent[activeAgent.agente_id] ?? 0 : 0
                       }
@@ -1974,6 +2446,65 @@ export function App() {
                       onClose={() => setInspectorOpen(false)}
                       onOpenFilesPage={() => setActiveSection("arquivos")}
                       onOpenWhatsAppModal={() => setWhatsappModalOpen(true)}
+                      onCreateBrowserProfile={async (input) => {
+                        await daemonApi.createBrowserProfile(input);
+                        setBrowserProfiles(await daemonApi.listBrowserProfiles());
+                      }}
+                      onUpdateBrowserProfile={async (perfilId, patch) => {
+                        await daemonApi.updateBrowserProfile(perfilId, patch);
+                        setBrowserProfiles(await daemonApi.listBrowserProfiles());
+                      }}
+                      onClearBrowserProfile={async (perfilId) => {
+                        await daemonApi.clearBrowserProfile(perfilId);
+                        setBrowserProfiles(await daemonApi.listBrowserProfiles());
+                      }}
+                      onDeleteBrowserProfile={async (perfilId) => {
+                        await daemonApi.deleteBrowserProfile(perfilId);
+                        const [nextProfiles, nextAgents] = await Promise.all([
+                          daemonApi.listBrowserProfiles(),
+                          daemonApi.listAgents(),
+                        ]);
+                        setBrowserProfiles(nextProfiles);
+                        setAgentes(nextAgents);
+                      }}
+                      onSaveBrowserProxy={async (input) => {
+                        const saved = await daemonApi.saveBrowserProxy(input);
+                        setBrowserProxies(await daemonApi.listBrowserProxies());
+                        return saved;
+                      }}
+                      onDeleteBrowserProxy={async (proxyId) => {
+                        await daemonApi.deleteBrowserProxy(proxyId);
+                        setBrowserProxies(await daemonApi.listBrowserProxies());
+                      }}
+                      onOpenAgentBrowserTakeover={async (agenteId) => {
+                        let tabId =
+                          browserStatus?.tabs.find((t) => t.agenteId === agenteId)?.tabId ?? null;
+                        if (!tabId) {
+                          const openRes = (await daemonApi.runBrowserSessionAction({
+                            action: "open",
+                            agenteId,
+                            url: "about:blank",
+                          })) as { tabId?: string; tab?: { tabId?: string } };
+                          tabId = openRes?.tabId ?? openRes?.tab?.tabId ?? null;
+                        }
+                        if (!tabId) return;
+                        const tkRes = await daemonApi.startBrowserTakeover(tabId, {
+                          agenteId,
+                          reason: "manual",
+                        });
+                        setActiveTakeoverModal(tkRes.session);
+                      }}
+                      onInspectAgentBrowsingLog={async (agenteId) => {
+                        const data = await daemonApi.listUserBrowsingLog(agenteId);
+                        const agName =
+                          agentes.find((a) => a.agente_id === agenteId)?.nome ?? agenteId;
+                        setBrowsingLogInspector({
+                          agenteId,
+                          agentName: agName,
+                          steps: data.steps,
+                          recordedTaskText: data.recordedTaskText,
+                        });
+                      }}
                       onOpenRoutineThread={(canalId) => {
                         setSidebarViewMode("agents");
                         if (canalId.startsWith("rotina:")) {
@@ -2239,6 +2770,25 @@ export function App() {
               habilidades={habilidades}
               upgrades={upgrades}
               conectores={conectores}
+              showcaseSites={showcaseSites}
+              onPublishShowcase={async (payload) => {
+                const res = await daemonApi.publishShowcaseSite(payload);
+                if (res.ok) {
+                  setShowcaseSites(await daemonApi.listShowcaseSites());
+                }
+                return res;
+              }}
+              onReplaceShowcase={async (siteId, payload) => {
+                const res = await daemonApi.replaceShowcaseSite(siteId, payload);
+                if (res.ok) {
+                  setShowcaseSites(await daemonApi.listShowcaseSites());
+                }
+                return res;
+              }}
+              onDeleteShowcase={async (siteId) => {
+                await daemonApi.deleteShowcaseSite(siteId, true);
+                setShowcaseSites(await daemonApi.listShowcaseSites());
+              }}
               onInstallUpgrade={async (pacote) => {
                 const nextUpgrades = await daemonApi.installUpgrade(pacote);
                 setUpgrades(nextUpgrades);
@@ -2574,6 +3124,191 @@ export function App() {
           ))}
         </div>
       )}
+
+      <QuickAgentDrawer
+        enabled={userSettings.comportamento.habilitar_drawer_rapido}
+        agentes={agentes}
+        pinnedIds={sidebarLayout?.pins ?? []}
+        selectedAgentId={activeAgent?.agente_id ?? null}
+        onSelectAgent={handleSelectAgent}
+      />
+
+      {activeTakeoverModal && (
+        <BrowserTakeoverModal
+          open={Boolean(activeTakeoverModal)}
+          tabId={activeTakeoverModal.tabId}
+          agentName={
+            agentes.find((a) => a.agente_id === activeTakeoverModal.agenteId)?.nome ??
+            "Agente de Pesquisa"
+          }
+          url={
+            activeTakeoverFrame?.tabId === activeTakeoverModal.tabId
+              ? activeTakeoverFrame.url
+              : activeTakeoverModal.url
+          }
+          title={
+            activeTakeoverFrame?.tabId === activeTakeoverModal.tabId
+              ? activeTakeoverFrame.title
+              : activeTakeoverModal.title
+          }
+          profileLabel={
+            browserProfiles.find((p) => p.perfil_id === activeTakeoverModal.perfilId)?.nome ??
+            "Perfil Compartilhado"
+          }
+          frameDataUrl={
+            activeTakeoverFrame?.tabId === activeTakeoverModal.tabId
+              ? activeTakeoverFrame.dataUrl
+              : activeTakeoverModal.previewDataUrl ?? null
+          }
+          frameWidth={
+            activeTakeoverFrame?.tabId === activeTakeoverModal.tabId
+              ? activeTakeoverFrame.width
+              : 1280
+          }
+          frameHeight={
+            activeTakeoverFrame?.tabId === activeTakeoverModal.tabId
+              ? activeTakeoverFrame.height
+              : 720
+          }
+          teachRecording={Boolean(teachStatusByTab[activeTakeoverModal.tabId]?.recording)}
+          teachStartedAt={teachStatusByTab[activeTakeoverModal.tabId]?.startedAt ?? null}
+          teachStepsCount={teachStatusByTab[activeTakeoverModal.tabId]?.stepsCount ?? 0}
+          onClose={() => setActiveTakeoverModal(null)}
+          onCompleteSession={async (tId) => {
+            await daemonApi.respondBrowserTakeover(tId, "complete");
+            setActiveTakeoverModal(null);
+          }}
+          onCancelSession={async (tId) => {
+            await daemonApi.respondBrowserTakeover(tId, "cancel");
+            setActiveTakeoverModal(null);
+          }}
+          onSendInput={async (tId, input) => {
+            await daemonApi.sendBrowserInput(tId, input);
+          }}
+          onStartTeach={async () => {
+            const started = await daemonApi.startTeachRecording(
+              activeTakeoverModal.tabId,
+              activeTakeoverModal.agenteId
+            );
+            setTeachStatusByTab((prev) => ({
+              ...prev,
+              [activeTakeoverModal.tabId]: {
+                recording: true,
+                startedAt: started.startedAt,
+                stepsCount: 0,
+              },
+            }));
+          }}
+          onStopTeach={async (action) => {
+            const stopped = await daemonApi.stopTeachRecording(
+              activeTakeoverModal.tabId,
+              action
+            );
+            setTeachStatusByTab((prev) => ({
+              ...prev,
+              [activeTakeoverModal.tabId]: {
+                recording: false,
+                startedAt: null,
+                stepsCount: stopped.steps.length,
+              },
+            }));
+            if (action === "save" && stopped.recordedTaskText && activeTakeoverModal.agenteId) {
+              setBrowsingLogInspector({
+                agenteId: activeTakeoverModal.agenteId,
+                agentName:
+                  agentes.find((a) => a.agente_id === activeTakeoverModal.agenteId)?.nome ??
+                  activeTakeoverModal.agenteId,
+                steps: stopped.steps,
+                recordedTaskText: stopped.recordedTaskText,
+              });
+            }
+          }}
+        />
+      )}
+
+      {browsingLogInspector && (
+        <UserBrowsingLogInspector
+          open={Boolean(browsingLogInspector)}
+          agentName={browsingLogInspector.agentName}
+          steps={browsingLogInspector.steps}
+          recordedTaskText={browsingLogInspector.recordedTaskText}
+          onClose={() => setBrowsingLogInspector(null)}
+          onAttachRecordedTask={(taskText) => {
+            setPrefilledChatPrompt(taskText);
+            handleSelectAgent(browsingLogInspector.agenteId);
+            setBrowsingLogInspector(null);
+          }}
+          onClearLog={async () => {
+            await daemonApi.clearUserBrowsingLog(browsingLogInspector.agenteId);
+            setBrowsingLogInspector((prev) =>
+              prev ? { ...prev, steps: [], recordedTaskText: "" } : null
+            );
+          }}
+        />
+      )}
+
+      <SettingsModal
+        open={settingsModalOpen}
+        settings={userSettings}
+        storageUsage={storageUsage}
+        whatsNew={whatsNew}
+        browserProfiles={browserProfiles}
+        browserProxies={browserProxies}
+        browserStatus={browserStatus}
+        agentes={agentes}
+        canais={canais}
+        onClose={() => setSettingsModalOpen(false)}
+        onSaveSettings={async (nextSettings) => {
+          const saved = await daemonApi.updateUserSettings(nextSettings);
+          setUserSettings(saved);
+          applyUserSettingsToDocument(saved);
+        }}
+        onRefreshStorage={async () => {
+          setStorageUsage(await daemonApi.getStorageUsage());
+        }}
+        onClearStorage={async (category) => {
+          const res = await daemonApi.clearStorageCategory(category);
+          setStorageUsage(res.snapshot);
+        }}
+        onDeleteStorageFile={async (arquivoId) => {
+          const res = await daemonApi.deleteStorageFile(arquivoId);
+          setStorageUsage(res.snapshot);
+          setArquivos(await daemonApi.listFiles());
+        }}
+        onCheckUpdates={async () => {
+          setWhatsNew(await daemonApi.getWhatsNew());
+        }}
+        onCreateBrowserProfile={async (input) => {
+          await daemonApi.createBrowserProfile(input);
+          setBrowserProfiles(await daemonApi.listBrowserProfiles());
+        }}
+        onUpdateBrowserProfile={async (perfilId, patch) => {
+          await daemonApi.updateBrowserProfile(perfilId, patch);
+          setBrowserProfiles(await daemonApi.listBrowserProfiles());
+        }}
+        onClearBrowserProfile={async (perfilId) => {
+          await daemonApi.clearBrowserProfile(perfilId);
+          setBrowserProfiles(await daemonApi.listBrowserProfiles());
+        }}
+        onDeleteBrowserProfile={async (perfilId) => {
+          await daemonApi.deleteBrowserProfile(perfilId);
+          const [nextProfiles, nextAgents] = await Promise.all([
+            daemonApi.listBrowserProfiles(),
+            daemonApi.listAgents(),
+          ]);
+          setBrowserProfiles(nextProfiles);
+          setAgentes(nextAgents);
+        }}
+        onSaveBrowserProxy={async (input) => {
+          const saved = await daemonApi.saveBrowserProxy(input);
+          setBrowserProxies(await daemonApi.listBrowserProxies());
+          return saved;
+        }}
+        onDeleteBrowserProxy={async (proxyId) => {
+          await daemonApi.deleteBrowserProxy(proxyId);
+          setBrowserProxies(await daemonApi.listBrowserProxies());
+        }}
+      />
     </div>
   );
 }

@@ -165,6 +165,9 @@ const OUTPUT_TARGET_OPTIONS: Array<PopoverOption<WorkflowOutputTarget>> = [
   { value: "canal", label: "Canal em Equipe" },
   { value: "whatsapp", label: "WhatsApp" },
   { value: "telegram", label: "Telegram" },
+  { value: "slack", label: "Slack" },
+  { value: "discord", label: "Discord" },
+  { value: "github", label: "GitHub" },
   { value: "arquivo", label: "Arquivo no Workspace" },
   { value: "instagram", label: "Instagram Meta" },
   { value: "notificacao", label: "Notificação Cockpit" },
@@ -1198,6 +1201,9 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
           )}
           {(outputTarget === "whatsapp" ||
             outputTarget === "telegram" ||
+            outputTarget === "slack" ||
+            outputTarget === "discord" ||
+            outputTarget === "github" ||
             outputTarget === "arquivo") && (
             <input
               type="text"
@@ -1214,7 +1220,13 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
                   ? "Número ou JID de destino..."
                   : outputTarget === "telegram"
                     ? "Chat ID Telegram (ou padrão do Cofre)"
-                    : "Nome em saidas/workflows/..."
+                    : outputTarget === "slack"
+                      ? "#canal ou Channel ID no Slack..."
+                      : outputTarget === "discord"
+                        ? "Channel ID ou Webhook Discord..."
+                        : outputTarget === "github"
+                          ? "owner/repositorio (ex: org/repo)..."
+                          : "Nome em saidas/workflows/..."
               }
               className="w-full rounded-lg border border-white/[0.06] bg-[#242424] px-2 py-1 text-[12px] text-[#DCDCDC] placeholder:text-[#6A6A6A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
             />
