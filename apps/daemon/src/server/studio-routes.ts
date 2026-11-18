@@ -48,20 +48,26 @@ import {
 } from "./brand-onboarding-service.ts";
 import { tryHandleWhatsAppMcpStoreRoute } from "./routes-whatsapp-mcp-store.ts";
 import {
+  buildPhase13SystemGuidance,
   buildStudioLiveContext,
   executeChatWorkflowTool,
+  executePhase13Tool,
   executeStudioExtensionTool,
   executeStudioRoutineTool,
   getChatWorkflowToolCatalog,
   isPhase10ExtensionTool,
+  isPhase13ToolName,
   isRoutineToolName,
   isUpgradeUnlocked,
   isWorkflowToolName,
   PHASE10_TOOL_DEFINITIONS,
+  PHASE13_TOOLS_SCHEMA,
+  readAgentContextCutoffAt,
   ROUTINE_AGENT_TOOLS_SCHEMA,
   syncWorkspaceFilesToDatabase,
   validateMetaIntegration,
 } from "./studio-tools-bridge.ts";
+import { tryHandleThreadsRoute, type Phase13ServicesBundle } from "./threads-routes.ts";
 import type { RoutineToolsDeps } from "../routines/routine-agent-tools.ts";
 import type { TelegramNotificationBot } from "../messaging/telegram-bot.ts";
 import type { WorkflowEngine } from "../workflows/workflow-engine.ts";
@@ -91,6 +97,7 @@ export interface StudioRoutesDeps {
   workflowEngine?: WorkflowEngine;
   workflowTriggers?: WorkflowTriggers;
   telegramBot?: TelegramNotificationBot;
+  phase13?: Phase13ServicesBundle;
 }
 
 const RAW_MIME_MAP: Record<string, string> = {
@@ -156,6 +163,14 @@ function mapChatRow(row: {
   tarefa_id: string | null;
   lida: number;
   criado_em: string;
+  thread_id?: string | null;
+  turno_id?: string | null;
+  item_type?: string | null;
+  status?: string | null;
+  resposta_para_mensagem_id?: string | null;
+  ordinal?: number | null;
+  branch_origem_mensagem_id?: string | null;
+  metadados_json?: string | null;
 }): MensagemChat {
   return {
     mensagem_id: row.mensagem_id,
@@ -167,6 +182,20 @@ function mapChatRow(row: {
     anexos: safeJsonParse<AnexoChat[]>(row.anexos_json, []),
     steps: safeJsonParse<PassoChat[]>(row.steps_json, []),
     tarefa_id: row.tarefa_id,
+    ...(row.thread_id !== undefined ? { thread_id: row.thread_id } : {}),
+    ...(row.turno_id !== undefined ? { turno_id: row.turno_id } : {}),
+    ...(row.item_type ? { item_type: row.item_type as MensagemChat["item_type"] } : {}),
+    ...(row.status ? { status: row.status as MensagemChat["status"] } : {}),
+    ...(row.resposta_para_mensagem_id !== undefined
+      ? { resposta_para_mensagem_id: row.resposta_para_mensagem_id }
+      : {}),
+    ...(typeof row.ordinal === "number" ? { ordinal: row.ordinal } : {}),
+    ...(row.branch_origem_mensagem_id !== undefined
+      ? { branch_origem_mensagem_id: row.branch_origem_mensagem_id }
+      : {}),
+    ...(row.metadados_json
+      ? { metadados: safeJsonParse<Record<string, unknown>>(row.metadados_json, {}) }
+      : {}),
     lida: row.lida !== 0,
     criado_em: row.criado_em,
   };
@@ -208,7 +237,7 @@ function parseWorkflowTextToolCalls(text: string): ParsedTextToolCall[] {
         name?: unknown;
         arguments?: unknown;
       };
-      if (typeof parsed.name === "string" && isWorkflowToolName(parsed.name)) {
+      if (typeof parsed.name === "string" && (isWorkflowToolName(parsed.name) || isPhase13ToolName(parsed.name))) {
         calls.push({
           name: parsed.name,
           arguments:
@@ -230,6 +259,12 @@ async function runTextModelWorkflowToolLoop(params: {
   deps: StudioRoutesDeps;
   agenteId: string;
   turnId: string;
+  threadId?: string | null;
+  entregaOrigemId?: string;
+  pedidoTexto?: string;
+  isRoutine?: boolean;
+  isResumingWait?: boolean;
+  signal?: AbortSignal;
   steps: PassoChat[];
   onProgress?: (event: {
     fase: "iniciado" | "etapa" | "chunk" | "concluido" | "erro";
@@ -239,11 +274,18 @@ async function runTextModelWorkflowToolLoop(params: {
   }) => void;
 }): Promise<string> {
   let currentText = params.initialText;
-  if (!params.deps.workflowStore || !params.deps.workflowEngine) {
+  const hasWorkflow = Boolean(params.deps.workflowStore && params.deps.workflowEngine);
+  const hasPhase13 = Boolean(params.deps.phase13);
+  if (!hasWorkflow && !hasPhase13) {
     return currentText;
   }
 
   for (let round = 0; round < 4; round += 1) {
+    if (params.signal?.aborted) {
+      const abortErr = new Error("Turno interrompido.");
+      abortErr.name = "AbortError";
+      throw abortErr;
+    }
     const calls = parseWorkflowTextToolCalls(currentText);
     if (calls.length === 0) break;
 
@@ -253,13 +295,39 @@ async function runTextModelWorkflowToolLoop(params: {
       let out: unknown;
       let failed = false;
       try {
-        out = await executeChatWorkflowTool(call.name, call.arguments, {
-          store: params.deps.workflowStore,
-          engine: params.deps.workflowEngine,
-          wsHub: params.deps.wsHub,
-          agenteId: params.agenteId,
-          requestSeed: params.turnId,
-        });
+        if (isPhase13ToolName(call.name) && params.deps.phase13) {
+          const p13 = await executePhase13Tool(
+            call.name,
+            call.arguments,
+            {
+              agenteId: params.agenteId,
+              turnoId: params.turnId,
+              callId: `${params.turnId}:${round}:${call.name}`,
+              threadId: params.threadId ?? `main:${params.agenteId}`,
+              canalId:
+                params.threadId && !params.threadId.startsWith("main:")
+                  ? `thread:${params.threadId}`
+                  : `agente:${params.agenteId}`,
+              entregaOrigemId: params.entregaOrigemId ?? params.turnId,
+              pedidoTexto: params.pedidoTexto ?? "",
+              isRoutine: params.isRoutine,
+              isResumingWait: params.isResumingWait,
+            },
+            params.deps.phase13,
+          );
+          out = p13.result;
+        } else if (hasWorkflow) {
+          out = await executeChatWorkflowTool(call.name, call.arguments, {
+            store: params.deps.workflowStore,
+            engine: params.deps.workflowEngine,
+            wsHub: params.deps.wsHub,
+            agenteId: params.agenteId,
+            requestSeed: params.turnId,
+          });
+        } else {
+          failed = true;
+          out = { erro: `Serviço indisponível para ferramenta '${call.name}'.` };
+        }
       } catch (err) {
         failed = true;
         out = { erro: err instanceof Error ? err.message : String(err) };
@@ -460,6 +528,12 @@ async function generateAgentChatReply(
   options?: {
     isHandoff?: boolean;
     originalUserPrompt?: string;
+    threadId?: string | null;
+    turnoId?: string;
+    signal?: AbortSignal;
+    wokenWaitsBlock?: string | null;
+    entregaOrigemId?: string;
+    isRoutine?: boolean;
   }
 ): Promise<{
   markdown: string;
@@ -563,6 +637,15 @@ async function generateAgentChatReply(
       `## Ferramentas de Workflow em Grafo Disponíveis\nVocê pode inspecionar, criar/editar, executar (completo ou parcial a partir de um nó) e consultar histórico de workflows pelas ferramentas: list_workflows, read_workflow, edit_workflow, delete_workflow, run_workflow e read_workflow_runs. Regra crítica de segurança: JAMAIS execute delete_workflow sem confirmação humana explícita prévia (confirmed_by_human: true).`
     );
   }
+  if (deps.phase13 || options?.wokenWaitsBlock) {
+    promptBaseParts.push(
+      buildPhase13SystemGuidance({
+        allowStartTask:
+          !options?.threadId || options.threadId.startsWith("main:") || Boolean(options?.isRoutine),
+        wokenWaitsBlock: options?.wokenWaitsBlock,
+      }),
+    );
+  }
 
   const promptBase = promptBaseParts.join("\n\n");
   const mcpTools = deps.mcpGateway
@@ -572,10 +655,12 @@ async function generateAgentChatReply(
   const studioRoutineTools = deps.routineToolsDeps ? ROUTINE_AGENT_TOOLS_SCHEMA : [];
   const studioWorkflowTools =
     deps.workflowStore && deps.workflowEngine ? getChatWorkflowToolCatalog() : [];
+  const studioPhase13Tools = deps.phase13 ? PHASE13_TOOLS_SCHEMA : [];
   for (const t of [
     ...PHASE10_TOOL_DEFINITIONS,
     ...studioRoutineTools,
     ...studioWorkflowTools,
+    ...studioPhase13Tools,
     ...mcpTools,
   ]) {
     if (!availableChatToolsMap.has(t.name)) {
@@ -635,7 +720,15 @@ async function generateAgentChatReply(
     step: skillStep,
   });
 
-  const turnId = `turn-${randomUUID().slice(0, 8)}`;
+  const turnId = options?.turnoId ?? `turn-${randomUUID().slice(0, 8)}`;
+  const assertNotAborted = (): void => {
+    if (options?.signal?.aborted) {
+      const abortErr = new Error("Turno interrompido via AbortSignal.");
+      abortErr.name = "AbortError";
+      throw abortErr;
+    }
+  };
+  assertNotAborted();
   const sessionId = `chat:${agente.agente_id}`;
 
   if (loadedSkill) {
@@ -922,6 +1015,12 @@ async function generateAgentChatReply(
         deps,
         agenteId: agente.agente_id,
         turnId,
+        threadId: options?.threadId,
+        entregaOrigemId: options?.entregaOrigemId,
+        pedidoTexto: userPrompt,
+        isRoutine: options?.isRoutine,
+        isResumingWait: Boolean(options?.wokenWaitsBlock),
+        signal: options?.signal,
         steps,
         onProgress,
       });
@@ -1023,6 +1122,12 @@ async function generateAgentChatReply(
           deps,
           agenteId: agente.agente_id,
           turnId,
+          threadId: options?.threadId,
+          entregaOrigemId: options?.entregaOrigemId,
+          pedidoTexto: userPrompt,
+          isRoutine: options?.isRoutine,
+          isResumingWait: Boolean(options?.wokenWaitsBlock),
+          signal: options?.signal,
           steps,
           onProgress,
         });
@@ -1089,12 +1194,14 @@ async function generateAgentChatReply(
       let finalReplyText = "";
 
       for (let iter = 0; iter < 8; iter += 1) {
+        assertNotAborted();
         const llmResult = await client.executeTurn({
           model: agente.modelo_padrao,
           systemPrompt: systemPromptChat,
           messages: turnMessages,
           tools: availableChatTools,
         });
+        assertNotAborted();
 
         totalInputTokens += llmResult.usage?.inputTokens ?? 0;
         totalOutputTokens += llmResult.usage?.outputTokens ?? 0;
@@ -1155,6 +1262,27 @@ async function generateAgentChatReply(
                 agenteId: agente.agente_id,
                 requestSeed: turnId,
               });
+            } else if (isPhase13ToolName(call.name) && deps.phase13) {
+              const p13 = await executePhase13Tool(
+                call.name,
+                call.arguments,
+                {
+                  agenteId: agente.agente_id,
+                  turnoId: turnId,
+                  callId: call.id,
+                  threadId: options?.threadId ?? `main:${agente.agente_id}`,
+                  canalId:
+                    options?.threadId && !options.threadId.startsWith("main:")
+                      ? `thread:${options.threadId}`
+                      : `agente:${agente.agente_id}`,
+                  entregaOrigemId: options?.entregaOrigemId ?? turnId,
+                  pedidoTexto: userPrompt,
+                  isRoutine: options?.isRoutine,
+                  isResumingWait: Boolean(options?.wokenWaitsBlock),
+                },
+                deps.phase13,
+              );
+              toolOutput = p13.result;
             } else if (deps.mcpGateway && call.name.startsWith("mcp_")) {
               toolOutput = await deps.mcpGateway.callMcpTool(call.name, call.arguments, {
                 agentId: agente.agente_id,
@@ -1377,6 +1505,12 @@ async function generateAgentChatReply(
           deps,
           agenteId: agente.agente_id,
           turnId,
+          threadId: options?.threadId,
+          entregaOrigemId: options?.entregaOrigemId,
+          pedidoTexto: userPrompt,
+          isRoutine: options?.isRoutine,
+          isResumingWait: Boolean(options?.wokenWaitsBlock),
+          signal: options?.signal,
           steps,
           onProgress,
         });
@@ -1454,6 +1588,195 @@ async function generateAgentChatReply(
   return { markdown: structuredFallback, steps, tarefaCriadaId, anexosGerados };
 }
 
+/**
+ * Executa um turno completo conversacional (chat principal ou sub-thread isolada)
+ * respeitando `context_cutoff_at`, `AbortSignal`, ferramentas da Fase 13 e emissão WS isolada por `thread_id`.
+ */
+export async function executeAgentConversationTurn(params: {
+  deps: StudioRoutesDeps;
+  agente: Parameters<typeof generateAgentChatReply>[1];
+  userPrompt: string;
+  anexos?: AnexoChat[];
+  threadId?: string | null;
+  turnoId: string;
+  signal?: AbortSignal;
+  wokenWaitsBlock?: string | null;
+  entregaOrigemId?: string;
+  isRoutine?: boolean;
+  isHandoff?: boolean;
+  originalUserPrompt?: string;
+  respostaParaMensagemId?: string | null;
+  onProgress?: (prog: ChatProgressReport) => void;
+}): Promise<{
+  agentMsg: MensagemChat;
+  reply: Awaited<ReturnType<typeof generateAgentChatReply>>;
+}> {
+  const { deps, agente } = params;
+  const rawThread = params.threadId;
+  const isSubThread = Boolean(rawThread && !rawThread.startsWith("main:"));
+  const effectiveThreadId = isSubThread ? rawThread! : `main:${agente.agente_id}`;
+  const canalId = isSubThread ? `thread:${effectiveThreadId}` : `agente:${agente.agente_id}`;
+
+  const cutoffAt = isSubThread ? null : readAgentContextCutoffAt(deps.db, agente.agente_id);
+
+  const historyRows = (isSubThread
+    ? deps.db.connection
+        .prepare(
+          `
+          SELECT * FROM projecao_conversas_chat
+          WHERE thread_id = ?
+            AND COALESCE(item_type, 'mensagem') = 'mensagem'
+            AND COALESCE(status, 'completed') != 'streaming'
+          ORDER BY criado_em DESC, COALESCE(ordinal, 0) DESC, mensagem_id DESC
+          LIMIT 30;
+        `,
+        )
+        .all(effectiveThreadId)
+    : deps.db.connection
+        .prepare(
+          `
+          SELECT * FROM projecao_conversas_chat
+          WHERE (thread_id = ? OR (thread_id IS NULL AND canal_id = ?))
+            AND COALESCE(item_type, 'mensagem') = 'mensagem'
+            AND COALESCE(status, 'completed') != 'streaming'
+            AND (? IS NULL OR criado_em > ?)
+          ORDER BY criado_em DESC, COALESCE(ordinal, 0) DESC, mensagem_id DESC
+          LIMIT 30;
+        `,
+        )
+        .all(effectiveThreadId, canalId, cutoffAt, cutoffAt)) as Array<Parameters<typeof mapChatRow>[0]>;
+
+  const history = historyRows.reverse().map(mapChatRow);
+  const progressEmitter = (prog: ChatProgressReport): void => {
+    params.onProgress?.(prog);
+    if (isSubThread) {
+      deps.wsHub.broadcast("thread:progress", {
+        agente_id: agente.agente_id,
+        thread_id: effectiveThreadId,
+        turno_id: params.turnoId,
+        ...prog,
+      });
+    } else {
+      deps.wsHub.broadcast("chat:progress", {
+        canal_id: canalId,
+        agente_id: agente.agente_id,
+        turno_id: params.turnoId,
+        ...prog,
+      });
+    }
+  };
+
+  const reply = await generateAgentChatReply(
+    deps,
+    agente,
+    params.userPrompt,
+    params.anexos ?? [],
+    history,
+    progressEmitter,
+    {
+      isHandoff: params.isHandoff,
+      originalUserPrompt: params.originalUserPrompt,
+      threadId: effectiveThreadId,
+      turnoId: params.turnoId,
+      signal: params.signal,
+      wokenWaitsBlock: params.wokenWaitsBlock,
+      entregaOrigemId: params.entregaOrigemId,
+      isRoutine: params.isRoutine,
+    },
+  );
+
+  if (isSubThread) {
+    deps.wsHub.broadcast("thread:progress", {
+      agente_id: agente.agente_id,
+      thread_id: effectiveThreadId,
+      turno_id: params.turnoId,
+      fase: "concluido",
+    });
+  } else {
+    deps.wsHub.broadcast("chat:progress", {
+      canal_id: canalId,
+      agente_id: agente.agente_id,
+      turno_id: params.turnoId,
+      fase: "concluido",
+    });
+  }
+
+  const maxOrdRow = deps.db.connection
+    .prepare("SELECT COALESCE(MAX(ordinal), 0) AS max_ord FROM projecao_conversas_chat WHERE thread_id = ?;")
+    .get(effectiveThreadId) as { max_ord: number };
+  const nextOrdinal = maxOrdRow.max_ord + 1;
+  const nowIso = new Date(Date.now() + 2).toISOString();
+
+  const agentMsg: MensagemChat = {
+    mensagem_id: `msg-${randomUUID()}`,
+    canal_id: canalId,
+    agente_id: agente.agente_id,
+    autor: "agente",
+    autor_nome: agente.nome,
+    conteudo_markdown: reply.markdown,
+    anexos: reply.anexosGerados,
+    steps: reply.steps,
+    tarefa_id: reply.tarefaCriadaId,
+    thread_id: effectiveThreadId,
+    turno_id: params.turnoId,
+    item_type: "mensagem",
+    status: "completed",
+    resposta_para_mensagem_id: params.respostaParaMensagemId ?? null,
+    ordinal: nextOrdinal,
+    lida: true,
+    criado_em: nowIso,
+  };
+
+  deps.db.connection
+    .prepare(
+      `
+      INSERT INTO projecao_conversas_chat (
+        mensagem_id, canal_id, agente_id, autor, autor_nome, conteudo_markdown,
+        anexos_json, steps_json, tarefa_id, lida, criado_em,
+        thread_id, turno_id, item_type, status, resposta_para_mensagem_id,
+        ordinal, branch_origem_mensagem_id, metadados_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'mensagem', 'completed', ?, ?, NULL, '{}');
+    `,
+    )
+    .run(
+      agentMsg.mensagem_id,
+      agentMsg.canal_id,
+      agentMsg.agente_id,
+      agentMsg.autor,
+      agentMsg.autor_nome ?? agente.nome,
+      agentMsg.conteudo_markdown,
+      JSON.stringify(agentMsg.anexos),
+      JSON.stringify(agentMsg.steps),
+      agentMsg.tarefa_id ?? null,
+      1,
+      agentMsg.criado_em,
+      effectiveThreadId,
+      params.turnoId,
+      agentMsg.resposta_para_mensagem_id ?? null,
+      nextOrdinal,
+    );
+
+  if (isSubThread) {
+    deps.wsHub.broadcast("thread:message", {
+      agente_id: agente.agente_id,
+      thread_id: effectiveThreadId,
+      mensagem: agentMsg,
+    });
+  } else {
+    deps.wsHub.broadcast("chat:message", {
+      canal_id: canalId,
+      agente_id: agente.agente_id,
+      mensagem: agentMsg,
+    });
+  }
+
+  if (!isSubThread && deps.phase13?.contextReset.hasPendingReset(agente.agente_id)) {
+    deps.phase13.contextReset.flushPendingResetIfIdle(agente.agente_id, params.entregaOrigemId);
+  }
+
+  return { agentMsg, reply };
+}
+
 export async function tryHandleStudioRoute(
   req: IncomingMessage,
   res: ServerResponse,
@@ -1463,6 +1786,15 @@ export async function tryHandleStudioRoute(
   deps: StudioRoutesDeps
 ): Promise<boolean> {
   if (await tryHandleWhatsAppMcpStoreRoute(req, res, path, method, url, deps)) {
+    return true;
+  }
+  if (
+    deps.phase13 &&
+    (await tryHandleThreadsRoute(req, res, path, method, url, {
+      ...deps,
+      ...deps.phase13,
+    }))
+  ) {
     return true;
   }
 
@@ -1932,6 +2264,13 @@ export async function tryHandleStudioRoute(
       ...(typeof body.avatar_shape === "string" ? { avatar_shape: body.avatar_shape } : {}),
       ...(typeof body.avatar_color === "string" ? { avatar_color: body.avatar_color } : {}),
       ...(typeof body.prompt_base === "string" ? { prompt_base: body.prompt_base } : {}),
+      ...(body.modo_ocupado === "steer" || body.modo_ocupado === "queue"
+        ? { modo_ocupado: body.modo_ocupado }
+        : {}),
+      ...(typeof body.allow_new_chat === "boolean" ? { allow_new_chat: body.allow_new_chat } : {}),
+      ...(typeof body.task_limit === "number" && Number.isFinite(body.task_limit)
+        ? { task_limit: Math.max(1, Math.min(4, Math.floor(body.task_limit))) }
+        : {}),
     };
 
     const nextModel =
@@ -2064,9 +2403,40 @@ export async function tryHandleStudioRoute(
         : `agente:${agenteId}`;
 
     if (method === "GET") {
+      const beforeCursor = url.searchParams.get("beforeCursor");
+      const aroundMessageId = url.searchParams.get("aroundMessageId");
+      const limitParam = url.searchParams.get("limit");
+      if (
+        deps.phase13?.pagination &&
+        !canalIdQuery?.startsWith("rotina:") &&
+        (beforeCursor || aroundMessageId || limitParam)
+      ) {
+        try {
+          const limitNum = limitParam ? Number(limitParam) : 50;
+          const mainThreadId = `main:${agenteId}`;
+          const pagina = aroundMessageId
+            ? deps.phase13.pagination.readAround({
+                threadId: mainThreadId,
+                agenteId,
+                aroundMessageId,
+                limit: Number.isFinite(limitNum) ? limitNum : 50,
+              })
+            : deps.phase13.pagination.readPage({
+                threadId: mainThreadId,
+                agenteId,
+                beforeCursor,
+                limit: Number.isFinite(limitNum) ? limitNum : 50,
+              });
+          sendJson(res, 200, { mensagens: pagina.mensagens, pagina });
+        } catch (err) {
+          sendJson(res, 400, { erro: err instanceof Error ? err.message : String(err) });
+        }
+        return true;
+      }
+
       const rows = db.connection
         .prepare(
-          `SELECT * FROM projecao_conversas_chat WHERE canal_id = ? ORDER BY criado_em ASC LIMIT 120;`
+          `SELECT * FROM projecao_conversas_chat WHERE canal_id = ? ORDER BY criado_em ASC, COALESCE(ordinal, 0) ASC, mensagem_id ASC LIMIT 120;`
         )
         .all(canalId) as Array<Parameters<typeof mapChatRow>[0]>;
       sendJson(res, 200, { mensagens: rows.map(mapChatRow) });
@@ -2090,6 +2460,13 @@ export async function tryHandleStudioRoute(
       return true;
     }
 
+    const mainThreadId = `main:${agenteId}`;
+    const liveTurnId = `turn-${randomUUID().slice(0, 8)}`;
+    const maxOrdUserRow = db.connection
+      .prepare("SELECT COALESCE(MAX(ordinal), 0) AS max_ord FROM projecao_conversas_chat WHERE thread_id = ?;")
+      .get(mainThreadId) as { max_ord: number };
+    const userOrdinal = maxOrdUserRow.max_ord + 1;
+
     const userMsg: MensagemChat = {
       mensagem_id: `msg-${randomUUID()}`,
       canal_id: canalId,
@@ -2100,13 +2477,24 @@ export async function tryHandleStudioRoute(
       anexos,
       steps: [],
       tarefa_id: null,
+      thread_id: mainThreadId,
+      turno_id: liveTurnId,
+      item_type: "mensagem",
+      status: "completed",
+      resposta_para_mensagem_id:
+        typeof body.resposta_para_mensagem_id === "string" ? body.resposta_para_mensagem_id : null,
+      ordinal: userOrdinal,
       lida: true,
       criado_em: new Date().toISOString(),
     };
 
     const insertMsgStmt = db.connection.prepare(
-      `INSERT INTO projecao_conversas_chat (mensagem_id, canal_id, agente_id, autor, autor_nome, conteudo_markdown, anexos_json, steps_json, tarefa_id, lida, criado_em)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+      `INSERT INTO projecao_conversas_chat (
+         mensagem_id, canal_id, agente_id, autor, autor_nome, conteudo_markdown,
+         anexos_json, steps_json, tarefa_id, lida, criado_em,
+         thread_id, turno_id, item_type, status, resposta_para_mensagem_id,
+         ordinal, branch_origem_mensagem_id, metadados_json
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'mensagem', 'completed', ?, ?, NULL, '{}');`
     );
 
     insertMsgStmt.run(
@@ -2120,7 +2508,11 @@ export async function tryHandleStudioRoute(
       "[]",
       null,
       1,
-      userMsg.criado_em
+      userMsg.criado_em,
+      mainThreadId,
+      liveTurnId,
+      userMsg.resposta_para_mensagem_id ?? null,
+      userOrdinal,
     );
 
     wsHub.broadcast("chat:message", {
@@ -2129,70 +2521,104 @@ export async function tryHandleStudioRoute(
       mensagem: userMsg,
     });
 
+    if (deps.phase13?.queueControls.isLaneBusy(agenteId, null)) {
+      const entrega = deps.phase13.queueControls.enqueueMessage({
+        mensagemId: userMsg.mensagem_id,
+        agenteId,
+        threadId: null,
+        remetenteTipo: "usuario",
+        conteudoMarkdown: userMsg.conteudo_markdown,
+        anexos,
+        respostaParaMensagemId: userMsg.resposta_para_mensagem_id,
+        chaveIdempotencia:
+          typeof body.client_message_id === "string" ? `chat-msg:${body.client_message_id}` : null,
+        skipWake: true,
+      });
+      const snapshot = deps.phase13.queueControls.getLaneSnapshot(agenteId, null);
+      if (snapshot.modo_ocupado === "steer" && snapshot.suporta_steer_nativo) {
+        try {
+          const steerRes = deps.phase13.queueControls.steerDelivery(agenteId, null, entrega.entrega_id);
+          if (steerRes.mode === "steered") {
+            sendJson(res, 202, {
+              enfileirada: false,
+              steered: true,
+              entrega: steerRes.entrega,
+              mensagem_usuario: userMsg,
+            });
+            return true;
+          }
+        } catch {
+          // segue enfileirada na lane
+        }
+      }
+      deps.phase13.onDrainLane(agenteId, null);
+      sendJson(res, 202, {
+        enfileirada: true,
+        entrega,
+        mensagem_usuario: userMsg,
+      });
+      return true;
+    }
+
+    const abortController = deps.phase13
+      ? deps.phase13.tasksService.registerTurnAbort(mainThreadId, liveTurnId)
+      : new AbortController();
+    if (deps.phase13) {
+      deps.phase13.queueControls.registerActiveTurn({
+        agenteId,
+        threadId: null,
+        turnoId: liveTurnId,
+        deliveries: [
+          {
+            entrega_id: `direct-${liveTurnId}`,
+            mensagem_id: userMsg.mensagem_id,
+            agente_id: agenteId,
+            thread_id: null,
+            remetente_tipo: "usuario",
+            conteudo_markdown: userMsg.conteudo_markdown,
+            anexos,
+            resposta_para_mensagem_id: userMsg.resposta_para_mensagem_id ?? null,
+            status: "executando",
+            posicao: 0,
+            turno_id: liveTurnId,
+            erro: null,
+            editando: false,
+            espera_resposta: true,
+            criado_em: userMsg.criado_em,
+          },
+        ],
+        abortController,
+      });
+    }
+
+    let agentMsg: MensagemChat;
+    try {
+      const turnOut = await executeAgentConversationTurn({
+        deps,
+        agente,
+        userPrompt: userMsg.conteudo_markdown,
+        anexos,
+        threadId: mainThreadId,
+        turnoId: liveTurnId,
+        signal: abortController.signal,
+        entregaOrigemId: userMsg.mensagem_id,
+        respostaParaMensagemId: userMsg.mensagem_id,
+      });
+      agentMsg = turnOut.agentMsg;
+    } finally {
+      if (deps.phase13) {
+        deps.phase13.queueControls.clearActiveTurn(agenteId, null, liveTurnId);
+        deps.phase13.tasksService.clearTurnAbort(mainThreadId, liveTurnId);
+        deps.phase13.onDrainLane(agenteId, null);
+      }
+    }
+
     const historyRows = db.connection
       .prepare(
-        `SELECT * FROM projecao_conversas_chat WHERE canal_id = ? ORDER BY criado_em ASC LIMIT 20;`
+        `SELECT * FROM projecao_conversas_chat WHERE canal_id = ? ORDER BY criado_em ASC, COALESCE(ordinal, 0) ASC LIMIT 20;`
       )
       .all(canalId) as Array<Parameters<typeof mapChatRow>[0]>;
     const history = historyRows.map(mapChatRow);
-    const liveTurnId = `turn-${randomUUID().slice(0, 8)}`;
-
-    const reply = await generateAgentChatReply(
-      deps,
-      agente,
-      userMsg.conteudo_markdown,
-      anexos,
-      history,
-      (prog) => {
-        wsHub.broadcast("chat:progress", {
-          canal_id: canalId,
-          agente_id: agenteId,
-          turno_id: liveTurnId,
-          ...prog,
-        });
-      }
-    );
-
-    wsHub.broadcast("chat:progress", {
-      canal_id: canalId,
-      agente_id: agenteId,
-      turno_id: liveTurnId,
-      fase: "concluido",
-    });
-
-    const agentMsg: MensagemChat = {
-      mensagem_id: `msg-${randomUUID()}`,
-      canal_id: canalId,
-      agente_id: agenteId,
-      autor: "agente",
-      autor_nome: agente.nome,
-      conteudo_markdown: reply.markdown,
-      anexos: reply.anexosGerados,
-      steps: reply.steps,
-      tarefa_id: reply.tarefaCriadaId,
-      lida: true,
-      criado_em: new Date(Date.now() + 2).toISOString(),
-    };
-
-    insertMsgStmt.run(
-      agentMsg.mensagem_id,
-      agentMsg.canal_id,
-      agentMsg.agente_id,
-      agentMsg.autor,
-      agentMsg.autor_nome ?? agente.nome,
-      agentMsg.conteudo_markdown,
-      JSON.stringify(agentMsg.anexos),
-      JSON.stringify(agentMsg.steps),
-      agentMsg.tarefa_id ?? null,
-      1,
-      agentMsg.criado_em
-    );
-
-    wsHub.broadcast("chat:message", {
-      canal_id: canalId,
-      agente_id: agenteId,
-      mensagem: agentMsg,
-    });
 
     // Handoff 1:1 somente quando não for saudação/dúvida:
     // - do usuário: aceita @agente_id ou [HANDOFF:agente_id]
@@ -2266,6 +2692,12 @@ export async function tryHandleStudioRoute(
             ...hReply.steps,
           ],
           tarefa_id: hReply.tarefaCriadaId,
+          thread_id: mainThreadId,
+          turno_id: liveTurnId,
+          item_type: "mensagem",
+          status: "completed",
+          resposta_para_mensagem_id: agentMsg.mensagem_id,
+          ordinal: userOrdinal + 2 + hIdx,
           lida: true,
           criado_em: new Date(Date.now() + 10 + hIdx * 10).toISOString(),
         };
@@ -2281,7 +2713,11 @@ export async function tryHandleStudioRoute(
           JSON.stringify(hMsg.steps),
           hMsg.tarefa_id ?? null,
           1,
-          hMsg.criado_em
+          hMsg.criado_em,
+          mainThreadId,
+          liveTurnId,
+          agentMsg.mensagem_id,
+          userOrdinal + 2 + hIdx,
         );
         wsHub.broadcast("chat:message", {
           canal_id: canalId,

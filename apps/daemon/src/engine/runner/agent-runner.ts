@@ -12,9 +12,14 @@ import type { McpGateway, McpOAuthRequiredNotice } from "../../mcp/mcp-gateway.t
 import { redactMcpPayload, redactMcpSecrets } from "../../mcp/mcp-redaction.ts";
 import type { FifoQueueManager } from "../../queue/fifo-queue.ts";
 import {
+  buildPhase13SystemGuidance,
+  executePhase13Tool,
   executeStudioExtensionTool,
   isPhase10ExtensionTool,
+  isPhase13ToolName,
   PHASE10_TOOL_DEFINITIONS,
+  PHASE13_TOOLS_SCHEMA,
+  type Phase13ToolServices,
 } from "../../server/studio-tools-bridge.ts";
 import {
   executeRoutineToolCall,
@@ -73,6 +78,14 @@ export interface AgentRunnerOptions {
   routineToolsDeps?: RoutineToolsDeps;
   workflowToolExecutor?: WorkflowToolExecutor;
   includeWorkflowTools?: boolean;
+  phase13Services?: Phase13ToolServices;
+}
+
+export interface AgentRunRuntimeContext {
+  threadId?: string | null;
+  signal?: AbortSignal;
+  wokenWaitsBlock?: string | null;
+  entregaOrigemId?: string;
 }
 
 export interface AgentRunResult {
@@ -215,6 +228,7 @@ export class AgentRunner {
   private routineToolsDeps?: RoutineToolsDeps;
   private workflowToolExecutor?: WorkflowToolExecutor;
   private readonly includeWorkflowTools: boolean;
+  private phase13Services?: Phase13ToolServices;
 
   constructor(options: AgentRunnerOptions) {
     this.db = options.db;
@@ -239,8 +253,13 @@ export class AgentRunner {
     this.routineToolsDeps = options.routineToolsDeps;
     this.workflowToolExecutor = options.workflowToolExecutor;
     this.includeWorkflowTools = options.includeWorkflowTools ?? true;
+    this.phase13Services = options.phase13Services;
 
     seedDefaultAgents(this.db);
+  }
+
+  public setPhase13Services(services: Phase13ToolServices): void {
+    this.phase13Services = services;
   }
 
   public setRoutineToolsDeps(deps: RoutineToolsDeps): void {
@@ -293,8 +312,41 @@ export class AgentRunner {
       agenteId: string;
       generatedArtifacts: string[];
       routineCtx?: RoutineToolExecutionContext;
+      runtimeContext?: AgentRunRuntimeContext;
+      wokenWaitsBlock?: string | null;
     }
   ): Promise<unknown> {
+    if (isPhase13ToolName(call.name) && this.phase13Services) {
+      const payloadRec = (context.tarefa.payload ?? {}) as Record<string, unknown>;
+      const pedidoTexto =
+        typeof payloadRec.tema === "string"
+          ? payloadRec.tema
+          : context.tarefa.titulo;
+      const res = await executePhase13Tool(
+        call.name,
+        call.arguments,
+        {
+          agenteId: context.agenteId,
+          turnoId: context.tarefa.tarefa_id,
+          callId: call.id,
+          threadId:
+            context.runtimeContext?.threadId ??
+            context.tarefa.thread_id ??
+            `main:${context.agenteId}`,
+          canalId: context.tarefa.thread_id
+            ? `thread:${context.tarefa.thread_id}`
+            : `agente:${context.agenteId}`,
+          entregaOrigemId: context.runtimeContext?.entregaOrigemId ?? context.tarefa.tarefa_id,
+          pedidoTexto,
+          isRoutine: context.routineCtx?.turnOrigin === "routine",
+          isResumingWait: Boolean(context.wokenWaitsBlock),
+        },
+        this.phase13Services,
+      );
+      if (res.handled) {
+        return res.result;
+      }
+    }
     if (isRoutineToolName(call.name)) {
       if (!this.routineToolsDeps) {
         throw new Error("Sistema de rotinas ainda não inicializado neste runner.");
@@ -460,12 +512,29 @@ export class AgentRunner {
   /**
    * Executa uma tarefa completa em loop multi-turn até resposta final ou entrega para aprovação.
    */
-  public async runTask(tarefa: TarefaRegistro): Promise<AgentRunResult> {
+  public async runTask(
+    tarefa: TarefaRegistro,
+    runtimeContext?: AgentRunRuntimeContext,
+  ): Promise<AgentRunResult> {
     const startedAt = Date.now();
     const agenteId = this.resolveTargetAgentId(tarefa);
     this.setAgentStatus(agenteId, "trabalhando");
 
     const payloadRec = (tarefa.payload ?? {}) as Record<string, unknown>;
+    const effectiveThreadId =
+      runtimeContext?.threadId ??
+      tarefa.thread_id ??
+      (typeof payloadRec.thread_id === "string" ? payloadRec.thread_id : null);
+    const wokenWaitsBlock =
+      runtimeContext?.wokenWaitsBlock ??
+      (typeof payloadRec.woken_waits_block === "string" ? payloadRec.woken_waits_block : null);
+    const assertNotAborted = (): void => {
+      if (runtimeContext?.signal?.aborted) {
+        const abortErr = new Error("Turno interrompido via AbortSignal.");
+        abortErr.name = "AbortError";
+        throw abortErr;
+      }
+    };
     const rotinaExecucaoId =
       typeof payloadRec.rotina_execucao_id === "string"
         ? payloadRec.rotina_execucao_id
@@ -507,12 +576,15 @@ export class AgentRunner {
         db: this.db,
         memoriaContexto: memories,
       });
-      const systemPrompt =
+      const baseCompiledPrompt =
         linkedSkills.length > 0 && !compiledSkill.linkedSkills
           ? `${compiledSkill.systemPrompt}\n\n${linkedSkills
               .map((s) => `## Habilidade Vinculada: ${s.name} (${s.slug})\n${s.body}`)
               .join("\n\n")}`
           : compiledSkill.systemPrompt;
+      const systemPrompt = this.phase13Services || wokenWaitsBlock
+        ? `${baseCompiledPrompt}\n\n${buildPhase13SystemGuidance({ allowStartTask: !effectiveThreadId || Boolean(payloadRec.rotina_execucao_id), wokenWaitsBlock })}`
+        : baseCompiledPrompt;
       const model = this.getAgentModel(agenteId);
       let client: ReturnType<ProviderRegistry["getClientForModel"]> | null = null;
       try {
@@ -527,6 +599,7 @@ export class AgentRunner {
       for (const tool of [
         ...NATIVE_TOOLS_SCHEMA,
         ...PHASE10_TOOL_DEFINITIONS,
+        ...PHASE13_TOOLS_SCHEMA,
         ...ROUTINE_AGENT_TOOLS_SCHEMA,
         ...(this.includeWorkflowTools ? WORKFLOW_TOOL_DEFINITIONS : []),
         ...legacyMcpTools,
@@ -588,6 +661,7 @@ export class AgentRunner {
       }
 
       for (let turn = 0; client && turn < this.maxTurns; turn++) {
+        assertNotAborted();
         turnsExecuted += 1;
 
         const turnResult = await client.streamTurn(
@@ -599,14 +673,25 @@ export class AgentRunner {
           },
           (evt) => {
             if (evt.type === "thought" && evt.tokenChunk) {
-              this.wsHub?.broadcast("agent:thought", {
-                tarefa_id: tarefa.tarefa_id,
-                agente_id: agenteId,
-                token_chunk: evt.tokenChunk,
-              });
+              if (effectiveThreadId && !effectiveThreadId.startsWith("main:")) {
+                this.wsHub?.broadcast("thread:progress", {
+                  agente_id: agenteId,
+                  thread_id: effectiveThreadId,
+                  turno_id: tarefa.tarefa_id,
+                  fase: "chunk",
+                  delta: evt.tokenChunk,
+                });
+              } else {
+                this.wsHub?.broadcast("agent:thought", {
+                  tarefa_id: tarefa.tarefa_id,
+                  agente_id: agenteId,
+                  token_chunk: evt.tokenChunk,
+                });
+              }
             }
           }
         );
+        assertNotAborted();
 
         finalText = turnResult.text;
 
@@ -644,6 +729,8 @@ export class AgentRunner {
             agenteId,
             generatedArtifacts,
             routineCtx,
+            runtimeContext,
+            wokenWaitsBlock,
           });
 
           messages.push({
@@ -716,6 +803,16 @@ export class AgentRunner {
         `Tarefa '${tarefa.titulo}' (${tarefa.tipo}) concluída com ${generatedArtifacts.length} artefatos.`,
         "automatica"
       );
+
+      if (
+        (!effectiveThreadId || effectiveThreadId.startsWith("main:")) &&
+        this.phase13Services?.contextReset?.hasPendingReset(agenteId)
+      ) {
+        this.phase13Services.contextReset.flushPendingResetIfIdle(
+          agenteId,
+          runtimeContext?.entregaOrigemId,
+        );
+      }
 
       return {
         tarefaId: tarefa.tarefa_id,

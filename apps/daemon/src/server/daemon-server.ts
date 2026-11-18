@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, extname, join, resolve, sep } from "node:path";
@@ -45,8 +45,18 @@ import { TranscriptionService } from "../voice/transcription-service.ts";
 import { ControlSocketServer } from "./control-socket.ts";
 import { importOpenBotTelemetryIfAvailable } from "./analytics-skills-service.ts";
 import { tryHandleRoutineRoute } from "./routine-routes.ts";
-import { tryHandleStudioRoute } from "./studio-routes.ts";
+import { executeAgentConversationTurn, tryHandleStudioRoute } from "./studio-routes.ts";
 import { WebSocketHub } from "./websocket-hub.ts";
+import { AgentThreadStore } from "../threads/agent-thread-store.ts";
+import { AgentTasksService } from "../threads/agent-tasks-service.ts";
+import { ConversationPaginationReader } from "../threads/conversation-pagination.ts";
+import { AgentWaitStore } from "../waits/agent-wait-store.ts";
+import { AgentWaitsService } from "../waits/agent-waits-service.ts";
+import { ChatQueueStore } from "../queue/chat-queue-store.ts";
+import { QueueControlsService } from "../queue/queue-controls-service.ts";
+import { SideQuestionService } from "../chat/side-question-service.ts";
+import { ContextResetService } from "../chat/context-reset-service.ts";
+import { MessagePinsService } from "../chat/message-pins-service.ts";
 import type { WaVersionFetcher, WhatsAppStudioClient } from "@criativo/whatsapp";
 
 export interface TaskExecutorHook {
@@ -101,6 +111,12 @@ export interface DaemonRuntime {
   whatsappOrchestrator: WhatsAppOrchestrator;
   whatsapp: WhatsAppStudioClient;
   approvalNotifier: WhatsAppApprovalNotifier;
+  threadStore: AgentThreadStore;
+  tasksService: AgentTasksService;
+  waitsService: AgentWaitsService;
+  queueControls: QueueControlsService;
+  pinsService: MessagePinsService;
+  contextReset: ContextResetService;
   port: number;
   close(): Promise<void>;
 }
@@ -384,15 +400,52 @@ export async function createDaemonServer(
     workspaceRoot: resolvedWorkspaceRoot,
     customTools: options.customTools,
   });
+  const threadStore = new AgentThreadStore(db);
+  const pagination = new ConversationPaginationReader(db);
+  const waitStore = new AgentWaitStore(db);
+  const queueStore = new ChatQueueStore(db);
+  const tasksService = new AgentTasksService({ db, threadStore, queue, queueStore, wsHub });
+  const waitsService = new AgentWaitsService({ db, waitStore, wsHub });
+  const queueControls = new QueueControlsService({ db, queueStore, tasksService, wsHub });
+  const sideQuestion = new SideQuestionService({ db, providers, providerConnection, wsHub });
+  const contextReset = new ContextResetService({ db, wsHub, providers, providerConnection });
+  const pinsService = new MessagePinsService({ db, wsHub });
+  runner.setPhase13Services({ tasksService, waitsService, queueControls, contextReset, pinsService });
+
   const activeExecutor: TaskExecutorHook = options.taskExecutor ?? {
     execute: async (tarefa) => {
       await runner.runTask(tarefa);
     },
   };
 
-  const cron = new CronScheduler(db, queue, (tarefaId) => {
+  const cron = new CronScheduler(db, queue, (tarefaId, rotinaId) => {
     const tarefa = queue.getTask(tarefaId);
     if (tarefa) {
+      const payloadRec = (tarefa.payload ?? {}) as Record<string, unknown>;
+      const targetAg =
+        tarefa.agente_id ??
+        (typeof payloadRec.owner_id === "string"
+          ? payloadRec.owner_id
+          : typeof payloadRec.agente_id === "string"
+            ? payloadRec.agente_id
+            : "estrategista");
+      const wakeRes = waitsService.wakeForRun({
+        agenteId: targetAg,
+        rotinaId: rotinaId ?? null,
+        entregaDespertarId: tarefa.tarefa_id,
+        webhookPayload: payloadRec,
+      });
+      if (wakeRes.promptBlock) {
+        const nextPayload = {
+          ...payloadRec,
+          woken_waits_block: wakeRes.promptBlock,
+          woken_wait_ids: wakeRes.woken.map((w) => w.espera_id),
+        };
+        db.connection
+          .prepare("UPDATE projecao_tarefas SET payload_json = ? WHERE tarefa_id = ?;")
+          .run(JSON.stringify(nextPayload), tarefa.tarefa_id);
+      }
+
       wsHub.broadcast("task:queued", {
         tarefa_id: tarefa.tarefa_id,
         tipo: tarefa.tipo,
@@ -536,17 +589,258 @@ export async function createDaemonServer(
   }
 
   let workerTimer: NodeJS.Timeout | null = null;
-  let isProcessingTask = false;
+  const MAX_CONCURRENT_LANE_TURNS = 8;
+  const activeFifoTaskIds = new Set<string>();
+  const activeLaneKeys = new Set<string>();
+  const activeTurnsByAgent = new Map<string, number>();
+
+  const incrementAgentTurn = (agenteId: string): number => {
+    const next = (activeTurnsByAgent.get(agenteId) ?? 0) + 1;
+    activeTurnsByAgent.set(agenteId, next);
+    return next;
+  };
+
+  const decrementAgentTurn = (agenteId: string): void => {
+    const cur = activeTurnsByAgent.get(agenteId) ?? 0;
+    if (cur <= 1) activeTurnsByAgent.delete(agenteId);
+    else activeTurnsByAgent.set(agenteId, cur - 1);
+  };
+
+  const baseStudioDepsForLanes = {
+    db,
+    queue,
+    vault,
+    providers,
+    providerConnection,
+    wsHub,
+    sendJson,
+    readJsonBody,
+    workspaceRoot: resolvedWorkspaceRoot,
+    mcpGateway,
+    catalogService,
+    githubImporter,
+    skillsManager,
+    whatsappManager,
+    whatsappOrchestrator,
+    routineToolsDeps,
+    workflowStore,
+    workflowEngine,
+    workflowTriggers,
+    telegramBot,
+    readRawBody,
+  };
+
+  const scheduleLaneDrain = (agenteId: string, threadId: string | null): void => {
+    void drainChatLane(agenteId, threadId);
+  };
+
+  const phase13Bundle = {
+    threadStore,
+    tasksService,
+    waitsService,
+    queueControls,
+    pagination,
+    sideQuestion,
+    contextReset,
+    pinsService,
+    onDrainLane: scheduleLaneDrain,
+  };
+
+  tasksService.setOnLaneWake(scheduleLaneDrain);
+  queueControls.setOnLaneWake(scheduleLaneDrain);
+
+  /**
+   * LaneDrainScheduler: drena entregas de chat/sub-thread por lane `(agente_id, thread_id)`
+   * respeitando o limite de concorrência do agente, lock `editando = 1` e `AbortController` isolado.
+   */
+  const drainChatLane = async (agenteId: string, threadId: string | null): Promise<void> => {
+    const normalizedThread = threadId && !threadId.startsWith("main:") ? threadId : null;
+    const laneKey = QueueControlsService.buildLaneKey(agenteId, normalizedThread);
+    if (activeLaneKeys.has(laneKey)) return;
+
+    const totalRunning = activeLaneKeys.size + activeFifoTaskIds.size;
+    if (totalRunning >= MAX_CONCURRENT_LANE_TURNS) return;
+
+    const agentLimit = tasksService.getConcurrencyLimit(agenteId);
+    const agentRunning = activeTurnsByAgent.get(agenteId) ?? 0;
+    if (agentRunning >= agentLimit) {
+      if (normalizedThread) {
+        threadStore.updateRuntimeState(normalizedThread, {
+          estado: "enfileirada",
+          progresso_atual:
+            agentLimit === 1
+              ? "Aguardando turno atual (um turno por vez)"
+              : `Aguardando vaga paralela (${agentRunning}/${agentLimit})`,
+        });
+        tasksService.emitAgentSnapshot(agenteId);
+      }
+      return;
+    }
+
+    const delivery = queueStore.dequeueNextForLane(agenteId, normalizedThread);
+    if (!delivery) return;
+
+    const threadKey = normalizedThread ?? `main:${agenteId}`;
+    const turnoId = `turn-${randomUUID().slice(0, 8)}`;
+    const abortCtrl = tasksService.registerTurnAbort(threadKey, turnoId);
+    activeLaneKeys.add(laneKey);
+    incrementAgentTurn(agenteId);
+    queueControls.registerActiveTurn({
+      agenteId,
+      threadId: normalizedThread,
+      turnoId,
+      deliveries: [delivery],
+      abortController: abortCtrl,
+    });
+    queueStore.markRunning(delivery.entrega_id, turnoId);
+
+    if (normalizedThread) {
+      const th = threadStore.getThread(normalizedThread);
+      threadStore.updateRuntimeState(normalizedThread, {
+        estado: "executando",
+        turno_ativo_id: turnoId,
+        progresso_atual: "Executando resposta na thread paralela...",
+      });
+      if (th?.tarefa_id) {
+        const tk = queue.getTask(th.tarefa_id);
+        if (tk && tk.status === "pendente") {
+          queue.updateTaskStatus(th.tarefa_id, "executando");
+        }
+      }
+      tasksService.emitAgentSnapshot(agenteId);
+    }
+    queueControls.emitQueueChanged(agenteId, normalizedThread);
+
+    try {
+      const agente = db.connection
+        .prepare("SELECT * FROM projecao_agentes WHERE agente_id = ?;")
+        .get(agenteId) as
+        | {
+            agente_id: string;
+            nome: string;
+            papel: string;
+            modelo_padrao: string;
+            config_json: string;
+          }
+        | undefined;
+
+      if (!agente) {
+        queueStore.markFinished(delivery.entrega_id, "falha", `Agente '${agenteId}' não encontrado.`);
+        return;
+      }
+
+      const wakePromptBlock =
+        delivery.remetente_tipo === "rotina"
+          ? waitsService.wakeForRun({
+              agenteId,
+              rotinaId: delivery.rotina_id ?? null,
+              entregaDespertarId: delivery.entrega_id,
+            }).promptBlock
+          : null;
+
+      const { agentMsg } = await executeAgentConversationTurn({
+        deps: { ...baseStudioDepsForLanes, phase13: phase13Bundle },
+        agente,
+        userPrompt: delivery.conteudo_markdown,
+        anexos: delivery.anexos,
+        threadId: threadKey,
+        turnoId,
+        signal: abortCtrl.signal,
+        wokenWaitsBlock: wakePromptBlock,
+        entregaOrigemId: delivery.entrega_id,
+        isRoutine: delivery.remetente_tipo === "rotina",
+        respostaParaMensagemId: delivery.resposta_para_mensagem_id ?? delivery.mensagem_id,
+      });
+
+      queueStore.markFinished(delivery.entrega_id, "concluida");
+
+      if (normalizedThread) {
+        const th = threadStore.getThread(normalizedThread);
+        threadStore.updateRuntimeState(normalizedThread, {
+          estado: "ociosa",
+          desfecho: "concluida",
+          erro: null,
+          turno_ativo_id: null,
+          progresso_atual: "Concluída",
+        });
+        if (th?.tarefa_id) {
+          queue.updateTaskStatus(th.tarefa_id, "concluido", {
+            texto: agentMsg.conteudo_markdown,
+            thread_id: normalizedThread,
+          });
+        }
+      }
+    } catch (error) {
+      const isAbort =
+        abortCtrl.signal.aborted ||
+        (error instanceof Error && error.name === "AbortError");
+      const msg = error instanceof Error ? error.message : String(error);
+      queueStore.markFinished(delivery.entrega_id, isAbort ? "interrompida" : "falha", msg);
+
+      if (normalizedThread) {
+        const th = threadStore.getThread(normalizedThread);
+        threadStore.updateRuntimeState(normalizedThread, {
+          estado: "ociosa",
+          desfecho: isAbort ? "interrompida" : "falha",
+          erro: isAbort ? null : msg,
+          turno_ativo_id: null,
+          progresso_atual: isAbort ? "Interrompida" : msg.slice(0, 140),
+        });
+        if (th?.tarefa_id) {
+          if (isAbort) {
+            queue.cancelTask(th.tarefa_id, msg);
+          } else {
+            queue.updateTaskStatus(th.tarefa_id, "falha", null, msg);
+          }
+        }
+      }
+    } finally {
+      activeLaneKeys.delete(laneKey);
+      decrementAgentTurn(agenteId);
+      queueControls.clearActiveTurn(agenteId, normalizedThread, turnoId);
+      tasksService.clearTurnAbort(threadKey, turnoId);
+      queueControls.emitQueueChanged(agenteId, normalizedThread);
+      if (normalizedThread) {
+        tasksService.emitAgentSnapshot(agenteId);
+      }
+      queueMicrotask(() => {
+        void drainChatLane(agenteId, normalizedThread);
+      });
+    }
+  };
 
   const processNextQueuedTask = async (): Promise<void> => {
-    if (isProcessingTask) return;
+    if (activeLaneKeys.size + activeFifoTaskIds.size >= MAX_CONCURRENT_LANE_TURNS) return;
     const nextTask = queue.dequeueNextTask();
     if (!nextTask) return;
 
-    isProcessingTask = true;
+    const targetAgentId = nextTask.agente_id ?? "estrategista";
+    activeFifoTaskIds.add(nextTask.tarefa_id);
+    incrementAgentTurn(targetAgentId);
+
+    const payloadRec = (nextTask.payload ?? {}) as Record<string, unknown>;
+    if (
+      typeof payloadRec.rotina_id === "string" &&
+      typeof payloadRec.woken_waits_block !== "string"
+    ) {
+      const wakeRes = waitsService.wakeForRun({
+        agenteId: targetAgentId,
+        rotinaId: payloadRec.rotina_id,
+        entregaDespertarId: nextTask.tarefa_id,
+        webhookPayload: payloadRec,
+      });
+      if (wakeRes.promptBlock) {
+        nextTask.payload = {
+          ...payloadRec,
+          woken_waits_block: wakeRes.promptBlock,
+          woken_wait_ids: wakeRes.woken.map((w) => w.espera_id),
+        };
+      }
+    }
+
     wsHub.broadcast("task:started", {
       tarefa_id: nextTask.tarefa_id,
-      agente_id: nextTask.agente_id ?? "estrategista",
+      agente_id: targetAgentId,
     });
 
     try {
@@ -649,8 +943,27 @@ export async function createDaemonServer(
         pode_retentar: true,
       });
     } finally {
-      isProcessingTask = false;
+      activeFifoTaskIds.delete(nextTask.tarefa_id);
+      decrementAgentTurn(targetAgentId);
     }
+  };
+
+  const drainAllPendingLanes = async (): Promise<void> => {
+    const pendingLanes = db.connection
+      .prepare(
+        `
+        SELECT DISTINCT agente_id, thread_id
+        FROM projecao_fila_chat
+        WHERE status = 'enfileirada' AND editando = 0
+        LIMIT 16;
+      `,
+      )
+      .all() as Array<{ agente_id: string; thread_id: string | null }>;
+
+    await Promise.all([
+      processNextQueuedTask(),
+      ...pendingLanes.map((lane) => drainChatLane(lane.agente_id, lane.thread_id)),
+    ]);
   };
 
   const httpServer = createServer(async (req, res) => {
@@ -710,6 +1023,7 @@ export async function createDaemonServer(
           workflowTriggers,
           telegramBot,
           readRawBody,
+          phase13: phase13Bundle,
         })
       ) {
         return;
@@ -893,15 +1207,45 @@ export async function createDaemonServer(
         }
 
         const body = await readJsonBody(req);
+        const requestedWaitId =
+          typeof body.waitId === "string"
+            ? body.waitId
+            : typeof body.wait_id === "string"
+              ? body.wait_id
+              : null;
+        const matchedWait = requestedWaitId ? waitStore.getWait(requestedWaitId) : null;
+        const waitEntregaId = `wh-${randomUUID().slice(0, 8)}`;
+        const wakeResult = matchedWait
+          ? waitsService.wakeForRun({
+              agenteId: matchedWait.agente_id,
+              waitId: matchedWait.espera_id,
+              entregaDespertarId: waitEntregaId,
+              webhookPayload: body,
+            })
+          : null;
+
         const tarefa = queue.enqueueTask({
+          agente_id:
+            matchedWait?.agente_id ??
+            (typeof body.agente_id === "string" ? body.agente_id : null),
           canal_origem: "webhook",
           tipo: typeof body.tipo === "string" ? body.tipo : webhook.tipo_evento,
           titulo:
             typeof body.titulo === "string"
               ? body.titulo
-              : `Disparo externo via webhook (${webhook.webhook_id})`,
+              : matchedWait
+                ? `Webhook despertou espera (${matchedWait.espera_id})`
+                : `Disparo externo via webhook (${webhook.webhook_id})`,
           prioridade: typeof body.prioridade === "number" ? body.prioridade : 4,
-          payload: body,
+          payload: {
+            ...body,
+            ...(wakeResult?.promptBlock
+              ? {
+                  woken_waits_block: wakeResult.promptBlock,
+                  woken_wait_ids: wakeResult.woken.map((w) => w.espera_id),
+                }
+              : {}),
+          },
         });
 
         db.connection
@@ -1092,7 +1436,7 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
     await routineFlowsEngine.sweep();
     whatsappArchiveService.startPeriodicCleanup();
     workerTimer = setInterval(() => {
-      void processNextQueuedTask();
+      void drainAllPendingLanes();
     }, options.workerPollMs ?? 500);
     workerTimer.unref?.();
   }
@@ -1134,6 +1478,12 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
     whatsappOrchestrator,
     whatsapp,
     approvalNotifier,
+    threadStore,
+    tasksService,
+    waitsService,
+    queueControls,
+    pinsService,
+    contextReset,
     port: resolvedPort,
     async close(): Promise<void> {
       cron.stop();

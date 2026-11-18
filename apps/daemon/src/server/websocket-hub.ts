@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type { WebSocketEnvelope, WebSocketEventMap } from "@criativo/contracts";
 
@@ -98,6 +98,52 @@ export class WebSocketHub {
     onClose?: () => void;
   }>();
 
+  private readonly sseListeners = new Set<{
+    res: ServerResponse;
+    agenteId?: string | null;
+    threadId?: string | null;
+    keepalive: NodeJS.Timeout;
+  }>();
+
+  public registerSseClient(
+    res: ServerResponse,
+    filter?: { agenteId?: string | null; threadId?: string | null },
+  ): () => void {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.write(`: conectado\n\n`);
+
+    const keepalive = setInterval(() => {
+      if (res.writableEnded || res.destroyed) return;
+      try {
+        res.write(`: keepalive ${Date.now()}\n\n`);
+      } catch {
+        // cleanup abaixo remove cliente
+      }
+    }, 15_000);
+    keepalive.unref?.();
+
+    const entry = {
+      res,
+      agenteId: filter?.agenteId ?? null,
+      threadId: filter?.threadId ?? null,
+      keepalive,
+    };
+    this.sseListeners.add(entry);
+
+    const cleanup = (): void => {
+      clearInterval(entry.keepalive);
+      this.sseListeners.delete(entry);
+    };
+    res.on("close", cleanup);
+    res.on("error", cleanup);
+    return cleanup;
+  }
+
   public subscribe(
     onEvent: (envelope: WebSocketEnvelope<keyof WebSocketEventMap>) => void,
     onClose?: () => void
@@ -127,6 +173,33 @@ export class WebSocketHub {
       }
     }
 
+    if (this.sseListeners.size > 0) {
+      const payloadRec = (data && typeof data === "object" ? data : {}) as {
+        agente_id?: string | null;
+        thread_id?: string | null;
+      };
+      const sseFrame = `event: ${event}\ndata: ${JSON.stringify(envelope)}\n\n`;
+      for (const sse of this.sseListeners) {
+        if (sse.res.writableEnded || sse.res.destroyed) {
+          clearInterval(sse.keepalive);
+          this.sseListeners.delete(sse);
+          continue;
+        }
+        if (sse.agenteId && payloadRec.agente_id && payloadRec.agente_id !== sse.agenteId) {
+          continue;
+        }
+        if (sse.threadId && payloadRec.thread_id && payloadRec.thread_id !== sse.threadId) {
+          continue;
+        }
+        try {
+          sse.res.write(sseFrame);
+        } catch {
+          clearInterval(sse.keepalive);
+          this.sseListeners.delete(sse);
+        }
+      }
+    }
+
     if (this.clients.size === 0) return;
     const frame = this.encodeTextFrame(JSON.stringify(envelope));
 
@@ -144,6 +217,18 @@ export class WebSocketHub {
   }
 
   public closeAll(): void {
+    for (const sse of this.sseListeners) {
+      clearInterval(sse.keepalive);
+      try {
+        if (!sse.res.writableEnded) {
+          sse.res.end();
+        }
+      } catch {
+        // ignora erro no encerramento SSE
+      }
+    }
+    this.sseListeners.clear();
+
     for (const socket of this.clients) {
       try {
         socket.destroy();

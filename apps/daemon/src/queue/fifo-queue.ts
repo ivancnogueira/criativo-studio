@@ -88,7 +88,7 @@ export class FifoQueueManager {
     return this.db.runInTransaction(() => {
       const selectStmt = this.db.connection.prepare(`
         SELECT * FROM projecao_tarefas
-        WHERE status = 'pendente'
+        WHERE status = 'pendente' AND thread_id IS NULL
         ORDER BY prioridade ASC, criado_em ASC
         LIMIT 1;
       `);
