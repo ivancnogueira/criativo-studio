@@ -65,6 +65,15 @@ export interface AgenteRegistro {
   memoria_resumo: string | null;
   ordem_exibicao: number;
   config: Record<string, unknown>;
+  backup_models?: BackupModelsConfig;
+  permission_level?: PermissionLevel;
+  allow_new_chat?: boolean;
+  allow_quick_ack?: boolean;
+  browser_profile_id?: string | null;
+  notification_level?: AgentNotificationLevel;
+  pinned?: boolean;
+  hidden?: boolean;
+  section_id?: string | null;
   atualizado_em: string;
 }
 
@@ -399,6 +408,45 @@ export type WebSocketEventMap = {
     reply_to_message_id: string | null;
     expects_reply: boolean;
   };
+  "browser:frame": {
+    tabId: string;
+    dataUrl: string;
+    width: number;
+    height: number;
+    url: string;
+    title: string;
+    userControl: boolean;
+    agenteId?: string | null;
+    perfilId?: string | null;
+  };
+  "browser:takeover_requested": BrowserTakeoverSession;
+  "browser:takeover_resolved": {
+    takeoverId: string;
+    tabId: string;
+    agenteId: string | null;
+    decision: "complete" | "cancel";
+    url?: string;
+    title?: string;
+  };
+  "browser:teach_status": {
+    tabId: string;
+    agenteId: string;
+    recording: boolean;
+    startedAt: number | null;
+    stepsCount: number;
+  };
+  "screen:capture_requested": CaptureScreenConsentRequest;
+  "sidebar:updated": {
+    revision: number;
+  };
+  "settings:updated": {
+    atualizado_em: string;
+  };
+  "showcase:updated": {
+    acao: "published" | "replaced" | "deleted";
+    site_id: string;
+    slug: string;
+  };
 };
 
 export interface AgenteConfigVisual {
@@ -413,6 +461,14 @@ export interface AgenteConfigVisual {
   modo_ocupado?: ModoMensagemOcupado;
   allow_new_chat?: boolean;
   allow_quick_acknowledgement?: boolean;
+  allow_quick_ack?: boolean;
+  backup_models?: BackupModelsConfig;
+  permission_level?: PermissionLevel;
+  browser_profile_id?: string | null;
+  notification_level?: AgentNotificationLevel;
+  pinned?: boolean;
+  hidden?: boolean;
+  section_id?: string | null;
   skill_learning_mode?: SkillLearningMode;
   task_limit?: number;
   context_cutoff_at?: string | null;
@@ -1119,7 +1175,16 @@ export interface HabilidadeInstaladaInfo {
 }
 
 export interface ConectorIntegracaoInfo {
-  id: "whatsapp" | "instagram" | "telegram" | "elevenlabs" | "fish_audio" | "mcp";
+  id:
+    | "whatsapp"
+    | "instagram"
+    | "telegram"
+    | "elevenlabs"
+    | "fish_audio"
+    | "mcp"
+    | "slack"
+    | "discord"
+    | "github";
   nome: string;
   categoria: "mensageria" | "publicacao" | "voz" | "sistema";
   descricao: string;
@@ -1150,6 +1215,354 @@ export interface WebSocketEnvelope<K extends keyof WebSocketEventMap = keyof Web
   event: K;
   data: WebSocketEventMap[K];
   timestamp: string;
+}
+
+// ============================================================================
+// Fase 15 — Browser CDP, Mídia, Backup Models, Sidebar, Settings & Showcase
+// ============================================================================
+
+export type BrowserProxyProtocol = "http" | "https" | "socks5";
+
+export interface BrowserProxyConfig {
+  proxy_id: string;
+  nome: string;
+  servidor: string;
+  protocolo?: BrowserProxyProtocol;
+  usuario?: string | null;
+  senha_configurada?: boolean;
+  ativo: boolean;
+  criado_em: string;
+  atualizado_em: string;
+}
+
+export interface BrowserProfileProxyPayload {
+  proxy_id?: string | null;
+  server?: string | null;
+  username?: string | null;
+  password_vault_key?: string | null;
+}
+
+export interface BrowserProfileInfo {
+  perfil_id: string;
+  nome: string;
+  cor_hex: string;
+  user_data_dir: string;
+  cdp_porta?: number | null;
+  proxy_url?: string | null;
+  proxy?: BrowserProfileProxyPayload;
+  agentes_count?: number;
+  abas_count?: number;
+  compartilhado?: boolean;
+  criado_em?: string | null;
+  ultimo_uso_em?: string | null;
+}
+
+export type BrowserTargetSelector =
+  | { kind: "ref"; ref: string; revision?: number }
+  | { kind: "role"; role: string; name?: string; exact?: boolean; nth?: number }
+  | { kind: "text"; text: string; exact?: boolean; nth?: number }
+  | { kind: "css"; selector: string; nth?: number }
+  | { kind: "point"; x: number; y: number };
+
+export interface BrowserSnapshotElement {
+  ref: string;
+  role: string;
+  tag: string;
+  name: string;
+  value?: string;
+  placeholder?: string;
+  href?: string;
+  checked?: boolean;
+  disabled?: boolean;
+  isSensitive?: boolean;
+  bounds?: { x: number; y: number; width: number; height: number };
+}
+
+export interface BrowserSnapshotResult {
+  tabId: string;
+  perfilId: string;
+  url: string;
+  title: string;
+  revision: number;
+  elements: BrowserSnapshotElement[];
+  textSummary: string;
+  truncated: boolean;
+  imageDataUrl?: string | null;
+}
+
+export interface BrowserTabSummary {
+  tabId: string;
+  perfilId: string;
+  agenteId: string | null;
+  url: string;
+  title: string;
+  revision: number;
+  userControl: boolean;
+  screencastActive: boolean;
+  lastActivityAt: string;
+}
+
+export interface BrowserStatusReport {
+  available: boolean;
+  executablePath: string | null;
+  reason?: string | null;
+  activeContexts: number;
+  activeTabs: number;
+  tabs: BrowserTabSummary[];
+}
+
+export type BrowserTakeoverReason =
+  | "login"
+  | "2fa"
+  | "captcha"
+  | "passkey"
+  | "payment"
+  | "sign-in-blocked"
+  | "manual";
+
+export interface BrowserTakeoverSession {
+  takeoverId: string;
+  tabId: string;
+  perfilId?: string;
+  agenteId: string | null;
+  canalId?: string | null;
+  reason: BrowserTakeoverReason;
+  url: string;
+  title: string;
+  status: "pending" | "active" | "completed" | "cancelled";
+  previewDataUrl?: string | null;
+  criadoEm: string;
+}
+
+export interface BrowserSecretRequest {
+  requestId: string;
+  tabId: string;
+  agenteId: string | null;
+  canalId?: string | null;
+  host: string;
+  method: "password" | "otp" | "authenticator";
+  targets: BrowserTargetSelector[];
+  digits?: number;
+  loginId?: string | null;
+  username?: string | null;
+  submission?: "enter" | "click" | "none";
+  submitTarget?: BrowserTargetSelector | null;
+}
+
+export interface UserBrowsingStep {
+  log_id: string;
+  agente_id: string;
+  kind: "page" | "click";
+  host: string;
+  path: string;
+  title?: string | null;
+  role?: string | null;
+  name?: string | null;
+  revisado: boolean;
+  criado_em: number;
+}
+
+export interface ReadVideoResult {
+  url: string;
+  title: string;
+  uploader?: string | null;
+  webpage_url?: string | null;
+  durationSeconds?: number | null;
+  uploadDate?: string | null;
+  viewCount?: number | null;
+  likeCount?: number | null;
+  commentCount?: number | null;
+  description?: string | null;
+  transcript: Array<{ seconds: number; text: string }>;
+  frames: string[];
+  transcriptNote?: string;
+  framesNote?: string;
+}
+
+export interface ReadImageResult {
+  path: string;
+  dataUrl: string;
+  width: number;
+  height: number;
+  sourceWidth: number;
+  sourceHeight: number;
+  mimeType: string;
+  bytes: number;
+}
+
+export interface CaptureScreenConsentRequest {
+  captureId: string;
+  agenteId: string;
+  canalId: string;
+  purpose: string;
+  targetHint?: string | null;
+  status: "pending" | "granted" | "declined" | "expired";
+  criadoEm: string;
+}
+
+export interface BackupModelChoice {
+  provedor: ProviderName;
+  modelo: string;
+  conta_id?: string | null;
+}
+
+export interface BackupModelsConfig {
+  automatic: boolean;
+  order: BackupModelChoice[];
+}
+
+export type PermissionLevel = "workspace" | "ask" | "full";
+export type AgentNotificationLevel = "all" | "mentions" | "muted";
+
+export interface UsageLimitAskPayload {
+  ask_id: string;
+  agente_id: string;
+  canal_id: string;
+  modelo_atual: string;
+  provedor_atual: ProviderName;
+  motivo: string;
+  opcoes: BackupModelChoice[];
+}
+
+export interface SidebarSectionNode {
+  section_id: string;
+  nome: string;
+  parent_id: string | null;
+  ordem: number;
+  colapsada: boolean;
+  nivel: number;
+  criado_em: string;
+  atualizado_em: string;
+}
+
+export interface SidebarLayoutSnapshot {
+  revision: number;
+  sections: SidebarSectionNode[];
+  order: string[];
+  agentAssignments: Record<string, string | null>;
+  agentOrder: string[];
+  pins: string[];
+  hiddenAgentIds: string[];
+}
+
+export type SidebarLayoutMutation =
+  | { op: "create_section"; nome: string; parentId?: string | null }
+  | { op: "rename_section"; sectionId: string; nome: string }
+  | { op: "delete_section"; sectionId: string }
+  | { op: "toggle_collapse"; sectionId: string; colapsada: boolean }
+  | { op: "nest_section"; sectionId: string; parentId: string | null; beforeSectionId?: string | null }
+  | { op: "move_agent"; agentId: string; sectionId: string | null; beforeAgentId?: string | null }
+  | { op: "set_pin"; agentId: string; pinned: boolean }
+  | { op: "set_hidden"; agentId: string; hidden: boolean }
+  | { op: "reorder_pins"; pins: string[] };
+
+export interface StudioUserSettings {
+  geral: {
+    atalho_envio: "enter" | "mod_enter";
+    ordenacao_sidebar: "secoes" | "recente" | "alfabetica";
+    exibir_passos_agente: boolean;
+    acoes_compactas: boolean;
+  };
+  aparencia: {
+    tema: "carbon_dark" | "midnight_contrast" | "light";
+    cor_acento: string;
+    escala: 80 | 90 | 100 | 110 | 120;
+    fonte_interface: string;
+    fonte_codigo: string;
+    idioma: "pt-BR" | "en" | "es";
+  };
+  comportamento: {
+    restaurar_ultima_aba: boolean;
+    exibir_dynamic_island: boolean;
+    detalhe_dynamic_island: "compacto" | "detalhado";
+    habilitar_drawer_rapido: boolean;
+  };
+  notificacoes: {
+    web_habilitadas: boolean;
+    mostrar_preview: boolean;
+    som_tarefa: "cristal" | "suave" | "pulso" | "silencio";
+    som_feedback: "cristal" | "suave" | "pulso" | "silencio";
+    matriz: Record<string, AgentNotificationLevel>;
+  };
+  voz: {
+    provedor_ditado: "web_speech" | "whisper" | "gemini";
+    modelo_tts: "edge_tts" | "elevenlabs" | "fish_audio";
+    velocidade: number;
+    leitura_automatica: boolean;
+    live_voice_habilitada: boolean;
+  };
+  atualizado_em: string;
+}
+
+export interface WhatsNewReleaseInfo {
+  versao_atual: string;
+  verificado_em: string;
+  atualizacao_disponivel: boolean;
+  notas: Array<{
+    versao: string;
+    data: string;
+    added: string[];
+    changed: string[];
+    fixed: string[];
+  }>;
+}
+
+export type StorageUsageCategory =
+  | "uploads"
+  | "artes_geradas"
+  | "videos"
+  | "perfis_navegador"
+  | "banco_dados";
+
+export interface StorageUsageItem {
+  categoria: StorageUsageCategory;
+  rotulo: string;
+  cor_hex: string;
+  bytes: number;
+  arquivos_count: number;
+}
+
+export interface StorageUsageSnapshot {
+  totalBytes: number;
+  categorias: StorageUsageItem[];
+  topFiles: Array<{
+    arquivo_id: string;
+    nome: string;
+    caminho_relativo: string;
+    bytes: number;
+    agente_id: string | null;
+    criado_em: string;
+  }>;
+  porAgente: Record<string, number>;
+  atualizado_em: string;
+}
+
+export interface ShowcaseSiteSummary {
+  site_id: string;
+  slug: string;
+  titulo: string;
+  descricao: string;
+  source_dir: string;
+  public_dir: string;
+  url_local: string;
+  spa_fallback: boolean;
+  agente_id: string | null;
+  aprovado_por_humano: boolean;
+  ativo: boolean;
+  arquivos_count?: number;
+  tamanho_bytes?: number;
+  criado_em: string;
+  atualizado_em: string;
+}
+
+export interface OptionalConnectorWebhookEvent {
+  conector_id: "slack" | "discord" | "github";
+  evento: string;
+  canal_ou_repo?: string | null;
+  autor?: string | null;
+  texto?: string | null;
+  dados: Record<string, unknown>;
+  recebido_em: string;
 }
 
 export * from "./whatsapp-contracts.ts";

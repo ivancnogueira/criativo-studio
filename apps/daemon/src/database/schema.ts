@@ -1011,6 +1011,77 @@ export const SCHEMA_TABLES: readonly { nome: string; sql: string }[] = [
         ON projecao_chat_ui_blocos(canal_id, status, criado_em DESC);
     `,
   },
+  {
+    nome: "projecao_browser_proxies",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_browser_proxies (
+        proxy_id TEXT PRIMARY KEY,
+        nome TEXT NOT NULL,
+        servidor TEXT NOT NULL,
+        usuario TEXT,
+        senha_vault_chave TEXT,
+        ativo INTEGER NOT NULL DEFAULT 1 CHECK(ativo IN (0, 1)),
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    nome: "projecao_agent_browsing_log",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_agent_browsing_log (
+        log_id TEXT PRIMARY KEY,
+        agente_id TEXT NOT NULL REFERENCES projecao_agentes(agente_id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK(kind IN ('page', 'click')),
+        host TEXT NOT NULL,
+        path TEXT NOT NULL,
+        title TEXT,
+        role TEXT,
+        name TEXT,
+        revisado INTEGER NOT NULL DEFAULT 0 CHECK(revisado IN (0, 1)),
+        criado_em INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_browsing_log_agente
+        ON projecao_agent_browsing_log(agente_id, revisado, criado_em);
+    `,
+  },
+  {
+    nome: "projecao_sidebar_secoes",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_sidebar_secoes (
+        section_id TEXT PRIMARY KEY,
+        nome TEXT NOT NULL,
+        parent_id TEXT REFERENCES projecao_sidebar_secoes(section_id) ON DELETE SET NULL,
+        ordem INTEGER NOT NULL DEFAULT 0,
+        colapsada INTEGER NOT NULL DEFAULT 0 CHECK(colapsada IN (0, 1)),
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_sidebar_secoes_ordem
+        ON projecao_sidebar_secoes(ordem ASC);
+    `,
+  },
+  {
+    nome: "projecao_showcase_sites",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_showcase_sites (
+        site_id TEXT PRIMARY KEY,
+        slug TEXT NOT NULL UNIQUE,
+        titulo TEXT NOT NULL,
+        descricao TEXT NOT NULL DEFAULT '',
+        source_dir TEXT NOT NULL,
+        public_dir TEXT NOT NULL,
+        spa_fallback INTEGER NOT NULL DEFAULT 1 CHECK(spa_fallback IN (0, 1)),
+        agente_id TEXT REFERENCES projecao_agentes(agente_id) ON DELETE SET NULL,
+        aprovado_por_humano INTEGER NOT NULL DEFAULT 0 CHECK(aprovado_por_humano IN (0, 1)),
+        ativo INTEGER NOT NULL DEFAULT 1 CHECK(ativo IN (0, 1)),
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_showcase_slug
+        ON projecao_showcase_sites(slug);
+    `,
+  },
 ];
 
 export const SCHEMA_TABLE_NAMES = [
@@ -1063,4 +1134,8 @@ export const SCHEMA_TABLE_NAMES = [
   "agente_memorias_fts",
   "projecao_biblioteca_pastas",
   "projecao_chat_ui_blocos",
+  "projecao_browser_proxies",
+  "projecao_agent_browsing_log",
+  "projecao_sidebar_secoes",
+  "projecao_showcase_sites",
 ] as const;

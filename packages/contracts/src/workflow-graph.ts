@@ -12,7 +12,12 @@ export type TipoNoWorkflowExecutavel =
 
 export type TipoNoWorkflowAnotacao = "nota" | "shape" | "text";
 
-export type TipoNoWorkflowLegado = "aprovacao" | "publicar_meta";
+export type TipoNoWorkflowLegado =
+  | "aprovacao"
+  | "publicar_meta"
+  | "slack_notificar"
+  | "discord_notificar"
+  | "github_acao";
 
 export type TipoNoWorkflow =
   | TipoNoWorkflowExecutavel
@@ -42,7 +47,10 @@ export type WorkflowOutputTarget =
   | "telegram"
   | "arquivo"
   | "instagram"
-  | "notificacao";
+  | "notificacao"
+  | "slack"
+  | "discord"
+  | "github";
 
 export type WorkflowScheduleKind =
   | "hourly"
@@ -313,7 +321,14 @@ export function isAnnotationNodeKind(tipo: TipoNoWorkflow): boolean {
 
 export function normalizeNodeKind(tipo: TipoNoWorkflow): TipoNoWorkflowExecutavel | TipoNoWorkflowAnotacao {
   if (tipo === "aprovacao") return "approval";
-  if (tipo === "publicar_meta") return "output";
+  if (
+    tipo === "publicar_meta" ||
+    tipo === "slack_notificar" ||
+    tipo === "discord_notificar" ||
+    tipo === "github_acao"
+  ) {
+    return "output";
+  }
   return tipo;
 }
 
@@ -330,6 +345,21 @@ export function normalizeWorkflowNode(node: WorkflowNo): WorkflowNo {
     nextTipo = "output";
     if (typeof cfg.target !== "string" && !node.target) {
       cfg.target = "instagram";
+    }
+  } else if (node.tipo === "slack_notificar") {
+    nextTipo = "output";
+    if (typeof cfg.target !== "string" && !node.target) {
+      cfg.target = "slack";
+    }
+  } else if (node.tipo === "discord_notificar") {
+    nextTipo = "output";
+    if (typeof cfg.target !== "string" && !node.target) {
+      cfg.target = "discord";
+    }
+  } else if (node.tipo === "github_acao") {
+    nextTipo = "output";
+    if (typeof cfg.target !== "string" && !node.target) {
+      cfg.target = "github";
     }
   } else {
     nextTipo = node.tipo;

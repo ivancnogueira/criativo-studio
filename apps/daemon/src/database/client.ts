@@ -46,6 +46,7 @@ export class CriativoDatabase {
       runPhase10Migrations(this.connection);
       this.applyAdditiveMigrations();
       this.applyPhase14Migrations();
+      this.applyPhase15Migrations();
     });
   }
 
@@ -59,6 +60,61 @@ export class CriativoDatabase {
     if (!cols.has(columnName)) {
       this.connection.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefSql};`);
     }
+  }
+
+  private ensureColumns(
+    tableName: string,
+    columns: ReadonlyArray<{ name: string; definition: string }>,
+  ): void {
+    const existing = this.getTableColumns(tableName);
+    for (const col of columns) {
+      if (!existing.has(col.name)) {
+        this.connection.exec(`ALTER TABLE ${tableName} ADD COLUMN ${col.name} ${col.definition};`);
+        existing.add(col.name);
+      }
+    }
+  }
+
+  private applyPhase15Migrations(): void {
+    this.ensureColumns("projecao_perfis_navegador", [
+      { name: "cor_hex", definition: "TEXT NOT NULL DEFAULT '#42A0FF'" },
+      { name: "cdp_porta", definition: "INTEGER" },
+      { name: "proxy_json", definition: "TEXT NOT NULL DEFAULT '{}'" },
+      { name: "criado_em", definition: "TEXT" },
+    ]);
+
+    this.connection.exec(`
+      UPDATE projecao_perfis_navegador
+      SET criado_em = COALESCE(ultimo_uso_em, datetime('now'))
+      WHERE criado_em IS NULL;
+    `);
+
+    this.ensureColumns("projecao_agentes", [
+      {
+        name: "backup_models_json",
+        definition: `TEXT NOT NULL DEFAULT '{"automatic":false,"order":[]}'`,
+      },
+      {
+        name: "permission_level",
+        definition: "TEXT NOT NULL DEFAULT 'workspace' CHECK(permission_level IN ('workspace', 'ask', 'full'))",
+      },
+      {
+        name: "allow_new_chat",
+        definition: "INTEGER NOT NULL DEFAULT 1 CHECK(allow_new_chat IN (0, 1))",
+      },
+      {
+        name: "allow_quick_ack",
+        definition: "INTEGER NOT NULL DEFAULT 1 CHECK(allow_quick_ack IN (0, 1))",
+      },
+      { name: "browser_profile_id", definition: "TEXT" },
+      { name: "pinned", definition: "INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0, 1))" },
+      { name: "hidden", definition: "INTEGER NOT NULL DEFAULT 0 CHECK(hidden IN (0, 1))" },
+      { name: "section_id", definition: "TEXT" },
+      {
+        name: "notification_level",
+        definition: "TEXT NOT NULL DEFAULT 'all' CHECK(notification_level IN ('all', 'mentions', 'muted'))",
+      },
+    ]);
   }
 
   private applyPhase14Migrations(): void {
