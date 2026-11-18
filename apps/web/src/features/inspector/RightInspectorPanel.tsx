@@ -1,10 +1,17 @@
 import React, { useEffect, useState } from "react";
 import type {
+  AgentNotificationLevel,
   AgenteRegistro,
   ArquivoStudio,
   AvatarShape,
+  BackupModelsConfig,
+  BrowserProfileInfo,
+  BrowserProfileProxyPayload,
+  BrowserProxyConfig,
   CanalEquipe,
   NivelEsforco,
+  PermissionLevel,
+  ProvedorStatusInfo,
   TarefaRegistro,
 } from "@criativo/contracts";
 import {
@@ -12,18 +19,28 @@ import {
   AudioLines,
   Brain,
   CalendarClock,
+  ChevronRight,
   FolderOpen,
+  Globe,
+  Layers,
+  Monitor,
+  MousePointerClick,
   Settings,
+  ShieldAlert,
+  ShieldCheck,
   Smartphone,
   Sparkles,
   X,
 } from "lucide-react";
 import { MascoteAppearancePicker } from "../../components/MascoteAvatar";
+import { CarbonSelect, type CarbonSelectOption } from "../../components/ui/CarbonControls";
+import { ServerBrowserProfilesPanel } from "../browser/ServerBrowserProfilesPanel";
 import { ApprovalBridge } from "../preview/ApprovalBridge";
 import { InstagramMobilePreview } from "../preview/InstagramMobilePreview";
 import { AgentRoutinesSettings } from "../routines/AgentRoutinesSettings";
+import { BackupModelsEditor } from "./BackupModelsEditor";
 
-interface RightInspectorPanelProps {
+export interface RightInspectorPanelProps {
   open: boolean;
   agente: AgenteRegistro | null;
   arquivos: ArquivoStudio[];
@@ -35,6 +52,11 @@ interface RightInspectorPanelProps {
     nonce: number;
   } | null;
   previewTarefa: TarefaRegistro | null;
+  provedores?: ProvedorStatusInfo[];
+  browserProfiles?: BrowserProfileInfo[];
+  browserProxies?: BrowserProxyConfig[];
+  activeBrowserTabsCount?: number;
+  userBrowsingStepsCount?: number;
   onClose: () => void;
   onOpenFilesPage: () => void;
   onOpenWhatsAppModal: () => void;
@@ -49,6 +71,12 @@ interface RightInspectorPanelProps {
       avatar_shape?: AvatarShape;
       avatar_color?: string;
       effort?: NivelEsforco;
+      backup_models?: BackupModelsConfig;
+      permission_level?: PermissionLevel;
+      allow_new_chat?: boolean;
+      allow_quick_ack?: boolean;
+      browser_profile_id?: string | null;
+      notification_level?: AgentNotificationLevel;
     }
   ) => Promise<void>;
   onRestoreAgentDefaults?: (agenteId: string) => Promise<void>;
@@ -58,12 +86,57 @@ interface RightInspectorPanelProps {
   ) => Promise<Array<{ memoria_id: string; texto: string; criado_em: string }>>;
   onApproveTask: (tarefaId: string) => Promise<void>;
   onRequestRevision: (tarefa: TarefaRegistro) => Promise<void>;
+  onCreateBrowserProfile?: (input: { nome: string; cor_hex?: string }) => Promise<void>;
+  onUpdateBrowserProfile?: (
+    perfilId: string,
+    patch: { nome?: string; cor_hex?: string; proxy_json?: BrowserProfileProxyPayload | null }
+  ) => Promise<void>;
+  onClearBrowserProfile?: (perfilId: string) => Promise<void>;
+  onDeleteBrowserProfile?: (perfilId: string) => Promise<void>;
+  onSaveBrowserProxy?: (input: {
+    nome: string;
+    servidor: string;
+    usuario?: string | null;
+    senha?: string | null;
+  }) => Promise<BrowserProxyConfig>;
+  onDeleteBrowserProxy?: (proxyId: string) => Promise<void>;
+  onOpenAgentBrowserTakeover?: (agenteId: string) => void | Promise<void>;
+  onInspectAgentBrowsingLog?: (agenteId: string) => void | Promise<void>;
 }
 
-/**
- * Painel inspetor direito estilo OpenBot (Screenshot 5): 3 botões de atalho rápido no centro
- * ('Abrir Arquivos', 'Abrir Configurações do agente', 'Abrir Voz') + vitrine Mobile Instagram e editor do agente.
- */
+const PERMISSION_RANK: Record<PermissionLevel, number> = {
+  workspace: 0,
+  ask: 1,
+  full: 2,
+};
+
+const PERMISSION_OPTIONS: readonly CarbonSelectOption<PermissionLevel>[] = [
+  {
+    value: "workspace",
+    label: "Apenas workspace",
+    description: "Restrito a recursos/, saidas/, previas/ e dados do agente",
+  },
+  {
+    value: "ask",
+    label: "Perguntar fora do workspace",
+    description: "Solicita aprovação explícita antes de gravar ou publicar fora do padrão",
+  },
+  {
+    value: "full",
+    label: "Acesso total",
+    description: "Permite operar todo o workspace do projeto sem barreira extra",
+  },
+];
+
+type InspectorSubView =
+  | "hub"
+  | "config"
+  | "preview"
+  | "files"
+  | "routines"
+  | "backup_models"
+  | "browser_profiles";
+
 export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   open,
   agente,
@@ -72,6 +145,11 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   routineCount = 0,
   routineFocusSignal = null,
   previewTarefa,
+  provedores = [],
+  browserProfiles = [],
+  browserProxies = [],
+  activeBrowserTabsCount = 0,
+  userBrowsingStepsCount = 0,
   onClose,
   onOpenFilesPage,
   onOpenWhatsAppModal,
@@ -83,14 +161,33 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   onLoadMemories,
   onApproveTask,
   onRequestRevision,
+  onCreateBrowserProfile,
+  onUpdateBrowserProfile,
+  onClearBrowserProfile,
+  onDeleteBrowserProfile,
+  onSaveBrowserProxy,
+  onDeleteBrowserProxy,
+  onOpenAgentBrowserTakeover,
+  onInspectAgentBrowsingLog,
 }) => {
-  const [subView, setSubView] = useState<"hub" | "config" | "preview" | "files" | "routines">(
+  const [subView, setSubView] = useState<InspectorSubView>(
     routineFocusSignal?.subView === "routines" ? "routines" : "hub"
   );
   const [nomeDraft, setNomeDraft] = useState(agente?.nome ?? "");
   const [promptDraft, setPromptDraft] = useState("");
   const [shapeDraft, setShapeDraft] = useState<AvatarShape>("blob");
   const [colorDraft, setColorDraft] = useState("#38bdf8");
+  const [permissionDraft, setPermissionDraft] = useState<PermissionLevel>("workspace");
+  const [pendingPermissionModal, setPendingPermissionModal] =
+    useState<PermissionLevel | null>(null);
+  const [browserProfileDraft, setBrowserProfileDraft] = useState<string>("shared");
+  const [allowNewChatDraft, setAllowNewChatDraft] = useState(true);
+  const [allowQuickAckDraft, setAllowQuickAckDraft] = useState(true);
+  const [notificationDraft, setNotificationDraft] = useState<AgentNotificationLevel>("all");
+  const [backupModelsDraft, setBackupModelsDraft] = useState<BackupModelsConfig>({
+    automatic: false,
+    order: [],
+  });
   const [saving, setSaving] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState("");
   const [memories, setMemories] = useState<
@@ -112,6 +209,40 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
       (typeof cfg.avatar_shape === "string" ? cfg.avatar_shape : "blob") as AvatarShape
     );
     setColorDraft(typeof cfg.avatar_color === "string" ? cfg.avatar_color : "#38bdf8");
+
+    const perm = (agente.permission_level ??
+      cfg.permission_level ??
+      "workspace") as PermissionLevel;
+    setPermissionDraft(perm === "ask" || perm === "full" ? perm : "workspace");
+
+    const prof = (agente.browser_profile_id ??
+      (typeof cfg.browser_profile_id === "string" ? cfg.browser_profile_id : null) ??
+      "shared") as string;
+    setBrowserProfileDraft(prof || "shared");
+
+    setAllowNewChatDraft(
+      typeof agente.allow_new_chat === "boolean"
+        ? agente.allow_new_chat
+        : cfg.allow_new_chat !== false
+    );
+    setAllowQuickAckDraft(
+      typeof agente.allow_quick_ack === "boolean"
+        ? agente.allow_quick_ack
+        : cfg.allow_quick_ack !== false && cfg.allow_quick_acknowledgement !== false
+    );
+
+    const notif = (agente.notification_level ??
+      cfg.notification_level ??
+      "all") as AgentNotificationLevel;
+    setNotificationDraft(notif === "mentions" || notif === "muted" ? notif : "all");
+
+    const rawBackup =
+      agente.backup_models ??
+      (cfg.backup_models as BackupModelsConfig | undefined) ?? { automatic: false, order: [] };
+    setBackupModelsDraft({
+      automatic: Boolean(rawBackup?.automatic),
+      order: Array.isArray(rawBackup?.order) ? rawBackup.order : [],
+    });
   }, [agente]);
 
   useEffect(() => {
@@ -132,9 +263,36 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
         prompt_base: promptDraft,
         avatar_shape: shapeDraft,
         avatar_color: colorDraft,
+        permission_level: permissionDraft,
+        browser_profile_id: browserProfileDraft === "shared" ? null : browserProfileDraft,
+        allow_new_chat: allowNewChatDraft,
+        allow_quick_ack: allowQuickAckDraft,
+        notification_level: notificationDraft,
+        backup_models: backupModelsDraft,
       });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handlePermissionPick = (nextPerm: PermissionLevel) => {
+    if (PERMISSION_RANK[nextPerm] > PERMISSION_RANK[permissionDraft]) {
+      setPendingPermissionModal(nextPerm);
+      return;
+    }
+    setPermissionDraft(nextPerm);
+    if (agente) {
+      void onSaveAgentSettings(agente.agente_id, { permission_level: nextPerm });
+    }
+  };
+
+  const handleConfirmPermission = () => {
+    if (!pendingPermissionModal) return;
+    const confirmed = pendingPermissionModal;
+    setPermissionDraft(confirmed);
+    setPendingPermissionModal(null);
+    if (agente) {
+      void onSaveAgentSettings(agente.agente_id, { permission_level: confirmed });
     }
   };
 
@@ -149,6 +307,26 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
     }
   };
 
+  const browserProfileOptions: CarbonSelectOption<string>[] = [
+    {
+      value: "shared",
+      label: "Compartilhado (padrão)",
+      description: "Usa a sessão compartilhada entre agentes",
+    },
+    {
+      value: "agent",
+      label: "Exclusivo deste agente",
+      description: "Isola cookies e login exclusivamente neste agente",
+    },
+    ...browserProfiles
+      .filter((p) => !p.compartilhado && p.perfil_id !== "shared")
+      .map((p) => ({
+        value: p.perfil_id,
+        label: p.nome,
+        description: p.proxy_url ? "Proxy vinculado" : undefined,
+      })),
+  ];
+
   const panelTitle =
     subView === "files"
       ? `Arquivos (${arquivos.length})`
@@ -158,21 +336,33 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
           ? "Rotinas do agente"
           : subView === "preview"
             ? "Preview Instagram"
-            : "";
+            : subView === "backup_models"
+              ? "Backup Models"
+              : subView === "browser_profiles"
+                ? "Perfis de Navegador"
+                : "";
+
+  const backTarget: InspectorSubView =
+    subView === "backup_models" || subView === "browser_profiles" ? "config" : "hub";
+
+  const backupSummary = backupModelsDraft.automatic
+    ? `Automático · ${backupModelsDraft.order.length} modelo(s)`
+    : backupModelsDraft.order.length > 0
+      ? `Perguntar antes · ${backupModelsDraft.order.length} modelo(s)`
+      : "Perguntar antes";
 
   return (
     <aside
       aria-label="Inspetor contextual do agente"
-      className="w-[300px] xl:w-[330px] shrink-0 bg-[#1A1A1A] border-l border-white/[0.06] flex flex-col h-full overflow-hidden"
+      className="relative w-[300px] xl:w-[330px] shrink-0 bg-[#1A1A1A] border-l border-white/[0.06] flex flex-col h-full overflow-hidden"
     >
-      {/* Topo estilo OpenBot SidePanelHeader: no launcher só fechar discreto; nos subpainéis exibe Voltar + título + fechar */}
       <div className="h-[48px] shrink-0 px-3.5 flex items-center justify-between gap-2 border-b border-white/[0.06]">
         {subView === "hub" ? (
           <span className="text-[12px] font-medium text-[#787878]">Painel do agente</span>
         ) : (
           <button
             type="button"
-            onClick={() => setSubView("hub")}
+            onClick={() => setSubView(backTarget)}
             className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-[#DCDCDC] hover:text-white transition-colors"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
@@ -193,7 +383,6 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
       <div className="flex-1 overflow-y-auto p-4 min-w-0">
         {subView === "hub" && (
           <div className="h-full flex flex-col justify-between gap-4">
-            {/* Launcher central limpo fiel ao SidePanelLauncher do OpenBot */}
             <div className="my-auto space-y-2.5 py-4">
               <button
                 type="button"
@@ -245,7 +434,6 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
               </button>
             </div>
 
-            {/* Vitrine rápida abaixo caso haja criativo em aprovação */}
             {previewTarefa && (
               <div className="pt-3 border-t border-white/[0.06]">
                 <div className="flex items-center justify-between mb-2">
@@ -304,7 +492,8 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
             </div>
             {arquivos.length === 0 ? (
               <p className="text-[12px] text-[#979797] rounded-xl bg-[#212121] p-4 border border-white/[0.06]">
-                Nenhum arquivo enviado ainda. Use o botão <strong>+</strong> no chat para subir referências faciais ou logos.
+                Nenhum arquivo enviado ainda. Use o botão <strong>+</strong> no chat para subir
+                referências faciais ou logos.
               </p>
             ) : (
               <div className="space-y-2">
@@ -350,6 +539,44 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
             onBackToHub={() => setSubView("hub")}
             onOpenThreadOrChat={onOpenRoutineThread}
             onRoutinesChanged={onRoutinesChanged}
+          />
+        )}
+
+        {subView === "backup_models" && agente && (
+          <BackupModelsEditor
+            primaryModel={agente.modelo_padrao}
+            config={backupModelsDraft}
+            provedores={provedores}
+            onChange={(nextCfg) => {
+              setBackupModelsDraft(nextCfg);
+              void onSaveAgentSettings(agente.agente_id, { backup_models: nextCfg });
+            }}
+          />
+        )}
+
+        {subView === "browser_profiles" && (
+          <ServerBrowserProfilesPanel
+            profiles={browserProfiles}
+            proxies={browserProxies}
+            onCreateProfile={async (input) => {
+              if (onCreateBrowserProfile) await onCreateBrowserProfile(input);
+            }}
+            onUpdateProfile={async (perfilId, patch) => {
+              if (onUpdateBrowserProfile) await onUpdateBrowserProfile(perfilId, patch);
+            }}
+            onClearProfile={async (perfilId) => {
+              if (onClearBrowserProfile) await onClearBrowserProfile(perfilId);
+            }}
+            onDeleteProfile={async (perfilId) => {
+              if (onDeleteBrowserProfile) await onDeleteBrowserProfile(perfilId);
+            }}
+            onSaveProxy={async (input) => {
+              if (onSaveBrowserProxy) return await onSaveBrowserProxy(input);
+              throw new Error("Serviço de proxy não conectado.");
+            }}
+            onDeleteProxy={async (proxyId) => {
+              if (onDeleteBrowserProxy) await onDeleteBrowserProxy(proxyId);
+            }}
           />
         )}
 
@@ -401,6 +628,188 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                 />
               </div>
 
+              {/* Governança & Navegador (Fase 15) */}
+              <div className="rounded-xl bg-[#212121] border border-white/[0.06] p-[16px] space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5 text-[12px] font-semibold text-[#F0F0F0]">
+                    <ShieldCheck size={14} className="text-[#42A0FF]" />
+                    <span>Governança &amp; Navegador</span>
+                  </span>
+                  {activeBrowserTabsCount > 0 && (
+                    <span className="rounded-full bg-[#31CF76]/15 px-2 py-0.5 text-[11px] font-semibold text-[#31CF76]">
+                      {activeBrowserTabsCount} aba(s)
+                    </span>
+                  )}
+                </div>
+
+                <div className="space-y-1">
+                  <span className="block text-[12px] text-[#979797]">Nível de acesso</span>
+                  <CarbonSelect
+                    ariaLabel="Nível de acesso do agente"
+                    value={permissionDraft}
+                    options={PERMISSION_OPTIONS}
+                    onChange={handlePermissionPick}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[12px] text-[#979797]">Perfil de navegador</span>
+                    <button
+                      type="button"
+                      onClick={() => setSubView("browser_profiles")}
+                      className="text-[12px] font-semibold text-[#42A0FF] hover:underline"
+                    >
+                      Gerenciar perfis de navegador
+                    </button>
+                  </div>
+                  <CarbonSelect
+                    ariaLabel="Perfil de navegador do agente"
+                    value={browserProfileDraft}
+                    options={browserProfileOptions}
+                    onChange={(nextVal) => {
+                      setBrowserProfileDraft(nextVal);
+                      void onSaveAgentSettings(agente.agente_id, {
+                        browser_profile_id: nextVal === "shared" ? null : nextVal,
+                      });
+                    }}
+                  />
+                </div>
+
+                {/* Switches governança */}
+                <div className="space-y-2 pt-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[12px] font-semibold text-[#F0F0F0]">
+                      Permitir iniciar novo chat
+                    </span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={allowNewChatDraft}
+                      aria-label="Permitir iniciar novo chat"
+                      onClick={() => {
+                        const next = !allowNewChatDraft;
+                        setAllowNewChatDraft(next);
+                        void onSaveAgentSettings(agente.agente_id, { allow_new_chat: next });
+                      }}
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors ${
+                        allowNewChatDraft ? "bg-[#007CF7]" : "bg-[#2A2A2A]"
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                          allowNewChatDraft ? "translate-x-4.5" : "translate-x-1"
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[12px] font-semibold text-[#F0F0F0]">
+                      Mostrar plano antes de tarefas longas
+                    </span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={allowQuickAckDraft}
+                      aria-label="Mostrar plano antes de tarefas longas"
+                      onClick={() => {
+                        const next = !allowQuickAckDraft;
+                        setAllowQuickAckDraft(next);
+                        void onSaveAgentSettings(agente.agente_id, { allow_quick_ack: next });
+                      }}
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors ${
+                        allowQuickAckDraft ? "bg-[#007CF7]" : "bg-[#2A2A2A]"
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                          allowQuickAckDraft ? "translate-x-4.5" : "translate-x-1"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Linha Configurar backup models */}
+                <button
+                  type="button"
+                  onClick={() => setSubView("backup_models")}
+                  className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/[0.06] bg-[#1A1A1A] px-3 py-2 text-left transition hover:bg-[#242424]"
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Layers size={14} className="shrink-0 text-[#42A0FF]" />
+                    <div className="min-w-0">
+                      <p className="text-[12px] font-semibold text-[#F0F0F0]">
+                        Configurar backup models
+                      </p>
+                      <p className="truncate text-[11px] text-[#979797]">{backupSummary}</p>
+                    </div>
+                  </div>
+                  <ChevronRight size={14} className="shrink-0 text-[#979797]" />
+                </button>
+
+                {/* Notificações segmentadas */}
+                <div className="space-y-1">
+                  <span className="block text-[12px] text-[#979797]">Nível de notificação</span>
+                  <div className="grid grid-cols-3 gap-1 rounded-lg bg-[#141414] p-1">
+                    {(
+                      [
+                        { id: "all", label: "Todas" },
+                        { id: "mentions", label: "Menções" },
+                        { id: "muted", label: "Silenciado" },
+                      ] as const
+                    ).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => {
+                          setNotificationDraft(opt.id);
+                          void onSaveAgentSettings(agente.agente_id, {
+                            notification_level: opt.id,
+                          });
+                        }}
+                        className={`rounded-md py-1 text-[11px] font-semibold transition ${
+                          notificationDraft === opt.id
+                            ? "bg-[#2A2A2A] text-[#F0F0F0]"
+                            : "text-[#979797] hover:text-[#F0F0F0]"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Ações rápidas navegador/teach */}
+                {(onOpenAgentBrowserTakeover || onInspectAgentBrowsingLog) && (
+                  <div className="grid grid-cols-1 gap-1.5 pt-1">
+                    {onOpenAgentBrowserTakeover && (
+                      <button
+                        type="button"
+                        onClick={() => void onOpenAgentBrowserTakeover(agente.agente_id)}
+                        className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#242424] px-3 py-1.5 text-[12px] font-semibold text-[#F0F0F0] hover:bg-[#2A2A2A]"
+                      >
+                        <Monitor size={13} className="text-[#42A0FF]" />
+                        <span>Assumir navegador</span>
+                      </button>
+                    )}
+                    {onInspectAgentBrowsingLog && (
+                      <button
+                        type="button"
+                        onClick={() => void onInspectAgentBrowsingLog(agente.agente_id)}
+                        className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#242424] px-3 py-1.5 text-[12px] font-semibold text-[#F0F0F0] hover:bg-[#2A2A2A]"
+                      >
+                        <MousePointerClick size={13} className="text-[#31CF76]" />
+                        <span>
+                          Inspecionar log gravado ({userBrowsingStepsCount})
+                        </span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <div className="rounded-xl bg-[#212121] border border-white/[0.06] p-3 space-y-2 text-[11.5px]">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[#8E8E93]">Modelo ativo</span>
@@ -418,14 +827,16 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                   <div className="pt-1 border-t border-white/[0.05]">
                     <span className="text-[#8E8E93] block mb-1">Ferramentas nativas</span>
                     <div className="flex flex-wrap gap-1">
-                      {((agente.config as Record<string, unknown>).ferramentas as string[]).map((tool) => (
-                        <span
-                          key={tool}
-                          className="px-1.5 py-0.5 rounded bg-white/[0.06] text-[#DCDCDC] font-mono text-[10px]"
-                        >
-                          {tool}
-                        </span>
-                      ))}
+                      {((agente.config as Record<string, unknown>).ferramentas as string[]).map(
+                        (tool) => (
+                          <span
+                            key={tool}
+                            className="px-1.5 py-0.5 rounded bg-white/[0.06] text-[#DCDCDC] font-mono text-[10px]"
+                          >
+                            {tool}
+                          </span>
+                        )
+                      )}
                     </div>
                   </div>
                 )}
@@ -437,7 +848,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                   disabled={saving}
                   className="openbot-btn-primary flex-1 py-2 text-[12.5px]"
                 >
-                  {saving ? "Salvando..." : "Salvar configurações"}
+                  {saving ? "Aplicando..." : "Aplicar configurações"}
                 </button>
                 {onRestoreAgentDefaults && (
                   <button
@@ -453,13 +864,12 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                     }}
                     className="openbot-btn-secondary px-3 py-2 text-[12px]"
                   >
-                    Restaurar
+                    Restaurar padrão
                   </button>
                 )}
               </div>
             </form>
 
-            {/* Memória persistente no SQLite */}
             <div className="pt-4 border-t border-white/[0.06] space-y-2.5">
               <div className="text-[12px] font-semibold text-white flex items-center gap-1.5">
                 <Brain className="h-3.5 w-3.5 text-[#38bdf8]" />
@@ -481,7 +891,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                   onClick={() => void handleAddMemory()}
                   className="rounded-xl bg-[#2A2A2A] hover:bg-[#333336] px-3 py-1.5 text-[12px] font-medium text-white"
                 >
-                  Fixar
+                  Fixar memória
                 </button>
               </div>
               <div className="space-y-1.5 max-h-40 overflow-y-auto">
@@ -498,6 +908,44 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
           </div>
         )}
       </div>
+
+      {/* Modal de confirmação explícita ao ampliar permission_level */}
+      {pendingPermissionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-[16px]">
+          <div className="w-full max-w-[420px] space-y-[16px] rounded-xl border border-[#FF9412]/40 bg-[#212121] p-[20px] shadow-2xl">
+            <div className="flex items-start gap-[12px]">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#FF9412]/15 text-[#FF9412]">
+                <ShieldAlert size={18} />
+              </div>
+              <div className="space-y-1">
+                <h4 className="text-[14px] font-semibold text-[#F0F0F0]">
+                  Ampliar permissões de {agente?.nome ?? "agente"}?
+                </h4>
+                <p className="text-[12px] text-[#979797]">
+                  Acesso ampliado permite editar pastas fora do workspace do agente.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-[8px]">
+              <button
+                type="button"
+                onClick={() => setPendingPermissionModal(null)}
+                className="rounded-lg bg-[#2A2A2A] px-3 py-2 text-[12px] font-semibold text-[#F0F0F0] hover:bg-[#333333]"
+              >
+                Manter restrição
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmPermission}
+                className="rounded-lg bg-[#F0F0F0] px-4 py-2 text-[12px] font-semibold text-[#141414] hover:bg-white"
+              >
+                Conceder acesso
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   );
 };

@@ -14,11 +14,14 @@ import {
   BookOpen,
   Check,
   ChevronDown,
+  Code2,
   Cpu,
   FlaskConical,
+  Hash,
   Image as ImageIcon,
   KeyRound,
   MessageCircle,
+  MessageSquare,
   Plug,
   RefreshCw,
   RotateCcw,
@@ -97,13 +100,16 @@ const BrandTile: React.FC<{ id: ConectorIntegracaoInfo["id"]; color: string }> =
     elevenlabs: <Volume2 className="h-5 w-5" />,
     fish_audio: <Sparkles className="h-5 w-5" />,
     mcp: <Plug className="h-5 w-5" />,
+    slack: <Hash className="h-5 w-5" />,
+    discord: <MessageSquare className="h-5 w-5" />,
+    github: <Code2 className="h-5 w-5" />,
   };
   return (
     <div
       className="h-11 w-11 rounded-2xl flex items-center justify-center shrink-0 border border-white/10"
       style={{
         backgroundColor: `${color}1F`,
-        color: id === "elevenlabs" ? "#F0F0F0" : color,
+        color: id === "elevenlabs" || id === "github" ? "#F0F0F0" : color,
       }}
     >
       {iconMap[id] ?? <Plug className="h-5 w-5" />}

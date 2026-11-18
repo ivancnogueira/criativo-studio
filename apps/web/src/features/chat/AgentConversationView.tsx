@@ -6,6 +6,9 @@ import type {
   AgenteThreadRegistro,
   AnexoChat,
   AvatarShape,
+  BackupModelChoice,
+  BrowserSecretRequest,
+  BrowserTakeoverReason,
   CanalEquipe,
   FilaChatEntrega,
   FilaChatSnapshot,
@@ -15,6 +18,7 @@ import type {
   PassoChat,
   ProvedorStatusInfo,
   UiBlockSubmitPayload,
+  UsageLimitAskPayload,
 } from "@criativo/contracts";
 import {
   Check,
@@ -37,6 +41,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  Radio,
   RotateCcw,
   Send,
   Sparkles,
@@ -69,6 +74,12 @@ import { SideQuestionPanel } from "./SideQuestionPanel";
 import { SkillSuggestionChatCard } from "./SkillSuggestionChatCard";
 import { ThreadTabsBar } from "./ThreadTabsBar";
 import { UiBlockPrompt } from "./UiBlockPrompt";
+import {
+  BrowserSecretCard,
+  BrowserTakeoverCard,
+  CaptureScreenConsentCard,
+} from "../browser/BrowserTakeoverModal";
+import { UsageLimitAskCard } from "../inspector/BackupModelsEditor";
 
 export interface McpSignInCardState {
   mcpId: string;
@@ -264,6 +275,45 @@ interface AgentConversationViewProps {
   onOpenSharedTables?: () => void;
   onOpenFilePreview?: (anexo: AnexoChat) => void;
   onOpenImageLightbox?: (url: string, alt?: string) => void;
+  // Fase 15 — Navegador CDP, Segredos, Captura de Tela, Backup Models, Atalho & Voz Contínua
+  takeoverSession?: {
+    takeoverId: string;
+    tabId: string;
+    reason: BrowserTakeoverReason;
+    url: string;
+    title: string;
+    previewDataUrl?: string | null;
+  } | null;
+  secretRequest?: BrowserSecretRequest | null;
+  captureRequest?: {
+    captureId: string;
+    purpose: string;
+    targetHint?: string;
+  } | null;
+  usageLimitAsk?: UsageLimitAskPayload | null;
+  sendShortcut?: "enter" | "mod_enter";
+  compactActions?: boolean;
+  showAgentSteps?: boolean;
+  liveVoiceEnabled?: boolean;
+  liveVoiceActive?: boolean;
+  onOpenTakeover?: (tabId: string) => void;
+  onCancelTakeover?: (tabId: string) => Promise<void> | void;
+  onSubmitSecret?: (
+    tabId: string,
+    payload: { username?: string; secret: string; saveToVault?: boolean; loginLabel?: string }
+  ) => Promise<void> | void;
+  onAuthorizeScreenCapture?: (
+    captureId: string,
+    payload: { dataUrl: string; width: number; height: number }
+  ) => Promise<void> | void;
+  onDeclineScreenCapture?: (captureId: string, reason?: string) => Promise<void> | void;
+  onResolveUsageLimit?: (payload: {
+    askId: string;
+    choice?: BackupModelChoice;
+    remember?: boolean;
+    action: "switch" | "wait";
+  }) => Promise<void> | void;
+  onToggleLiveVoice?: () => void;
 }
 
 const EFFORT_LABELS: Record<NivelEsforco, string> = {
@@ -606,10 +656,42 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
   onOpenSharedTables,
   onOpenFilePreview,
   onOpenImageLightbox,
+  takeoverSession = null,
+  secretRequest = null,
+  captureRequest = null,
+  usageLimitAsk = null,
+  sendShortcut = "enter",
+  compactActions = false,
+  showAgentSteps = true,
+  liveVoiceEnabled = false,
+  liveVoiceActive = false,
+  onOpenTakeover,
+  onCancelTakeover,
+  onSubmitSecret,
+  onAuthorizeScreenCapture,
+  onDeclineScreenCapture,
+  onResolveUsageLimit,
+  onToggleLiveVoice,
 }) => {
   const [draft, setDraft] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<AnexoChat[]>([]);
   const [pageContext, setPageContext] = useState<string | null>(null);
+  const [dismissedUsageAskIds, setDismissedUsageAskIds] = useState<string[]>([]);
+
+  const effectiveUsageLimitAsk = useMemo<UsageLimitAskPayload | null>(() => {
+    if (usageLimitAsk && !dismissedUsageAskIds.includes(usageLimitAsk.ask_id)) {
+      return usageLimitAsk;
+    }
+    const lastMsg = mensagens[mensagens.length - 1];
+    if (!lastMsg || lastMsg.autor === "usuario") return null;
+    const meta = (lastMsg as unknown as { metadados?: Record<string, unknown> }).metadados;
+    if (!meta || meta.usage_limit_resolved) return null;
+    const candidate = meta.usage_limit_ask as UsageLimitAskPayload | undefined;
+    if (candidate && typeof candidate.ask_id === "string" && !dismissedUsageAskIds.includes(candidate.ask_id)) {
+      return candidate;
+    }
+    return null;
+  }, [dismissedUsageAskIds, mensagens, usageLimitAsk]);
 
   useEffect(() => {
     if (typeof prefilledDraft === "string" && prefilledDraft.trim().length > 0) {
@@ -805,7 +887,10 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
   };
 
   return (
-    <div className="flex-1 min-w-0 h-full bg-[#1A1A1A] flex overflow-hidden">
+    <div
+      data-compact-actions={compactActions ? "true" : "false"}
+      className="flex-1 min-w-0 h-full bg-[#1A1A1A] flex overflow-hidden"
+    >
       <div className="flex-1 min-w-0 h-full flex flex-col overflow-hidden">
         {mode === "agent" && onSelectThread && onCreateQuickThread && (
           <ThreadTabsBar
@@ -857,13 +942,15 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
             <ChevronDown className="h-3.5 w-3.5 text-[#979797]" />
           </button>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className={`flex items-center shrink-0 ${compactActions ? "gap-1" : "gap-2"}`}>
             <button
               type="button"
               onClick={() => onOpenSharedTables?.()}
               aria-label="Abrir tabelas SQL compartilhadas"
               title="Tabelas SQL"
-              className="inline-flex h-8 items-center gap-1 rounded-lg border border-white/[0.06] bg-[#212121] px-2 text-[12px] font-semibold text-[#DCDCDC] transition hover:bg-[#242424] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
+              className={`inline-flex items-center gap-1 rounded-lg border border-white/[0.06] bg-[#212121] font-semibold text-[#DCDCDC] transition hover:bg-[#242424] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7] ${
+                compactActions ? "h-7 px-1.5 text-[11px]" : "h-8 px-2 text-[12px]"
+              }`}
             >
               <Database className="h-3.5 w-3.5 text-[#42A0FF]" />
               <span>Tabelas SQL</span>
@@ -1125,7 +1212,7 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                   )}
 
                   {/* Passos de execução colapsáveis */}
-                  {!isUser && msg.steps && msg.steps.length > 0 && (
+                  {!isUser && showAgentSteps && msg.steps && msg.steps.length > 0 && (
                     <div className="rounded-xl bg-[#212121] border border-white/[0.06] overflow-hidden">
                       <button
                         type="button"
@@ -1492,7 +1579,7 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                 </span>
               </div>
 
-              {liveRun && liveRun.steps.length > 0 && (
+              {showAgentSteps && liveRun && liveRun.steps.length > 0 && (
                 <div className="rounded-xl bg-[#212121] border border-white/[0.06] px-3 py-2 space-y-1.5">
                   {liveRun.steps.map((st) => (
                     <div
@@ -1556,6 +1643,67 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
             </div>
           </div>
         )}
+
+        {takeoverSession && (
+          <div className="max-w-[820px] mr-auto">
+            <BrowserTakeoverCard
+              takeoverId={takeoverSession.takeoverId}
+              tabId={takeoverSession.tabId}
+              reason={takeoverSession.reason}
+              url={takeoverSession.url}
+              title={takeoverSession.title}
+              previewDataUrl={takeoverSession.previewDataUrl}
+              onAssume={(tId) => onOpenTakeover?.(tId)}
+              onCancel={async (tId) => {
+                await onCancelTakeover?.(tId);
+              }}
+            />
+          </div>
+        )}
+
+        {secretRequest && (
+          <div className="max-w-[820px] mr-auto">
+            <BrowserSecretCard
+              request={secretRequest}
+              onSubmitSecret={async (tId, payload) => {
+                await onSubmitSecret?.(tId, payload);
+              }}
+              onAssumeManually={onOpenTakeover ? (tId) => onOpenTakeover(tId) : undefined}
+            />
+          </div>
+        )}
+
+        {captureRequest && (
+          <div className="max-w-[820px] mr-auto">
+            <CaptureScreenConsentCard
+              captureId={captureRequest.captureId}
+              agentName={titleName}
+              purpose={captureRequest.purpose}
+              targetHint={captureRequest.targetHint}
+              onAuthorizeCapture={async (cId, payload) => {
+                await onAuthorizeScreenCapture?.(cId, payload);
+              }}
+              onDeclineCapture={async (cId, reason) => {
+                await onDeclineScreenCapture?.(cId, reason);
+              }}
+            />
+          </div>
+        )}
+
+        {effectiveUsageLimitAsk && (
+          <div className="max-w-[820px] mr-auto">
+            <UsageLimitAskCard
+              ask={effectiveUsageLimitAsk}
+              onResolve={async (payload) => {
+                setDismissedUsageAskIds((prev) =>
+                  prev.includes(payload.askId) ? prev : [...prev, payload.askId]
+                );
+                await onResolveUsageLimit?.(payload);
+              }}
+            />
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
 
         {pagination?.has_newer && onJumpToLatest && (
@@ -1766,16 +1914,42 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
+                if (sendShortcut === "mod_enter") {
+                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    void handleSend();
+                  }
+                } else if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   void handleSend();
                 }
               }}
               placeholder={
-                uploading ? "Enviando arquivo..." : `Mensagem para ${titleName}`
+                uploading
+                  ? "Enviando arquivo..."
+                  : sendShortcut === "mod_enter"
+                    ? `Mensagem para ${titleName} (Ctrl/⌘ + Enter para enviar)`
+                    : `Mensagem para ${titleName}`
               }
               className="flex-1 bg-transparent py-2 text-[13.5px] text-white placeholder-[#6A6A6A] focus:outline-none resize-none max-h-32"
             />
+
+            {liveVoiceEnabled && onToggleLiveVoice && (
+              <button
+                type="button"
+                onClick={onToggleLiveVoice}
+                aria-label={liveVoiceActive ? "Encerrar voz contínua" : "Iniciar voz contínua"}
+                title={liveVoiceActive ? "Encerrar voz contínua" : "Iniciar voz contínua"}
+                className={`inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-[12px] font-semibold transition shrink-0 ${
+                  liveVoiceActive
+                    ? "border-[#007CF7] bg-[#007CF7]/20 text-[#42A0FF]"
+                    : "border-white/[0.08] bg-[#141414] text-[#DCDCDC] hover:bg-[#242424]"
+                }`}
+              >
+                <Radio className="h-3.5 w-3.5" />
+                <span>{liveVoiceActive ? "Encerrar voz contínua" : "Iniciar voz contínua"}</span>
+              </button>
+            )}
 
             <button
               type="button"
