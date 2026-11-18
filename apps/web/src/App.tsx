@@ -44,6 +44,7 @@ import { RoutineFlowsCanvas } from "./features/routines/RoutineFlowsCanvas";
 import { SchedulePage } from "./features/schedule/SchedulePage";
 import type { AgentStepLog } from "./features/trace/AgentStepsWaterfall";
 import { WhatsAppPairingModal } from "./features/whatsapp/WhatsAppPairingModal";
+import type { WorkflowEventSignal } from "./features/workflows/WorkflowsCanvasPage";
 import { WorkflowsCanvasPage } from "./features/workflows/WorkflowsCanvasPage";
 import { daemonApi, WebSocketClient } from "./services/websocket-client";
 
@@ -93,6 +94,9 @@ export function App() {
   const [canais, setCanais] = useState<CanalEquipe[]>([]);
   const [tarefas, setTarefas] = useState<TarefaRegistro[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowVisual[]>([]);
+  const [workflowEventSignal, setWorkflowEventSignal] = useState<WorkflowEventSignal>({
+    nonce: 0,
+  });
   const [arquivos, setArquivos] = useState<ArquivoStudio[]>([]);
   const [provedores, setProvedores] = useState<ProvedorStatusInfo[]>([]);
   const [uso, setUso] = useState<UsoProvedoresSnapshot | null>(null);
@@ -465,6 +469,31 @@ export function App() {
       ]);
     });
 
+    const unsubWorkflowUpdated = ws.on("workflow:updated", (evt) => {
+      void daemonApi.listWorkflows().then(setWorkflows).catch(() => {});
+      setWorkflowEventSignal((prev) => ({
+        nonce: prev.nonce + 1,
+        workflowId: evt.workflow_id,
+        type: "updated",
+      }));
+    });
+    const unsubWorkflowRunUpdated = ws.on("workflow:run_updated", (evt) => {
+      setWorkflowEventSignal((prev) => ({
+        nonce: prev.nonce + 1,
+        workflowId: evt.workflow_id,
+        runId: evt.run_id,
+        type: "run_updated",
+      }));
+    });
+    const unsubWorkflowStepUpdated = ws.on("workflow:step_updated", (evt) => {
+      setWorkflowEventSignal((prev) => ({
+        nonce: prev.nonce + 1,
+        workflowId: evt.workflow_id,
+        runId: evt.run_id ?? undefined,
+        type: "step_updated",
+      }));
+    });
+
     ws.connect();
     return () => {
       unsubConn();
@@ -490,6 +519,9 @@ export function App() {
       unsubRoutineWebhook();
       unsubRoutineFlowUpdated();
       unsubRoutineNotification();
+      unsubWorkflowUpdated();
+      unsubWorkflowRunUpdated();
+      unsubWorkflowStepUpdated();
       ws.disconnect();
     };
   }, [refreshRoutineCounts]);
@@ -1035,16 +1067,54 @@ export function App() {
             <WorkflowsCanvasPage
               workflows={workflows}
               agentes={agentes}
+              canais={canais}
+              arquivos={arquivos}
+              provedores={provedores}
               uso={uso}
+              workflowEventSignal={workflowEventSignal}
+              onCreateWorkflow={async (input) => {
+                const created = await daemonApi.saveWorkflow({
+                  nome: input?.nome ?? "Novo fluxo criativo",
+                  nos: input?.nos ?? [],
+                  arestas: input?.arestas ?? [],
+                  tracos: input?.tracos ?? [],
+                });
+                setWorkflows(await daemonApi.listWorkflows());
+                return created;
+              }}
+              onGetWorkflowDetail={daemonApi.getWorkflowDetail}
               onSaveWorkflow={async (wf) => {
                 const saved = await daemonApi.saveWorkflow(wf);
                 setWorkflows(await daemonApi.listWorkflows());
                 return saved;
               }}
-              onExecuteWorkflow={async (wfId) => {
-                const res = await daemonApi.executeWorkflow(wfId);
+              onDeleteWorkflow={async (wfId) => {
+                await daemonApi.deleteWorkflow(wfId);
+                setWorkflows(await daemonApi.listWorkflows());
+              }}
+              onListVersions={daemonApi.listWorkflowVersions}
+              onGetVersion={daemonApi.getWorkflowVersion}
+              onRestoreVersion={async (wfId, versionId) => {
+                const det = await daemonApi.restoreWorkflowVersion(wfId, versionId);
+                setWorkflows(await daemonApi.listWorkflows());
+                return det;
+              }}
+              onExecuteWorkflow={async (wfId, options) => {
+                const res = await daemonApi.executeWorkflow(wfId, options);
                 setTarefas(await daemonApi.listTasks());
                 return res;
+              }}
+              onExecuteStep={daemonApi.executeWorkflowStep}
+              onListRuns={daemonApi.listWorkflowRuns}
+              onGetRunDetail={daemonApi.getWorkflowRunDetail}
+              onStopRun={daemonApi.stopWorkflowRun}
+              onDecideStep={daemonApi.decideWorkflowStep}
+              onRetryStep={daemonApi.retryWorkflowStep}
+              onStopStep={daemonApi.stopWorkflowStep}
+              onRotateWebhook={daemonApi.rotateWorkflowWebhookSecret}
+              onUploadFile={async (file) => {
+                await daemonApi.uploadFile(file);
+                setArquivos(await daemonApi.listFiles());
               }}
             />
           )}

@@ -896,4 +896,326 @@ describe("Fase 5 — Componentes React do Cockpit Web & Mobile", () => {
     assert.match(onboardingHtml, /bg-\[#F0F0F0\][^"]*">Conectar<\/button>/);
     assert.match(onboardingHtml, /max-w-\[165px\]/);
   });
+
+  it("Fase 12 — Editor de Workflows em Grafo, Nós Avançados, Inspetor e Produtividade", async () => {
+    const { WorkflowsCanvasPage } = await vite.ssrLoadModule(
+      "/src/features/workflows/WorkflowsCanvasPage.tsx"
+    );
+    const { WorkflowVersionBar } = await vite.ssrLoadModule(
+      "/src/features/workflows/WorkflowVersionBar.tsx"
+    );
+    const { WorkflowRunDetail } = await vite.ssrLoadModule(
+      "/src/features/workflows/WorkflowRunDetail.tsx"
+    );
+    const { WorkflowMinimap } = await vite.ssrLoadModule(
+      "/src/features/workflows/WorkflowMinimap.tsx"
+    );
+    const { WorkflowSearch } = await vite.ssrLoadModule(
+      "/src/features/workflows/WorkflowSearch.tsx"
+    );
+    const { WorkflowDeleteUndoToast } = await vite.ssrLoadModule(
+      "/src/features/workflows/WorkflowDeleteUndoToast.tsx"
+    );
+    const { WorkflowTriggerModal } = await vite.ssrLoadModule(
+      "/src/features/workflows/WorkflowTriggerModal.tsx"
+    );
+    const { WorkflowSwitcher } = await vite.ssrLoadModule(
+      "/src/features/workflows/WorkflowSwitcher.tsx"
+    );
+
+    const nowIso = new Date().toISOString();
+    const fullNodes = [
+      { id: "n1", tipo: "gatilho", titulo: "Gatilho", x: 100, y: 100, triggerKind: "schedule", config: {} },
+      { id: "n2", tipo: "prompt", titulo: "Briefing", x: 460, y: 100, prompt: "Ideia {{input}}", config: {} },
+      { id: "n3", tipo: "asset", titulo: "Ativo", x: 460, y: 320, config: {} },
+      { id: "n4", tipo: "llm", titulo: "Modelo", x: 820, y: 100, prompt: "Gerar legenda", config: {} },
+      { id: "n5", tipo: "agente", titulo: "Especialista", x: 820, y: 320, agenteId: "estrategista", config: {} },
+      { id: "n6", tipo: "gerar_imagem", titulo: "Gerar Arte", x: 1180, y: 100, config: {} },
+      { id: "n7", tipo: "render_video", titulo: "Render Reels", x: 1180, y: 320, config: {} },
+      { id: "n8", tipo: "condition", titulo: "Validar Regra", x: 1540, y: 100, rule: "Tem CTA?", config: {} },
+      { id: "n9", tipo: "approval", titulo: "Aprovação", x: 1900, y: 100, question: "Aprovar envio?", config: {} },
+      { id: "n10", tipo: "output", titulo: "Saída", x: 2260, y: 100, target: "arquivo", targetRef: "out.txt", config: {} },
+      { id: "n11", tipo: "nota", titulo: "Nota", x: 100, y: 400, subtitulo: "Observação", config: {} },
+      { id: "n12", tipo: "shape", titulo: "Bloco", x: 400, y: 460, shape: "diamond", config: {} },
+      { id: "n13", tipo: "text", titulo: "Cabeçalho", x: 700, y: 460, config: {} },
+    ];
+    const fullEdges = [
+      { id: "e1", origem: "n1", destino: "n2", type: "text" },
+      { id: "e2", origem: "n2", destino: "n4", type: "text" },
+      { id: "e3", origem: "n4", destino: "n8", type: "text" },
+      { id: "e4", origem: "n8", destino: "n9", type: "text", branch: "yes" },
+      { id: "e5", origem: "n8", destino: "n10", type: "text", branch: "no" },
+      { id: "e6", origem: "n9", destino: "n10", type: "text" },
+    ];
+
+    const wfPageHtml = renderToStaticMarkup(
+      React.createElement(WorkflowsCanvasPage, {
+        workflows: [
+          {
+            workflow_id: "wf-12",
+            nome: "Fluxo Completo",
+            descricao: "",
+            nos: fullNodes,
+            arestas: fullEdges,
+            tracos: [{ id: "tr-1", points: [[10, 10], [80, 90]], color: "#42A0FF", width: 3 }],
+            ativo: true,
+            revisao_grafo: 2,
+            ultima_execucao_em: null,
+            atualizado_em: nowIso,
+          },
+        ],
+        agentes: [
+          {
+            agente_id: "estrategista",
+            nome: "Estrategista Editorial",
+            papel: "Planejamento",
+            modelo_padrao: "gemini-2.5-pro",
+            status: "ocioso",
+            skills_paths: [],
+            memoria_resumo: null,
+            ordem_exibicao: 1,
+            config: {},
+            atualizado_em: nowIso,
+          },
+        ],
+        uso: null,
+        onSaveWorkflow: async (w) => ({
+          workflow_id: w.workflow_id ?? "wf-12",
+          nome: w.nome,
+          descricao: "",
+          nos: w.nos,
+          arestas: w.arestas,
+          ativo: true,
+          revisao_grafo: 3,
+          ultima_execucao_em: null,
+          atualizado_em: nowIso,
+        }),
+        onExecuteWorkflow: async () => ({ tarefas_criadas: [] }),
+      })
+    );
+
+    assert.match(wfPageHtml, /Sim/);
+    assert.match(wfPageHtml, /Não/);
+    assert.match(wfPageHtml, /Executar fluxo/);
+    assert.match(wfPageHtml, /Adicionar nó/);
+    assert.match(wfPageHtml, /Abrir inspetor/);
+    assert.doesNotMatch(wfPageHtml, /<select/i);
+
+    const verHtml = renderToStaticMarkup(
+      React.createElement(WorkflowVersionBar, {
+        previewVersion: {
+          version_id: "ver-1",
+          workflow_id: "wf-12",
+          revisao_grafo: 2,
+          kind: "auto",
+          grafo_json: "{}",
+          criado_em: nowIso,
+        },
+        onExitPreview: () => {},
+        onRestoreVersion: () => {},
+      })
+    );
+    assert.match(verHtml, /Versão salva/);
+    assert.match(verHtml, /Somente leitura/);
+    assert.match(verHtml, /Voltar ao atual/);
+    assert.match(verHtml, /Restaurar versão/);
+
+    const sampleRun = {
+      run: {
+        run_id: "run-7",
+        workflow_id: "wf-12",
+        numero: 7,
+        trigger_node_id: "n1",
+        from_node_id: null,
+        origem: "manual",
+        agendado_para: null,
+        chave_idempotencia: "idemp-7",
+        revisao_grafo: 2,
+        grafo_json: "{}",
+        payload: null,
+        status: "approval",
+        erro: null,
+        iniciado_em: nowIso,
+        encerrado_em: null,
+        atualizado_em: nowIso,
+      },
+      steps: [
+        {
+          step_id: "st-fail",
+          workflow_id: "wf-12",
+          run_id: "run-7",
+          node_id: "n4",
+          tentativa: 1,
+          request_id: "req-1",
+          kind: "llm",
+          agente_id: null,
+          status: "failed",
+          tarefa_id: null,
+          input: "entrada",
+          output: null,
+          output_tipo: null,
+          artefatos_json: "[]",
+          branch: null,
+          erro: "Erro de rede simulado",
+          iniciado_em: nowIso,
+          encerrado_em: nowIso,
+          criado_em: nowIso,
+          atualizado_em: nowIso,
+        },
+        {
+          step_id: "st-appr",
+          workflow_id: "wf-12",
+          run_id: "run-7",
+          node_id: "n9",
+          tentativa: 1,
+          request_id: "req-2",
+          kind: "approval",
+          agente_id: null,
+          status: "approval",
+          tarefa_id: null,
+          input: "Revisar criativo",
+          output: null,
+          output_tipo: null,
+          artefatos_json: "[]",
+          branch: null,
+          erro: null,
+          iniciado_em: nowIso,
+          encerrado_em: null,
+          criado_em: nowIso,
+          atualizado_em: nowIso,
+        },
+      ],
+      deliveries: [],
+    };
+
+    const runDetailHtml = renderToStaticMarkup(
+      React.createElement(WorkflowRunDetail, {
+        open: true,
+        runs: [sampleRun],
+        selectedRun: sampleRun,
+        soloSteps: [],
+        nodes: fullNodes,
+        onSelectRun: () => {},
+        onFocusNode: () => {},
+        onStopRun: () => {},
+        onDecideStep: () => {},
+        onRetryStep: () => {},
+        onStopStep: () => {},
+        onClose: () => {},
+      })
+    );
+    assert.match(runDetailHtml, /Execução #7/);
+    assert.match(runDetailHtml, /Aprovar etapa/);
+    assert.match(runDetailHtml, /Rejeitar etapa/);
+    assert.match(runDetailHtml, /Retentar etapa/);
+    assert.match(runDetailHtml, /Interromper execução/);
+    assert.match(runDetailHtml, /Fechar inspetor/);
+    assert.doesNotMatch(runDetailHtml, /<select/i);
+
+    const miniHtml = renderToStaticMarkup(
+      React.createElement(WorkflowMinimap, {
+        nos: fullNodes,
+        tracos: [],
+        selectedNodeId: "n1",
+        viewport: { x: 0, y: 0, width: 1000, height: 600, zoom: 1 },
+        onPanToWorld: () => {},
+      })
+    );
+    assert.match(miniHtml, /<svg/);
+
+    const searchHtml = renderToStaticMarkup(
+      React.createElement(WorkflowSearch, {
+        open: true,
+        nos: fullNodes,
+        runViewMap: new Map(),
+        onSelectResult: () => {},
+        onClose: () => {},
+      })
+    );
+    assert.match(searchHtml, /Buscar por nome, prompt ou saída/);
+    assert.match(searchHtml, /Fechar busca/);
+
+    const undoHtml = renderToStaticMarkup(
+      React.createElement(WorkflowDeleteUndoToast, {
+        pending: { workflowId: "wf-12", nome: "Fluxo Completo" },
+        onUndoDelete: () => {},
+        onCommitDelete: () => {},
+      })
+    );
+    assert.match(undoHtml, /Fluxo excluído/);
+    assert.match(undoHtml, /Desfazer exclusão/);
+
+    const trigSchedHtml = renderToStaticMarkup(
+      React.createElement(WorkflowTriggerModal, {
+        workflowId: "wf-12",
+        node: fullNodes[0],
+        triggerState: null,
+        onApply: () => {},
+        onRotateWebhook: async () => ({
+          route_id: "r1",
+          webhook_url: "/api/workflows/webhook/r1",
+          secret: "sec",
+        }),
+        onClose: () => {},
+      })
+    );
+    assert.match(trigSchedHtml, /Execuções são puladas se o fluxo anterior ainda estiver aberto/);
+    assert.doesNotMatch(trigSchedHtml, /<select/i);
+
+    const trigWhHtml = renderToStaticMarkup(
+      React.createElement(WorkflowTriggerModal, {
+        workflowId: "wf-12",
+        node: { ...fullNodes[0], triggerKind: "webhook" },
+        triggerState: null,
+        onApply: () => {},
+        onRotateWebhook: async () => ({
+          route_id: "r1",
+          webhook_url: "/api/workflows/webhook/r1",
+          secret: "sec",
+        }),
+        onClose: () => {},
+      })
+    );
+    assert.match(trigWhHtml, /Gerar segredo/);
+    assert.match(trigWhHtml, /X-Criativo-Signature/);
+    assert.doesNotMatch(trigWhHtml, /<select/i);
+
+    const switcherHtml = renderToStaticMarkup(
+      React.createElement(WorkflowSwitcher, {
+        workflows: [
+          {
+            workflow_id: "wf-12",
+            nome: "Fluxo Completo",
+            descricao: "",
+            nos: fullNodes,
+            arestas: fullEdges,
+            ativo: true,
+            revisao_grafo: 2,
+            ultima_execucao_em: null,
+            atualizado_em: nowIso,
+          },
+        ],
+        activeWorkflow: {
+          workflow_id: "wf-12",
+          nome: "Fluxo Completo",
+          descricao: "",
+          nos: fullNodes,
+          arestas: fullEdges,
+          ativo: true,
+          revisao_grafo: 2,
+          ultima_execucao_em: null,
+          atualizado_em: nowIso,
+        },
+        versions: [],
+        onSelectWorkflow: () => {},
+        onCreateWorkflow: () => {},
+        onRenameWorkflow: () => {},
+        onDuplicateWorkflow: () => {},
+        onDeleteWorkflow: () => {},
+        onPreviewVersion: () => {},
+      })
+    );
+    assert.match(switcherHtml, /Fluxo Completo/);
+    assert.doesNotMatch(switcherHtml, /<select/i);
+  });
 });
