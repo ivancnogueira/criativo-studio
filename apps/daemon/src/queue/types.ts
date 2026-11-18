@@ -32,6 +32,8 @@ export interface RecoveryReport {
   totalInterrompidas: number;
   reenfileiradas: string[];
   marcadasFalha: string[];
+  threadsInterrompidas?: number;
+  entregasFilaInterrompidas?: number;
 }
 
 export function mapTarefaRow(row: TarefaRow): TarefaRegistro {

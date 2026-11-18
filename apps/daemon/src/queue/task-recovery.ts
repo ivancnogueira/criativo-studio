@@ -81,10 +81,53 @@ export function recoverInterruptedTasks(db: CriativoDatabase): RecoveryReport {
       .prepare(`UPDATE projecao_agentes SET status = 'ocioso', atualizado_em = ? WHERE status = 'trabalhando';`)
       .run(agora);
 
+    // Fase 13: recupera threads paralelas e entregas de fila interrompidas por queda sem perder esperas nem histórico
+    const threadsReset = db.connection
+      .prepare(
+        `
+        UPDATE projecao_agente_threads
+        SET estado = 'ociosa',
+            desfecho = 'interrompida',
+            turno_ativo_id = NULL,
+            progresso_atual = 'Interrompida durante reinicialização do sistema',
+            atualizado_em = ?
+        WHERE estado = 'executando';
+      `,
+      )
+      .run(agora);
+
+    const filaReset = db.connection
+      .prepare(
+        `
+        UPDATE projecao_fila_chat
+        SET status = 'interrompida',
+            editando = 0,
+            edit_id = NULL,
+            erro = 'Execução interrompida durante reinicialização do daemon.',
+            atualizado_em = ?
+        WHERE status IN ('iniciando', 'executando');
+      `,
+      )
+      .run(agora);
+
+    db.connection
+      .prepare(
+        `
+        UPDATE projecao_fila_chat
+        SET editando = 0,
+            edit_id = NULL,
+            atualizado_em = ?
+        WHERE status = 'enfileirada' AND editando = 1;
+      `,
+      )
+      .run(agora);
+
     return {
       totalInterrompidas: rows.length,
       reenfileiradas,
       marcadasFalha,
+      threadsInterrompidas: Number(threadsReset.changes),
+      entregasFilaInterrompidas: Number(filaReset.changes),
     };
   });
 }

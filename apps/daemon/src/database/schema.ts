@@ -856,7 +856,7 @@ export const SCHEMA_TABLES: readonly { nome: string; sql: string }[] = [
         entrega_origem_id TEXT NOT NULL,
         pedido_texto TEXT NOT NULL,
         nota TEXT NOT NULL,
-        rotina_id TEXT REFERENCES projecao_rotinas(rotina_id) ON DELETE SET NULL,
+        rotina_id TEXT,
         criado_em TEXT NOT NULL,
         despertada_em TEXT,
         entrega_despertar_id TEXT
