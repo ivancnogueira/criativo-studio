@@ -3,6 +3,8 @@ declare module "electron" {
     readonly isPackaged: boolean;
     requestSingleInstanceLock(): boolean;
     getPath(name: "userData" | "home" | "appData" | "temp"): string;
+    setPath(name: "userData" | "home" | "appData" | "temp", path: string): void;
+    setName(name: string): void;
     getVersion(): string;
     whenReady(): Promise<void>;
     quit(): void;
@@ -95,6 +97,10 @@ declare module "electron" {
   export const shell: {
     openExternal(url: string): Promise<void>;
     openPath(fullPath: string): Promise<string>;
+  };
+
+  export const dialog: {
+    showErrorBox(title: string, content: string): void;
   };
 
   export const app: App;

@@ -6,6 +6,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import type { HostRequestMessage, HostResponseMessage } from "./shared-tables-host.ts";
@@ -37,9 +38,19 @@ interface QueuedTask {
 }
 
 function resolveHostScriptPath(): string {
-  const jsCandidate = fileURLToPath(new URL("./shared-tables-host.js", import.meta.url));
-  if (existsSync(jsCandidate)) {
-    return jsCandidate;
+  const currentDir = dirname(fileURLToPath(import.meta.url));
+  const productRoot = process.env.CRIATIVO_PRODUCT_ROOT ? resolve(process.env.CRIATIVO_PRODUCT_ROOT) : null;
+  const candidates = [
+    fileURLToPath(new URL("./shared-tables-host.js", import.meta.url)),
+    resolve(currentDir, "../agent-data/shared-tables-host.js"),
+    productRoot ? resolve(productRoot, "apps/daemon/dist/agent-data/shared-tables-host.js") : null,
+    productRoot ? resolve(productRoot, "apps/daemon/dist/server/shared-tables-host.js") : null,
+    fileURLToPath(new URL("./shared-tables-host.ts", import.meta.url)),
+  ].filter((c): c is string => Boolean(c));
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
   }
   return fileURLToPath(new URL("./shared-tables-host.ts", import.meta.url));
 }
@@ -111,6 +122,10 @@ export class SharedTablesSupervisor {
     const proc = spawn(process.execPath, [scriptPath, "--db", this.dbPath], {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      env: {
+        ...process.env,
+        ...(process.env.CRIATIVO_DESKTOP_PACKAGED === "1" ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+      },
     });
 
     this.child = proc;

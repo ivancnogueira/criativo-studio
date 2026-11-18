@@ -2018,8 +2018,10 @@ function tryServeWebStatic(
 }
 
 const isEntryPoint =
-  process.argv[1] &&
-  resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
+  Boolean(process.argv[1]) &&
+  resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]) &&
+  !/local-child-entry\.(ts|js)$/i.test(process.argv[1]) &&
+  process.env.CRIATIVO_LOCAL_CHILD !== "1";
 
 if (isEntryPoint) {
   createDaemonServer()

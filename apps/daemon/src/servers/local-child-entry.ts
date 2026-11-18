@@ -113,7 +113,8 @@ async function bootLocalChild(): Promise<void> {
 
 const isEntryPoint =
   Boolean(process.argv[1]) &&
-  resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
+  resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]) &&
+  /local-child-entry\.(ts|js)$/i.test(process.argv[1]);
 
 if (isEntryPoint) {
   bootLocalChild().catch((err) => {

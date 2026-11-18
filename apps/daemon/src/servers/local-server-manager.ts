@@ -58,8 +58,23 @@ function slugifyServerName(name: string): string {
 
 function resolveChildEntryFile(): string {
   const currentFile = fileURLToPath(import.meta.url);
-  const ext = currentFile.endsWith(".ts") ? "ts" : "js";
-  return resolve(dirname(currentFile), `local-child-entry.${ext}`);
+  const currentDir = dirname(currentFile);
+  const productRoot = process.env.CRIATIVO_PRODUCT_ROOT ? resolve(process.env.CRIATIVO_PRODUCT_ROOT) : null;
+  if (currentFile.endsWith(".ts")) {
+    return resolve(currentDir, "local-child-entry.ts");
+  }
+  const candidates = [
+    resolve(currentDir, "local-child-entry.js"),
+    resolve(currentDir, "../servers/local-child-entry.js"),
+    productRoot ? resolve(productRoot, "apps/daemon/dist/servers/local-child-entry.js") : null,
+    productRoot ? resolve(productRoot, "apps/daemon/dist/server/local-child-entry.js") : null,
+  ].filter((c): c is string => Boolean(c));
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return resolve(currentDir, "local-child-entry.js");
 }
 
 export interface LocalServerManagerOptions {
@@ -343,6 +358,7 @@ export class LocalServerManager {
       windowsHide: true,
       env: {
         ...process.env,
+        ...(process.env.CRIATIVO_DESKTOP_PACKAGED === "1" ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
         CRIATIVO_LOCAL_CHILD: "1",
         CRIATIVO_CHILD_SERVER_ID: serverId,
         CRIATIVO_CHILD_SERVER_NAME: record.nome,

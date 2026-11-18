@@ -67,7 +67,7 @@ export async function findFreeLoopbackPort(preferredPort = 3000): Promise<number
 }
 
 async function waitForDaemonHealthy(port: number, proc: ChildProcess, getLogs: () => string[]): Promise<void> {
-  const deadline = Date.now() + 25_000;
+  const deadline = Date.now() + 45_000;
   const healthUrl = `http://127.0.0.1:${port}/health`;
 
   while (Date.now() < deadline) {

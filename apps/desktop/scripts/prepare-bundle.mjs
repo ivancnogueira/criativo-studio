@@ -132,32 +132,26 @@ export function prepareDesktopBundle(options = {}) {
   return outDir;
 }
 
-function bundleDaemonSync(outDir, repoRoot) {
-  const daemonEntry = join(outDir, "apps/daemon/dist/server/daemon-server.js");
-  if (!existsSync(daemonEntry)) return;
-
+function bundleEntrySync(entryFile, outFile, repoRoot, outDir) {
   const contractsDist = join(outDir, "packages/contracts/dist");
   const whatsappDist = join(outDir, "packages/whatsapp/dist");
-  const bundledFile = join(outDir, "apps/daemon/dist/server/daemon-server.bundled.js");
-
-  console.info("[esbuild] Bundling daemon-server.js (síncrono)...");
 
   buildSync({
-    entryPoints: [daemonEntry],
+    entryPoints: [entryFile],
     bundle: true,
     platform: "node",
     target: "node22",
     format: "esm",
-    outfile: bundledFile,
+    outfile: outFile,
     minify: false,
     sourcemap: false,
     keepNames: true,
-    external: [
-      "node:*",
-      "qrcode",
-      "@whiskeysockets/baileys",
-      "playwright-core",
+    nodePaths: [
+      join(repoRoot, "node_modules"),
+      join(repoRoot, "apps/daemon/node_modules"),
+      join(repoRoot, "packages/whatsapp/node_modules"),
     ],
+    external: ["node:*", "playwright-core"],
     alias: {
       "@criativo/contracts/license-crypto-node": join(contractsDist, "license-crypto-node.js"),
       "@criativo/contracts": join(contractsDist, "index.js"),
@@ -165,46 +159,72 @@ function bundleDaemonSync(outDir, repoRoot) {
     },
     banner: {
       js: [
-        '// Criativo AI Studio — Daemon Bundle (gerado por esbuild)',
+        "// Criativo AI Studio — Bundle autossuficiente (gerado por esbuild)",
         'import { createRequire as __createRequire } from "node:module";',
-        'const require = __createRequire(import.meta.url);',
+        "const require = __createRequire(import.meta.url);",
       ].join("\n"),
     },
     logLevel: "warning",
   });
+}
 
-  if (!existsSync(bundledFile)) {
-    throw new Error("[esbuild] Falha ao gerar bundle: arquivo de saída ausente.");
+function bundleDaemonSync(outDir, repoRoot) {
+  const targets = [
+    "apps/daemon/dist/server/daemon-server.js",
+    "apps/daemon/dist/servers/local-child-entry.js",
+    "apps/daemon/dist/agent-data/shared-tables-host.js",
+  ];
+
+  const daemonEntry = join(outDir, targets[0]);
+  if (!existsSync(daemonEntry)) return;
+
+  console.info("[esbuild] Bundling entrypoints do daemon com dependências incluídas...");
+
+  const tempOutputs = [];
+  for (const rel of targets) {
+    const entry = join(outDir, rel);
+    if (!existsSync(entry)) continue;
+    const tmpOut = `${entry}.bundled.js`;
+    bundleEntrySync(entry, tmpOut, repoRoot, outDir);
+    if (!existsSync(tmpOut)) {
+      throw new Error(`[esbuild] Falha ao gerar bundle para '${rel}'.`);
+    }
+    const mb = (statSync(tmpOut).size / 1024 / 1024).toFixed(2);
+    console.info(`[esbuild] ${rel}: ${mb} MB`);
+    tempOutputs.push({ entry, tmpOut, rel });
   }
 
-  const bundleSize = statSync(bundledFile).size;
-  console.info(`[esbuild] Bundle gerado: ${(bundleSize / 1024 / 1024).toFixed(2)} MB`);
-
-  rmSync(daemonEntry);
-  cpSync(bundledFile, daemonEntry);
-  rmSync(bundledFile);
+  for (const item of tempOutputs) {
+    rmSync(item.entry, { force: true });
+    cpSync(item.tmpOut, item.entry);
+    rmSync(item.tmpOut, { force: true });
+  }
 
   rmSync(join(outDir, "packages"), { recursive: true, force: true });
 
+  const keepDirs = new Set(["server", "servers", "agent-data"]);
+  const keepFilesByDir = new Map([
+    ["server", "daemon-server.js"],
+    ["servers", "local-child-entry.js"],
+    ["agent-data", "shared-tables-host.js"],
+  ]);
+
   const daemonDist = join(outDir, "apps/daemon/dist");
   for (const sub of readdirSync(daemonDist)) {
-    if (sub === "server") continue;
     const subPath = join(daemonDist, sub);
-    if (statSync(subPath).isDirectory()) {
+    if (!statSync(subPath).isDirectory()) continue;
+    if (!keepDirs.has(sub)) {
       rmSync(subPath, { recursive: true, force: true });
+      continue;
+    }
+    const keepFile = keepFilesByDir.get(sub);
+    for (const f of readdirSync(subPath)) {
+      if (f === keepFile) continue;
+      rmSync(join(subPath, f), { recursive: true, force: true });
     }
   }
 
-  const serverDir = join(daemonDist, "server");
-  for (const f of readdirSync(serverDir)) {
-    if (f === "daemon-server.js") continue;
-    const fPath = join(serverDir, f);
-    if (statSync(fPath).isFile() && f.endsWith(".js")) {
-      rmSync(fPath, { force: true });
-    }
-  }
-
-  console.info("[esbuild] ✅ Bundle do daemon pronto — node_modules não necessário.");
+  console.info("[esbuild] ✅ Bundles autossuficientes prontos (qrcode e baileys incluídos).");
 }
 
 const isCli =

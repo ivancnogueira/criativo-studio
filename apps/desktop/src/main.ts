@@ -1,6 +1,7 @@
+import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, ipcMain, shell, type Tray } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell, type Tray } from "electron";
 import {
   resolveDesktopProductRoot,
   startEmbeddedDaemon,
@@ -157,6 +158,19 @@ function registerIpcHandlers(userDataDir: string): void {
   });
 }
 
+let activeBootLogPath: string | null = null;
+
+function writeDesktopLog(message: string): void {
+  const line = `[${new Date().toISOString()}] ${message}\n`;
+  if (!activeBootLogPath) return;
+  try {
+    mkdirSync(dirname(activeBootLogPath), { recursive: true });
+    appendFileSync(activeBootLogPath, line, "utf8");
+  } catch {
+    // ignora falha de escrita de log
+  }
+}
+
 async function bootstrapDesktop(): Promise<void> {
   const gotLock = app.requestSingleInstanceLock();
   if (!gotLock) {
@@ -170,11 +184,23 @@ async function bootstrapDesktop(): Promise<void> {
 
   await app.whenReady();
 
-  const userDataDir = process.env.CRIATIVO_USER_DATA_DIR || app.getPath("userData");
+  const userDataDir =
+    process.env.CRIATIVO_USER_DATA_DIR || join(app.getPath("appData"), "CriativoAIStudio");
+  try {
+    app.setName("Criativo AI Studio");
+    app.setPath("userData", userDataDir);
+  } catch {
+    // ignora caso já esteja bloqueado
+  }
+
+  activeBootLogPath = join(userDataDir, "logs", "desktop-boot.log");
+  writeDesktopLog(`Iniciando Criativo AI Studio v${app.getVersion()} (packaged=${app.isPackaged})`);
+
   const productRoot = resolveDesktopProductRoot({
     isPackaged: app.isPackaged,
     resourcesPath: (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath,
   });
+  writeDesktopLog(`productRoot=${productRoot} | userDataDir=${userDataDir}`);
 
   registerIpcHandlers(userDataDir);
 
@@ -189,6 +215,7 @@ async function bootstrapDesktop(): Promise<void> {
     isPackaged: app.isPackaged,
     appVersion: app.getVersion(),
   });
+  writeDesktopLog(`Daemon embutido pronto em ${daemonHandle.baseUrl}`);
 
   // Atualiza permissões de origem caso a porta 3000 estivesse ocupada e o fallback usou outra
   if (daemonHandle.port !== 3000) {
@@ -248,7 +275,19 @@ app.on("window-all-closed", () => {
 });
 
 bootstrapDesktop().catch((err) => {
+  const errMsg = err instanceof Error ? err.stack || err.message : String(err);
+  writeDesktopLog(`ERRO FATAL: ${errMsg}`);
   console.error("[Criativo Desktop] Falha ao iniciar aplicativo:", err);
+  try {
+    dialog.showErrorBox(
+      "Criativo AI Studio — Falha ao iniciar",
+      `Não foi possível iniciar o motor local do aplicativo.\n\nDetalhes: ${
+        err instanceof Error ? err.message : String(err)
+      }${activeBootLogPath ? `\n\nLog salvo em:\n${activeBootLogPath}` : ""}`,
+    );
+  } catch {
+    // ignora se dialog falhar antes de app ready
+  }
   isQuitting = true;
   app.quit();
 });
