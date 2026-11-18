@@ -807,6 +807,122 @@ export const SCHEMA_TABLES: readonly { nome: string; sql: string }[] = [
       );
     `,
   },
+  {
+    nome: "projecao_agente_threads",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_agente_threads (
+        thread_id TEXT PRIMARY KEY,
+        agente_id TEXT NOT NULL REFERENCES projecao_agentes(agente_id) ON DELETE CASCADE,
+        tarefa_id TEXT UNIQUE REFERENCES projecao_tarefas(tarefa_id) ON DELETE SET NULL,
+        origem TEXT NOT NULL CHECK(origem IN ('usuario', 'agente')),
+        titulo TEXT NOT NULL,
+        titulo_origem TEXT NOT NULL DEFAULT 'auto' CHECK(titulo_origem IN ('auto', 'agente', 'usuario')),
+        estado TEXT NOT NULL DEFAULT 'ociosa' CHECK(estado IN ('executando', 'enfileirada', 'ociosa', 'arquivada')),
+        desfecho TEXT CHECK(desfecho IS NULL OR desfecho IN ('concluida', 'falha', 'interrompida')),
+        erro TEXT,
+        progresso_atual TEXT,
+        turno_ativo_id TEXT,
+        sessao_provedor_id TEXT,
+        branch_origem_thread_id TEXT,
+        branch_origem_mensagem_id TEXT,
+        branch_ate_mensagem_id TEXT,
+        rotina_id TEXT,
+        ultima_mensagem_lida_id TEXT,
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL,
+        arquivada_em TEXT,
+        ultima_sequencia_evento INTEGER NOT NULL DEFAULT 0,
+        CHECK(
+          (branch_origem_thread_id IS NULL AND branch_origem_mensagem_id IS NULL AND branch_ate_mensagem_id IS NULL) OR
+          (branch_origem_thread_id IS NOT NULL AND branch_origem_mensagem_id IS NOT NULL AND branch_ate_mensagem_id IS NOT NULL)
+        )
+      );
+      CREATE INDEX IF NOT EXISTS idx_agente_threads_abertas
+        ON projecao_agente_threads(agente_id, atualizado_em DESC)
+        WHERE arquivada_em IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_agente_threads_agente
+        ON projecao_agente_threads(agente_id, criado_em DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_agente_threads_rotina
+        ON projecao_agente_threads(agente_id, rotina_id)
+        WHERE rotina_id IS NOT NULL;
+    `,
+  },
+  {
+    nome: "projecao_agente_esperas",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_agente_esperas (
+        espera_id TEXT PRIMARY KEY,
+        agente_id TEXT NOT NULL REFERENCES projecao_agentes(agente_id) ON DELETE CASCADE,
+        entrega_origem_id TEXT NOT NULL,
+        pedido_texto TEXT NOT NULL,
+        nota TEXT NOT NULL,
+        rotina_id TEXT REFERENCES projecao_rotinas(rotina_id) ON DELETE SET NULL,
+        criado_em TEXT NOT NULL,
+        despertada_em TEXT,
+        entrega_despertar_id TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_esperas_agente
+        ON projecao_agente_esperas(agente_id, criado_em ASC);
+      CREATE INDEX IF NOT EXISTS idx_esperas_rotina
+        ON projecao_agente_esperas(rotina_id)
+        WHERE rotina_id IS NOT NULL;
+    `,
+  },
+  {
+    nome: "projecao_fila_chat",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_fila_chat (
+        entrega_id TEXT PRIMARY KEY,
+        mensagem_id TEXT NOT NULL,
+        agente_id TEXT NOT NULL REFERENCES projecao_agentes(agente_id) ON DELETE CASCADE,
+        thread_id TEXT,
+        remetente_tipo TEXT NOT NULL CHECK(remetente_tipo IN ('usuario', 'agente', 'rotina', 'webhook')),
+        remetente_agente_id TEXT,
+        rotina_id TEXT,
+        run_id TEXT,
+        conteudo_markdown TEXT NOT NULL,
+        anexos_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(anexos_json)),
+        resposta_para_mensagem_id TEXT,
+        status TEXT NOT NULL CHECK(status IN ('enfileirada', 'iniciando', 'executando', 'concluida', 'falha', 'interrompida', 'cancelada')),
+        posicao INTEGER,
+        turno_id TEXT,
+        erro TEXT,
+        editando INTEGER NOT NULL DEFAULT 0 CHECK(editando IN (0, 1)),
+        edit_id TEXT,
+        espera_resposta INTEGER NOT NULL DEFAULT 1 CHECK(espera_resposta IN (0, 1)),
+        steer_fallback TEXT CHECK(steer_fallback IS NULL OR steer_fallback IN ('provedor_nao_suporta', 'falha_steer')),
+        chave_idempotencia TEXT UNIQUE,
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_fila_chat_lane
+        ON projecao_fila_chat(agente_id, thread_id, status, posicao ASC, criado_em ASC);
+      CREATE INDEX IF NOT EXISTS idx_fila_chat_turno
+        ON projecao_fila_chat(agente_id, turno_id)
+        WHERE turno_id IS NOT NULL;
+    `,
+  },
+  {
+    nome: "projecao_mensagens_fixadas",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_mensagens_fixadas (
+        thread_id TEXT NOT NULL,
+        agente_id TEXT NOT NULL REFERENCES projecao_agentes(agente_id) ON DELETE CASCADE,
+        mensagem_id TEXT NOT NULL CHECK(length(mensagem_id) > 0),
+        fixado_em TEXT NOT NULL,
+        fixado_por_tipo TEXT NOT NULL CHECK(fixado_por_tipo IN ('usuario', 'agente')),
+        fixado_por_id TEXT,
+        fixado_por_nome TEXT,
+        PRIMARY KEY (thread_id, mensagem_id),
+        CHECK(
+          (fixado_por_tipo = 'agente' AND fixado_por_id IS NOT NULL AND fixado_por_nome IS NULL) OR
+          (fixado_por_tipo = 'usuario' AND (fixado_por_id IS NULL) = (fixado_por_nome IS NULL))
+        )
+      );
+      CREATE INDEX IF NOT EXISTS idx_mensagens_fixadas_agente
+        ON projecao_mensagens_fixadas(agente_id, fixado_em DESC);
+    `,
+  },
 ];
 
 export const SCHEMA_TABLE_NAMES = [
@@ -850,4 +966,8 @@ export const SCHEMA_TABLE_NAMES = [
   "projecao_workflow_execucoes",
   "projecao_workflow_etapas",
   "projecao_workflow_entregas",
+  "projecao_agente_threads",
+  "projecao_agente_esperas",
+  "projecao_fila_chat",
+  "projecao_mensagens_fixadas",
 ] as const;

@@ -80,6 +80,8 @@ export interface TarefaRegistro {
   resultado: Record<string, unknown> | null;
   erro_detalhes: string | null;
   tentativas: number;
+  thread_id?: string | null;
+  origem?: "usuario" | "agente" | "rotina" | "webhook";
   criado_em: string;
   atualizado_em: string;
   concluido_em: string | null;
@@ -319,6 +321,43 @@ export type WebSocketEventMap = {
     status: WorkflowStepStatus;
     branch?: WorkflowBranch | null;
   };
+  "threads:changed": {
+    agente_id: string;
+    snapshot: AgenteThreadsSnapshot;
+  };
+  "thread:message": {
+    agente_id: string;
+    thread_id: string;
+    mensagem: MensagemChat;
+  };
+  "thread:progress": {
+    agente_id: string;
+    thread_id: string;
+    turno_id: string;
+    fase: "iniciado" | "etapa" | "chunk" | "concluido" | "erro";
+    mensagem_status?: string;
+    step?: PassoChat;
+    delta?: string;
+  };
+  "waits:changed": {
+    agente_id: string;
+    esperas: AgenteEspera[];
+  };
+  "chat_queue:changed": {
+    agente_id: string;
+    thread_id: string | null;
+    snapshot: FilaChatSnapshot;
+  };
+  "pins:changed": {
+    agente_id: string;
+    pins: MensagemFixada[];
+  };
+  "context:reset": {
+    agente_id: string;
+    thread_id: string;
+    cutoff_at: string;
+    mensagem_divisor: MensagemChat;
+  };
 };
 
 export interface AgenteConfigVisual {
@@ -330,6 +369,10 @@ export interface AgenteConfigVisual {
   effort?: NivelEsforco;
   customizado?: boolean;
   prompt_base?: string;
+  modo_ocupado?: ModoMensagemOcupado;
+  allow_new_chat?: boolean;
+  task_limit?: number;
+  context_cutoff_at?: string | null;
   [key: string]: unknown;
 }
 
@@ -405,6 +448,160 @@ export interface PassoChat {
   duracao_ms?: number;
 }
 
+export type TipoItemMensagemChat =
+  | "mensagem"
+  | "context_reset"
+  | "branch_marker"
+  | "wait_event"
+  | "routine_run";
+
+export type OrigemThread = "usuario" | "agente";
+export type OrigemTituloThread = "auto" | "agente" | "usuario";
+export type EstadoThreadAgente = "executando" | "enfileirada" | "ociosa" | "arquivada";
+export type DesfechoThreadAgente = "concluida" | "falha" | "interrompida";
+export type MotivoHoldThread =
+  | "limite_tarefas"
+  | "reiniciando_agente"
+  | "limite_uso"
+  | "servidor_ocupado"
+  | "agente_ocupado"
+  | "um_turno_por_vez";
+
+export interface AgenteThreadBranch {
+  origem_thread_id: string;
+  origem_task_id: string | null;
+  origem_titulo: string | null;
+  origem_mensagem_id: string;
+  ate_mensagem_id: string;
+  origem_excluida?: boolean;
+}
+
+export interface AgenteThreadMensagemNaFila {
+  entrega_id: string;
+  texto: string;
+  criado_em: string;
+}
+
+export interface AgenteThreadRegistro {
+  thread_id: string;
+  agente_id: string;
+  tarefa_id: string | null;
+  origem: OrigemThread;
+  titulo: string;
+  titulo_origem: OrigemTituloThread;
+  estado: EstadoThreadAgente;
+  desfecho: DesfechoThreadAgente | null;
+  hold: MotivoHoldThread | null;
+  turno_ativo_id: string | null;
+  progresso: string | null;
+  erro: string | null;
+  mensagens_enfileiradas: AgenteThreadMensagemNaFila[];
+  fila?: FilaChatEntrega[];
+  branch: AgenteThreadBranch | null;
+  rotina_id: string | null;
+  ultima_mensagem_lida_id: string | null;
+  criado_em: string;
+  atualizado_em: string;
+  arquivada_em: string | null;
+}
+
+export interface AgenteThreadsSnapshot {
+  agente_id: string;
+  threads: AgenteThreadRegistro[];
+  limite_concorrencia: number;
+}
+
+export type EstadoEsperaVisual = "waiting" | "resuming" | "woken";
+
+export interface AgenteEspera {
+  espera_id: string;
+  agente_id: string;
+  entrega_origem_id: string;
+  pedido_texto: string;
+  nota: string;
+  rotina_id: string | null;
+  criado_em: string;
+  despertada_em: string | null;
+  entrega_despertar_id: string | null;
+  estado?: EstadoEsperaVisual;
+}
+
+export type FilaChatStatus =
+  | "enfileirada"
+  | "iniciando"
+  | "executando"
+  | "concluida"
+  | "falha"
+  | "interrompida"
+  | "cancelada";
+
+export type ModoMensagemOcupado = "steer" | "queue";
+export type MotivoSteerFallback = "provedor_nao_suporta" | "falha_steer";
+
+export interface FilaChatEntrega {
+  entrega_id: string;
+  mensagem_id: string;
+  agente_id: string;
+  thread_id: string | null;
+  remetente_tipo: "usuario" | "agente" | "rotina" | "webhook";
+  remetente_agente_id?: string | null;
+  rotina_id?: string | null;
+  conteudo_markdown: string;
+  anexos: AnexoChat[];
+  resposta_para_mensagem_id: string | null;
+  status: FilaChatStatus;
+  posicao: number | null;
+  turno_id: string | null;
+  erro: string | null;
+  editando: boolean;
+  espera_resposta: boolean;
+  steer_fallback?: MotivoSteerFallback | null;
+  criado_em: string;
+}
+
+export interface FilaChatSnapshot {
+  agente_id: string;
+  thread_id: string | null;
+  modo_ocupado: ModoMensagemOcupado;
+  suporta_steer_nativo: boolean;
+  entregas: FilaChatEntrega[];
+}
+
+export interface MensagemFixada {
+  thread_id: string;
+  mensagem_id: string;
+  thread_titulo: string | null;
+  fixado_em: string;
+  fixado_por_tipo: "usuario" | "agente";
+  fixado_por_id: string | null;
+  fixado_por_nome: string | null;
+  autor: "usuario" | "agente";
+  autor_nome: string;
+  conteudo_resumo: string;
+  criado_em: string;
+}
+
+export interface PaginaConversaThread {
+  agente_id: string;
+  thread_id: string;
+  turno_ativo_id: string | null;
+  revisao: number;
+  mensagens: MensagemChat[];
+  referencias: Record<string, MensagemChat>;
+  has_older: boolean;
+  older_cursor: string | null;
+  older_count?: number;
+  has_newer?: boolean;
+}
+
+export interface PerguntaLateralTroca {
+  id: string;
+  pergunta: string;
+  perguntada_em: string;
+  resposta: string | null;
+  respondida_em: string | null;
+}
+
 export interface MensagemChat {
   mensagem_id: string;
   canal_id: string;
@@ -415,6 +612,14 @@ export interface MensagemChat {
   anexos: AnexoChat[];
   steps: PassoChat[];
   tarefa_id?: string | null;
+  thread_id?: string | null;
+  turno_id?: string | null;
+  item_type?: TipoItemMensagemChat;
+  status?: "streaming" | "completed" | "failed" | "interrupted";
+  resposta_para_mensagem_id?: string | null;
+  ordinal?: number;
+  branch_origem_mensagem_id?: string | null;
+  metadados?: Record<string, unknown>;
   lida: boolean;
   criado_em: string;
 }
