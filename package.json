@@ -22,13 +22,25 @@
     "diagnosticar": "node scripts/diagnosticar.mjs",
     "start:daemon": "npm run start --workspace=apps/daemon",
     "test:daemon": "npm run test --workspace=apps/daemon",
-    "test:e2e": "node --test testes/e2e/*.test.mjs"
+    "test:e2e": "node --test testes/e2e/*.test.mjs",
+    "prepare:desktop-bundle": "node apps/desktop/scripts/prepare-bundle.mjs",
+    "build:web": "npm run build --workspace=apps/web",
+    "build:desktop": "npm run build --workspace=apps/desktop",
+    "dist:desktop:win": "node ./node_modules/electron-builder/cli.js --project apps/desktop --config electron-builder.yml --win nsis --x64",
+    "dist:desktop:linux": "node ./node_modules/electron-builder/cli.js --project apps/desktop --config electron-builder.yml --linux tar.gz --x64",
+    "dist:desktop:mac": "node ./node_modules/electron-builder/cli.js --project apps/desktop --config electron-builder.yml --mac dmg zip"
   },
   "engines": {
     "node": ">=22.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "app-builder-bin": "^5.0.0-alpha.13",
+    "electron-builder": "^26.18.0",
     "typescript": "^5.8.3"
+  },
+  "allowScripts": {
+    "app-builder-bin@5.0.0-alpha.13": true,
+    "app-builder-bin@5.0.0-alpha.10": true
   }
 }

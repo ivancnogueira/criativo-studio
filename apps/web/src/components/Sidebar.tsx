@@ -7,6 +7,7 @@ import type {
   SidebarLayoutSnapshot,
   SidebarSectionNode,
   StatusMensageria,
+  UpdateStatusSnapshot,
 } from "@criativo/contracts";
 import {
   Bot,
@@ -33,6 +34,7 @@ import {
   getDefaultMascotForAgent,
   MascoteAvatar,
 } from "./MascoteAvatar";
+import { UpdateNotificationBanner } from "../features/updates/UpdateNotificationBanner";
 
 export interface SidebarProps {
   agentes: Array<
@@ -61,6 +63,9 @@ export interface SidebarProps {
   onMutateSidebar?: (mutation: SidebarLayoutMutation) => Promise<void> | void;
   onDuplicateAgent?: (agentId: string) => Promise<void> | void;
   onReorderPins?: (pins: string[]) => Promise<void> | void;
+  updateStatus?: UpdateStatusSnapshot | null;
+  onApplyUpdate?: () => void;
+  onOpenUpdateSettings?: () => void;
 }
 
 function getAgentVisual(ag: AgenteRegistro): { shape: AvatarShape; color: string } {
@@ -123,6 +128,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onMutateSidebar,
   onDuplicateAgent,
   onReorderPins,
+  updateStatus = null,
+  onApplyUpdate,
+  onOpenUpdateSettings,
 }) => {
   const [search, setSearch] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1088,6 +1096,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         )}
       </div>
+
+      <UpdateNotificationBanner
+        status={updateStatus}
+        onApplyUpdate={onApplyUpdate}
+        onOpenDetails={onOpenUpdateSettings}
+      />
 
       {/* Card fixo inferior estilo 'OpenBot para celular' (Screenshot 3) adaptado para WhatsApp */}
       {!dismissWhatsAppCard && (

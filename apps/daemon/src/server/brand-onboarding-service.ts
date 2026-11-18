@@ -5,6 +5,7 @@ import type { IdentidadeMarcaStudio, PacoteUpgradeInfo } from "@criativo/contrac
 import type { CriativoDatabase } from "../database/client.ts";
 import { ROSTER_15_AGENTES } from "../engine/runner/roster-defaults.ts";
 import type { ProviderConnectionService } from "../providers/provider-connection-service.ts";
+import { LicenseValidationError, type LicenseClientService } from "../license/license-service.ts";
 import { isUpgradeUnlocked, UPGRADE_PACKAGE_SLUGS } from "./studio-tools-bridge.ts";
 
 const DEFAULT_BRAND_IDENTITY: IdentidadeMarcaStudio = {
@@ -193,7 +194,9 @@ atualizado_em: ${JSON.stringify(brand.atualizado_em)}
 
 export function listUpgradePackages(
   db: CriativoDatabase,
-  workspaceRoot: string
+  workspaceRoot: string,
+  licenseService?: LicenseClientService,
+  productRoot?: string
 ): PacoteUpgradeInfo[] {
   const bonusAgents = ROSTER_15_AGENTES.filter((a) => a.pacote === "bonus").map((a) => a.nome);
   const videoAgents = ROSTER_15_AGENTES.filter((a) => a.pacote === "video").map((a) => a.nome);
@@ -204,7 +207,7 @@ export function listUpgradePackages(
       nome: "Pacote Agentes Bônus",
       descricao:
         "Desbloqueia Entregáveis Executivos (PDF/CSV/Showcase), Engenharia Reversa de Concorrentes e Consistência Visual 360°.",
-      instalado: isUpgradeUnlocked(db, workspaceRoot, "bonus"),
+      instalado: isUpgradeUnlocked(db, workspaceRoot, "bonus", licenseService, productRoot),
       agentes: bonusAgents,
       skills: [...UPGRADE_PACKAGE_SLUGS.bonus],
       comando_cli: "npm run instalar-upgrade -- --pacote bonus",
@@ -214,7 +217,7 @@ export function listUpgradePackages(
       nome: "Criativo Video Studio (Remotion)",
       descricao:
         "Desbloqueia Diretor & Editor de Vídeo Remotion, Roteirista Faceless e Roteirista Talking Head para Reels 9:16.",
-      instalado: isUpgradeUnlocked(db, workspaceRoot, "video"),
+      instalado: isUpgradeUnlocked(db, workspaceRoot, "video", licenseService, productRoot),
       agentes: videoAgents,
       skills: [...UPGRADE_PACKAGE_SLUGS.video],
       comando_cli: "npm run instalar-upgrade -- --pacote video",
@@ -222,11 +225,24 @@ export function listUpgradePackages(
   ];
 }
 
-export function activateUpgradePackage(
+export async function activateUpgradePackage(
   db: CriativoDatabase,
   workspaceRoot: string,
-  pacote: "bonus" | "video"
-): PacoteUpgradeInfo[] {
+  pacote: "bonus" | "video",
+  licenseService?: LicenseClientService
+): Promise<PacoteUpgradeInfo[]> {
+  if (licenseService && !licenseService.isBypassedForTests()) {
+    await licenseService.heartbeat();
+    if (!licenseService.hasSignedUpgradeEntitlement(pacote)) {
+      throw new LicenseValidationError(
+        `O módulo '${pacote}' não consta na sua licença atual. Caso tenha adquirido o upgrade agora, aguarde alguns segundos e sincronize novamente.`,
+        403,
+        "upgrade_not_entitled",
+      );
+    }
+    return listUpgradePackages(db, workspaceRoot, licenseService);
+  }
+
   const row = db.connection
     .prepare(`SELECT valor_json FROM projecao_studio_config WHERE chave = 'upgrades_instalados';`)
     .get() as { valor_json: string } | undefined;
@@ -247,7 +263,7 @@ export function activateUpgradePackage(
     )
     .run(JSON.stringify(next), new Date().toISOString());
 
-  return listUpgradePackages(db, workspaceRoot);
+  return listUpgradePackages(db, workspaceRoot, licenseService);
 }
 
 export function checkSkillPresentInWorkspace(workspaceRoot: string, slug: string): boolean {

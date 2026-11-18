@@ -43,6 +43,11 @@ import { redactMcpPayload, redactMcpSecrets } from "../mcp/mcp-redaction.ts";
 import type { ProviderConnectionService } from "../providers/provider-connection-service.ts";
 import type { FifoQueueManager } from "../queue/fifo-queue.ts";
 import type { VaultService } from "../vault/vault-service.ts";
+import { LicenseValidationError, type LicenseClientService } from "../license/license-service.ts";
+import type { LocalServerManager } from "../servers/local-server-manager.ts";
+import type { RemoteClaimService } from "../servers/remote-claim-service.ts";
+import { ServerQuotaExceededError } from "../servers/server-quota.ts";
+import type { AutoUpdateService } from "../updater/auto-update-service.ts";
 import {
   buildConnectorsList,
   computeHostAnalytics,
@@ -156,6 +161,10 @@ export interface StudioRoutesDeps {
   connectorsWebhook?: ConnectorsWebhookService;
   transcription?: TranscriptionService;
   backupResolver?: BackupModelsResolver;
+  licenseService?: LicenseClientService;
+  localServerManager?: LocalServerManager | null;
+  remoteClaimService?: RemoteClaimService | null;
+  autoUpdateService?: AutoUpdateService;
 }
 
 const RAW_MIME_MAP: Record<string, string> = {
@@ -453,6 +462,7 @@ async function runTextModelWorkflowToolLoop(params: {
               screenCapture: params.deps.screenCapture,
               showcaseService: params.deps.showcaseService,
               transcription: params.deps.transcription,
+              remoteClaimService: params.deps.remoteClaimService ?? undefined,
             },
           });
         } else if (isPhase14ToolName(call.name) && params.deps.phase14) {
@@ -646,7 +656,8 @@ function enrichAgentRow(
     notification_level?: string | null;
     atualizado_em: string;
   },
-  workspaceRoot = process.cwd()
+  workspaceRoot = process.cwd(),
+  licenseService?: LicenseClientService
 ) {
   const canalId = `agente:${row.agente_id}`;
   const unreadRow = db.connection
@@ -667,7 +678,7 @@ function enrichAgentRow(
       ? parsedConfig.pacote
       : def?.pacote ?? "base"
   ) as "base" | "bonus" | "video";
-  const upgradeDesbloqueado = isUpgradeUnlocked(db, workspaceRoot, pacote);
+  const upgradeDesbloqueado = isUpgradeUnlocked(db, workspaceRoot, pacote, licenseService);
   const promptBase =
     typeof parsedConfig.prompt_base === "string" && parsedConfig.prompt_base.trim().length > 0
       ? parsedConfig.prompt_base
@@ -1514,6 +1525,7 @@ export async function generateAgentChatReply(
                     screenCapture: deps.screenCapture,
                     showcaseService: deps.showcaseService,
                     transcription: deps.transcription,
+                    remoteClaimService: deps.remoteClaimService ?? undefined,
                   },
                 });
               } else if (isPhase10ExtensionTool(call.name)) {
@@ -2229,6 +2241,287 @@ export async function tryHandleStudioRoute(
   const { db, sendJson, readJsonBody, providerConnection, wsHub } = deps;
   const workspaceRoot = deps.workspaceRoot ?? process.cwd();
 
+  // 0. Licenciamento Comercial (Fase 16)
+  if (method === "GET" && path === "/api/studio/license/status") {
+    if (!deps.licenseService) {
+      sendJson(res, 503, { erro: "Serviço de licenciamento não inicializado." });
+      return true;
+    }
+    sendJson(res, 200, { license: deps.licenseService.getStatus() });
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/studio/license/activate") {
+    if (!deps.licenseService) {
+      sendJson(res, 503, { erro: "Serviço de licenciamento não inicializado." });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    try {
+      const license = await deps.licenseService.activate({
+        license_key: String(body.license_key ?? ""),
+        email: String(body.email ?? ""),
+      });
+      sendJson(res, 200, { ok: true, license });
+    } catch (err) {
+      if (err instanceof LicenseValidationError) {
+        sendJson(res, err.statusCode, {
+          erro: err.message,
+          code: err.code,
+          ...(err.details ?? {}),
+        });
+        return true;
+      }
+      throw err;
+    }
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/studio/license/heartbeat") {
+    if (!deps.licenseService) {
+      sendJson(res, 503, { erro: "Serviço de licenciamento não inicializado." });
+      return true;
+    }
+    const license = await deps.licenseService.heartbeat();
+    sendJson(res, 200, { ok: license.valid, license });
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/studio/license/deactivate") {
+    if (!deps.licenseService) {
+      sendJson(res, 503, { erro: "Serviço de licenciamento não inicializado." });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    try {
+      const result = await deps.licenseService.deactivateDevice({
+        target_machine_id: String(body.target_machine_id ?? ""),
+        license_key: typeof body.license_key === "string" ? body.license_key : undefined,
+        email: typeof body.email === "string" ? body.email : undefined,
+      });
+      sendJson(res, 200, result);
+    } catch (err) {
+      if (err instanceof LicenseValidationError) {
+        sendJson(res, err.statusCode, {
+          erro: err.message,
+          code: err.code,
+          ...(err.details ?? {}),
+        });
+        return true;
+      }
+      throw err;
+    }
+    return true;
+  }
+
+  // 0.5 Multi-Servidores Local & Pareamento VPS (Fase 17)
+  if (method === "GET" && path === "/api/studio/servers") {
+    if (!deps.localServerManager) {
+      sendJson(res, 200, { servers: [], active_server_id: "primary", quota: null });
+      return true;
+    }
+    sendJson(res, 200, {
+      servers: deps.localServerManager.listServers(),
+      active_server_id: deps.localServerManager.getActiveServerId(),
+      quota: deps.localServerManager.getQuotaSummary(),
+    });
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/studio/servers/local") {
+    if (!deps.localServerManager) {
+      sendJson(res, 503, { erro: "Gerenciador de servidores indisponível em processo filho." });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    try {
+      const server = await deps.localServerManager.createLocalServer({
+        nome: String(body.nome ?? ""),
+        cor_hex: typeof body.cor_hex === "string" ? body.cor_hex : undefined,
+      });
+      sendJson(res, 201, {
+        ok: true,
+        server,
+        servers: deps.localServerManager.listServers(),
+        quota: deps.localServerManager.getQuotaSummary(),
+      });
+    } catch (err) {
+      if (err instanceof ServerQuotaExceededError) {
+        sendJson(res, err.statusCode, { erro: err.message, code: err.code, quota: err.quota });
+        return true;
+      }
+      throw err;
+    }
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/studio/servers/claims") {
+    if (!deps.remoteClaimService) {
+      sendJson(res, 503, { erro: "RemoteClaimService indisponível." });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    try {
+      const claim = await deps.remoteClaimService.createRemoteClaim(
+        typeof body.server_name === "string" && body.server_name.trim()
+          ? body.server_name.trim()
+          : "Servidor VPS",
+      );
+      sendJson(res, 201, { ok: true, claim });
+    } catch (err) {
+      if (err instanceof ServerQuotaExceededError) {
+        sendJson(res, err.statusCode, { erro: err.message, code: err.code, quota: err.quota });
+        return true;
+      }
+      throw err;
+    }
+    return true;
+  }
+
+  const claimPollMatch = path.match(/^\/api\/studio\/servers\/claims\/([^/]+)$/);
+  if (method === "GET" && claimPollMatch) {
+    if (!deps.remoteClaimService) {
+      sendJson(res, 503, { erro: "RemoteClaimService indisponível." });
+      return true;
+    }
+    const claim = await deps.remoteClaimService.pollRemoteClaim(decodeURIComponent(claimPollMatch[1]));
+    sendJson(res, 200, { ok: true, claim });
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/studio/servers/join") {
+    if (!deps.remoteClaimService || !deps.localServerManager) {
+      sendJson(res, 503, { erro: "RemoteClaimService indisponível." });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    try {
+      const server = await deps.remoteClaimService.joinServerByInviteOrDirect({
+        invite_url: typeof body.invite_url === "string" ? body.invite_url : undefined,
+        nome: typeof body.nome === "string" ? body.nome : undefined,
+        base_url: typeof body.base_url === "string" ? body.base_url : undefined,
+        access_token: typeof body.access_token === "string" ? body.access_token : undefined,
+      });
+      sendJson(res, 201, {
+        ok: true,
+        server,
+        servers: deps.localServerManager.listServers(),
+        quota: deps.localServerManager.getQuotaSummary(),
+      });
+    } catch (err) {
+      if (err instanceof ServerQuotaExceededError) {
+        sendJson(res, err.statusCode, { erro: err.message, code: err.code, quota: err.quota });
+        return true;
+      }
+      throw err;
+    }
+    return true;
+  }
+
+  const serverSelectMatch = path.match(/^\/api\/studio\/servers\/([^/]+)\/select$/);
+  if (method === "POST" && serverSelectMatch) {
+    if (!deps.localServerManager) {
+      sendJson(res, 503, { erro: "Gerenciador de servidores indisponível." });
+      return true;
+    }
+    const server = await deps.localServerManager.selectActiveServer(decodeURIComponent(serverSelectMatch[1]));
+    sendJson(res, 200, {
+      ok: true,
+      server,
+      active_server_id: server.server_id,
+      servers: deps.localServerManager.listServers(),
+    });
+    return true;
+  }
+
+  const serverRestartMatch = path.match(/^\/api\/studio\/servers\/([^/]+)\/restart$/);
+  if (method === "POST" && serverRestartMatch) {
+    if (!deps.localServerManager) {
+      sendJson(res, 503, { erro: "Gerenciador de servidores indisponível." });
+      return true;
+    }
+    const srvId = decodeURIComponent(serverRestartMatch[1]);
+    await deps.localServerManager.stopLocalChild(srvId);
+    const server = await deps.localServerManager.ensureRunning(srvId);
+    sendJson(res, 200, { ok: true, server });
+    return true;
+  }
+
+  const serverInviteMatch = path.match(/^\/api\/studio\/servers\/([^/]+)\/invite$/);
+  if (method === "POST" && serverInviteMatch) {
+    if (!deps.remoteClaimService) {
+      sendJson(res, 503, { erro: "RemoteClaimService indisponível." });
+      return true;
+    }
+    const invite = deps.remoteClaimService.createServerInvite(decodeURIComponent(serverInviteMatch[1]));
+    sendJson(res, 200, { ok: true, invite });
+    return true;
+  }
+
+  const serverSingleMatch = path.match(/^\/api\/studio\/servers\/([^/]+)$/);
+  if (serverSingleMatch && (method === "PATCH" || method === "DELETE")) {
+    if (!deps.localServerManager) {
+      sendJson(res, 503, { erro: "Gerenciador de servidores indisponível." });
+      return true;
+    }
+    const srvId = decodeURIComponent(serverSingleMatch[1]);
+    if (method === "PATCH") {
+      const body = await readJsonBody(req);
+      const server = deps.localServerManager.renameOrUpdateServer(srvId, {
+        nome: typeof body.nome === "string" ? body.nome : undefined,
+        cor_hex: typeof body.cor_hex === "string" ? body.cor_hex : undefined,
+      });
+      sendJson(res, 200, { ok: true, server, servers: deps.localServerManager.listServers() });
+      return true;
+    }
+    const deleteFiles = url.searchParams.get("delete_files") === "1";
+    await deps.localServerManager.deleteServer(srvId, deleteFiles);
+    sendJson(res, 200, {
+      ok: true,
+      servers: deps.localServerManager.listServers(),
+      active_server_id: deps.localServerManager.getActiveServerId(),
+    });
+    return true;
+  }
+
+  // Fase 18 — Auto-Update (Desktop e VPS)
+  if (method === "GET" && path === "/api/studio/updates/status") {
+    if (!deps.autoUpdateService) {
+      sendJson(res, 503, { erro: "AutoUpdateService indisponível." });
+      return true;
+    }
+    sendJson(res, 200, { ok: true, status: deps.autoUpdateService.getStatus() });
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/studio/updates/check") {
+    if (!deps.autoUpdateService) {
+      sendJson(res, 503, { erro: "AutoUpdateService indisponível." });
+      return true;
+    }
+    const status = await deps.autoUpdateService.checkForUpdates();
+    sendJson(res, 200, { ok: true, status });
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/studio/updates/apply") {
+    if (!deps.autoUpdateService) {
+      sendJson(res, 503, { erro: "AutoUpdateService indisponível." });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    const status = await deps.autoUpdateService.downloadAndApplyUpdate({
+      platform:
+        typeof body.platform === "string"
+          ? (body.platform as "win32" | "darwin" | "linux" | "vps-tarball")
+          : undefined,
+      targetProductDir: typeof body.target_product_dir === "string" ? body.target_product_dir : undefined,
+      restartAfterApply: body.restart === true,
+    });
+    sendJson(res, 200, { ok: true, status });
+    return true;
+  }
+
   // 1. Onboarding
   if (method === "GET" && path === "/api/onboarding") {
     sendJson(res, 200, { onboarding: providerConnection.getOnboardingState() });
@@ -2341,7 +2634,7 @@ export async function tryHandleStudioRoute(
 
   // Upgrades Modulares (Bônus & Vídeo em Etapas)
   if (method === "GET" && path === "/api/upgrades") {
-    sendJson(res, 200, { upgrades: listUpgradePackages(db, workspaceRoot) });
+    sendJson(res, 200, { upgrades: listUpgradePackages(db, workspaceRoot, deps.licenseService) });
     return true;
   }
 
@@ -2351,13 +2644,21 @@ export async function tryHandleStudioRoute(
       sendJson(res, 400, { erro: "Campo obrigatório: 'pacote' ('bonus' ou 'video')." });
       return true;
     }
-    const upgrades = activateUpgradePackage(db, workspaceRoot, body.pacote);
-    wsHub.broadcast("provider:updated", {
-      provedor: "gemini",
-      conectado: true,
-      modo: "assinatura",
-    });
-    sendJson(res, 200, { ok: true, upgrades });
+    try {
+      const upgrades = await activateUpgradePackage(db, workspaceRoot, body.pacote, deps.licenseService);
+      wsHub.broadcast("provider:updated", {
+        provedor: "gemini",
+        conectado: true,
+        modo: "assinatura",
+      });
+      sendJson(res, 200, { ok: true, upgrades });
+    } catch (err) {
+      if (err instanceof LicenseValidationError) {
+        sendJson(res, err.statusCode, { erro: err.message, code: err.code });
+        return true;
+      }
+      throw err;
+    }
     return true;
   }
 
@@ -2577,7 +2878,7 @@ export async function tryHandleStudioRoute(
     const rows = db.connection
       .prepare(`SELECT * FROM projecao_agentes ORDER BY ordem_exibicao ASC;`)
       .all() as Array<Parameters<typeof enrichAgentRow>[1]>;
-    const enriched = rows.map((row) => enrichAgentRow(db, row, workspaceRoot));
+    const enriched = rows.map((row) => enrichAgentRow(db, row, workspaceRoot, deps.licenseService));
     const filtered = apenasDesbloqueados
       ? enriched.filter((a) => a.config.upgrade_desbloqueado !== false)
       : enriched;
@@ -2663,7 +2964,7 @@ export async function tryHandleStudioRoute(
       .prepare(`SELECT * FROM projecao_agentes WHERE agente_id = ?;`)
       .get(agenteId) as Parameters<typeof enrichAgentRow>[1];
 
-    sendJson(res, 201, { agente: enrichAgentRow(db, createdRow) });
+    sendJson(res, 201, { agente: enrichAgentRow(db, createdRow, workspaceRoot, deps.licenseService) });
     return true;
   }
 
@@ -2853,7 +3154,7 @@ export async function tryHandleStudioRoute(
       .prepare(`SELECT * FROM projecao_agentes WHERE agente_id = ?;`)
       .get(agenteId) as Parameters<typeof enrichAgentRow>[1];
 
-    sendJson(res, 200, { agente: enrichAgentRow(db, updated, workspaceRoot) });
+    sendJson(res, 200, { agente: enrichAgentRow(db, updated, workspaceRoot, deps.licenseService) });
     return true;
   }
 
@@ -2892,7 +3193,7 @@ export async function tryHandleStudioRoute(
     const updated = db.connection
       .prepare(`SELECT * FROM projecao_agentes WHERE agente_id = ?;`)
       .get(agenteId) as Parameters<typeof enrichAgentRow>[1];
-    sendJson(res, 200, { agente: enrichAgentRow(db, updated, workspaceRoot) });
+    sendJson(res, 200, { agente: enrichAgentRow(db, updated, workspaceRoot, deps.licenseService) });
     return true;
   }
 

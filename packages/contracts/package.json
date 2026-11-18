@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./license-crypto-node": {
+      "types": "./dist/license-crypto-node.d.ts",
+      "default": "./dist/license-crypto-node.js"
     }
   },
   "scripts": {

@@ -1082,6 +1082,30 @@ export const SCHEMA_TABLES: readonly { nome: string; sql: string }[] = [
         ON projecao_showcase_sites(slug);
     `,
   },
+  {
+    nome: "projecao_servidores_conectados",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_servidores_conectados (
+        server_id TEXT PRIMARY KEY,
+        nome TEXT NOT NULL,
+        slug TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL CHECK(kind IN ('primary', 'local_child', 'remote_vps', 'joined')),
+        cor_hex TEXT NOT NULL DEFAULT '#F59E0B',
+        base_url TEXT NOT NULL,
+        workspace_path TEXT,
+        port INTEGER,
+        remote_ip TEXT,
+        access_token_vault_key TEXT,
+        version TEXT,
+        is_active INTEGER NOT NULL DEFAULT 0 CHECK(is_active IN (0, 1)),
+        created_at TEXT NOT NULL,
+        last_seen_at TEXT,
+        last_error TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_servidores_kind
+        ON projecao_servidores_conectados(kind, is_active);
+    `,
+  },
 ];
 
 export const SCHEMA_TABLE_NAMES = [
@@ -1138,4 +1162,5 @@ export const SCHEMA_TABLE_NAMES = [
   "projecao_agent_browsing_log",
   "projecao_sidebar_secoes",
   "projecao_showcase_sites",
+  "projecao_servidores_conectados",
 ] as const;

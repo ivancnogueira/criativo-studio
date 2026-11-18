@@ -1,0 +1,115 @@
+name: Build Multiplatform Desktop Releases
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Criar ou atualizar GitHub Release pública"
+        required: true
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.os_name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            os_name: Windows
+            build_cmd: npm run dist:desktop:win
+          - os: ubuntu-latest
+            os_name: Linux
+            build_cmd: node ./node_modules/electron-builder/cli.js --project apps/desktop --config electron-builder.yml --linux AppImage tar.gz --x64
+          - os: macos-latest
+            os_name: macOS
+            build_cmd: npm run dist:desktop:mac
+
+    steps:
+      - name: Checkout repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Instalar dependências
+        run: npm install
+
+      - name: Compilar pacotes TypeScript do monorepo
+        run: npm run build
+
+      - name: Compilar aplicação Web
+        run: npx vite build apps/web
+
+      - name: Compilar TypeScript do Desktop
+        run: npm run build:desktop
+
+      - name: Preparar bundle de produto agnóstico
+        run: npm run prepare:desktop-bundle
+
+      - name: Empacotar com electron-builder (${{ matrix.os_name }})
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ${{ matrix.build_cmd }}
+
+      - name: Fazer upload dos artefatos da plataforma
+        uses: actions/upload-artifact@v4
+        with:
+          name: criativo-desktop-${{ matrix.os_name }}
+          path: |
+            apps/desktop/release-dist/*.exe
+            apps/desktop/release-dist/*.blockmap
+            apps/desktop/release-dist/*.AppImage
+            apps/desktop/release-dist/*.tar.gz
+            apps/desktop/release-dist/*.dmg
+            apps/desktop/release-dist/*.zip
+            apps/desktop/release-dist/latest*.yml
+          if-no-files-found: warn
+
+  release:
+    name: Publicar GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.publish_release == 'true'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Criar diretório de artefatos
+        run: mkdir -p dist-artifacts
+
+      - name: Baixar todos os artefatos compilados
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+          merge-multiple: true
+
+      - name: Gerar somas de verificação SHA-256
+        run: |
+          cd dist-artifacts
+          sha256sum * > SHA256SUMS.txt || true
+          cat SHA256SUMS.txt
+
+      - name: Publicar Release no GitHub
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist-artifacts/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

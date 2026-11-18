@@ -1,0 +1,21 @@
+{
+  "name": "@criativo/desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Aplicativo Desktop instalável (Windows/macOS/Linux) do Criativo AI Studio Online com Daemon embutido 24/7.",
+  "author": "Criativo AI Studio Online",
+  "type": "module",
+  "main": "./dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepare:bundle": "node scripts/prepare-bundle.mjs",
+    "dist:win": "npm run prepare:bundle && npx electron-builder --config electron-builder.yml --win nsis",
+    "dist:mac": "npm run prepare:bundle && npx electron-builder --config electron-builder.yml --mac dmg",
+    "dist:linux": "npm run prepare:bundle && npx electron-builder --config electron-builder.yml --linux AppImage"
+  },
+  "devDependencies": {
+    "electron": "35.7.5",
+    "electron-builder": "^25.1.8"
+  }
+}

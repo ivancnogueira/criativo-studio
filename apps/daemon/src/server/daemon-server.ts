@@ -1,4 +1,4 @@
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID, createHash, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -75,6 +75,16 @@ import { BackupModelsResolver } from "../engine/runner/backup-models-resolver.ts
 import { ConnectorsWebhookService } from "./connectors-webhook-service.ts";
 import { ShowcaseSiteService } from "./showcase-service.ts";
 import { tryHandlePhase15Route } from "./phase15-routes.ts";
+import { LicenseClientService } from "../license/license-service.ts";
+import { LocalServerManager } from "../servers/local-server-manager.ts";
+import { RemoteClaimService } from "../servers/remote-claim-service.ts";
+import { ServerProxyRouter } from "../servers/server-proxy-router.ts";
+import {
+  bootstrapUserDataDirectory,
+  resolveStudioPaths,
+  type StudioResolvedPaths,
+} from "../config/app-paths.ts";
+import { AutoUpdateService } from "../updater/auto-update-service.ts";
 import type { WaVersionFetcher, WhatsAppStudioClient } from "@criativo/whatsapp";
 
 export interface TaskExecutorHook {
@@ -86,6 +96,7 @@ export interface DaemonServerOptions {
   host?: string;
   dbPath?: string;
   workspaceRoot?: string;
+  productRoot?: string;
   vaultMasterKey?: string;
   cronIntervalMs?: number;
   workerPollMs?: number;
@@ -98,6 +109,14 @@ export interface DaemonServerOptions {
   taskExecutor?: TaskExecutorHook;
   whatsappSocketFactory?: SocketFactory;
   whatsappVersionFetcher?: WaVersionFetcher;
+  licenseHubUrl?: string;
+  licensePublicKeyPem?: string;
+  enforceLicense?: boolean;
+  bypassLicenseForTests?: boolean;
+  machineSeedOverride?: string;
+  accessToken?: string | null;
+  isChildServer?: boolean;
+  sharedAuthDir?: string | null;
 }
 
 export interface DaemonRuntime {
@@ -105,8 +124,13 @@ export interface DaemonRuntime {
   wsHub: WebSocketHub;
   controlSocket: ControlSocketServer | null;
   db: CriativoDatabase;
+  paths: StudioResolvedPaths;
   queue: FifoQueueManager;
   vault: VaultService;
+  licenseService: LicenseClientService;
+  localServerManager: LocalServerManager | null;
+  remoteClaimService: RemoteClaimService | null;
+  autoUpdateService: AutoUpdateService;
   cron: CronScheduler;
   routineStore: RoutineStore;
   routineFlowStore: RoutineFlowStore;
@@ -159,7 +183,7 @@ function sendJson(res: ServerResponse, statusCode: number, body: unknown): void 
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type,Authorization",
+    "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Criativo-Server-Id",
   });
   res.end(payload);
 }
@@ -239,10 +263,21 @@ export function resolveDefaultWorkspaceRoot(cwd = process.cwd()): string {
 export async function createDaemonServer(
   options: DaemonServerOptions = {}
 ): Promise<DaemonRuntime> {
+  const studioPaths = resolveStudioPaths({
+    workspaceRoot: options.workspaceRoot,
+    productRoot: options.productRoot,
+    dbPath: options.dbPath,
+  });
+  if ((studioPaths.separatedRoots || studioPaths.isPackaged) && !options.isChildServer) {
+    bootstrapUserDataDirectory(studioPaths);
+  }
   const resolvedWorkspaceRoot = options.workspaceRoot
     ? resolve(options.workspaceRoot)
-    : resolveDefaultWorkspaceRoot();
-  const db = initializeDatabase({ dbPath: options.dbPath });
+    : studioPaths.userDataRoot;
+  const resolvedDbPath =
+    options.dbPath ??
+    (studioPaths.separatedRoots || studioPaths.isPackaged ? studioPaths.dbPath : undefined);
+  const db = initializeDatabase({ dbPath: resolvedDbPath });
   const recoveryReport = recoverInterruptedTasks(db);
   if (recoveryReport.totalInterrompidas > 0) {
     console.info("[Daemon] Crash recovery executado:", recoveryReport);
@@ -251,6 +286,69 @@ export async function createDaemonServer(
   const queue = new FifoQueueManager(db);
   const vault = new VaultService(db, options.vaultMasterKey);
   const wsHub = new WebSocketHub();
+  const licenseService = new LicenseClientService({
+    db,
+    vault,
+    wsHub,
+    hubBaseUrl: options.licenseHubUrl,
+    publicKeyPem: options.licensePublicKeyPem,
+    fetchImpl: options.fetchImpl,
+    machineSeedOverride: options.machineSeedOverride,
+    productRoot: studioPaths.productRoot,
+    enforceLicense: options.enforceLicense,
+    bypassForTests: options.bypassLicenseForTests,
+  });
+  let activeServerPort = 0;
+  const localServerManager = options.isChildServer
+    ? null
+    : new LocalServerManager({
+        db,
+        vault,
+        licenseService,
+        wsHub,
+        workspaceRoot: resolvedWorkspaceRoot,
+        primaryPortProvider: () => activeServerPort,
+      });
+  const remoteClaimService = localServerManager
+    ? new RemoteClaimService({
+        localServerManager,
+        licenseService,
+        wsHub,
+        fetchImpl: options.fetchImpl,
+      })
+    : null;
+  const serverProxyRouter = localServerManager
+    ? new ServerProxyRouter({
+        localServerManager,
+        fetchImpl: options.fetchImpl,
+      })
+    : null;
+  const autoUpdateService = new AutoUpdateService({
+    licenseService,
+    paths: studioPaths,
+    wsHub,
+    fetchImpl: options.fetchImpl,
+    serverId: options.isChildServer ? (process.env.CRIATIVO_CHILD_SERVER_ID ?? "local_child") : "primary",
+    serverKind: options.isChildServer ? "local_child" : "primary",
+  });
+
+  const configuredAccessToken =
+    options.accessToken !== undefined
+      ? options.accessToken
+      : (process.env.CRIATIVO_SERVER_ACCESS_TOKEN ?? null);
+
+  const isAuthorizedByAccessToken = (req: IncomingMessage, urlObj: URL): boolean => {
+    if (!configuredAccessToken) return true;
+    const authHeader = String(req.headers.authorization ?? "");
+    const bearer = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+    const queryTok = urlObj.searchParams.get("token") ?? "";
+    const provided = bearer || queryTok;
+    if (!provided) return false;
+    const bufA = Buffer.from(provided, "utf8");
+    const bufB = Buffer.from(configuredAccessToken, "utf8");
+    return bufA.length === bufB.length && timingSafeEqual(bufA, bufB);
+  };
+
   const providers = new ProviderRegistry({ vault });
   seedDefaultStudioExperience(db);
   if (process.env.CRIATIVO_IMPORT_OPENBOT_DB === "1") {
@@ -260,6 +358,7 @@ export async function createDaemonServer(
     db,
     vault,
     workspaceRoot: resolvedWorkspaceRoot,
+    sharedAuthDir: options.sharedAuthDir ?? null,
   });
   const mcpGateway = new McpGateway({
     db,
@@ -291,6 +390,7 @@ export async function createDaemonServer(
   const skillsManager = new SkillsManager({
     db,
     workspaceRoot: resolvedWorkspaceRoot,
+    productRoot: studioPaths.productRoot,
   });
   skillsManager.syncDiskAndCatalog();
 
@@ -1232,7 +1332,7 @@ export async function createDaemonServer(
         res.writeHead(204, {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type,Authorization",
+          "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Criativo-Server-Id",
         });
         res.end();
         return;
@@ -1241,6 +1341,37 @@ export async function createDaemonServer(
       const url = new URL(req.url ?? "/", "http://localhost");
       const path = url.pathname;
       const method = req.method ?? "GET";
+
+      if (
+        configuredAccessToken &&
+        !(method === "GET" && (path === "/health" || path === "/api/health")) &&
+        path.startsWith("/api/") &&
+        !isAuthorizedByAccessToken(req, url)
+      ) {
+        sendJson(res, 401, { erro: "Token de acesso do servidor ausente ou inválido." });
+        return;
+      }
+
+      const isLicenseExemptRoute =
+        (method === "GET" && (path === "/health" || path === "/api/health")) ||
+        path.startsWith("/api/studio/license/") ||
+        (method === "GET" && !path.startsWith("/api/") && path !== "/ws");
+
+      if (!isLicenseExemptRoute && path.startsWith("/api/")) {
+        const opCheck = licenseService.assertOperational();
+        if (!opCheck.ok) {
+          sendJson(res, 402, {
+            error: "license_required",
+            erro: opCheck.status.message ?? "Licença ativa necessária para operar o Criativo AI Studio.",
+            status: opCheck.status,
+          });
+          return;
+        }
+      }
+
+      if (serverProxyRouter && (await serverProxyRouter.tryProxyHttpRequest(req, res, url, method))) {
+        return;
+      }
 
       if (
         await tryHandleRoutineRoute(req, res, path, method, url, {
@@ -1300,6 +1431,10 @@ export async function createDaemonServer(
         connectorsWebhook,
         transcription,
         backupResolver,
+        licenseService,
+        localServerManager,
+        remoteClaimService,
+        autoUpdateService,
       };
 
       if (
@@ -1623,24 +1758,36 @@ const STATIC_MIME_TYPES: Record<string, string> = {
   ".mp4": "video/mp4",
 };
 
-function resolveWebDistDir(): string {
+function resolveWebDistDir(preferredDistDir?: string, productRoot?: string): string {
+  if (preferredDistDir && existsSync(resolve(preferredDistDir, "index.html"))) {
+    return preferredDistDir;
+  }
   const currentDir = resolve(fileURLToPath(import.meta.url), "..");
-  const candidateA = resolve(currentDir, "../../../../apps/web/dist");
-  const candidateB = resolve(process.cwd(), "apps/web/dist");
-  const candidateC = resolve(process.cwd(), "../web/dist");
-  for (const dir of [candidateA, candidateB, candidateC]) {
+  const candidates = [
+    productRoot ? resolve(productRoot, "apps/web/dist") : null,
+    productRoot ? resolve(productRoot, "web-dist") : null,
+    resolve(currentDir, "../../../../apps/web/dist"),
+    resolve(process.cwd(), "apps/web/dist"),
+    resolve(process.cwd(), "../web/dist"),
+  ].filter((d): d is string => Boolean(d));
+  for (const dir of candidates) {
     if (existsSync(resolve(dir, "index.html"))) {
       return dir;
     }
   }
-  return candidateA;
+  return candidates[0] ?? resolve(currentDir, "../../../../apps/web/dist");
 }
 
-function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
+function tryServeWebStatic(
+  pathName: string,
+  res: ServerResponse,
+  preferredDistDir?: string,
+  productRoot?: string
+): boolean {
   if (pathName.startsWith("/api/") || pathName === "/health" || pathName === "/ws") {
     return false;
   }
-  const distDir = resolveWebDistDir();
+  const distDir = resolveWebDistDir(preferredDistDir, productRoot);
   const indexHtml = resolve(distDir, "index.html");
   if (!existsSync(indexHtml)) {
     return false;
@@ -1676,7 +1823,7 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
         return;
       }
 
-      if (method === "GET" && tryServeWebStatic(path, res)) {
+      if (method === "GET" && tryServeWebStatic(path, res, studioPaths.webDistDir, studioPaths.productRoot)) {
         return;
       }
 
@@ -1694,7 +1841,20 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
     }
   });
 
-  httpServer.on("upgrade", (req, socket) => {
+  httpServer.on("upgrade", (req, socket, head) => {
+    const reqUrl = new URL(req.url ?? "/", "http://localhost");
+    if (configuredAccessToken && !isAuthorizedByAccessToken(req, reqUrl)) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    if (serverProxyRouter && reqUrl.pathname === "/ws") {
+      const targetSid = reqUrl.searchParams.get("serverId")?.trim();
+      if (targetSid && targetSid !== "primary") {
+        void serverProxyRouter.tryProxyWebSocketUpgrade(req, socket, head, reqUrl);
+        return;
+      }
+    }
     const handled = wsHub.handleUpgrade(req, socket, "/ws");
     if (!handled) {
       socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
@@ -1715,6 +1875,7 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
 
   const address = httpServer.address();
   const resolvedPort = typeof address === "object" && address ? address.port : listenPort;
+  activeServerPort = resolvedPort;
   routineStore.setPublicBaseUrl(`http://${listenHost}:${resolvedPort}`);
 
   const resolvedControlSocketPath =
@@ -1737,6 +1898,7 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
   }
 
   if (options.autoStartLoops !== false) {
+    licenseService.startHeartbeatTimer();
     cron.start(options.cronIntervalMs ?? 60_000);
     await routineExecutionService.skipMissed();
     routineTimer.arm();
@@ -1761,8 +1923,13 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
     wsHub,
     controlSocket,
     db,
+    paths: studioPaths,
     queue,
     vault,
+    licenseService,
+    localServerManager,
+    remoteClaimService,
+    autoUpdateService,
     cron,
     routineStore,
     routineFlowStore,
@@ -1807,6 +1974,10 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
     connectorsWebhook,
     port: resolvedPort,
     async close(): Promise<void> {
+      licenseService.stopHeartbeatTimer();
+      if (localServerManager) {
+        await localServerManager.stopAll();
+      }
       cron.stop();
       routineTimer.dispose();
       memoryReview.dispose();

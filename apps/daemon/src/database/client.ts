@@ -47,6 +47,7 @@ export class CriativoDatabase {
       this.applyAdditiveMigrations();
       this.applyPhase14Migrations();
       this.applyPhase15Migrations();
+      this.applyPhase17Migrations();
     });
   }
 
@@ -115,6 +116,22 @@ export class CriativoDatabase {
         definition: "TEXT NOT NULL DEFAULT 'all' CHECK(notification_level IN ('all', 'mentions', 'muted'))",
       },
     ]);
+  }
+
+  private applyPhase17Migrations(): void {
+    const countRow = this.connection
+      .prepare(`SELECT COUNT(*) AS total FROM projecao_servidores_conectados;`)
+      .get() as { total: number } | undefined;
+    if (Number(countRow?.total ?? 0) === 0) {
+      const nowIso = new Date().toISOString();
+      this.connection
+        .prepare(
+          `INSERT INTO projecao_servidores_conectados (
+            server_id, nome, slug, kind, cor_hex, base_url, is_active, created_at, last_seen_at
+          ) VALUES ('primary', 'Servidor Principal', 'principal', 'primary', '#F59E0B', 'local://primary', 1, ?, ?);`,
+        )
+        .run(nowIso, nowIso);
+    }
   }
 
   private applyPhase14Migrations(): void {

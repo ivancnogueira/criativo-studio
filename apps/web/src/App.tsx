@@ -22,6 +22,7 @@ import type {
   FilaChatEntrega,
   FilaChatSnapshot,
   HabilidadeInstaladaInfo,
+  LicenseActivationStatus,
   MensagemChat,
   MensagemFixada,
   NivelEsforco,
@@ -32,14 +33,18 @@ import type {
   ProvedorStatusInfo,
   ProviderName,
   RelatorioAnalyticsHost,
+  ServerClaimTicket,
+  ServerQuotaSummary,
   ShowcaseSiteSummary,
   SidebarLayoutMutation,
   SidebarLayoutSnapshot,
   StatusMensageria,
   StorageUsageSnapshot,
+  StudioServerRecord,
   StudioUserSettings,
   TarefaRegistro,
   UiBlockSubmitPayload,
+  UpdateStatusSnapshot,
   UsageLimitAskPayload,
   UserBrowsingStep,
   UsoProvedoresSnapshot,
@@ -86,11 +91,25 @@ import {
 import {
   DEFAULT_FRONTEND_USER_SETTINGS,
   SettingsModal,
+  type SettingsModalTabId,
   applyUserSettingsToDocument,
 } from "./features/settings/SettingsModal";
 import type { WorkflowEventSignal } from "./features/workflows/WorkflowsCanvasPage";
 import { WorkflowsCanvasPage } from "./features/workflows/WorkflowsCanvasPage";
-import { daemonApi, WebSocketClient } from "./services/websocket-client";
+import { LicenseActivationGate } from "./features/license/LicenseActivationGate";
+import {
+  JoinServerModal,
+  NewLocalServerModal,
+  NewRemoteServerClaimModal,
+  ServerSettingsModal,
+} from "./features/servers/ServerModals";
+import {
+  daemonApi,
+  getActiveServerId,
+  setActiveServerId,
+  setOnLicenseRequiredHandler,
+  WebSocketClient,
+} from "./services/websocket-client";
 
 const USER_SETTINGS_STORAGE_KEY = "criativo_user_settings";
 const LAST_TAB_STORAGE_KEY = "criativo_last_tab_id";
@@ -313,6 +332,17 @@ export function App() {
   const [whatsNew, setWhatsNew] = useState<WhatsNewReleaseInfo | null>(null);
   const [showcaseSites, setShowcaseSites] = useState<ShowcaseSiteSummary[]>([]);
   const [liveVoiceActive, setLiveVoiceActive] = useState(false);
+  const [licenseStatus, setLicenseStatus] = useState<LicenseActivationStatus | null>(null);
+  const [servers, setServers] = useState<StudioServerRecord[]>([]);
+  const [activeServerId, setActiveServerIdState] = useState<string>(() => getActiveServerId());
+  const [serverQuota, setServerQuota] = useState<ServerQuotaSummary | null>(null);
+  const [newLocalModalOpen, setNewLocalModalOpen] = useState(false);
+  const [newRemoteModalOpen, setNewRemoteModalOpen] = useState(false);
+  const [joinServerModalOpen, setJoinServerModalOpen] = useState(false);
+  const [serverSettingsTarget, setServerSettingsTarget] = useState<StudioServerRecord | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatusSnapshot | null>(null);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsModalTabId>("geral");
+  const wsRef = useRef<WebSocketClient | null>(null);
   const restoredLastTabRef = useRef(false);
 
   useEffect(() => {
@@ -400,6 +430,14 @@ export function App() {
 
   const hydrateAll = useCallback(async () => {
     try {
+      const licStatus = await daemonApi.obterStatusLicenca().catch(() => null);
+      if (licStatus) {
+        setLicenseStatus(licStatus);
+        if (!licStatus.valid) {
+          return;
+        }
+      }
+
       const [
         onb,
         agList,
@@ -426,6 +464,8 @@ export function App() {
         remoteShowcaseSites,
         remoteStorageUsage,
         remoteWhatsNew,
+        remoteServersSnap,
+        remoteUpdateStatus,
       ] = await Promise.all([
         daemonApi.getOnboarding(),
         daemonApi.listAgents(),
@@ -452,7 +492,23 @@ export function App() {
         daemonApi.listShowcaseSites().catch(() => [] as ShowcaseSiteSummary[]),
         daemonApi.getStorageUsage().catch(() => null),
         daemonApi.getWhatsNew().catch(() => null),
+        daemonApi.listarServidores().catch(() => null),
+        daemonApi.obterStatusAtualizacao().catch(() => null),
       ]);
+
+      if (remoteUpdateStatus) {
+        setUpdateStatus(remoteUpdateStatus);
+      }
+
+      if (remoteServersSnap) {
+        setServers(remoteServersSnap.servers);
+        setServerQuota(remoteServersSnap.quota);
+        const resolvedServerId = remoteServersSnap.active_server_id || "primary";
+        if (resolvedServerId !== getActiveServerId()) {
+          setActiveServerId(resolvedServerId);
+          setActiveServerIdState(resolvedServerId);
+        }
+      }
 
       setOnboarding(onb);
       setAgentes(agList);
@@ -609,6 +665,7 @@ export function App() {
   // Assinatura WebSocket ao vivo
   useEffect(() => {
     const ws = new WebSocketClient();
+    wsRef.current = ws;
     const unsubConn = ws.onConnectionChange(setWsConnected);
 
     const unsubQueued = ws.on("task:queued", () => {
@@ -1089,8 +1146,38 @@ export function App() {
       void daemonApi.listShowcaseSites().then(setShowcaseSites).catch(() => {});
     });
 
+    const unsubLicenseUpdated = ws.on("license:updated", (evt) => {
+      setLicenseStatus(evt);
+      if (evt.valid) {
+        void hydrateAll();
+      }
+    });
+
+    const unsubServersUpdated = ws.on("servers:updated", () => {
+      void daemonApi
+        .listarServidores()
+        .then((snap) => {
+          setServers(snap.servers);
+          setServerQuota(snap.quota);
+        })
+        .catch(() => {});
+    });
+
+    const unsubUpdateStatus = ws.on("update:status", (nextStatus) => {
+      setUpdateStatus(nextStatus);
+    });
+
+    setOnLicenseRequiredHandler((status) => {
+      if (status) {
+        setLicenseStatus(status);
+      } else {
+        void daemonApi.obterStatusLicenca().then(setLicenseStatus).catch(() => {});
+      }
+    });
+
     ws.connect();
     return () => {
+      setOnLicenseRequiredHandler(null);
       unsubConn();
       unsubQueued();
       unsubStarted();
@@ -1139,9 +1226,122 @@ export function App() {
       unsubSidebarUpdated();
       unsubSettingsUpdated();
       unsubShowcaseUpdated();
+      unsubLicenseUpdated();
+      unsubServersUpdated();
+      unsubUpdateStatus();
+      wsRef.current = null;
       ws.disconnect();
     };
-  }, [refreshAgentThreadsState, refreshRoutineCounts]);
+  }, [hydrateAll, refreshAgentThreadsState, refreshRoutineCounts]);
+
+  const handleApplyUpdate = useCallback(async () => {
+    const win = typeof window !== "undefined"
+      ? (window as Window & {
+          criativoDesktop?: {
+            isPackagedDesktop?: boolean;
+            triggerUpdateInstall?: () => Promise<unknown>;
+          };
+        })
+      : null;
+
+    if (win?.criativoDesktop?.isPackagedDesktop && win.criativoDesktop.triggerUpdateInstall) {
+      await win.criativoDesktop.triggerUpdateInstall();
+      const refreshed = await daemonApi.obterStatusAtualizacao().catch(() => null);
+      if (refreshed) setUpdateStatus(refreshed);
+      return;
+    }
+
+    const next = await daemonApi.aplicarAtualizacao({ restart: true });
+    setUpdateStatus(next);
+  }, []);
+
+  const handleSwitchServer = useCallback(
+    async (serverId: string) => {
+      try {
+        const res = await daemonApi.selecionarServidor(serverId);
+        setServers(res.servers);
+        setActiveServerIdState(res.active_server_id);
+        setActiveSideThreadId(null);
+        setChatByKey({});
+        setThreadChatById({});
+        setLiveRunByChat({});
+        setLiveRunByThread({});
+        setOpenTabs([
+          { id: "agent:estrategista", titulo: "Estrategista Editorial", shape: "hex", color: "#31cf76" },
+        ]);
+        setActiveTabId("agent:estrategista");
+        setCenterMode({ type: "agent", agenteId: "estrategista" });
+        setActiveSection("agentes");
+        restoredLastTabRef.current = false;
+        wsRef.current?.reconnectForServer(res.active_server_id);
+        await hydrateAll();
+      } catch {
+        // toast/error silencioso; status permanece no servidor atual
+      }
+    },
+    [hydrateAll]
+  );
+
+  const handleConfigureServerWithAgent = useCallback(
+    async (promptText: string, _claim: ServerClaimTicket | null) => {
+      setNewRemoteModalOpen(false);
+      setActiveSection("agentes");
+      const targetAgent = agentes.find((a) => a.agente_id === "estrategista") ?? agentes[0];
+      const targetAgentId = targetAgent?.agente_id ?? "estrategista";
+      const vis = getAgentAvatar(targetAgent);
+      setOpenTabs((prev) =>
+        prev.some((t) => t.id === `agent:${targetAgentId}`)
+          ? prev
+          : [
+              ...prev,
+              {
+                id: `agent:${targetAgentId}`,
+                titulo: targetAgent?.nome ?? "Estrategista",
+                shape: vis.shape,
+                color: vis.color,
+              },
+            ]
+      );
+      setActiveTabId(`agent:${targetAgentId}`);
+      setCenterMode({ type: "agent", agenteId: targetAgentId });
+
+      const targetKey = `agente:${targetAgentId}`;
+      const optimisticId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const optimisticMsg: MensagemChat = {
+        mensagem_id: optimisticId,
+        canal_id: targetKey,
+        agente_id: targetAgentId,
+        autor: "usuario",
+        autor_nome: "Você",
+        conteudo_markdown: promptText,
+        anexos: [],
+        steps: [],
+        tarefa_id: null,
+        lida: true,
+        criado_em: new Date().toISOString(),
+      };
+      setChatByKey((prev) => ({
+        ...prev,
+        [targetKey]: mergeUniqueMessages(prev[targetKey] ?? [], [optimisticMsg]),
+      }));
+      try {
+        const res = await daemonApi.sendAgentMessage(targetAgentId, promptText, []);
+        setChatByKey((prev) => {
+          const withoutTemp = (prev[targetKey] ?? []).filter((m) => m.mensagem_id !== optimisticId);
+          const extras = [res.mensagem_usuario, res.mensagem_agente, ...(res.mensagens_handoff ?? [])].filter(
+            (x): x is MensagemChat => Boolean(x)
+          );
+          return {
+            ...prev,
+            [targetKey]: mergeUniqueMessages(withoutTemp, extras),
+          };
+        });
+      } catch {
+        setPrefilledChatPrompt(promptText);
+      }
+    },
+    [agentes]
+  );
 
   const ensureAndActivateTab = useCallback((tab: StudioTabItem, mode: AgentCenterMode) => {
     setOpenTabs((prev) => (prev.some((t) => t.id === tab.id) ? prev : [...prev, tab]));
@@ -1972,6 +2172,35 @@ export function App() {
     );
   }
 
+  // Gatekeeper de Licença Comercial (Fase 16)
+  if (licenseStatus && !licenseStatus.valid) {
+    return (
+      <LicenseActivationGate
+        status={licenseStatus}
+        onActivate={async (payload) => {
+          const next = await daemonApi.ativarLicenca(payload);
+          setLicenseStatus(next);
+          if (next.valid) {
+            await hydrateAll();
+          }
+          return next;
+        }}
+        onDeactivateDevice={async (payload) => {
+          const res = await daemonApi.desvincularDispositivoLicenca(payload);
+          if (res.status) setLicenseStatus(res.status);
+          return res;
+        }}
+        onRefreshStatus={async () => {
+          const next = await daemonApi.sincronizarLicenca();
+          setLicenseStatus(next);
+          if (next.valid) {
+            await hydrateAll();
+          }
+        }}
+      />
+    );
+  }
+
   // Etapa de Onboarding fiel às Screenshots 1 & 2 quando ainda não concluído
   if (onboarding && !onboarding.onboarding_concluido) {
     return (
@@ -2022,6 +2251,15 @@ export function App() {
         onOpenWhatsAppModal={() => setWhatsappModalOpen(true)}
         onOpenSettings={() => setSettingsModalOpen(true)}
         onOpenHelp={() => setHelpModalOpen(true)}
+        servers={servers}
+        activeServerId={activeServerId}
+        serverQuota={serverQuota}
+        onSelectServer={(sid) => void handleSwitchServer(sid)}
+        onOpenNewLocalServer={() => setNewLocalModalOpen(true)}
+        onOpenNewRemoteServer={() => setNewRemoteModalOpen(true)}
+        onOpenJoinServer={() => setJoinServerModalOpen(true)}
+        onOpenServerSettings={(srv) => setServerSettingsTarget(srv)}
+        onOpenDisplaySettings={() => setSettingsModalOpen(true)}
       />
 
       {/* Shell principal à direita do Rail */}
@@ -2112,6 +2350,12 @@ export function App() {
                     setSidebarLayout(res.layout);
                     setAgentes(await daemonApi.listAgents());
                     handleSelectAgent(res.agente.agente_id);
+                  }}
+                  updateStatus={updateStatus}
+                  onApplyUpdate={() => void handleApplyUpdate()}
+                  onOpenUpdateSettings={() => {
+                    setSettingsInitialTab("atualizacoes");
+                    setSettingsModalOpen(true);
                   }}
                 />
               )}
@@ -3258,6 +3502,7 @@ export function App() {
 
       <SettingsModal
         open={settingsModalOpen}
+        initialTab={settingsInitialTab}
         settings={userSettings}
         storageUsage={storageUsage}
         whatsNew={whatsNew}
@@ -3285,7 +3530,27 @@ export function App() {
           setArquivos(await daemonApi.listFiles());
         }}
         onCheckUpdates={async () => {
-          setWhatsNew(await daemonApi.getWhatsNew());
+          const [wn, up] = await Promise.all([
+            daemonApi.getWhatsNew().catch(() => null),
+            daemonApi.verificarAtualizacoes().catch(() => null),
+          ]);
+          if (wn) setWhatsNew(wn);
+          if (up) setUpdateStatus(up);
+        }}
+        updateStatus={updateStatus}
+        activeServerName={
+          servers.find((s) => s.server_id === activeServerId)?.nome ?? "Servidor Principal"
+        }
+        onApplyUpdate={handleApplyUpdate}
+        licenseStatus={licenseStatus}
+        onRefreshLicense={async () => {
+          const next = await daemonApi.sincronizarLicenca();
+          setLicenseStatus(next);
+        }}
+        onDeactivateLicenseDevice={async (payload) => {
+          const res = await daemonApi.desvincularDispositivoLicenca(payload);
+          if (res.status) setLicenseStatus(res.status);
+          return res;
         }}
         onCreateBrowserProfile={async (input) => {
           await daemonApi.createBrowserProfile(input);
@@ -3316,6 +3581,53 @@ export function App() {
         onDeleteBrowserProxy={async (proxyId) => {
           await daemonApi.deleteBrowserProxy(proxyId);
           setBrowserProxies(await daemonApi.listBrowserProxies());
+        }}
+      />
+
+      <NewLocalServerModal
+        open={newLocalModalOpen}
+        quota={serverQuota}
+        onClose={() => setNewLocalModalOpen(false)}
+        onOpenLicenseSettings={() => setSettingsModalOpen(true)}
+        onCreated={async (srv, nextList) => {
+          setServers(nextList);
+          await handleSwitchServer(srv.server_id);
+        }}
+      />
+
+      <NewRemoteServerClaimModal
+        open={newRemoteModalOpen}
+        quota={serverQuota}
+        onClose={() => setNewRemoteModalOpen(false)}
+        onOpenLicenseSettings={() => setSettingsModalOpen(true)}
+        onConfigureWithAgent={(promptText, claimTicket) => {
+          void handleConfigureServerWithAgent(promptText, claimTicket);
+        }}
+        onOpenPairedServer={async (srv) => {
+          await handleSwitchServer(srv.server_id);
+        }}
+      />
+
+      <JoinServerModal
+        open={joinServerModalOpen}
+        onClose={() => setJoinServerModalOpen(false)}
+        onJoined={async (srv, nextList) => {
+          setServers(nextList);
+          await handleSwitchServer(srv.server_id);
+        }}
+      />
+
+      <ServerSettingsModal
+        open={Boolean(serverSettingsTarget)}
+        server={serverSettingsTarget}
+        onClose={() => setServerSettingsTarget(null)}
+        onUpdated={async (nextList, updatedSrv) => {
+          setServers(nextList);
+          setServerSettingsTarget(updatedSrv);
+        }}
+        onRemoved={async (nextList, nextActiveId) => {
+          setServers(nextList);
+          await handleSwitchServer(nextActiveId);
         }}
       />
     </div>

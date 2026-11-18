@@ -63,6 +63,7 @@ import type { CanalMensagemRow, HandoffBus } from "../engine/runner/handoff-bus.
 import type { ChatVisualPreviewService } from "../engine/runner/chat-visual-preview-service.ts";
 import type { UiBlockRegistry } from "../engine/runner/ui-block-registry.ts";
 import type { ApiKeysBridge, OrigemTurnoApiKey } from "../vault/api-keys-bridge.ts";
+import type { LicenseClientService } from "../license/license-service.ts";
 import type { WorkflowStore } from "../workflows/workflow-store.ts";
 import type { VaultService } from "../vault/vault-service.ts";
 import type { WebSocketHub } from "./websocket-hub.ts";
@@ -72,6 +73,7 @@ import type {
   BrowserTargetSelector,
   PermissionLevel,
 } from "@criativo/contracts";
+import type { RemoteClaimService } from "../servers/remote-claim-service.ts";
 import type {
   BrowserAutomationService,
   BrowserCdpActionName,
@@ -286,13 +288,20 @@ export async function validateMetaIntegration(
 
 /**
  * Verifica se um pacote modular (`base`, `bonus` ou `video`) está desbloqueado na instalação.
+ * Quando o licenciamento está ativo (produção ou enforceLicense), exige entitlement assinado Ed25519.
  */
 export function isUpgradeUnlocked(
   db: CriativoDatabase,
   workspaceRoot: string,
-  pacote: "base" | "bonus" | "video"
+  pacote: "base" | "bonus" | "video",
+  licenseService?: LicenseClientService,
+  productRoot?: string,
 ): boolean {
   if (pacote === "base") return true;
+
+  if (licenseService && !licenseService.isBypassedForTests()) {
+    return licenseService.hasSignedUpgradeEntitlement(pacote);
+  }
 
   try {
     const row = db.connection
@@ -312,9 +321,16 @@ export function isUpgradeUnlocked(
     return false;
   }
 
-  const skillsDir = resolve(workspaceRoot, ".agents", "skills");
   const required = UPGRADE_PACKAGE_SLUGS[pacote];
-  return required.some((slug) => existsSync(join(skillsDir, slug, "SKILL.md")));
+  const candidateRoots = [
+    resolve(workspaceRoot, ".agents", "skills"),
+    productRoot ? resolve(productRoot, ".agents", "skills") : null,
+    process.env.CRIATIVO_PRODUCT_ROOT ? resolve(process.env.CRIATIVO_PRODUCT_ROOT, ".agents", "skills") : null,
+  ].filter((d): d is string => Boolean(d));
+
+  return candidateRoots.some((skillsDir) =>
+    required.some((slug) => existsSync(join(skillsDir, slug, "SKILL.md"))),
+  );
 }
 
 const STUDIO_MEDIA_MIME_MAP: Record<string, string> = {
@@ -3497,6 +3513,22 @@ export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
       required: ["siteId"],
     },
   },
+  {
+    name: "create_server_install_command",
+    description:
+      "Gera comando único de instalação e pareamento (CRIATIVO_CLAIM) com validade de 15 minutos para conectar uma VPS Linux ao Criativo AI Studio (fluxo 'Configurar com um agente'). Nunca registre o token em memórias permanentes.",
+    parameters: {
+      type: "object",
+      properties: {
+        server_name: { type: "string", description: "Nome amigável do servidor VPS" },
+        aprovadoPorHumano: {
+          type: "boolean",
+          description: "Confirmação explícita do usuário antes de executar instalação em VPS.",
+        },
+      },
+      required: ["server_name"],
+    },
+  },
 ];
 
 export const PHASE15_TOOL_NAMES: ReadonlySet<string> = new Set(
@@ -3515,6 +3547,7 @@ export interface Phase15ToolServices {
   screenCapture?: ScreenCaptureBridge;
   showcaseService?: ShowcaseSiteService;
   transcription?: TranscriptionService;
+  remoteClaimService?: RemoteClaimService;
 }
 
 export interface Phase15ToolContext {
@@ -3725,6 +3758,33 @@ export async function executePhase15ToolCall(
       agenteId: ctx.agenteId,
       aprovadoPorHumano: ctx.aprovadoPorHumano,
     });
+  }
+
+  if (toolName === "create_server_install_command") {
+    if (!services.remoteClaimService) {
+      throw new Error("RemoteClaimService não inicializado neste daemon.");
+    }
+    const serverName = readStringArg(args, "server_name", "nome") ?? "Servidor VPS";
+    const approved = ctx.aprovadoPorHumano === true || args.aprovadoPorHumano === true;
+    if (!approved) {
+      return {
+        requiresApproval: true,
+        action: "create_server_install_command",
+        server_name: serverName,
+        mensagem: `Confirme que deseja gerar o comando único de instalação para a VPS '${serverName}' (expira em 15 minutos).`,
+      };
+    }
+    const ticket = await services.remoteClaimService.createRemoteClaim(serverName);
+    return {
+      ok: true,
+      claim_id: ticket.claim_id,
+      server_name: ticket.server_name,
+      expires_at: ticket.expires_at,
+      ttl_seconds: ticket.ttl_seconds,
+      command_bash: ticket.command_bash,
+      aviso_seguranca:
+        "Comando de uso único (15 minutos). Não salve o token CRIATIVO_CLAIM em arquivos permanentes ou memórias.",
+    };
   }
 
   throw new Error(`Ferramenta da Fase 15 desconhecida: ${toolName}`);

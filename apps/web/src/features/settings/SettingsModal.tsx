@@ -6,14 +6,18 @@ import type {
   BrowserProxyConfig,
   BrowserStatusReport,
   CanalEquipe,
+  LicenseActivationStatus,
+  LicenseDeviceRecord,
   StorageUsageSnapshot,
   StudioUserSettings,
+  UpdateStatusSnapshot,
   WhatsNewReleaseInfo,
 } from "@criativo/contracts";
 import {
   Bell,
   Globe,
   HardDrive,
+  KeyRound,
   Mic,
   Palette,
   RotateCcw,
@@ -28,11 +32,13 @@ import {
   SettingsBehaviorTab,
   SettingsGeneralTab,
 } from "./SettingsGeneralTabs";
+import { SettingsLicenseTab } from "./SettingsLicenseTab";
+import { SettingsUpdatesTab } from "./SettingsUpdatesTab";
 import {
   SettingsNotificationsTab,
   SettingsVoiceTab,
 } from "./SettingsNotificationsVoiceTabs";
-import { SettingsStorageTab, WhatsNewPanel } from "./StorageUsageBar";
+import { SettingsStorageTab } from "./StorageUsageBar";
 
 export type SettingsModalTabId =
   | "geral"
@@ -42,6 +48,7 @@ export type SettingsModalTabId =
   | "notificacoes"
   | "voz"
   | "armazenamento"
+  | "licenca"
   | "atualizacoes";
 
 const ALLOWED_THEMES = new Set(["carbon_dark", "midnight_contrast", "light"]);
@@ -166,6 +173,7 @@ const NAV_GROUPS: Array<{
   {
     grupo: "Sistema",
     items: [
+      { id: "licenca", label: "Licença & Plano", Icon: KeyRound },
       { id: "armazenamento", label: "Armazenamento", Icon: HardDrive },
       { id: "atualizacoes", label: "Atualizações & Novidades", Icon: Sparkles },
     ],
@@ -189,6 +197,16 @@ export interface SettingsModalProps {
   onClearStorage?: (category: "browser_cache" | "temp_previews") => Promise<void>;
   onDeleteStorageFile?: (arquivoId: string) => Promise<void>;
   onCheckUpdates?: () => Promise<void>;
+  updateStatus?: UpdateStatusSnapshot | null;
+  activeServerName?: string;
+  onApplyUpdate?: () => Promise<void>;
+  licenseStatus?: LicenseActivationStatus | null;
+  onRefreshLicense?: () => Promise<void>;
+  onDeactivateLicenseDevice?: (payload: {
+    target_machine_id: string;
+    license_key?: string;
+    email?: string;
+  }) => Promise<{ ok: boolean; devices: LicenseDeviceRecord[]; status?: LicenseActivationStatus }>;
   onCreateBrowserProfile: (input: { nome: string; cor_hex?: string }) => Promise<void>;
   onUpdateBrowserProfile: (
     perfilId: string,
@@ -222,6 +240,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClearStorage,
   onDeleteStorageFile,
   onCheckUpdates,
+  updateStatus = null,
+  activeServerName = "Servidor Principal",
+  onApplyUpdate,
+  licenseStatus = null,
+  onRefreshLicense,
+  onDeactivateLicenseDevice,
   onCreateBrowserProfile,
   onUpdateBrowserProfile,
   onClearBrowserProfile,
@@ -407,8 +431,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               />
             )}
 
+            {activeTab === "licenca" && (
+              <SettingsLicenseTab
+                status={licenseStatus}
+                onRefreshLicense={onRefreshLicense}
+                onDeactivateDevice={onDeactivateLicenseDevice}
+              />
+            )}
+
             {activeTab === "atualizacoes" && (
-              <WhatsNewPanel whatsNew={whatsNew} onCheckUpdates={onCheckUpdates} />
+              <SettingsUpdatesTab
+                updateStatus={updateStatus}
+                whatsNew={whatsNew}
+                activeServerName={activeServerName}
+                onCheckUpdates={onCheckUpdates}
+                onApplyUpdate={onApplyUpdate}
+              />
             )}
           </div>
 

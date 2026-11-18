@@ -1,0 +1,1119 @@
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  Bot,
+  Check,
+  CheckCircle2,
+  Copy,
+  Link2,
+  Loader2,
+  Monitor,
+  RefreshCw,
+  Server,
+  Trash2,
+  X,
+} from "lucide-react";
+import type {
+  ServerClaimTicket,
+  ServerInviteToken,
+  ServerQuotaSummary,
+  StudioServerRecord,
+} from "@criativo/contracts";
+import { daemonApi } from "../../services/websocket-client";
+
+export const SERVER_ACCENT_COLORS = [
+  { hex: "#E88B2D", label: "Âmbar" },
+  { hex: "#31CF76", label: "Esmeralda" },
+  { hex: "#4E8DFF", label: "Cobalto" },
+  { hex: "#9B6DFF", label: "Violeta" },
+  { hex: "#EC5C8D", label: "Magenta" },
+  { hex: "#2EC4B6", label: "Turquesa" },
+] as const;
+
+export function formatCountdownMMSS(totalSeconds: number): string {
+  const safe = Math.max(0, Math.floor(totalSeconds));
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
+function isLocalQuotaBlocked(quota: ServerQuotaSummary | null): {
+  blocked: boolean;
+  message: string | null;
+} {
+  if (!quota) return { blocked: false, message: null };
+  if (quota.max_local_servers === 0) {
+    return {
+      blocked: true,
+      message:
+        quota.reason ||
+        "Seu plano Individual inclui o servidor principal neste computador e 1 servidor VPS remoto. Para múltiplos servidores locais isolados, faça upgrade para Agência 10 ou Agência Ilimitada.",
+    };
+  }
+  if (quota.max_local_servers > 0 && quota.local_used >= quota.max_local_servers) {
+    return {
+      blocked: true,
+      message:
+        quota.reason ||
+        `Limite local atingido (${quota.local_used} de ${quota.max_local_servers} servidores locais permitidos neste plano).`,
+    };
+  }
+  if (!quota.allowed) {
+    return {
+      blocked: true,
+      message:
+        quota.reason ||
+        `Cota de servidores atingida (${quota.servers_used} de ${quota.max_servers} no plano atual).`,
+    };
+  }
+  return { blocked: false, message: null };
+}
+
+function isRemoteQuotaBlocked(quota: ServerQuotaSummary | null): {
+  blocked: boolean;
+  message: string | null;
+} {
+  if (!quota) return { blocked: false, message: null };
+  if (quota.max_remote_servers >= 0 && quota.remote_used >= quota.max_remote_servers) {
+    return {
+      blocked: true,
+      message:
+        quota.reason ||
+        `Limite de servidores remotos atingido (${quota.remote_used} de ${quota.max_remote_servers} no plano atual).`,
+    };
+  }
+  if (!quota.allowed) {
+    return {
+      blocked: true,
+      message:
+        quota.reason ||
+        `Cota de servidores atingida (${quota.servers_used} de ${quota.max_servers} no plano atual).`,
+    };
+  }
+  return { blocked: false, message: null };
+}
+
+/* ============================================================================
+ * MODAL 1: Novo servidor neste computador (Print 3)
+ * ============================================================================ */
+export interface NewLocalServerModalProps {
+  open: boolean;
+  quota: ServerQuotaSummary | null;
+  onClose: () => void;
+  onCreated: (server: StudioServerRecord, servers: StudioServerRecord[]) => Promise<void> | void;
+  onOpenLicenseSettings?: () => void;
+}
+
+export const NewLocalServerModal: React.FC<NewLocalServerModalProps> = ({
+  open,
+  quota,
+  onClose,
+  onCreated,
+  onOpenLicenseSettings,
+}) => {
+  const [nome, setNome] = useState("");
+  const [corHex, setCorHex] = useState<string>(SERVER_ACCENT_COLORS[0].hex);
+  const [submitting, setSubmitting] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setNome("");
+      setErro(null);
+      setSubmitting(false);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  const quotaCheck = isLocalQuotaBlocked(quota);
+  const canSubmit = nome.trim().length >= 2 && !submitting && !quotaCheck.blocked;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setSubmitting(true);
+    setErro(null);
+    try {
+      const res = await daemonApi.criarServidorLocal({
+        nome: nome.trim(),
+        cor_hex: corHex,
+      });
+      await onCreated(res.server, res.servers);
+      onClose();
+    } catch (err) {
+      setErro(err instanceof Error ? err.message : "Falha ao criar servidor local.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Novo servidor neste computador"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+    >
+      <form
+        onSubmit={handleSubmit}
+        className="w-full max-w-[440px] bg-[#1E1E1E] border border-white/[0.1] rounded-2xl shadow-[0_24px_60px_rgba(0,0,0,0.8)] p-6 text-[#F0F0F0]"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-[18px] font-semibold text-white leading-snug">
+              Novo servidor neste computador
+            </h2>
+            <p className="mt-1.5 text-[13.5px] text-[#9A9A9A] leading-relaxed">
+              O servidor tem seus próprios agentes, chats e arquivos. Ele é executado neste computador.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Fechar modal"
+            className="text-[#8E8E8E] hover:text-white p-1 rounded-lg transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="mt-5 space-y-4">
+          <div>
+            <label
+              htmlFor="criativo-local-server-name"
+              className="block text-[12.5px] font-medium text-[#E5E5E5] mb-1.5"
+            >
+              Nome do servidor
+            </label>
+            <input
+              id="criativo-local-server-name"
+              type="text"
+              value={nome}
+              onChange={(e) => setNome(e.target.value)}
+              placeholder="Ex.: Cliente Acme, Clínica Estética..."
+              disabled={submitting}
+              autoFocus
+              className="w-full rounded-xl bg-[#141414] border border-white/[0.16] focus:border-white/50 outline-none px-3.5 py-2.5 text-[14px] text-white placeholder:text-[#666666] transition-colors"
+            />
+          </div>
+
+          <div>
+            <span className="block text-[12px] font-medium text-[#A8A8A8] mb-2">
+              Cor de identificação
+            </span>
+            <div className="flex items-center gap-2">
+              {SERVER_ACCENT_COLORS.map((item) => {
+                const selected = corHex === item.hex;
+                return (
+                  <button
+                    key={item.hex}
+                    type="button"
+                    onClick={() => setCorHex(item.hex)}
+                    title={item.label}
+                    aria-label={`Cor ${item.label}`}
+                    className={`w-7 h-7 rounded-lg flex items-center justify-center transition-transform ${
+                      selected ? "ring-2 ring-white scale-105" : "opacity-75 hover:opacity-100"
+                    }`}
+                    style={{ backgroundColor: item.hex }}
+                  >
+                    {selected && <Check className="w-3.5 h-3.5 text-[#0D0D0D] stroke-[3]" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {quotaCheck.blocked && quotaCheck.message && (
+            <div className="rounded-xl bg-[#FF9412]/10 border border-[#FF9412]/30 p-3 text-[12.5px] text-[#FFD79E] flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-[#FF9412] shrink-0 mt-0.5" />
+              <div className="space-y-1.5">
+                <p className="leading-relaxed">{quotaCheck.message}</p>
+                {onOpenLicenseSettings && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onOpenLicenseSettings();
+                    }}
+                    className="text-[12px] font-semibold text-white underline underline-offset-2 hover:text-[#FFD79E]"
+                  >
+                    Ver planos e licença
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {erro && (
+            <div className="rounded-xl bg-red-500/10 border border-red-500/30 p-3 text-[12.5px] text-red-200">
+              {erro}
+            </div>
+          )}
+        </div>
+
+        <div className="mt-6 flex items-center justify-end gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 rounded-xl text-[13.5px] font-medium text-[#D4D4D4] hover:text-white hover:bg-white/[0.06] transition-colors"
+          >
+            Cancelar
+          </button>
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            className={`px-4 py-2 rounded-xl text-[13.5px] font-semibold transition-colors flex items-center gap-2 ${
+              canSubmit
+                ? "bg-[#E5E5E5] text-[#0D0D0D] hover:bg-white"
+                : "bg-[#686868]/60 text-[#1A1A1A] cursor-not-allowed"
+            }`}
+          >
+            {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            Criar servidor
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+/* ============================================================================
+ * MODAL 2: Novo servidor em outro computador — CRIATIVO_CLAIM (Print 4)
+ * ============================================================================ */
+export interface NewRemoteServerClaimModalProps {
+  open: boolean;
+  quota: ServerQuotaSummary | null;
+  initialClaim?: ServerClaimTicket | null;
+  onClose: () => void;
+  onConfigureWithAgent: (promptText: string, claim: ServerClaimTicket | null) => void;
+  onOpenPairedServer: (server: StudioServerRecord) => Promise<void> | void;
+  onOpenLicenseSettings?: () => void;
+}
+
+export const NewRemoteServerClaimModal: React.FC<NewRemoteServerClaimModalProps> = ({
+  open,
+  quota,
+  initialClaim = null,
+  onClose,
+  onConfigureWithAgent,
+  onOpenPairedServer,
+  onOpenLicenseSettings,
+}) => {
+  const [serverName, setServerName] = useState(initialClaim?.server_name ?? "");
+  const [claim, setClaim] = useState<ServerClaimTicket | null>(initialClaim);
+  const [loading, setLoading] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const [copiedMode, setCopiedMode] = useState<"bash" | "agent" | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [openingServer, setOpeningServer] = useState(false);
+
+  const quotaCheck = isRemoteQuotaBlocked(quota);
+
+  const generateNewClaim = useCallback(async (customName?: string) => {
+    setLoading(true);
+    setErro(null);
+    try {
+      const next = await daemonApi.criarClaimVps({
+        server_name: customName?.trim() ? customName.trim() : undefined,
+      });
+      setClaim(next);
+    } catch (err) {
+      setErro(err instanceof Error ? err.message : "Falha ao gerar comando CRIATIVO_CLAIM.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      if (!initialClaim) {
+        setClaim(null);
+      }
+      setErro(null);
+      setCopiedMode(null);
+      return;
+    }
+    if (!claim && !initialClaim && !quotaCheck.blocked) {
+      void generateNewClaim();
+    }
+  }, [open, claim, initialClaim, quotaCheck.blocked, generateNewClaim]);
+
+  useEffect(() => {
+    if (!open || !claim || claim.status !== "pending") return;
+    const timer = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [open, claim]);
+
+  useEffect(() => {
+    if (!open || !claim || claim.status !== "pending") return;
+    const poller = window.setInterval(async () => {
+      try {
+        const updated = await daemonApi.consultarClaimVps(claim.claim_id);
+        setClaim(updated);
+      } catch {
+        // mantém última leitura em falhas transitórias de rede
+      }
+    }, 3000);
+    return () => window.clearInterval(poller);
+  }, [open, claim]);
+
+  const remainingSeconds = useMemo(() => {
+    if (!claim) return 15 * 60;
+    const expMs = Date.parse(claim.expires_at);
+    if (!Number.isFinite(expMs)) return claim.ttl_seconds;
+    return Math.max(0, Math.floor((expMs - nowMs) / 1000));
+  }, [claim, nowMs]);
+
+  if (!open) return null;
+
+  const isRedeemed = claim?.status === "redeemed" && Boolean(claim.paired_server);
+  const isExpired = claim?.status === "expired" || (claim?.status === "pending" && remainingSeconds <= 0);
+
+  const copyText = async (mode: "bash" | "agent") => {
+    if (!claim) return;
+    const text = mode === "bash" ? claim.command_bash : claim.command_agent_prompt;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedMode(mode);
+      window.setTimeout(() => setCopiedMode(null), 2000);
+    } catch {
+      // ignora em headless
+    }
+  };
+
+  const handleOpenPaired = async () => {
+    if (!claim?.paired_server || openingServer) return;
+    setOpeningServer(true);
+    try {
+      await onOpenPairedServer(claim.paired_server);
+      onClose();
+    } finally {
+      setOpeningServer(false);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Novo servidor em outro computador"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+    >
+      <div className="relative w-full max-w-[490px] bg-[#1C1C1C] border border-white/[0.1] rounded-[22px] shadow-[0_24px_70px_rgba(0,0,0,0.85)] p-6 text-[#F0F0F0]">
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Fechar modal"
+          className="absolute right-4 top-4 text-[#8E8E8E] hover:text-white p-1.5 rounded-lg transition-colors"
+        >
+          <X className="w-4 h-4" />
+        </button>
+
+        {/* Emblema superior fiel ao Print 4 */}
+        <div className="flex flex-col items-center text-center pt-1">
+          <div className="w-12 h-12 rounded-2xl bg-white flex items-center justify-center shadow-lg">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle cx="8.5" cy="12" r="3" fill="#0D0D0D" />
+              <circle cx="15.5" cy="12" r="3" fill="#0D0D0D" />
+            </svg>
+          </div>
+          <h2 className="mt-4 text-[21px] font-bold text-white tracking-tight">
+            Novo servidor em outro computador
+          </h2>
+          <p className="mt-2 text-[13.5px] text-[#9A9A9A] max-w-[380px] leading-relaxed">
+            Execute este comando em um computador Linux ou VPS que seja seu. Ele instala o Criativo AI Studio e adiciona o servidor a esta conta.
+          </p>
+        </div>
+
+        {quotaCheck.blocked && quotaCheck.message && (
+          <div className="mt-4 rounded-xl bg-[#FF9412]/10 border border-[#FF9412]/30 p-3 text-[12.5px] text-[#FFD79E] flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-[#FF9412] shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p>{quotaCheck.message}</p>
+              {onOpenLicenseSettings && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenLicenseSettings();
+                  }}
+                  className="text-[12px] font-semibold text-white underline underline-offset-2"
+                >
+                  Fazer upgrade de plano
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="mt-4">
+          <label htmlFor="criativo-remote-name" className="sr-only">
+            Nome opcional da VPS
+          </label>
+          <input
+            id="criativo-remote-name"
+            type="text"
+            value={serverName}
+            onChange={(e) => setServerName(e.target.value)}
+            placeholder="Nome do servidor remoto (opcional, ex.: VPS Cliente)"
+            className="w-full rounded-xl bg-[#121212] border border-white/[0.08] focus:border-white/35 outline-none px-3 py-2 text-[12.5px] text-white placeholder:text-[#666666]"
+          />
+        </div>
+
+        {/* Bloco Shell */}
+        <div className="mt-3 rounded-xl bg-[#121212] border border-white/[0.08] overflow-hidden">
+          <div className="px-3 py-2 border-b border-white/[0.06] flex items-center justify-between gap-2 bg-[#161616]">
+            <span className="text-[11.5px] font-medium px-2 py-0.5 rounded-md bg-white/[0.06] text-[#B8B8B8]">
+              Shell
+            </span>
+            <div className="flex items-center gap-3 text-[11.5px] text-[#B0B0B0]">
+              <button
+                type="button"
+                disabled={!claim}
+                onClick={() => void copyText("agent")}
+                className="flex items-center gap-1.5 hover:text-white disabled:opacity-40 transition-colors"
+              >
+                {copiedMode === "agent" ? (
+                  <Check className="w-3.5 h-3.5 text-[#31CF76]" />
+                ) : (
+                  <Bot className="w-3.5 h-3.5" />
+                )}
+                <span>{copiedMode === "agent" ? "Copiado para IA!" : "Copiar para um agente de IA"}</span>
+              </button>
+              <button
+                type="button"
+                disabled={!claim}
+                onClick={() => void copyText("bash")}
+                className="flex items-center gap-1.5 hover:text-white disabled:opacity-40 transition-colors"
+              >
+                {copiedMode === "bash" ? (
+                  <Check className="w-3.5 h-3.5 text-[#31CF76]" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+                <span>{copiedMode === "bash" ? "Copiado!" : "Copiar"}</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="px-3.5 py-3 font-mono text-[12px] text-[#E6E6E6] overflow-x-auto whitespace-nowrap flex items-center gap-3">
+            <span className="text-[#5C5C5C] select-none">1</span>
+            <code>
+              {loading
+                ? "Gerando token único CRIATIVO_CLAIM..."
+                : claim?.command_bash ?? "Comando indisponível no momento."}
+            </code>
+          </div>
+        </div>
+
+        {/* Expiração + Novo comando */}
+        <div className="mt-2.5 flex items-center justify-between gap-2 text-[12px]">
+          <span className="text-[#969696]">
+            Funciona uma vez. Expira em {formatCountdownMMSS(remainingSeconds)}.
+          </span>
+          <button
+            type="button"
+            disabled={loading || quotaCheck.blocked}
+            onClick={() => void generateNewClaim(serverName)}
+            className="text-[#E5E5E5] hover:text-white font-medium flex items-center gap-1.5 disabled:opacity-40"
+          >
+            <RefreshCw className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} />
+            Novo comando
+          </button>
+        </div>
+
+        {/* Status do pareamento */}
+        <div className="mt-4 flex items-center gap-2.5 text-[13px]">
+          {isRedeemed ? (
+            <>
+              <CheckCircle2 className="w-4 h-4 text-[#31CF76] shrink-0" />
+              <span className="text-[#31CF76] font-medium">
+                Servidor conectado: {claim?.paired_server?.nome}. Pronto para abrir!
+              </span>
+            </>
+          ) : isExpired ? (
+            <>
+              <AlertTriangle className="w-4 h-4 text-[#FF9412] shrink-0" />
+              <span className="text-[#FFD79E]">
+                Comando expirado. Clique em Novo comando para gerar outro.
+              </span>
+            </>
+          ) : (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin text-[#9A9A9A] shrink-0" />
+              <span className="text-[#B8B8B8]">
+                Aguardando o comando ser executado no seu servidor...
+              </span>
+            </>
+          )}
+        </div>
+
+        {erro && (
+          <div className="mt-3 rounded-xl bg-red-500/10 border border-red-500/30 p-2.5 text-[12px] text-red-200">
+            {erro}
+          </div>
+        )}
+
+        {/* Ações inferiores largas do Print 4 */}
+        <div className="mt-5 space-y-2.5">
+          <button
+            type="button"
+            disabled={!claim && !quotaCheck.blocked}
+            onClick={() => {
+              const prompt =
+                claim?.command_agent_prompt ??
+                `Quero instalar e parear um novo servidor Criativo AI Studio em minha VPS Linux${
+                  serverName ? ` chamada "${serverName}"` : ""
+                }. Gere ou utilize o comando seguro CRIATIVO_CLAIM e me guie passo a passo.`;
+              onConfigureWithAgent(prompt, claim);
+            }}
+            className="w-full py-2.5 rounded-xl bg-[#F0F0F0] hover:bg-white text-[#0D0D0D] text-[13.5px] font-semibold transition-colors disabled:opacity-40"
+          >
+            Configurar com um agente
+          </button>
+
+          <button
+            type="button"
+            disabled={!isRedeemed || openingServer}
+            onClick={() => void handleOpenPaired()}
+            className={`w-full py-2.5 rounded-xl text-[13.5px] font-semibold transition-colors flex items-center justify-center gap-2 ${
+              isRedeemed
+                ? "bg-[#31CF76] hover:bg-[#3CE085] text-[#081A0F]"
+                : "bg-[#5A5A5A]/70 text-[#191919] cursor-not-allowed"
+            }`}
+          >
+            {openingServer && <Loader2 className="w-4 h-4 animate-spin" />}
+            Abrir servidor
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ============================================================================
+ * MODAL 3: Entrar em um servidor existente
+ * ============================================================================ */
+export interface JoinServerModalProps {
+  open: boolean;
+  onClose: () => void;
+  onJoined: (server: StudioServerRecord, servers: StudioServerRecord[]) => Promise<void> | void;
+}
+
+export const JoinServerModal: React.FC<JoinServerModalProps> = ({
+  open,
+  onClose,
+  onJoined,
+}) => {
+  const [mode, setMode] = useState<"invite" | "direct">("invite");
+  const [inviteUrl, setInviteUrl] = useState("");
+  const [nome, setNome] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [accessToken, setAccessToken] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setErro(null);
+      setSubmitting(false);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  const canSubmit =
+    !submitting &&
+    (mode === "invite"
+      ? inviteUrl.trim().length > 8
+      : baseUrl.trim().length > 8 && accessToken.trim().length > 8);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setSubmitting(true);
+    setErro(null);
+    try {
+      const res = await daemonApi.entrarEmServidor(
+        mode === "invite"
+          ? { invite_url: inviteUrl.trim(), nome: nome.trim() || undefined }
+          : {
+              nome: nome.trim() || undefined,
+              base_url: baseUrl.trim(),
+              access_token: accessToken.trim(),
+            }
+      );
+      await onJoined(res.server, res.servers);
+      onClose();
+    } catch (err) {
+      setErro(err instanceof Error ? err.message : "Não foi possível conectar ao servidor.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Entrar em um servidor"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+    >
+      <form
+        onSubmit={handleSubmit}
+        className="w-full max-w-[460px] bg-[#1E1E1E] border border-white/[0.1] rounded-2xl shadow-[0_24px_60px_rgba(0,0,0,0.8)] p-6 text-[#F0F0F0]"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-white/[0.08] flex items-center justify-center">
+              <Link2 className="w-4 h-4 text-white" />
+            </div>
+            <div>
+              <h2 className="text-[17px] font-semibold text-white">Entrar em um servidor</h2>
+              <p className="text-[12.5px] text-[#9A9A9A]">
+                Conecte uma VPS existente usando link de convite ou URL + token.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Fechar modal"
+            className="text-[#8E8E8E] hover:text-white p-1 rounded-lg"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Abas customizadas em Carbon Dark */}
+        <div className="mt-4 grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-[#121212] border border-white/[0.07]">
+          <button
+            type="button"
+            onClick={() => setMode("invite")}
+            className={`py-1.5 rounded-lg text-[12.5px] font-medium transition-colors ${
+              mode === "invite" ? "bg-white/[0.1] text-white" : "text-[#8A8A8A] hover:text-white"
+            }`}
+          >
+            Link de convite
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("direct")}
+            className={`py-1.5 rounded-lg text-[12.5px] font-medium transition-colors ${
+              mode === "direct" ? "bg-white/[0.1] text-white" : "text-[#8A8A8A] hover:text-white"
+            }`}
+          >
+            URL + Token
+          </button>
+        </div>
+
+        <div className="mt-4 space-y-3">
+          {mode === "invite" ? (
+            <div>
+              <label
+                htmlFor="criativo-join-invite"
+                className="block text-[12px] font-medium text-[#D4D4D4] mb-1"
+              >
+                Link de convite (criativo://join?...)
+              </label>
+              <input
+                id="criativo-join-invite"
+                type="text"
+                value={inviteUrl}
+                onChange={(e) => setInviteUrl(e.target.value)}
+                placeholder="criativo://join?url=https%3A%2F%2F...&token=..."
+                className="w-full rounded-xl bg-[#121212] border border-white/[0.14] px-3 py-2 text-[13px] text-white font-mono placeholder:text-[#666666]"
+              />
+            </div>
+          ) : (
+            <>
+              <div>
+                <label
+                  htmlFor="criativo-join-url"
+                  className="block text-[12px] font-medium text-[#D4D4D4] mb-1"
+                >
+                  URL do daemon remoto
+                </label>
+                <input
+                  id="criativo-join-url"
+                  type="url"
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  placeholder="https://studio.exemplo.com"
+                  className="w-full rounded-xl bg-[#121212] border border-white/[0.14] px-3 py-2 text-[13px] text-white placeholder:text-[#666666]"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="criativo-join-token"
+                  className="block text-[12px] font-medium text-[#D4D4D4] mb-1"
+                >
+                  Token de acesso do servidor
+                </label>
+                <input
+                  id="criativo-join-token"
+                  type="password"
+                  value={accessToken}
+                  onChange={(e) => setAccessToken(e.target.value)}
+                  placeholder="Cole o token secreto do servidor remoto"
+                  className="w-full rounded-xl bg-[#121212] border border-white/[0.14] px-3 py-2 text-[13px] text-white placeholder:text-[#666666]"
+                />
+              </div>
+            </>
+          )}
+
+          <div>
+            <label
+              htmlFor="criativo-join-alias"
+              className="block text-[12px] font-medium text-[#D4D4D4] mb-1"
+            >
+              Apelido nesta máquina (opcional)
+            </label>
+            <input
+              id="criativo-join-alias"
+              type="text"
+              value={nome}
+              onChange={(e) => setNome(e.target.value)}
+              placeholder="Ex.: VPS Agência Principal"
+              className="w-full rounded-xl bg-[#121212] border border-white/[0.14] px-3 py-2 text-[13px] text-white placeholder:text-[#666666]"
+            />
+          </div>
+
+          {erro && (
+            <div className="rounded-xl bg-red-500/10 border border-red-500/30 p-3 text-[12.5px] text-red-200">
+              {erro}
+            </div>
+          )}
+        </div>
+
+        <div className="mt-6 flex items-center justify-end gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 rounded-xl text-[13px] font-medium text-[#CCCCCC] hover:text-white"
+          >
+            Cancelar
+          </button>
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            className="px-4 py-2 rounded-xl bg-[#F0F0F0] hover:bg-white text-[#0D0D0D] text-[13px] font-semibold disabled:opacity-40 flex items-center gap-2"
+          >
+            {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            Conectar servidor
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+/* ============================================================================
+ * MODAL 4: Configurações do servidor
+ * ============================================================================ */
+export interface ServerSettingsModalProps {
+  open: boolean;
+  server: StudioServerRecord | null;
+  onClose: () => void;
+  onUpdated: (servers: StudioServerRecord[], updated: StudioServerRecord) => Promise<void> | void;
+  onRemoved: (servers: StudioServerRecord[], nextActiveServerId: string) => Promise<void> | void;
+}
+
+export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
+  open,
+  server,
+  onClose,
+  onUpdated,
+  onRemoved,
+}) => {
+  const [nome, setNome] = useState(server?.nome ?? "");
+  const [corHex, setCorHex] = useState(server?.cor_hex ?? SERVER_ACCENT_COLORS[0].hex);
+  const [invite, setInvite] = useState<ServerInviteToken | null>(null);
+  const [deleteFiles, setDeleteFiles] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [copiedInvite, setCopiedInvite] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open && server) {
+      setNome(server.nome);
+      setCorHex(server.cor_hex || SERVER_ACCENT_COLORS[0].hex);
+      setInvite(null);
+      setDeleteFiles(false);
+      setErro(null);
+    }
+  }, [open, server]);
+
+  if (!open || !server) return null;
+
+  const isPrimary = server.server_id === "primary" || server.kind === "primary";
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!nome.trim() || saving) return;
+    setSaving(true);
+    setErro(null);
+    try {
+      const res = await daemonApi.atualizarServidor(server.server_id, {
+        nome: nome.trim(),
+        cor_hex: corHex,
+      });
+      await onUpdated(res.servers, res.server);
+      onClose();
+    } catch (err) {
+      setErro(err instanceof Error ? err.message : "Erro ao salvar configurações do servidor.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRestart = async () => {
+    setRestarting(true);
+    setErro(null);
+    try {
+      await daemonApi.reiniciarServidor(server.server_id);
+    } catch (err) {
+      setErro(err instanceof Error ? err.message : "Falha ao reiniciar servidor.");
+    } finally {
+      setRestarting(false);
+    }
+  };
+
+  const handleGenerateInvite = async () => {
+    setErro(null);
+    try {
+      const inv = await daemonApi.gerarConviteServidor(server.server_id);
+      setInvite(inv);
+    } catch (err) {
+      setErro(err instanceof Error ? err.message : "Erro ao gerar convite.");
+    }
+  };
+
+  const handleRemove = async () => {
+    if (isPrimary || removing) return;
+    setRemoving(true);
+    setErro(null);
+    try {
+      const res = await daemonApi.removerServidor(server.server_id, deleteFiles);
+      await onRemoved(res.servers, res.active_server_id);
+      onClose();
+    } catch (err) {
+      setErro(err instanceof Error ? err.message : "Erro ao remover servidor.");
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Configurações do servidor"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+    >
+      <div className="w-full max-w-[490px] bg-[#1E1E1E] border border-white/[0.1] rounded-2xl shadow-[0_24px_60px_rgba(0,0,0,0.85)] p-6 text-[#F0F0F0] max-h-[90vh] overflow-y-auto">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span
+              className="w-9 h-9 rounded-xl flex items-center justify-center text-[14px] font-bold text-[#0D0D0D]"
+              style={{ backgroundColor: corHex }}
+            >
+              {nome.trim().slice(0, 1).toUpperCase() || "S"}
+            </span>
+            <div>
+              <h2 className="text-[17px] font-semibold text-white">Configurações do servidor</h2>
+              <p className="text-[12px] text-[#9A9A9A] flex items-center gap-1.5">
+                {server.kind === "local_child" || server.kind === "primary" ? (
+                  <Monitor className="w-3.5 h-3.5" />
+                ) : (
+                  <Server className="w-3.5 h-3.5" />
+                )}
+                <span>
+                  {server.kind === "primary"
+                    ? "Servidor Principal Local"
+                    : server.kind === "local_child"
+                      ? `Servidor Local · Porta ${server.port ?? "--"}`
+                      : server.remote_ip
+                        ? `VPS Remota · ${server.remote_ip}`
+                        : "Servidor Remoto"}
+                </span>
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Fechar modal"
+            className="text-[#8E8E8E] hover:text-white p-1 rounded-lg"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSave} className="mt-5 space-y-4">
+          <div>
+            <label
+              htmlFor="criativo-settings-server-name"
+              className="block text-[12px] font-medium text-[#D4D4D4] mb-1"
+            >
+              Nome exibido
+            </label>
+            <input
+              id="criativo-settings-server-name"
+              type="text"
+              value={nome}
+              onChange={(e) => setNome(e.target.value)}
+              className="w-full rounded-xl bg-[#121212] border border-white/[0.14] px-3.5 py-2 text-[13.5px] text-white"
+            />
+          </div>
+
+          <div>
+            <span className="block text-[12px] font-medium text-[#A8A8A8] mb-2">
+              Cor do ícone na barra lateral
+            </span>
+            <div className="flex items-center gap-2">
+              {SERVER_ACCENT_COLORS.map((item) => {
+                const selected = corHex === item.hex;
+                return (
+                  <button
+                    key={item.hex}
+                    type="button"
+                    onClick={() => setCorHex(item.hex)}
+                    aria-label={`Selecionar cor ${item.label}`}
+                    className={`w-7 h-7 rounded-lg flex items-center justify-center ${
+                      selected ? "ring-2 ring-white scale-105" : "opacity-75 hover:opacity-100"
+                    }`}
+                    style={{ backgroundColor: item.hex }}
+                  >
+                    {selected && <Check className="w-3.5 h-3.5 text-[#0D0D0D] stroke-[3]" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="rounded-xl bg-[#141414] border border-white/[0.06] p-3 text-[12px] text-[#9A9A9A] space-y-1">
+            <div>
+              <span className="text-[#6E6E6E]">Endpoint:</span>{" "}
+              <span className="text-[#D4D4D4] font-mono">{server.base_url}</span>
+            </div>
+            {server.workspace_path && (
+              <div className="truncate">
+                <span className="text-[#6E6E6E]">Workspace:</span>{" "}
+                <span className="text-[#D4D4D4] font-mono">{server.workspace_path}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Convite rápido */}
+          {server.kind !== "primary" && (
+            <div className="rounded-xl bg-[#141414] border border-white/[0.08] p-3.5 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[12.5px] font-medium text-white">Convite de conexão</span>
+                <button
+                  type="button"
+                  onClick={() => void handleGenerateInvite()}
+                  className="text-[12px] font-medium px-2.5 py-1 rounded-lg bg-white/[0.08] hover:bg-white/[0.14] text-white"
+                >
+                  Gerar convite
+                </button>
+              </div>
+              {invite && (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={invite.invite_url}
+                    className="flex-1 rounded-lg bg-[#0D0D0D] border border-white/[0.1] px-2.5 py-1.5 text-[11.5px] font-mono text-[#D0D0D0]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(invite.invite_url).then(() => {
+                        setCopiedInvite(true);
+                        window.setTimeout(() => setCopiedInvite(false), 2000);
+                      });
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg bg-white/[0.08] hover:bg-white/[0.16] text-[12px] text-white flex items-center gap-1"
+                  >
+                    {copiedInvite ? <Check className="w-3.5 h-3.5 text-[#31CF76]" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedInvite ? "Copiado" : "Copiar"}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {erro && (
+            <div className="rounded-xl bg-red-500/10 border border-red-500/30 p-3 text-[12.5px] text-red-200">
+              {erro}
+            </div>
+          )}
+
+          <div className="flex items-center justify-between gap-2 pt-1">
+            {server.kind === "local_child" ? (
+              <button
+                type="button"
+                disabled={restarting}
+                onClick={() => void handleRestart()}
+                className="px-3 py-2 rounded-xl bg-white/[0.07] hover:bg-white/[0.12] text-[12.5px] font-medium text-white flex items-center gap-1.5"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${restarting ? "animate-spin" : ""}`} />
+                Reiniciar processo
+              </button>
+            ) : (
+              <span />
+            )}
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-3.5 py-2 rounded-xl text-[13px] font-medium text-[#CCCCCC] hover:text-white"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={saving || nome.trim().length < 2}
+                className="px-4 py-2 rounded-xl bg-[#F0F0F0] hover:bg-white text-[#0D0D0D] text-[13px] font-semibold disabled:opacity-40"
+              >
+                {saving ? "Salvando..." : "Salvar"}
+              </button>
+            </div>
+          </div>
+        </form>
+
+        {!isPrimary && (
+          <div className="mt-5 pt-4 border-t border-white/[0.08] space-y-2.5">
+            {server.kind === "local_child" && (
+              <label className="flex items-center gap-2 text-[12px] text-[#A8A8A8] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={deleteFiles}
+                  onChange={(e) => setDeleteFiles(e.target.checked)}
+                  className="rounded border-white/20 bg-[#121212]"
+                />
+                <span>Excluir também a pasta local de dados deste servidor</span>
+              </label>
+            )}
+            <button
+              type="button"
+              disabled={removing}
+              onClick={() => void handleRemove()}
+              className="w-full py-2 rounded-xl border border-red-500/35 bg-red-500/10 hover:bg-red-500/20 text-red-200 text-[12.5px] font-medium flex items-center justify-center gap-2"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{removing ? "Removendo..." : "Remover conexão deste servidor"}</span>
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};

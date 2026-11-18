@@ -65,13 +65,21 @@ const catalogBundleCache = new Map<string, CatalogBundleData>();
 
 export function resolveCatalogBundlePath(options?: {
   workspaceRoot?: string;
+  productRoot?: string;
   bundlePath?: string;
 }): string {
   const moduleDir = dirname(fileURLToPath(import.meta.url));
   const workspaceRoot = options?.workspaceRoot ? resolve(options.workspaceRoot) : process.cwd();
+  const productRoot = options?.productRoot
+    ? resolve(options.productRoot)
+    : process.env.CRIATIVO_PRODUCT_ROOT
+      ? resolve(process.env.CRIATIVO_PRODUCT_ROOT)
+      : null;
 
   const candidates = [
     options?.bundlePath ? resolve(options.bundlePath) : null,
+    productRoot ? resolve(productRoot, "apps", "daemon", "src", "marketplace", "catalog", "catalog-bundle.json") : null,
+    productRoot ? resolve(productRoot, "catalog-bundle.json") : null,
     resolve(moduleDir, "catalog", "catalog-bundle.json"),
     resolve(moduleDir, "..", "..", "src", "marketplace", "catalog", "catalog-bundle.json"),
     resolve(workspaceRoot, "apps", "daemon", "src", "marketplace", "catalog", "catalog-bundle.json"),
@@ -97,6 +105,7 @@ export function resolveCatalogBundlePath(options?: {
  */
 export function loadCatalogBundle(options?: {
   workspaceRoot?: string;
+  productRoot?: string;
   bundlePath?: string;
 }): CatalogBundleData {
   const filePath = resolveCatalogBundlePath(options);
@@ -173,6 +182,7 @@ function buildSkillMarkdownDocument(
 export interface SkillsManagerOptions {
   db: CriativoDatabase;
   workspaceRoot?: string;
+  productRoot?: string;
   bundlePath?: string;
 }
 
@@ -190,12 +200,18 @@ export interface SkillReadResult {
 export class SkillsManager {
   private readonly db: CriativoDatabase;
   private readonly workspaceRoot: string;
+  private readonly productRoot: string | null;
   private readonly skillsLojaRoot: string;
   private readonly bundlePath?: string;
 
   constructor(options: SkillsManagerOptions) {
     this.db = options.db;
     this.workspaceRoot = resolve(options.workspaceRoot ?? process.cwd());
+    this.productRoot = options.productRoot
+      ? resolve(options.productRoot)
+      : process.env.CRIATIVO_PRODUCT_ROOT
+        ? resolve(process.env.CRIATIVO_PRODUCT_ROOT)
+        : null;
     this.skillsLojaRoot = resolve(this.workspaceRoot, "dados", "skills-loja");
     this.bundlePath = options.bundlePath;
   }
@@ -203,6 +219,7 @@ export class SkillsManager {
   private getBundle(): CatalogBundleData {
     return loadCatalogBundle({
       workspaceRoot: this.workspaceRoot,
+      productRoot: this.productRoot ?? undefined,
       bundlePath: this.bundlePath,
     });
   }
@@ -211,10 +228,11 @@ export class SkillsManager {
     const moduleDir = dirname(fileURLToPath(import.meta.url));
     const candidates = [
       resolve(this.workspaceRoot, ".agents", "skills"),
+      this.productRoot ? resolve(this.productRoot, ".agents", "skills") : null,
       resolve(this.workspaceRoot, "..", "..", ".agents", "skills"),
       resolve(moduleDir, "..", "..", "..", "..", ".agents", "skills"),
       resolve(process.cwd(), ".agents", "skills"),
-    ];
+    ].filter((dir): dir is string => Boolean(dir));
     return Array.from(new Set(candidates)).filter((dir) => existsSync(dir));
   }
 

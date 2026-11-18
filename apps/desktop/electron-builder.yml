@@ -1,0 +1,67 @@
+appId: com.criativoaistudio.desktop
+productName: Criativo AI Studio
+executableName: criativo-ai-studio
+copyright: Copyright © Criativo AI Studio Online
+asar: true
+npmRebuild: false
+electronVersion: "35.7.5"
+
+directories:
+  output: release-dist
+  buildResources: build
+
+files:
+  - dist/**/*
+  - package.json
+
+extraResources:
+  - from: build-product
+    to: app-product
+    filter:
+      - "**/*"
+      - "!**/*.ts"
+      - "!**/*.map"
+      - "!**/.env"
+      - "!**/*.db"
+
+win:
+  signAndEditExecutable: false
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: "CriativoAIStudio-Setup-${version}.${ext}"
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: "Criativo AI Studio"
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - universal
+    - target: zip
+      arch:
+        - universal
+  category: public.app-category.productivity
+  artifactName: "CriativoAIStudio-${version}-universal.${ext}"
+
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: tar.gz
+      arch:
+        - x64
+  category: Utility
+  artifactName: "CriativoAIStudio-${version}-x86_64.${ext}"
+
+publish:
+  provider: generic
+  url: https://criativoaistudio.com.br/api/releases

@@ -17,11 +17,14 @@ import type {
   ContaProvedorInfo,
   GrupoCotaConta,
   ProviderName,
+  ServerQuotaSummary,
   StatusMensageria,
+  StudioServerRecord,
   UsoProvedoresSnapshot,
 } from "@criativo/contracts";
 import { MascoteAvatar } from "./MascoteAvatar";
 import { ProviderLogo } from "./ProviderLogo";
+import { ServerSwitcherPopover } from "../features/servers/ServerSwitcherPopover";
 
 export type StudioNavSection =
   | "agentes"
@@ -44,6 +47,15 @@ interface WorkspaceRailProps {
   onOpenWhatsAppModal: () => void;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
+  servers?: StudioServerRecord[];
+  activeServerId?: string;
+  serverQuota?: ServerQuotaSummary | null;
+  onSelectServer?: (serverId: string) => void;
+  onOpenNewLocalServer?: () => void;
+  onOpenNewRemoteServer?: () => void;
+  onOpenJoinServer?: () => void;
+  onOpenServerSettings?: (server: StudioServerRecord) => void;
+  onOpenDisplaySettings?: () => void;
 }
 
 const RAIL_ITEMS: Array<{
@@ -183,10 +195,25 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
   onOpenWhatsAppModal,
   onOpenSettings,
   onOpenHelp,
+  servers = [],
+  activeServerId = "primary",
+  serverQuota = null,
+  onSelectServer,
+  onOpenNewLocalServer,
+  onOpenNewRemoteServer,
+  onOpenJoinServer,
+  onOpenServerSettings,
+  onOpenDisplaySettings,
 }) => {
   const [activeProvider, setActiveProvider] = useState<ProviderName | null>(null);
   const [fallbackPopoverOpen, setFallbackPopoverOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [serverPopoverOpen, setServerPopoverOpen] = useState(false);
+
+  const activeServer = useMemo(
+    () => servers.find((s) => s.server_id === activeServerId) ?? servers[0] ?? null,
+    [servers, activeServerId]
+  );
 
   const allAccounts = uso?.contas ?? [];
   const providerGroups = useMemo<
@@ -525,6 +552,72 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
         >
           <Settings className="h-[17px] w-[17px]" />
         </button>
+
+        {/* Avatar quadrado do servidor ativo abrindo ServerSwitcherPopover (Print 1 OpenBot) */}
+        <div className="relative pt-0.5">
+          <button
+            type="button"
+            onClick={() => setServerPopoverOpen((prev) => !prev)}
+            title={
+              activeServer
+                ? `Servidor ativo: ${activeServer.nome} (${activeServer.status})`
+                : "Servidores conectados"
+            }
+            aria-label="Trocar ou adicionar servidor"
+            aria-expanded={serverPopoverOpen}
+            className={`relative h-8 w-8 rounded-[10px] flex items-center justify-center text-[12px] font-bold text-[#0D0D0D] shadow-md transition-transform hover:scale-105 ${
+              serverPopoverOpen ? "ring-2 ring-white/80" : "ring-1 ring-white/15"
+            }`}
+            style={{ backgroundColor: activeServer?.cor_hex || "#E88B2D" }}
+          >
+            {activeServer?.nome?.trim().slice(0, 1).toUpperCase() || "S"}
+            <span
+              className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-2 ring-[#0D0D0D] ${
+                activeServer?.status === "error"
+                  ? "bg-[#FF5A5F]"
+                  : activeServer?.status === "offline"
+                    ? "bg-[#6A6A6A]"
+                    : "bg-[#31CF76]"
+              }`}
+            />
+          </button>
+
+          <ServerSwitcherPopover
+            open={serverPopoverOpen}
+            servers={
+              servers.length > 0
+                ? servers
+                : [
+                    {
+                      server_id: "primary",
+                      nome: "Servidor Principal",
+                      slug: "primary",
+                      kind: "primary",
+                      status: "online",
+                      cor_hex: "#E88B2D",
+                      base_url: "http://127.0.0.1:3000",
+                      is_active: true,
+                      created_at: new Date().toISOString(),
+                    },
+                  ]
+            }
+            activeServerId={activeServerId}
+            quota={serverQuota}
+            onClose={() => setServerPopoverOpen(false)}
+            onSelectServer={(sid) => onSelectServer?.(sid)}
+            onOpenNewLocalModal={() => onOpenNewLocalServer?.()}
+            onOpenNewRemoteModal={() => onOpenNewRemoteServer?.()}
+            onOpenJoinModal={() => onOpenJoinServer?.()}
+            onOpenServerSettings={(srv) => onOpenServerSettings?.(srv)}
+            onOpenDisplaySettings={() => {
+              if (onOpenDisplaySettings) {
+                onOpenDisplaySettings();
+              } else {
+                onOpenSettings();
+              }
+            }}
+          />
+        </div>
       </div>
     </aside>
   );

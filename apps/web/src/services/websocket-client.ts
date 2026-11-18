@@ -34,6 +34,8 @@ import type {
   GithubImportPreview,
   HabilidadeInstaladaInfo,
   IdentidadeMarcaStudio,
+  LicenseActivationStatus,
+  LicenseDeviceRecord,
   LojaCatalogoSnapshot,
   MarketplaceAgentPackage,
   MarketplaceAppItem,
@@ -71,6 +73,9 @@ import type {
   RoutineRun,
   RoutineWebhookConfig,
   SaveAgentRoutineInput,
+  ServerClaimTicket,
+  ServerInviteToken,
+  ServerQuotaSummary,
   SharedTableDetail,
   SharedTableQueryResult,
   SharedTableSummary,
@@ -80,10 +85,12 @@ import type {
   SkillSugestaoItem,
   StatusMensageria,
   StorageUsageSnapshot,
+  StudioServerRecord,
   StudioUserSettings,
   TarefaRegistro,
   UiBlockSubmitPayload,
   UpdateAgentRoutineInput,
+  UpdateStatusSnapshot,
   UserBrowsingStep,
   UsoProvedoresSnapshot,
   WebhookReceipt,
@@ -122,12 +129,83 @@ export class WorkflowRevisionConflictError extends Error {
 
 export class DaemonHttpError extends Error {
   public readonly status: number;
+  public readonly code?: string;
+  public readonly payload?: Record<string, unknown>;
 
-  constructor(message: string, status: number) {
+  constructor(
+    message: string,
+    status: number,
+    code?: string,
+    payload?: Record<string, unknown>
+  ) {
     super(message);
     this.name = "DaemonHttpError";
     this.status = status;
+    this.code = code;
+    this.payload = payload;
   }
+}
+
+let licenseRequiredListener: ((status: LicenseActivationStatus | null) => void) | null = null;
+const ACTIVE_SERVER_STORAGE_KEY = "criativo_active_server_id";
+let activeServerId = (() => {
+  if (typeof window === "undefined") return "primary";
+  try {
+    return window.localStorage.getItem(ACTIVE_SERVER_STORAGE_KEY) || "primary";
+  } catch {
+    return "primary";
+  }
+})();
+
+export function getActiveServerId(): string {
+  return activeServerId;
+}
+
+export function setActiveServerId(serverId: string): void {
+  activeServerId = serverId || "primary";
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(ACTIVE_SERVER_STORAGE_KEY, activeServerId);
+    } catch {
+      // ignora erro de quota
+    }
+  }
+}
+
+function shouldForwardToActiveServer(rawInput: RequestInfo | URL): boolean {
+  if (!activeServerId || activeServerId === "primary") return false;
+  const urlStr = typeof rawInput === "string" ? rawInput : rawInput instanceof URL ? rawInput.pathname : rawInput.url;
+  if (!urlStr.startsWith("/api/")) return false;
+  if (urlStr.startsWith("/api/studio/servers") || urlStr.startsWith("/api/studio/license")) {
+    return false;
+  }
+  return true;
+}
+
+/** Resolve URL de mídia/preview do servidor ativo para tags <img>/<video>/<iframe> sem headers customizados. */
+export function resolveActiveServerUrl(rawUrl: string): string {
+  if (!activeServerId || activeServerId === "primary") return rawUrl;
+  if (!rawUrl.startsWith("/api/")) return rawUrl;
+  if (rawUrl.includes("serverId=")) return rawUrl;
+  const sep = rawUrl.includes("?") ? "&" : "?";
+  return `${rawUrl}${sep}serverId=${encodeURIComponent(activeServerId)}`;
+}
+
+async function fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  if (!shouldForwardToActiveServer(input)) {
+    return await globalThis.fetch(input, init);
+  }
+  const headers = new Headers(init?.headers);
+  if (!headers.has("X-Criativo-Server-Id")) {
+    headers.set("X-Criativo-Server-Id", activeServerId);
+  }
+  return await globalThis.fetch(input, { ...init, headers });
+}
+
+export function setOnLicenseRequiredHandler(
+  handler: ((status: LicenseActivationStatus | null) => void) | null
+): void {
+  licenseRequiredListener = handler;
 }
 
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
@@ -142,11 +220,26 @@ async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
     }
   }
   if (!res.ok) {
+    if (res.status === 402 && licenseRequiredListener) {
+      const licStatus =
+        parsed.status && typeof parsed.status === "object"
+          ? (parsed.status as LicenseActivationStatus)
+          : null;
+      licenseRequiredListener(licStatus);
+    }
     const errMsg =
       typeof parsed.erro === "string"
         ? parsed.erro
-        : `Erro HTTP ${res.status} ao consultar ${input}.`;
-    throw new DaemonHttpError(errMsg, res.status);
+        : typeof parsed.message === "string"
+          ? parsed.message
+          : `Erro HTTP ${res.status} ao consultar ${input}.`;
+    const errCode =
+      typeof parsed.code === "string"
+        ? parsed.code
+        : typeof parsed.error === "string"
+          ? parsed.error
+          : undefined;
+    throw new DaemonHttpError(errMsg, res.status, errCode, parsed);
   }
   return parsed as T;
 }
@@ -200,6 +293,14 @@ export class WebSocketClient {
     };
   }
 
+  private buildTargetUrl(): string {
+    if (!activeServerId || activeServerId === "primary") {
+      return this.url;
+    }
+    const sep = this.url.includes("?") ? "&" : "?";
+    return `${this.url}${sep}serverId=${encodeURIComponent(activeServerId)}`;
+  }
+
   public connect(): void {
     this.closedManually = false;
     if (typeof WebSocket === "undefined") return;
@@ -207,7 +308,7 @@ export class WebSocketClient {
       return;
     }
 
-    const ws = new WebSocket(this.url);
+    const ws = new WebSocket(this.buildTargetUrl());
     this.socket = ws;
 
     ws.addEventListener("open", () => {
@@ -230,6 +331,9 @@ export class WebSocketClient {
     });
 
     ws.addEventListener("close", () => {
+      if (this.socket === ws) {
+        this.socket = null;
+      }
       for (const cb of this.connectionListeners) cb(false);
       if (!this.closedManually) {
         this.scheduleReconnect();
@@ -239,6 +343,13 @@ export class WebSocketClient {
     ws.addEventListener("error", () => {
       ws.close();
     });
+  }
+
+  public reconnectForServer(serverId: string): void {
+    setActiveServerId(serverId);
+    this.disconnect();
+    this.reconnectAttempt = 0;
+    this.connect();
   }
 
   private scheduleReconnect(): void {
@@ -3162,5 +3273,199 @@ export const daemonApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ aprovadoPorHumano }),
     });
+  },
+
+  // Fase 16 — Licenciamento Comercial
+  async obterStatusLicenca(): Promise<LicenseActivationStatus> {
+    const data = await requestJson<{ license: LicenseActivationStatus }>("/api/studio/license/status");
+    return data.license;
+  },
+
+  async ativarLicenca(payload: {
+    license_key: string;
+    email: string;
+  }): Promise<LicenseActivationStatus> {
+    const data = await requestJson<{ ok: boolean; license: LicenseActivationStatus }>(
+      "/api/studio/license/activate",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    );
+    return data.license;
+  },
+
+  async sincronizarLicenca(): Promise<LicenseActivationStatus> {
+    const data = await requestJson<{ ok: boolean; license: LicenseActivationStatus }>(
+      "/api/studio/license/heartbeat",
+      { method: "POST" }
+    );
+    return data.license;
+  },
+
+  async desvincularDispositivoLicenca(payload: {
+    target_machine_id: string;
+    license_key?: string;
+    email?: string;
+  }): Promise<{ ok: boolean; devices: LicenseDeviceRecord[]; status?: LicenseActivationStatus }> {
+    return await requestJson("/api/studio/license/deactivate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  // Fase 17 — Multi-Servidores Local & Pareamento VPS
+  async listarServidores(): Promise<{
+    servers: StudioServerRecord[];
+    active_server_id: string;
+    quota: ServerQuotaSummary | null;
+  }> {
+    return await requestJson("/api/studio/servers");
+  },
+
+  async criarServidorLocal(payload: {
+    nome: string;
+    cor_hex?: string;
+  }): Promise<{
+    ok: boolean;
+    server: StudioServerRecord;
+    servers: StudioServerRecord[];
+    quota: ServerQuotaSummary;
+  }> {
+    return await requestJson("/api/studio/servers/local", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async criarClaimVps(payload: { server_name?: string }): Promise<ServerClaimTicket> {
+    const data = await requestJson<{ ok: boolean; claim: ServerClaimTicket }>(
+      "/api/studio/servers/claims",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    );
+    return data.claim;
+  },
+
+  async consultarClaimVps(claimId: string): Promise<ServerClaimTicket> {
+    const data = await requestJson<{ ok: boolean; claim: ServerClaimTicket }>(
+      `/api/studio/servers/claims/${encodeURIComponent(claimId)}`
+    );
+    return data.claim;
+  },
+
+  async entrarEmServidor(payload: {
+    invite_url?: string;
+    nome?: string;
+    base_url?: string;
+    access_token?: string;
+  }): Promise<{
+    ok: boolean;
+    server: StudioServerRecord;
+    servers: StudioServerRecord[];
+    quota: ServerQuotaSummary;
+  }> {
+    return await requestJson("/api/studio/servers/join", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async selecionarServidor(serverId: string): Promise<{
+    ok: boolean;
+    server: StudioServerRecord;
+    active_server_id: string;
+    servers: StudioServerRecord[];
+  }> {
+    const data = await requestJson<{
+      ok: boolean;
+      server: StudioServerRecord;
+      active_server_id: string;
+      servers: StudioServerRecord[];
+    }>(`/api/studio/servers/${encodeURIComponent(serverId)}/select`, {
+      method: "POST",
+    });
+    setActiveServerId(data.active_server_id);
+    return data;
+  },
+
+  async atualizarServidor(
+    serverId: string,
+    patch: { nome?: string; cor_hex?: string }
+  ): Promise<{ ok: boolean; server: StudioServerRecord; servers: StudioServerRecord[] }> {
+    return await requestJson(`/api/studio/servers/${encodeURIComponent(serverId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+  },
+
+  async reiniciarServidor(serverId: string): Promise<{ ok: boolean; server: StudioServerRecord }> {
+    return await requestJson(`/api/studio/servers/${encodeURIComponent(serverId)}/restart`, {
+      method: "POST",
+    });
+  },
+
+  async removerServidor(
+    serverId: string,
+    deleteFiles = false
+  ): Promise<{ ok: boolean; servers: StudioServerRecord[]; active_server_id: string }> {
+    const data = await requestJson<{
+      ok: boolean;
+      servers: StudioServerRecord[];
+      active_server_id: string;
+    }>(`/api/studio/servers/${encodeURIComponent(serverId)}?delete_files=${deleteFiles ? "1" : "0"}`, {
+      method: "DELETE",
+    });
+    if (getActiveServerId() === serverId) {
+      setActiveServerId(data.active_server_id || "primary");
+    }
+    return data;
+  },
+
+  async gerarConviteServidor(serverId: string): Promise<ServerInviteToken> {
+    const data = await requestJson<{ ok: boolean; invite: ServerInviteToken }>(
+      `/api/studio/servers/${encodeURIComponent(serverId)}/invite`,
+      { method: "POST" }
+    );
+    return data.invite;
+  },
+
+  // Fase 18 — Auto-Update (Desktop e VPS)
+  async obterStatusAtualizacao(): Promise<UpdateStatusSnapshot> {
+    const data = await requestJson<{ ok: boolean; status: UpdateStatusSnapshot }>(
+      "/api/studio/updates/status"
+    );
+    return data.status;
+  },
+
+  async verificarAtualizacoes(): Promise<UpdateStatusSnapshot> {
+    const data = await requestJson<{ ok: boolean; status: UpdateStatusSnapshot }>(
+      "/api/studio/updates/check",
+      { method: "POST" }
+    );
+    return data.status;
+  },
+
+  async aplicarAtualizacao(payload?: {
+    platform?: "win32" | "darwin" | "linux" | "vps-tarball";
+    restart?: boolean;
+  }): Promise<UpdateStatusSnapshot> {
+    const data = await requestJson<{ ok: boolean; status: UpdateStatusSnapshot }>(
+      "/api/studio/updates/apply",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload ?? {}),
+      }
+    );
+    return data.status;
   },
 };

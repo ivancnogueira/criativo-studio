@@ -385,6 +385,7 @@ export class ProviderConnectionService {
     db: CriativoDatabase;
     vault: VaultService;
     workspaceRoot?: string;
+    sharedAuthDir?: string | null;
     antigravityLive?: AntigravityLiveService;
     cliOAuth?: CliOAuthAccountsService;
     opencodeLive?: OpenCodeLiveService;
@@ -394,11 +395,15 @@ export class ProviderConnectionService {
     this.vault = options.vault;
     this.mcpGateway = options.mcpGateway;
     const baseWorkspace = resolve(options.workspaceRoot ?? process.cwd());
+    const explicitSharedAuth = options.sharedAuthDir ?? process.env.CRIATIVO_SHARED_AUTH_DIR;
     const daemonDadosContas = join(baseWorkspace, "apps", "daemon", "dados", "contas");
     const daemonDadosDir = join(baseWorkspace, "apps", "daemon", "dados");
-    const accountsRoot = existsSync(daemonDadosContas) || existsSync(daemonDadosDir)
-      ? daemonDadosContas
-      : join(baseWorkspace, "dados", "contas");
+    const accountsRoot =
+      explicitSharedAuth && explicitSharedAuth.trim().length > 0
+        ? resolve(explicitSharedAuth)
+        : existsSync(daemonDadosContas) || existsSync(daemonDadosDir)
+          ? daemonDadosContas
+          : join(baseWorkspace, "dados", "contas");
 
     this.antigravityLive =
       options.antigravityLive ??
