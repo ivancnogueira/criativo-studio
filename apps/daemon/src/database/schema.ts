@@ -923,6 +923,94 @@ export const SCHEMA_TABLES: readonly { nome: string; sql: string }[] = [
         ON projecao_mensagens_fixadas(agente_id, fixado_em DESC);
     `,
   },
+  // =========================================================================
+  // Fase 14 — Aprendizado Autônomo, FTS5, Pastas da Biblioteca & UI Blocks
+  // =========================================================================
+  {
+    nome: "projecao_memory_review_cursores",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_memory_review_cursores (
+        chave TEXT PRIMARY KEY,
+        agente_id TEXT NOT NULL REFERENCES projecao_agentes(agente_id) ON DELETE CASCADE,
+        thread_id TEXT,
+        ultimo_mensagem_id TEXT NOT NULL,
+        turnos_desde_revisao INTEGER NOT NULL DEFAULT 0,
+        atualizado_em TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_memory_review_agente
+        ON projecao_memory_review_cursores(agente_id);
+    `,
+  },
+  {
+    nome: "projecao_skill_sugestoes",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_skill_sugestoes (
+        sugestao_id TEXT PRIMARY KEY,
+        mensagem_id TEXT NOT NULL,
+        agente_id TEXT NOT NULL REFERENCES projecao_agentes(agente_id) ON DELETE CASCADE,
+        thread_id TEXT,
+        acao TEXT NOT NULL CHECK(acao IN ('create', 'update')),
+        skill_id TEXT,
+        nome_skill TEXT NOT NULL,
+        pergunta_markdown TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'aberta' CHECK(status IN ('aberta', 'salva', 'dispensada', 'expirada')),
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_skill_sugestoes_agente_status
+        ON projecao_skill_sugestoes(agente_id, status, criado_em DESC);
+    `,
+  },
+  {
+    nome: "agente_memorias_fts",
+    sql: `
+      CREATE VIRTUAL TABLE IF NOT EXISTS agente_memorias_fts USING fts5(
+        texto,
+        memoria_id UNINDEXED,
+        agente_id UNINDEXED,
+        tokenize = 'unicode61'
+      );
+    `,
+  },
+  {
+    nome: "projecao_biblioteca_pastas",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_biblioteca_pastas (
+        pasta_id TEXT PRIMARY KEY,
+        agente_id TEXT NOT NULL REFERENCES projecao_agentes(agente_id) ON DELETE CASCADE,
+        parent_id TEXT REFERENCES projecao_biblioteca_pastas(pasta_id) ON DELETE CASCADE,
+        nome TEXT NOT NULL,
+        caminho_completo TEXT NOT NULL,
+        nivel INTEGER NOT NULL CHECK(nivel >= 1 AND nivel <= 4),
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_biblioteca_pastas_agente_parent
+        ON projecao_biblioteca_pastas(agente_id, parent_id, nome);
+    `,
+  },
+  {
+    nome: "projecao_chat_ui_blocos",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_chat_ui_blocos (
+        bloco_id TEXT PRIMARY KEY,
+        mensagem_id TEXT NOT NULL,
+        canal_id TEXT NOT NULL,
+        agente_id TEXT NOT NULL,
+        turno_id TEXT NOT NULL,
+        tipo_ferramenta TEXT NOT NULL CHECK(tipo_ferramenta IN ('ask_user', 'ask_ui', 'acknowledge_request', 'request_api_key')),
+        versao INTEGER NOT NULL DEFAULT 1,
+        spec_json TEXT NOT NULL CHECK(json_valid(spec_json)),
+        estado_json TEXT NOT NULL CHECK(json_valid(estado_json)),
+        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'answered', 'expired', 'closed')),
+        auto_responder_em TEXT,
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_ui_blocos_canal_status
+        ON projecao_chat_ui_blocos(canal_id, status, criado_em DESC);
+    `,
+  },
 ];
 
 export const SCHEMA_TABLE_NAMES = [
@@ -970,4 +1058,9 @@ export const SCHEMA_TABLE_NAMES = [
   "projecao_agente_esperas",
   "projecao_fila_chat",
   "projecao_mensagens_fixadas",
+  "projecao_memory_review_cursores",
+  "projecao_skill_sugestoes",
+  "agente_memorias_fts",
+  "projecao_biblioteca_pastas",
+  "projecao_chat_ui_blocos",
 ] as const;

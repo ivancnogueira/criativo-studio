@@ -358,6 +358,47 @@ export type WebSocketEventMap = {
     cutoff_at: string;
     mensagem_divisor: MensagemChat;
   };
+  "chat:ui_block": {
+    canal_id: string;
+    agente_id: string;
+    mensagem_id: string;
+    bloco: ConversationUiBlock;
+  };
+  "chat:reaction": {
+    canal_id: string;
+    mensagem_id: string;
+    emoji: string;
+    agente_id: string;
+  };
+  "memory:reviewed": {
+    agente_id: string;
+    thread_id: string | null;
+    alteracoes: MemoryReviewAlteracao[];
+  };
+  "skill:suggested": {
+    agente_id: string;
+    mensagem_id: string;
+    sugestao_id: string;
+    acao: "create" | "update";
+    nome_skill: string;
+  };
+  "library:folders_changed": {
+    agente_id?: string;
+    revisao: number;
+  };
+  "shared_table:changed": {
+    acao: "created" | "updated" | "deleted";
+    table_name: string;
+    owner_agent_id: string | null;
+  };
+  "agent:message_queued": {
+    mensagem_id: string;
+    de_agente_id: string;
+    para_agente_id: string;
+    outcome: "steered" | "queued";
+    reply_to_message_id: string | null;
+    expects_reply: boolean;
+  };
 };
 
 export interface AgenteConfigVisual {
@@ -371,6 +412,8 @@ export interface AgenteConfigVisual {
   prompt_base?: string;
   modo_ocupado?: ModoMensagemOcupado;
   allow_new_chat?: boolean;
+  allow_quick_acknowledgement?: boolean;
+  skill_learning_mode?: SkillLearningMode;
   task_limit?: number;
   context_cutoff_at?: string | null;
   [key: string]: unknown;
@@ -453,7 +496,11 @@ export type TipoItemMensagemChat =
   | "context_reset"
   | "branch_marker"
   | "wait_event"
-  | "routine_run";
+  | "routine_run"
+  | "ui-block"
+  | "memory-changes"
+  | "skill-suggestion:create"
+  | (string & {});
 
 export type OrigemThread = "usuario" | "agente";
 export type OrigemTituloThread = "auto" | "agente" | "usuario";
@@ -465,7 +512,12 @@ export type MotivoHoldThread =
   | "limite_uso"
   | "servidor_ocupado"
   | "agente_ocupado"
-  | "um_turno_por_vez";
+  | "um_turno_por_vez"
+  | "ask_user"
+  | "ask_ui"
+  | "acknowledge_request"
+  | "request_api_key"
+  | "approval";
 
 export interface AgenteThreadBranch {
   origem_thread_id: string;
@@ -614,14 +666,283 @@ export interface MensagemChat {
   tarefa_id?: string | null;
   thread_id?: string | null;
   turno_id?: string | null;
-  item_type?: TipoItemMensagemChat;
+  item_type?: TipoItemMensagemChat | null;
   status?: "streaming" | "completed" | "failed" | "interrupted";
   resposta_para_mensagem_id?: string | null;
   ordinal?: number;
   branch_origem_mensagem_id?: string | null;
   metadados?: Record<string, unknown>;
+  ui_block?: ConversationUiBlock | null;
+  reacao_emoji?: string | null;
+  skill_sugestao?: SkillSugestaoItem | null;
+  visual_page?: ChatVisualMeta | null;
+  memory_changes?: MemoryReviewAlteracao[] | null;
   lida: boolean;
   criado_em: string;
+}
+
+// ============================================================================
+// Fase 14 — Aprendizado Autônomo, Shared SQL, Generative UI, Biblioteca & Handoff
+// ============================================================================
+
+export type MemoriaInclusao = "essential" | "searchable";
+export type SkillLearningMode = "off" | "ask" | "automatic";
+
+export interface AgenteMemoria {
+  memoria_id: string;
+  agente_id: string;
+  texto: string;
+  categoria: MemoriaInclusao;
+  escopo_site: string | null;
+  origem: "automatica" | "manual";
+  controlado_usuario: boolean;
+  revisao: number;
+  criado_em: string;
+  atualizado_em: string;
+}
+
+export interface AgenteMemoriasSnapshot {
+  memorias: AgenteMemoria[];
+  usedBytes: number;
+  budgetBytes: number;
+  total: number;
+  limit: number;
+}
+
+export interface SkillSugestaoItem {
+  sugestao_id: string;
+  mensagem_id: string;
+  agente_id: string;
+  thread_id: string | null;
+  acao: "create" | "update";
+  skill_id: string | null;
+  nome_skill: string;
+  pergunta_markdown: string;
+  instrucoes_preview?: string | null;
+  status: "aberta" | "salva" | "dispensada" | "expirada";
+  criado_em: string;
+  atualizado_em: string;
+}
+
+export interface AprendizadoConfig {
+  skill_learning_mode: SkillLearningMode;
+  memory_review_interval: number;
+  memory_limit: number;
+  plan_start_after_ms: number | null;
+}
+
+export interface MemoryReviewAlteracao {
+  memoria_id: string;
+  acao: "saved" | "updated" | "forgotten" | "notChanged";
+  texto: string;
+  categoria?: MemoriaInclusao;
+  escopo_site?: string | null;
+}
+
+export interface SharedTableSummary {
+  name: string;
+  ownerAgentId: string | null;
+  rowCount: number | null;
+  sql: string;
+  createdAt?: string | null;
+}
+
+export interface SharedTableDetail {
+  name: string;
+  ownerAgentId: string | null;
+  sql: string;
+  columns: string[];
+  rows: unknown[][];
+  totalRows: number;
+  truncated: boolean;
+}
+
+export interface SharedTableQueryResult {
+  columns: string[];
+  rows: unknown[][];
+  rowCount: number;
+  truncated: boolean;
+  note?: string;
+}
+
+export interface ChatVisualMeta {
+  arquivo_id: string;
+  titulo: string;
+  altura_inicial?: number;
+  url?: string;
+}
+
+export interface AskUserQuestionOption {
+  label: string;
+  description?: string;
+}
+
+export interface AskUserQuestion {
+  id: string;
+  header?: string;
+  question: string;
+  detail?: string;
+  isSecret?: boolean;
+  multiSelect?: boolean;
+  options?: AskUserQuestionOption[];
+}
+
+export interface UiBlockAction {
+  id: string;
+  label: string;
+  tone?: "default" | "primary" | "warning" | "danger";
+  confirmHold?: { label?: string; durationMs?: number } | boolean;
+}
+
+export interface UiBlockFieldOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+export interface UiBlockFormField {
+  name: string;
+  label: string;
+  type: "text" | "textarea" | "number" | "select" | "toggle" | "checkbox" | "date";
+  required?: boolean;
+  placeholder?: string;
+  defaultValue?: string | number | boolean;
+  options?: UiBlockFieldOption[];
+  min?: number;
+  max?: number;
+}
+
+export type UiBlockVariant =
+  | "confirm"
+  | "quick_replies"
+  | "choice"
+  | "form"
+  | "approval"
+  | "progress"
+  | "block_run";
+
+export interface AskUserBlockSpec {
+  kind: "ask_user";
+  title?: string;
+  questions: AskUserQuestion[];
+}
+
+export interface AskUiBlockSpec {
+  kind: "ask_ui";
+  variant: UiBlockVariant;
+  title: string;
+  description?: string;
+  markdownPreview?: string;
+  danger?: boolean;
+  confirmHold?: { label?: string; durationMs?: number } | boolean;
+  options?: UiBlockFieldOption[];
+  multiSelect?: boolean;
+  fields?: UiBlockFormField[];
+  actions?: UiBlockAction[];
+}
+
+export interface AcknowledgeBlockSpec {
+  kind: "acknowledge_request";
+  title: string;
+  summaryMarkdown: string;
+  steps?: string[];
+  planStartAfterMs?: number | null;
+}
+
+export interface RequestApiKeyBlockSpec {
+  kind: "request_api_key";
+  name: string;
+  label?: string;
+  description?: string;
+  docsUrl?: string;
+  defaultScope?: "todos_agentes" | "agente_especifico";
+}
+
+export interface ConversationUiBlock {
+  bloco_id: string;
+  mensagem_id: string;
+  canal_id: string;
+  agente_id: string;
+  turno_id: string;
+  tipo_ferramenta: "ask_user" | "ask_ui" | "acknowledge_request" | "request_api_key";
+  status: "pending" | "answered" | "expired" | "closed";
+  versao: number;
+  auto_responder_em?: string | null;
+  criado_em: string;
+  atualizado_em: string;
+  spec: Record<string, unknown>;
+  estado: Record<string, unknown>;
+}
+
+export interface UiBlockSubmitPayload {
+  bloco_id: string;
+  canal_id: string;
+  acao: "answer" | "skip" | "cancel";
+  respostas_ask_user?: Record<string, string[] | string>;
+  ui_response?: {
+    actionId: string;
+    values?: Record<string, unknown>;
+  };
+  api_key_payload?: {
+    nome: string;
+    valor: string;
+    escopo: "todos_agentes" | "agente_especifico";
+  };
+}
+
+export interface ApiKeyMetadata {
+  name: string;
+  scope: "todos_agentes" | "agente_especifico";
+  agente_id?: string | null;
+  source: "vault";
+  configured: boolean;
+  updated_at: string;
+}
+
+export interface BibliotecaPasta {
+  pasta_id: string;
+  agente_id: string;
+  parent_id: string | null;
+  nome: string;
+  caminho_completo: string;
+  nivel: number;
+  criado_em: string;
+  atualizado_em: string;
+}
+
+export interface BibliotecasPastasSnapshot {
+  folders: BibliotecaPasta[];
+  placement: Record<string, string>;
+  unfiledByAgent: Record<string, number>;
+}
+
+export interface SendMessageInterAgenteInput {
+  recipientAgentIds: string[];
+  text: string;
+  paths?: string[];
+  replyToMessageId?: string | null;
+  expectsReply?: boolean;
+}
+
+export interface SendMessageInterAgenteResult {
+  ok: boolean;
+  entregas: Array<{
+    mensagem_id: string;
+    para_agente_id: string;
+    outcome: "steered" | "queued";
+    queuedBecause?: "own-turn" | "recipient-queues" | "idle-dispatched";
+    reply_to_message_id: string | null;
+    expects_reply: boolean;
+  }>;
+  corretivo?: {
+    erro: string;
+    pendentes: Array<{
+      mensagem_id: string;
+      de_agente_id: string;
+      trecho: string;
+      criado_em: string;
+    }>;
+  };
 }
 
 export interface CanalEquipe {
@@ -820,6 +1141,8 @@ export interface ArquivoStudio {
   tipo_uso: "referencia" | "logo" | "personagem" | "gerado" | "video" | "documento";
   agente_id: string | null;
   tarefa_id: string | null;
+  pasta_id?: string | null;
+  folder_path?: string | null;
   criado_em: string;
 }
 

@@ -45,12 +45,100 @@ export class CriativoDatabase {
       }
       runPhase10Migrations(this.connection);
       this.applyAdditiveMigrations();
+      this.applyPhase14Migrations();
     });
   }
 
   private getTableColumns(tableName: string): Set<string> {
     const rows = this.connection.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
     return new Set(rows.map((col) => col.name));
+  }
+
+  private ensureColumn(tableName: string, columnName: string, columnDefSql: string): void {
+    const cols = this.getTableColumns(tableName);
+    if (!cols.has(columnName)) {
+      this.connection.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefSql};`);
+    }
+  }
+
+  private applyPhase14Migrations(): void {
+    // 1. projecao_agente_memorias + FTS5 backfill
+    this.ensureColumn(
+      "projecao_agente_memorias",
+      "categoria",
+      "TEXT NOT NULL DEFAULT 'searchable' CHECK(categoria IN ('essential', 'searchable'))",
+    );
+    this.ensureColumn("projecao_agente_memorias", "escopo_site", "TEXT");
+    this.ensureColumn("projecao_agente_memorias", "normalized_text", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("projecao_agente_memorias", "source_turn_id", "TEXT");
+    this.ensureColumn(
+      "projecao_agente_memorias",
+      "controlado_usuario",
+      "INTEGER NOT NULL DEFAULT 0 CHECK(controlado_usuario IN (0, 1))",
+    );
+    this.ensureColumn("projecao_agente_memorias", "revisao", "INTEGER NOT NULL DEFAULT 1");
+    this.ensureColumn("projecao_agente_memorias", "atualizado_em", "TEXT NOT NULL DEFAULT ''");
+
+    this.connection.exec(
+      "CREATE INDEX IF NOT EXISTS idx_memorias_agente_categoria ON projecao_agente_memorias(agente_id, categoria, atualizado_em DESC);",
+    );
+    this.connection.exec(
+      "CREATE INDEX IF NOT EXISTS idx_memorias_agente_site ON projecao_agente_memorias(agente_id, escopo_site) WHERE escopo_site IS NOT NULL;",
+    );
+
+    this.connection.exec(`
+      UPDATE projecao_agente_memorias
+      SET normalized_text = lower(trim(texto)),
+          atualizado_em = COALESCE(NULLIF(atualizado_em, ''), criado_em),
+          controlado_usuario = CASE WHEN origem = 'manual' THEN 1 ELSE controlado_usuario END
+      WHERE normalized_text = '' OR atualizado_em = '';
+    `);
+
+    this.connection.exec(`
+      INSERT INTO agente_memorias_fts (texto, memoria_id, agente_id)
+      SELECT m.texto, m.memoria_id, m.agente_id
+      FROM projecao_agente_memorias m
+      WHERE NOT EXISTS (
+        SELECT 1 FROM agente_memorias_fts f WHERE f.memoria_id = m.memoria_id
+      );
+    `);
+
+    // 2. projecao_arquivos — pastas hierárquicas da Biblioteca
+    this.ensureColumn(
+      "projecao_arquivos",
+      "pasta_id",
+      "TEXT REFERENCES projecao_biblioteca_pastas(pasta_id) ON DELETE SET NULL",
+    );
+    this.ensureColumn("projecao_arquivos", "folder_path", "TEXT");
+    this.connection.exec(
+      "CREATE INDEX IF NOT EXISTS idx_arquivos_pasta ON projecao_arquivos(pasta_id, criado_em DESC);",
+    );
+
+    // 3. projecao_conversas_chat — blocos interativos UI e reação emoji
+    this.ensureColumn("projecao_conversas_chat", "item_type", "TEXT NOT NULL DEFAULT 'mensagem'");
+    this.ensureColumn(
+      "projecao_conversas_chat",
+      "ui_block_json",
+      "TEXT CHECK(ui_block_json IS NULL OR json_valid(ui_block_json))",
+    );
+    this.ensureColumn("projecao_conversas_chat", "reacao_emoji", "TEXT");
+
+    // 4. projecao_canal_mensagens — mensageria assíncrona inter-agentes avançada
+    this.ensureColumn("projecao_canal_mensagens", "reply_to_message_id", "TEXT");
+    this.ensureColumn(
+      "projecao_canal_mensagens",
+      "expects_reply",
+      "INTEGER NOT NULL DEFAULT 1 CHECK(expects_reply IN (0, 1))",
+    );
+    this.ensureColumn("projecao_canal_mensagens", "thread_origem_id", "TEXT");
+    this.ensureColumn(
+      "projecao_canal_mensagens",
+      "status_entrega",
+      "TEXT NOT NULL DEFAULT 'enfileirada' CHECK(status_entrega IN ('enfileirada', 'entregue_steer', 'respondida', 'sem_resposta_necessaria'))",
+    );
+    this.connection.exec(
+      "CREATE INDEX IF NOT EXISTS idx_canal_mensagens_reply ON projecao_canal_mensagens(reply_to_message_id) WHERE reply_to_message_id IS NOT NULL;",
+    );
   }
 
   private applyAdditiveMigrations(): void {
