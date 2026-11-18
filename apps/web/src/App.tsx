@@ -18,6 +18,7 @@ import type {
   StatusMensageria,
   TarefaRegistro,
   UsoProvedoresSnapshot,
+  WhatsAppContaResumo,
   WorkflowAresta,
   WorkflowNo,
   WorkflowVisual,
@@ -28,8 +29,12 @@ import { getDefaultMascotForAgent } from "./components/MascoteAvatar";
 import { Sidebar } from "./components/Sidebar";
 import { WorkspaceRail, type StudioNavSection } from "./components/WorkspaceRail";
 import { NewAgentScreen, type NewAgentPayload } from "./features/agents/NewAgentScreen";
-import { AgentConversationView } from "./features/chat/AgentConversationView";
+import {
+  AgentConversationView,
+  type McpSignInCardState,
+} from "./features/chat/AgentConversationView";
 import { RightInspectorPanel } from "./features/inspector/RightInspectorPanel";
+import { MarketplacePage } from "./features/marketplace/MarketplacePage";
 import { OnboardingFlow } from "./features/onboarding/OnboardingFlow";
 import { ConnectorsPage } from "./features/pages/ConnectorsPage";
 import { FilesVaultPage } from "./features/pages/FilesVaultPage";
@@ -104,7 +109,11 @@ export function App() {
 
   const [whatsappStatus, setWhatsappStatus] = useState<StatusMensageria>("desconectado");
   const [whatsappQr, setWhatsappQr] = useState<string | null>(null);
+  const [whatsappAccounts, setWhatsappAccounts] = useState<WhatsAppContaResumo[]>([]);
   const [whatsappModalOpen, setWhatsappModalOpen] = useState(false);
+  const [pendingMcpSignIn, setPendingMcpSignIn] = useState<McpSignInCardState | null>(null);
+  const [lojaInitialAppSlug, setLojaInitialAppSlug] = useState<string | null>(null);
+  const [prefilledChatPrompt, setPrefilledChatPrompt] = useState<string | null>(null);
   const [helpModalOpen, setHelpModalOpen] = useState(false);
   const [channelModalOpen, setChannelModalOpen] = useState(false);
 
@@ -157,6 +166,7 @@ export function App() {
         wfList,
         fileList,
         keys,
+        waAccountsList,
       ] = await Promise.all([
         daemonApi.getOnboarding(),
         daemonApi.listAgents(),
@@ -172,6 +182,7 @@ export function App() {
         daemonApi.listWorkflows(),
         daemonApi.listFiles(),
         daemonApi.getVaultStatus(),
+        daemonApi.listWhatsAppAccounts().catch(() => [] as WhatsAppContaResumo[]),
       ]);
 
       setOnboarding(onb);
@@ -189,6 +200,7 @@ export function App() {
       setWorkflows(wfList);
       setArquivos(fileList);
       setVaultKeys(keys);
+      setWhatsappAccounts(waAccountsList);
 
       if (tList.length > 0) {
         const pending =
@@ -349,6 +361,37 @@ export function App() {
       }
     });
 
+    const unsubWaConta = ws.on("whatsapp.conta_atualizada", () => {
+      void daemonApi.listWhatsAppAccounts().then(setWhatsappAccounts).catch(() => {});
+    });
+    const unsubMcpOAuthReq = ws.on("mcp.oauth_solicitado", (evt) => {
+      setPendingMcpSignIn({
+        mcpId: evt.mcp_id,
+        nome: evt.nome,
+        appSlug: evt.app_slug ?? null,
+        status: "pending",
+        errorMessage: null,
+      });
+    });
+    const unsubMcpOAuthDone = ws.on("mcp.oauth_concluido", (evt) => {
+      setPendingMcpSignIn((prev) =>
+        prev && prev.mcpId === evt.mcp_id
+          ? {
+              ...prev,
+              status: evt.sucesso ? "connected" : "error",
+              errorMessage: evt.sucesso ? null : evt.erro ?? "Autenticação falhou.",
+            }
+          : prev
+      );
+      void daemonApi.listConnectors().then(setConectores).catch(() => {});
+    });
+    const unsubLojaSkill = ws.on("loja.skill_atualizada", () => {
+      void daemonApi.listSkills().then(setHabilidades).catch(() => {});
+    });
+    const unsubLojaAgente = ws.on("loja.agente_instalado", () => {
+      void daemonApi.listAgents().then(setAgentes).catch(() => {});
+    });
+
     ws.connect();
     return () => {
       unsubConn();
@@ -364,6 +407,11 @@ export function App() {
       unsubChatProgress();
       unsubProv();
       unsubAuthUrl();
+      unsubWaConta();
+      unsubMcpOAuthReq();
+      unsubMcpOAuthDone();
+      unsubLojaSkill();
+      unsubLojaAgente();
       ws.disconnect();
     };
   }, []);
@@ -736,8 +784,43 @@ export function App() {
                     liveRun={activeChatKey ? liveRunByChat[activeChatKey] ?? null : null}
                     inspectorOpen={inspectorOpen}
                     onToggleInspector={() => setInspectorOpen((o) => !o)}
-                    onSendMessage={handleSendChatMessage}
+                    onSendMessage={async (conteudo, anexos) => {
+                      setPrefilledChatPrompt(null);
+                      await handleSendChatMessage(conteudo, anexos);
+                    }}
                     onUploadFile={handleUploadFile}
+                    pendingMcpSignIn={pendingMcpSignIn}
+                    prefilledDraft={prefilledChatPrompt}
+                    onAuthenticateMcp={async (mcpId) => {
+                      setPendingMcpSignIn((prev) =>
+                        prev ? { ...prev, status: "signing_in", errorMessage: null } : prev
+                      );
+                      try {
+                        const res = await daemonApi.startMcpOAuth(mcpId);
+                        if (typeof window !== "undefined") {
+                          window.open(res.authorizeUrl, "_blank", "noopener,noreferrer");
+                        }
+                      } catch (err) {
+                        setPendingMcpSignIn((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                status: "error",
+                                errorMessage:
+                                  err instanceof Error ? err.message : "Falha ao iniciar OAuth.",
+                              }
+                            : prev
+                        );
+                      }
+                    }}
+                    onOpenStoreApp={(slug) => {
+                      setLojaInitialAppSlug(slug);
+                      setActiveSection("loja");
+                    }}
+                    onRetryMcpContinue={async () => {
+                      setPendingMcpSignIn(null);
+                      await handleSendChatMessage("Pode continuar utilizando as ferramentas conectadas.", []);
+                    }}
                     onUpdateModelAndEffort={async (modelo: string, effort: NivelEsforco) => {
                       if (!activeAgent) return;
                       const targetId = activeAgent.agente_id;
@@ -893,6 +976,23 @@ export function App() {
             <FilesVaultPage arquivos={arquivos} onUploadFile={handleUploadFile} />
           )}
 
+          {activeSection === "loja" && (
+            <MarketplacePage
+              agentes={agentes}
+              initialAppSlug={lojaInitialAppSlug}
+              onRefreshStudio={hydrateAll}
+              onTryPromptInChat={(agentId, prompt) => {
+                handleSelectAgent(agentId);
+                setPrefilledChatPrompt(prompt);
+              }}
+              onCreateSkillWithAgent={(agentId, prompt) => {
+                handleSelectAgent(agentId);
+                setPrefilledChatPrompt(prompt);
+              }}
+              onOpenWhatsAppModal={() => setWhatsappModalOpen(true)}
+            />
+          )}
+
           {activeSection === "conexoes" && (
             <ConnectorsPage
               provedores={provedores}
@@ -1000,16 +1100,23 @@ export function App() {
         open={whatsappModalOpen}
         status={whatsappStatus}
         qrcodeBase64={whatsappQr}
+        accounts={whatsappAccounts}
+        agentes={agentes}
+        onRefreshAccounts={async () => {
+          setWhatsappAccounts(await daemonApi.listWhatsAppAccounts());
+        }}
         onClose={() => setWhatsappModalOpen(false)}
         onConnect={async () => {
           const snap = await daemonApi.connectWhatsApp();
           setWhatsappStatus(snap.status);
           setWhatsappQr(snap.qrcode_base64);
+          setWhatsappAccounts(await daemonApi.listWhatsAppAccounts().catch(() => whatsappAccounts));
         }}
         onDisconnect={async () => {
           await daemonApi.disconnectWhatsApp();
           setWhatsappStatus("desconectado");
           setWhatsappQr(null);
+          setWhatsappAccounts(await daemonApi.listWhatsAppAccounts().catch(() => whatsappAccounts));
         }}
       />
 
