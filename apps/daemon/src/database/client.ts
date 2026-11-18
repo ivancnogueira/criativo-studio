@@ -44,6 +44,20 @@ export class CriativoDatabase {
         this.connection.exec(item.sql);
       }
       runPhase10Migrations(this.connection);
+      const workflowCols = new Set(
+        (this.connection.prepare("PRAGMA table_info(projecao_workflows)").all() as Array<{ name: string }>).map(
+          (col) => col.name,
+        ),
+      );
+      if (!workflowCols.has("revisao_grafo")) {
+        this.connection.exec("ALTER TABLE projecao_workflows ADD COLUMN revisao_grafo INTEGER NOT NULL DEFAULT 0;");
+      }
+      if (!workflowCols.has("proximo_numero_run")) {
+        this.connection.exec("ALTER TABLE projecao_workflows ADD COLUMN proximo_numero_run INTEGER NOT NULL DEFAULT 1;");
+      }
+      if (!workflowCols.has("tracos_json")) {
+        this.connection.exec("ALTER TABLE projecao_workflows ADD COLUMN tracos_json TEXT NOT NULL DEFAULT '[]';");
+      }
     });
   }
 
@@ -53,7 +67,9 @@ export class CriativoDatabase {
    * Executa um bloco de operações em transação atômica (suportando SAVEPOINT reentrante) com rollback em erro.
    */
   public runInTransaction<T>(fn: () => T): T {
-    const isNested = this.transactionDepth > 0;
+    const isNested =
+      this.transactionDepth > 0 ||
+      Boolean((this.connection as unknown as { isTransaction?: boolean }).isTransaction);
     const spName = isNested ? `sp_${this.transactionDepth}_${Date.now()}` : null;
     if (isNested && spName) {
       this.connection.exec(`SAVEPOINT ${spName};`);

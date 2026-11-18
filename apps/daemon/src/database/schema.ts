@@ -668,6 +668,145 @@ export const SCHEMA_TABLES: readonly { nome: string; sql: string }[] = [
         WHERE status = 'running';
     `,
   },
+  {
+    nome: "projecao_workflow_versoes",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_workflow_versoes (
+        version_id TEXT PRIMARY KEY,
+        workflow_id TEXT NOT NULL REFERENCES projecao_workflows(workflow_id) ON DELETE CASCADE,
+        revisao_grafo INTEGER NOT NULL CHECK(revisao_grafo >= 0),
+        kind TEXT NOT NULL CHECK(kind IN ('auto', 'restore', 'run')),
+        grafo_json TEXT NOT NULL CHECK(json_valid(grafo_json)),
+        criado_em TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflow_versoes_recentes
+        ON projecao_workflow_versoes(workflow_id, criado_em DESC, version_id);
+    `,
+  },
+  {
+    nome: "projecao_workflow_gatilhos",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_workflow_gatilhos (
+        workflow_id TEXT NOT NULL REFERENCES projecao_workflows(workflow_id) ON DELETE CASCADE,
+        node_id TEXT NOT NULL,
+        tipo TEXT NOT NULL CHECK(tipo IN ('manual', 'schedule', 'webhook', 'whatsapp', 'telegram', 'conector')),
+        timezone TEXT,
+        schedule_json TEXT CHECK(schedule_json IS NULL OR json_valid(schedule_json)),
+        filtro_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(filtro_json)),
+        webhook_route_id TEXT UNIQUE,
+        webhook_secret_vault_key TEXT,
+        proxima_execucao_em TEXT,
+        atualizado_em TEXT NOT NULL,
+        PRIMARY KEY(workflow_id, node_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflow_gatilhos_due
+        ON projecao_workflow_gatilhos(proxima_execucao_em)
+        WHERE proxima_execucao_em IS NOT NULL;
+    `,
+  },
+  {
+    nome: "projecao_workflow_webhook_recibos",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_workflow_webhook_recibos (
+        receipt_id TEXT PRIMARY KEY,
+        workflow_id TEXT NOT NULL REFERENCES projecao_workflows(workflow_id) ON DELETE CASCADE,
+        node_id TEXT NOT NULL,
+        delivery_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('started', 'ignored')),
+        motivo TEXT CHECK(motivo IS NULL OR motivo IN ('busy', 'refused', 'unauthorized')),
+        run_id TEXT,
+        recebido_em TEXT NOT NULL,
+        UNIQUE(workflow_id, node_id, delivery_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflow_webhook_recibos_data
+        ON projecao_workflow_webhook_recibos(recebido_em);
+    `,
+  },
+  {
+    nome: "projecao_workflow_execucoes",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_workflow_execucoes (
+        run_id TEXT PRIMARY KEY,
+        workflow_id TEXT NOT NULL REFERENCES projecao_workflows(workflow_id) ON DELETE CASCADE,
+        numero INTEGER NOT NULL CHECK(numero >= 1),
+        trigger_node_id TEXT,
+        from_node_id TEXT,
+        origem TEXT NOT NULL CHECK(origem IN ('manual', 'schedule', 'webhook', 'whatsapp', 'telegram', 'conector', 'agente')),
+        agendado_para TEXT,
+        chave_idempotencia TEXT NOT NULL,
+        revisao_grafo INTEGER NOT NULL CHECK(revisao_grafo >= 0),
+        grafo_json TEXT NOT NULL CHECK(json_valid(grafo_json)),
+        payload TEXT,
+        status TEXT NOT NULL CHECK(status IN ('running', 'approval', 'stopping', 'done', 'failed', 'stopped')),
+        erro TEXT,
+        iniciado_em TEXT NOT NULL,
+        encerrado_em TEXT,
+        atualizado_em TEXT NOT NULL,
+        UNIQUE(workflow_id, numero),
+        UNIQUE(workflow_id, chave_idempotencia)
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflow_execucoes_recentes
+        ON projecao_workflow_execucoes(workflow_id, iniciado_em DESC, run_id);
+      CREATE INDEX IF NOT EXISTS idx_workflow_execucoes_abertas
+        ON projecao_workflow_execucoes(status)
+        WHERE status IN ('running', 'approval', 'stopping');
+    `,
+  },
+  {
+    nome: "projecao_workflow_etapas",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_workflow_etapas (
+        step_id TEXT PRIMARY KEY,
+        workflow_id TEXT NOT NULL REFERENCES projecao_workflows(workflow_id) ON DELETE CASCADE,
+        run_id TEXT REFERENCES projecao_workflow_execucoes(run_id) ON DELETE CASCADE,
+        node_id TEXT NOT NULL,
+        tentativa INTEGER NOT NULL CHECK(tentativa >= 1),
+        request_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        agente_id TEXT,
+        status TEXT NOT NULL CHECK(status IN ('running', 'approval', 'done', 'failed', 'stopped', 'skipped')),
+        tarefa_id TEXT,
+        input TEXT NOT NULL DEFAULT '',
+        output TEXT,
+        output_tipo TEXT CHECK(output_tipo IS NULL OR output_tipo IN ('text', 'image', 'file')),
+        artefatos_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(artefatos_json)),
+        branch TEXT CHECK(branch IS NULL OR branch IN ('yes', 'no')),
+        erro TEXT,
+        iniciado_em TEXT,
+        encerrado_em TEXT,
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL,
+        UNIQUE(workflow_id, request_id)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_etapas_tentativa
+        ON projecao_workflow_etapas(run_id, node_id, tentativa)
+        WHERE run_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_workflow_etapas_solo
+        ON projecao_workflow_etapas(workflow_id, criado_em DESC, step_id)
+        WHERE run_id IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_workflow_etapas_abertas
+        ON projecao_workflow_etapas(status)
+        WHERE status IN ('running', 'approval');
+    `,
+  },
+  {
+    nome: "projecao_workflow_entregas",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_workflow_entregas (
+        step_id TEXT PRIMARY KEY REFERENCES projecao_workflow_etapas(step_id) ON DELETE CASCADE,
+        destino TEXT NOT NULL CHECK(destino IN ('canal', 'whatsapp', 'telegram', 'arquivo', 'instagram', 'notificacao')),
+        destino_ref TEXT NOT NULL,
+        texto TEXT NOT NULL,
+        anexos_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(anexos_json)),
+        status TEXT NOT NULL CHECK(status IN ('pending', 'sending', 'sent', 'failed', 'uncertain')),
+        motivo TEXT,
+        tentativas INTEGER NOT NULL DEFAULT 0 CHECK(tentativas >= 0),
+        enviado_em TEXT,
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL
+      );
+    `,
+  },
 ];
 
 export const SCHEMA_TABLE_NAMES = [
@@ -705,4 +844,10 @@ export const SCHEMA_TABLE_NAMES = [
   "projecao_routine_flow_posicoes",
   "projecao_routine_flow_runs",
   "projecao_routine_flow_etapas",
+  "projecao_workflow_versoes",
+  "projecao_workflow_gatilhos",
+  "projecao_workflow_webhook_recibos",
+  "projecao_workflow_execucoes",
+  "projecao_workflow_etapas",
+  "projecao_workflow_entregas",
 ] as const;

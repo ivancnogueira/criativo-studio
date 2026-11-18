@@ -12,6 +12,11 @@ import type {
   WhatsAppMensagemRegistro,
   WhatsAppPairingRequest,
 } from "./whatsapp-contracts.ts";
+import type {
+  WorkflowBranch,
+  WorkflowRunStatus,
+  WorkflowStepStatus,
+} from "./workflow-graph.ts";
 
 export type ProviderName = "gemini" | "claude" | "openai" | "grok" | "opencode" | "ollama";
 
@@ -293,6 +298,26 @@ export type WebSocketEventMap = {
     owner_id: string;
     resumo: string;
     execucao_id: string;
+  };
+  "workflow:updated": {
+    workflow_id: string;
+    revisao_grafo: number;
+    agente_id?: string | null;
+    acao: "created" | "saved" | "deleted" | "restored";
+  };
+  "workflow:run_updated": {
+    workflow_id: string;
+    run_id: string;
+    numero: number;
+    status: WorkflowRunStatus;
+  };
+  "workflow:step_updated": {
+    workflow_id: string;
+    run_id: string | null;
+    step_id: string;
+    node_id: string;
+    status: WorkflowStepStatus;
+    branch?: WorkflowBranch | null;
   };
 };
 
@@ -580,42 +605,6 @@ export interface ConectorIntegracaoInfo {
   detalhes: Array<{ chave: string; rotulo: string; configurado: boolean; valor_mascarado?: string | null }>;
 }
 
-export type TipoNoWorkflow =
-  | "gatilho"
-  | "agente"
-  | "gerar_imagem"
-  | "render_video"
-  | "aprovacao"
-  | "publicar_meta"
-  | "nota";
-
-export interface WorkflowNo {
-  id: string;
-  tipo: TipoNoWorkflow;
-  titulo: string;
-  subtitulo?: string;
-  x: number;
-  y: number;
-  config: Record<string, unknown>;
-}
-
-export interface WorkflowAresta {
-  id: string;
-  origem: string;
-  destino: string;
-}
-
-export interface WorkflowVisual {
-  workflow_id: string;
-  nome: string;
-  descricao: string;
-  nos: WorkflowNo[];
-  arestas: WorkflowAresta[];
-  ativo: boolean;
-  ultima_execucao_em: string | null;
-  atualizado_em: string;
-}
-
 export interface ArquivoStudio {
   arquivo_id: string;
   nome_original: string;
@@ -639,3 +628,4 @@ export * from "./whatsapp-contracts.ts";
 export * from "./mcp-contracts.ts";
 export * from "./marketplace-contracts.ts";
 export * from "./routines.ts";
+export * from "./workflow-graph.ts";
