@@ -23,6 +23,10 @@ import {
   type RoutineToolExecutionContext,
   type RoutineToolsDeps,
 } from "../../routines/routine-agent-tools.ts";
+import {
+  isWorkflowToolName,
+  WORKFLOW_TOOL_DEFINITIONS,
+} from "../../workflows/workflow-tools.ts";
 import type { WebSocketHub } from "../../server/websocket-hub.ts";
 import type { VaultService } from "../../vault/vault-service.ts";
 import type { McpClient } from "../providers/mcp-client.ts";
@@ -43,6 +47,12 @@ export type CustomToolExecutor = (
   context: { tarefa: TarefaRegistro; agenteId: string }
 ) => Promise<unknown>;
 
+export type WorkflowToolExecutor = (
+  name: string,
+  args: Record<string, unknown>,
+  ctx: { tarefa: TarefaRegistro; agenteId: string }
+) => Promise<unknown>;
+
 export interface AgentRunnerOptions {
   db: CriativoDatabase;
   queue: FifoQueueManager;
@@ -61,6 +71,8 @@ export interface AgentRunnerOptions {
   maxTurns?: number;
   customTools?: Record<string, CustomToolExecutor>;
   routineToolsDeps?: RoutineToolsDeps;
+  workflowToolExecutor?: WorkflowToolExecutor;
+  includeWorkflowTools?: boolean;
 }
 
 export interface AgentRunResult {
@@ -201,6 +213,8 @@ export class AgentRunner {
   private readonly maxTurns: number;
   private readonly customTools: Record<string, CustomToolExecutor>;
   private routineToolsDeps?: RoutineToolsDeps;
+  private workflowToolExecutor?: WorkflowToolExecutor;
+  private readonly includeWorkflowTools: boolean;
 
   constructor(options: AgentRunnerOptions) {
     this.db = options.db;
@@ -223,12 +237,18 @@ export class AgentRunner {
     this.maxTurns = options.maxTurns ?? 8;
     this.customTools = options.customTools ?? {};
     this.routineToolsDeps = options.routineToolsDeps;
+    this.workflowToolExecutor = options.workflowToolExecutor;
+    this.includeWorkflowTools = options.includeWorkflowTools ?? true;
 
     seedDefaultAgents(this.db);
   }
 
   public setRoutineToolsDeps(deps: RoutineToolsDeps): void {
     this.routineToolsDeps = deps;
+  }
+
+  public setWorkflowToolExecutor(executor: WorkflowToolExecutor): void {
+    this.workflowToolExecutor = executor;
   }
 
   private resolveTargetAgentId(tarefa: TarefaRegistro): string {
@@ -286,6 +306,15 @@ export class AgentRunner {
         flags: { noUpdateCalled: false, failureReason: null },
       };
       return await executeRoutineToolCall(call, ctx, this.routineToolsDeps);
+    }
+    if (isWorkflowToolName(call.name)) {
+      if (!this.workflowToolExecutor) {
+        throw new Error("Sistema de workflows ainda não inicializado neste runner.");
+      }
+      return await this.workflowToolExecutor(call.name, call.arguments, {
+        tarefa: context.tarefa,
+        agenteId: context.agenteId,
+      });
     }
     if (this.customTools[call.name]) {
       const customResult = await this.customTools[call.name](call.arguments, {
@@ -499,6 +528,7 @@ export class AgentRunner {
         ...NATIVE_TOOLS_SCHEMA,
         ...PHASE10_TOOL_DEFINITIONS,
         ...ROUTINE_AGENT_TOOLS_SCHEMA,
+        ...(this.includeWorkflowTools ? WORKFLOW_TOOL_DEFINITIONS : []),
         ...legacyMcpTools,
         ...gatewayTools,
       ]) {

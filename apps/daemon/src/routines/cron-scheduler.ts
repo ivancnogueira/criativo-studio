@@ -177,6 +177,7 @@ export class CronScheduler {
   private timer: NodeJS.Timeout | null = null;
   private attachedRoutineTimer: RoutineTimer | null = null;
   private attachedExecutionService: RoutineExecutionService | null = null;
+  private readonly dueProcessors: Array<(now: Date) => Promise<void> | void> = [];
 
   constructor(
     db: CriativoDatabase,
@@ -186,6 +187,18 @@ export class CronScheduler {
     this.db = db;
     this.queue = queue;
     this.onEnqueued = onEnqueued;
+  }
+
+  public registerDueProcessor(
+    processor: (now: Date) => Promise<void> | void
+  ): () => void {
+    this.dueProcessors.push(processor);
+    return () => {
+      const idx = this.dueProcessors.indexOf(processor);
+      if (idx >= 0) {
+        this.dueProcessors.splice(idx, 1);
+      }
+    };
   }
 
   public attachRoutineEngine(
@@ -285,6 +298,19 @@ export class CronScheduler {
 
       createdTaskIds.push(task.tarefa_id);
       this.onEnqueued?.(task.tarefa_id, routine.rotina_id);
+    }
+
+    for (const processor of this.dueProcessors) {
+      try {
+        const res = processor(now);
+        if (res && typeof (res as Promise<void>).then === "function") {
+          void (res as Promise<void>).catch((err) => {
+            console.error("[CronScheduler] Erro em dueProcessor assíncrono:", err);
+          });
+        }
+      } catch (err) {
+        console.error("[CronScheduler] Erro em dueProcessor:", err);
+      }
     }
 
     return createdTaskIds;

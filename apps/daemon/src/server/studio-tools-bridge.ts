@@ -36,10 +36,24 @@ import {
   type RoutineToolExecutionContext,
   type RoutineToolsDeps,
 } from "../routines/routine-agent-tools.ts";
+import {
+  executeWorkflowToolCall,
+  isWorkflowToolName,
+  WORKFLOW_TOOL_DEFINITIONS,
+  WORKFLOW_TOOL_NAMES,
+} from "../workflows/workflow-tools.ts";
+import type { WorkflowEngine } from "../workflows/workflow-engine.ts";
+import type { WorkflowStore } from "../workflows/workflow-store.ts";
 import type { VaultService } from "../vault/vault-service.ts";
 import type { WebSocketHub } from "./websocket-hub.ts";
 
-export { isRoutineToolName, ROUTINE_AGENT_TOOLS_SCHEMA };
+export {
+  isRoutineToolName,
+  isWorkflowToolName,
+  ROUTINE_AGENT_TOOLS_SCHEMA,
+  WORKFLOW_TOOL_DEFINITIONS,
+  WORKFLOW_TOOL_NAMES,
+};
 
 export interface MetaCredentialsResolved {
   accessToken: string | null;
@@ -1434,4 +1448,31 @@ export async function executeStudioRoutineTool(
     ctx,
     options.routineToolsDeps
   );
+}
+
+export function getChatWorkflowToolCatalog(): ToolDefinition[] {
+  return WORKFLOW_TOOL_DEFINITIONS;
+}
+
+export async function executeChatWorkflowTool(
+  toolName: string,
+  args: Record<string, unknown>,
+  options: {
+    store?: WorkflowStore;
+    engine?: WorkflowEngine;
+    wsHub?: WebSocketHub;
+    agenteId?: string;
+    requestSeed?: string;
+  }
+): Promise<unknown> {
+  if (!options.store || !options.engine) {
+    throw new Error("Serviço de workflows em grafo ainda não inicializado neste daemon.");
+  }
+  return await executeWorkflowToolCall(toolName, args, {
+    store: options.store,
+    engine: options.engine,
+    wsHub: options.wsHub,
+    agenteId: options.agenteId,
+    requestSeed: options.requestSeed,
+  });
 }
