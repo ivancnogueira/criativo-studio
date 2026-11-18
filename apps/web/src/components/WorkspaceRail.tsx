@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Settings,
   Smartphone,
+  Store,
   WalletCards,
 } from "lucide-react";
 import type {
@@ -27,6 +28,7 @@ export type StudioNavSection =
   | "tarefas"
   | "uso"
   | "arquivos"
+  | "loja"
   | "conexoes";
 
 interface WorkspaceRailProps {
@@ -52,6 +54,7 @@ const RAIL_ITEMS: Array<{
   { id: "tarefas", label: "Fila e Tarefas", Icon: WalletCards },
   { id: "uso", label: "Uso e Cotas", Icon: Activity },
   { id: "arquivos", label: "Arquivos e ImagePaths", Icon: FolderOpen },
+  { id: "loja", label: "Loja de Apps, Agentes e Habilidades", Icon: Store },
   { id: "conexoes", label: "Conexões e Cofre", Icon: Plug },
 ];
 

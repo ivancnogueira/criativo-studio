@@ -6,8 +6,22 @@ import type {
   CanalEquipe,
   ConectorIntegracaoInfo,
   ContaProvedorInfo,
+  GithubImportPreview,
   HabilidadeInstaladaInfo,
   IdentidadeMarcaStudio,
+  LojaCatalogoSnapshot,
+  MarketplaceAgentPackage,
+  MarketplaceAppItem,
+  MarketplaceAuthKind,
+  MarketplaceSkillItem,
+  MarketplaceSourceFilter,
+  MarketplaceTab,
+  McpAcessoAgentes,
+  McpOAuthAccountView,
+  McpOAuthStatus,
+  McpProbeResultado,
+  McpServidorConfig,
+  McpTransporte,
   MensagemChat,
   NivelEsforco,
   OnboardingEstado,
@@ -20,6 +34,12 @@ import type {
   UsoProvedoresSnapshot,
   WebSocketEnvelope,
   WebSocketEventMap,
+  WhatsAppContaResumo,
+  WhatsAppContatoAutorizado,
+  WhatsAppMensagemRegistro,
+  WhatsAppMetodoPareamento,
+  WhatsAppModoOperacao,
+  WhatsAppPairingRequest,
   WorkflowAresta,
   WorkflowNo,
   WorkflowVisual,
@@ -692,5 +712,731 @@ export const daemonApi = {
       tamanho_bytes: json.arquivo.tamanho_bytes,
       tipo_uso: json.arquivo.tipo_uso,
     };
+  },
+
+  // ------------------------------------------------------------------
+  // Fase 10 — WhatsApp Multi-Número
+  // ------------------------------------------------------------------
+  async listWhatsAppAccounts(): Promise<WhatsAppContaResumo[]> {
+    const res = await fetch("/api/mensageria/whatsapp/contas");
+    const json = (await res.json()) as { contas?: WhatsAppContaResumo[] };
+    return json.contas ?? [];
+  },
+
+  async createWhatsAppAccount(input: {
+    rotulo: string;
+    modo_operacao?: WhatsAppModoOperacao;
+    notificar_aprovacoes?: boolean;
+    codigo_autorizacao_obrigatorio?: boolean;
+    grupo_auto_responder?: boolean;
+    agente_orquestrador_id?: string | null;
+  }): Promise<WhatsAppContaResumo> {
+    const res = await fetch("/api/mensageria/whatsapp/contas", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const json = (await res.json()) as { conta?: WhatsAppContaResumo; erro?: string };
+    if (!res.ok || !json.conta) {
+      throw new Error(json.erro ?? "Falha ao criar conta WhatsApp.");
+    }
+    return json.conta;
+  },
+
+  async updateWhatsAppAccount(
+    contaId: string,
+    patch: Partial<{
+      rotulo: string;
+      modo_operacao: WhatsAppModoOperacao;
+      notificar_aprovacoes: boolean;
+      codigo_autorizacao_obrigatorio: boolean;
+      grupo_auto_responder: boolean;
+      agente_orquestrador_id: string | null;
+    }>
+  ): Promise<WhatsAppContaResumo> {
+    const res = await fetch(`/api/mensageria/whatsapp/contas/${encodeURIComponent(contaId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const json = (await res.json()) as { conta?: WhatsAppContaResumo; erro?: string };
+    if (!res.ok || !json.conta) {
+      throw new Error(json.erro ?? "Falha ao atualizar configurações do WhatsApp.");
+    }
+    return json.conta;
+  },
+
+  async deleteWhatsAppAccount(contaId: string): Promise<void> {
+    const res = await fetch(`/api/mensageria/whatsapp/contas/${encodeURIComponent(contaId)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const json = (await res.json().catch(() => ({}))) as { erro?: string };
+      throw new Error(json.erro ?? "Falha ao remover conta WhatsApp.");
+    }
+  },
+
+  async connectWhatsAppAccount(
+    contaId: string,
+    input: { mode?: WhatsAppMetodoPareamento; phoneNumber?: string }
+  ): Promise<{ status: Record<string, unknown>; conta: WhatsAppContaResumo | null }> {
+    const res = await fetch(
+      `/api/mensageria/whatsapp/contas/${encodeURIComponent(contaId)}/conectar`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    const json = (await res.json()) as {
+      status?: Record<string, unknown>;
+      conta?: WhatsAppContaResumo | null;
+      erro?: string;
+    };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao iniciar conexão WhatsApp.");
+    }
+    return { status: json.status ?? {}, conta: json.conta ?? null };
+  },
+
+  async disconnectWhatsAppAccount(
+    contaId: string,
+    limparSessao = false
+  ): Promise<{ status: Record<string, unknown>; conta: WhatsAppContaResumo | null }> {
+    const res = await fetch(
+      `/api/mensageria/whatsapp/contas/${encodeURIComponent(contaId)}/desconectar`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limparSessao }),
+      }
+    );
+    const json = (await res.json()) as {
+      status?: Record<string, unknown>;
+      conta?: WhatsAppContaResumo | null;
+      erro?: string;
+    };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao desconectar conta WhatsApp.");
+    }
+    return { status: json.status ?? {}, conta: json.conta ?? null };
+  },
+
+  async listWhatsAppContacts(contaId: string): Promise<WhatsAppContatoAutorizado[]> {
+    const res = await fetch(
+      `/api/mensageria/whatsapp/contas/${encodeURIComponent(contaId)}/contatos`
+    );
+    const json = (await res.json()) as { contatos?: WhatsAppContatoAutorizado[] };
+    return json.contatos ?? [];
+  },
+
+  async addWhatsAppContact(
+    contaId: string,
+    input: {
+      tipo?: "contato" | "grupo";
+      identificador_jid: string;
+      nome_exibicao?: string | null;
+      permitido?: boolean;
+      somente_mencao?: boolean;
+    }
+  ): Promise<WhatsAppContatoAutorizado> {
+    const res = await fetch(
+      `/api/mensageria/whatsapp/contas/${encodeURIComponent(contaId)}/contatos`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    const json = (await res.json()) as { contato?: WhatsAppContatoAutorizado; erro?: string };
+    if (!res.ok || !json.contato) {
+      throw new Error(json.erro ?? "Falha ao autorizar contato ou grupo.");
+    }
+    return json.contato;
+  },
+
+  async removeWhatsAppContact(contaId: string, autorizacaoId: string): Promise<void> {
+    const res = await fetch(
+      `/api/mensageria/whatsapp/contas/${encodeURIComponent(contaId)}/contatos/${encodeURIComponent(autorizacaoId)}`,
+      { method: "DELETE" }
+    );
+    if (!res.ok) {
+      const json = (await res.json().catch(() => ({}))) as { erro?: string };
+      throw new Error(json.erro ?? "Falha ao revogar contato autorizado.");
+    }
+  },
+
+  async listWhatsAppPairings(contaId: string): Promise<WhatsAppPairingRequest[]> {
+    const res = await fetch(
+      `/api/mensageria/whatsapp/contas/${encodeURIComponent(contaId)}/pareamentos`
+    );
+    const json = (await res.json()) as { pareamentos?: WhatsAppPairingRequest[] };
+    return json.pareamentos ?? [];
+  },
+
+  async resolveWhatsAppPairing(
+    contaId: string,
+    requestId: string,
+    aprovar: boolean
+  ): Promise<Record<string, unknown>> {
+    const res = await fetch(
+      `/api/mensageria/whatsapp/contas/${encodeURIComponent(contaId)}/pareamentos/${encodeURIComponent(requestId)}/resolver`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ aprovar }),
+      }
+    );
+    const json = (await res.json()) as Record<string, unknown>;
+    if (!res.ok) {
+      throw new Error(String(json.erro ?? "Falha ao resolver pedido de pareamento."));
+    }
+    return json;
+  },
+
+  async getWhatsAppHistory(
+    contaId: string,
+    chatJid?: string,
+    limit = 30
+  ): Promise<WhatsAppMensagemRegistro[]> {
+    const params = new URLSearchParams();
+    if (chatJid) params.set("chatJid", chatJid);
+    params.set("limit", String(limit));
+    const res = await fetch(
+      `/api/mensageria/whatsapp/contas/${encodeURIComponent(contaId)}/historico?${params.toString()}`
+    );
+    const json = (await res.json()) as { mensagens?: WhatsAppMensagemRegistro[] };
+    return json.mensagens ?? [];
+  },
+
+  async sendWhatsAppMessage(
+    contaId: string,
+    payload: { chatJid: string; text?: string; mediaPath?: string }
+  ): Promise<Record<string, unknown>> {
+    const res = await fetch(
+      `/api/mensageria/whatsapp/contas/${encodeURIComponent(contaId)}/enviar`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    );
+    const json = (await res.json()) as Record<string, unknown>;
+    if (!res.ok) {
+      throw new Error(String(json.erro ?? "Falha ao enviar mensagem pelo WhatsApp."));
+    }
+    return json;
+  },
+
+  // ------------------------------------------------------------------
+  // Fase 10 — MCPs & OAuth 2.1 PKCE
+  // ------------------------------------------------------------------
+  async listMcpServers(agentId?: string): Promise<
+    Array<
+      McpServidorConfig & {
+        oauthStatus: McpOAuthStatus;
+        oauthAccounts?: McpOAuthAccountView[];
+      }
+    >
+  > {
+    const qs = agentId ? `?agentId=${encodeURIComponent(agentId)}` : "";
+    const res = await fetch(`/api/mcps/servidores${qs}`);
+    const json = (await res.json()) as {
+      servidores?: Array<
+        McpServidorConfig & {
+          oauthStatus: McpOAuthStatus;
+          oauthAccounts?: McpOAuthAccountView[];
+        }
+      >;
+    };
+    return json.servidores ?? [];
+  },
+
+  async saveMcpServer(payload: {
+    mcp_id?: string;
+    nome: string;
+    transporte: McpTransporte;
+    comando?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    envPassthrough?: string[];
+    workingDirectory?: string | null;
+    url?: string | null;
+    headers?: Record<string, string>;
+    acesso?: McpAcessoAgentes;
+    origemAppSlug?: string | null;
+    contaRotulo?: string | null;
+    ativo?: boolean;
+    testar?: boolean;
+  }): Promise<{ servidor: McpServidorConfig; probe?: McpProbeResultado }> {
+    const res = await fetch("/api/mcps/servidores", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const json = (await res.json()) as {
+      servidor?: McpServidorConfig;
+      probe?: McpProbeResultado;
+      erro?: string;
+    };
+    if (!res.ok || !json.servidor) {
+      throw new Error(json.erro ?? "Falha ao registrar servidor MCP.");
+    }
+    return { servidor: json.servidor, probe: json.probe };
+  },
+
+  async updateMcpServer(
+    mcpId: string,
+    payload: Record<string, unknown>
+  ): Promise<McpServidorConfig> {
+    const res = await fetch(`/api/mcps/servidores/${encodeURIComponent(mcpId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const json = (await res.json()) as { servidor?: McpServidorConfig; erro?: string };
+    if (!res.ok || !json.servidor) {
+      throw new Error(json.erro ?? "Falha ao atualizar servidor MCP.");
+    }
+    return json.servidor;
+  },
+
+  async deleteMcpServer(mcpId: string): Promise<void> {
+    const res = await fetch(`/api/mcps/servidores/${encodeURIComponent(mcpId)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const json = (await res.json().catch(() => ({}))) as { erro?: string };
+      throw new Error(json.erro ?? "Falha ao remover servidor MCP.");
+    }
+  },
+
+  async testMcpServer(mcpId: string): Promise<McpProbeResultado & { servidor?: McpServidorConfig }> {
+    const res = await fetch(`/api/mcps/servidores/${encodeURIComponent(mcpId)}/testar`, {
+      method: "POST",
+    });
+    const json = (await res.json()) as McpProbeResultado & {
+      servidor?: McpServidorConfig;
+      erro?: string;
+    };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao testar servidor MCP.");
+    }
+    return json;
+  },
+
+  async testMcpDraft(payload: Record<string, unknown>): Promise<McpProbeResultado> {
+    const res = await fetch("/api/mcps/testar-rascunho", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const json = (await res.json()) as McpProbeResultado & { erro?: string };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao validar rascunho MCP.");
+    }
+    return json;
+  },
+
+  async setMcpServerStatus(
+    mcpId: string,
+    patch: { ativo?: boolean; acesso?: McpAcessoAgentes }
+  ): Promise<McpServidorConfig> {
+    const res = await fetch(`/api/mcps/servidores/${encodeURIComponent(mcpId)}/ativo`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const json = (await res.json()) as { servidor?: McpServidorConfig; erro?: string };
+    if (!res.ok || !json.servidor) {
+      throw new Error(json.erro ?? "Falha ao atualizar status/acesso do servidor MCP.");
+    }
+    return json.servidor;
+  },
+
+  async startMcpOAuth(
+    mcpId: string,
+    opts?: { contaChave?: string; scopes?: string[] }
+  ): Promise<{ authorizeUrl: string; state: string; redirectUri: string; contaChave: string }> {
+    const res = await fetch(`/api/mcps/servidores/${encodeURIComponent(mcpId)}/oauth/iniciar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(opts ?? {}),
+    });
+    const json = (await res.json()) as {
+      authorizeUrl?: string;
+      state?: string;
+      redirectUri?: string;
+      contaChave?: string;
+      erro?: string;
+    };
+    if (!res.ok || !json.authorizeUrl) {
+      throw new Error(json.erro ?? "Falha ao iniciar fluxo OAuth 2.1.");
+    }
+    return {
+      authorizeUrl: json.authorizeUrl,
+      state: json.state ?? "",
+      redirectUri: json.redirectUri ?? "",
+      contaChave: json.contaChave ?? "",
+    };
+  },
+
+  async disconnectMcpOAuth(mcpId: string, contaChave?: string): Promise<void> {
+    const res = await fetch(`/api/mcps/servidores/${encodeURIComponent(mcpId)}/oauth/desconectar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(contaChave ? { contaChave } : {}),
+    });
+    if (!res.ok) {
+      const json = (await res.json().catch(() => ({}))) as { erro?: string };
+      throw new Error(json.erro ?? "Falha ao desconectar conta OAuth.");
+    }
+  },
+
+  // ------------------------------------------------------------------
+  // Fase 10 — Loja Unificada (Apps, Agentes e Habilidades)
+  // ------------------------------------------------------------------
+  async getLojaCatalogo(params?: {
+    q?: string;
+    tab?: MarketplaceTab;
+    fonte?: MarketplaceSourceFilter;
+    category?: string;
+  }): Promise<LojaCatalogoSnapshot> {
+    const qs = new URLSearchParams();
+    if (params?.q) qs.set("q", params.q);
+    if (params?.tab) qs.set("tab", params.tab);
+    if (params?.fonte) qs.set("fonte", params.fonte);
+    if (params?.category) qs.set("category", params.category);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    const res = await fetch(`/api/loja/catalogo${suffix}`);
+    const json = (await res.json()) as LojaCatalogoSnapshot & { erro?: string };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao carregar catálogo da Loja.");
+    }
+    return json;
+  },
+
+  async getLojaAppDetail(slug: string): Promise<{
+    app: MarketplaceAppItem;
+    accounts: Array<{
+      server: McpServidorConfig;
+      contaRotulo: string | null;
+      oauthStatus: McpOAuthStatus;
+      oauthAccounts: McpOAuthAccountView[];
+    }>;
+    agents: Array<{ agente_id: string; nome: string; papel: string; modelo_padrao: string }>;
+    nativeStatus?: {
+      configuredKeys: string[];
+      missingKeys: string[];
+      whatsappAccountsCount?: number;
+      whatsappConnectedCount?: number;
+    };
+  }> {
+    const res = await fetch(`/api/loja/apps/${encodeURIComponent(slug)}`);
+    const json = (await res.json()) as {
+      app?: MarketplaceAppItem;
+      accounts?: Array<{
+        server: McpServidorConfig;
+        contaRotulo: string | null;
+        oauthStatus: McpOAuthStatus;
+        oauthAccounts: McpOAuthAccountView[];
+      }>;
+      agents?: Array<{ agente_id: string; nome: string; papel: string; modelo_padrao: string }>;
+      nativeStatus?: {
+        configuredKeys: string[];
+        missingKeys: string[];
+        whatsappAccountsCount?: number;
+        whatsappConnectedCount?: number;
+      };
+      erro?: string;
+    };
+    if (!res.ok || !json.app) {
+      throw new Error(json.erro ?? "Falha ao carregar detalhes do aplicativo.");
+    }
+    return {
+      app: json.app,
+      accounts: json.accounts ?? [],
+      agents: json.agents ?? [],
+      nativeStatus: json.nativeStatus,
+    };
+  },
+
+  async connectLojaApp(
+    slug: string,
+    payload: {
+      flowId?: string;
+      kind?: MarketplaceAuthKind;
+      mcpId?: string;
+      contaRotulo?: string;
+      fields?: Record<string, string>;
+      url?: string;
+      comando?: string;
+      args?: string[];
+      workingDirectory?: string | null;
+      acesso?: McpAcessoAgentes;
+    }
+  ): Promise<{
+    ok: boolean;
+    kind: MarketplaceAuthKind;
+    appSlug: string;
+    native?: boolean;
+    mcpId?: string;
+    authorizeUrl?: string;
+    state?: string;
+    server?: McpServidorConfig;
+    probe?: McpProbeResultado;
+    instructions?: string[];
+  }> {
+    const res = await fetch(`/api/loja/apps/${encodeURIComponent(slug)}/conectar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const json = (await res.json()) as {
+      ok?: boolean;
+      kind?: MarketplaceAuthKind;
+      appSlug?: string;
+      native?: boolean;
+      mcpId?: string;
+      authorizeUrl?: string;
+      state?: string;
+      server?: McpServidorConfig;
+      probe?: McpProbeResultado;
+      instructions?: string[];
+      erro?: string;
+    };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao conectar aplicativo da Loja.");
+    }
+    return {
+      ok: Boolean(json.ok),
+      kind: json.kind ?? "oauth",
+      appSlug: json.appSlug ?? slug,
+      native: json.native,
+      mcpId: json.mcpId,
+      authorizeUrl: json.authorizeUrl,
+      state: json.state,
+      server: json.server,
+      probe: json.probe,
+      instructions: json.instructions,
+    };
+  },
+
+  async installLojaAgent(
+    slug: string,
+    overrides?: {
+      name?: string;
+      model?: string;
+      pasta?: string;
+      activateRoutines?: boolean;
+      manifest?: Partial<MarketplaceAgentPackage>;
+    }
+  ): Promise<{
+    agente: { agente_id: string; nome: string; papel: string; modelo_padrao: string };
+    installedSkills: MarketplaceSkillItem[];
+  }> {
+    const res = await fetch(`/api/loja/agentes/${encodeURIComponent(slug)}/instalar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(overrides ? { overrides, manifest: overrides.manifest } : {}),
+    });
+    const json = (await res.json()) as {
+      agente?: { agente_id: string; nome: string; papel: string; modelo_padrao: string };
+      installedSkills?: MarketplaceSkillItem[];
+      erro?: string;
+    };
+    if (!res.ok || !json.agente) {
+      throw new Error(json.erro ?? "Falha ao instalar agente da Loja.");
+    }
+    return {
+      agente: json.agente,
+      installedSkills: json.installedSkills ?? [],
+    };
+  },
+
+  async exportLojaAgent(agenteId: string): Promise<MarketplaceAgentPackage & Record<string, unknown>> {
+    const res = await fetch(`/api/loja/agentes/${encodeURIComponent(agenteId)}/exportar`);
+    const json = (await res.json()) as (MarketplaceAgentPackage & Record<string, unknown>) & {
+      erro?: string;
+    };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao exportar agente.");
+    }
+    return json;
+  },
+
+  async duplicateLojaAgent(
+    agenteId: string,
+    nome?: string
+  ): Promise<{ agente: { agente_id: string; nome: string } }> {
+    const res = await fetch(`/api/loja/agentes/${encodeURIComponent(agenteId)}/duplicar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(nome ? { nome } : {}),
+    });
+    const json = (await res.json()) as {
+      agente?: { agente_id: string; nome: string };
+      erro?: string;
+    };
+    if (!res.ok || !json.agente) {
+      throw new Error(json.erro ?? "Falha ao duplicar agente.");
+    }
+    return { agente: json.agente };
+  },
+
+  async inspectGithubRepo(url: string, tipo: "skills" | "agents"): Promise<GithubImportPreview> {
+    const params = new URLSearchParams({ url, tipo });
+    const res = await fetch(`/api/loja/github/inspecionar?${params.toString()}`);
+    const json = (await res.json()) as GithubImportPreview & { erro?: string };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao inspecionar repositório do GitHub.");
+    }
+    return json;
+  },
+
+  async installFromGithub(payload: {
+    url: string;
+    kind: "skills" | "agents";
+    itemPaths?: string[];
+    targetAgentIds?: string[];
+  }): Promise<{ installedCount: number; installedSkills: unknown[]; installedAgents: unknown[] }> {
+    const res = await fetch("/api/loja/github/instalar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const json = (await res.json()) as {
+      installedCount?: number;
+      installedSkills?: unknown[];
+      installedAgents?: unknown[];
+      erro?: string;
+    };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao instalar pacote do GitHub.");
+    }
+    return {
+      installedCount: json.installedCount ?? 0,
+      installedSkills: json.installedSkills ?? [],
+      installedAgents: json.installedAgents ?? [],
+    };
+  },
+
+  async listLojaSkills(params?: {
+    q?: string;
+    fonte?: MarketplaceSourceFilter;
+    agentId?: string;
+  }): Promise<MarketplaceSkillItem[]> {
+    const qs = new URLSearchParams();
+    if (params?.q) qs.set("q", params.q);
+    if (params?.fonte) qs.set("fonte", params.fonte);
+    if (params?.agentId) qs.set("agentId", params.agentId);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    const res = await fetch(`/api/loja/habilidades${suffix}`);
+    const json = (await res.json()) as { habilidades?: MarketplaceSkillItem[] };
+    return json.habilidades ?? [];
+  },
+
+  async readLojaSkill(skillId: string): Promise<{ skill: MarketplaceSkillItem; markdown: string }> {
+    const res = await fetch(`/api/loja/habilidades/${encodeURIComponent(skillId)}`);
+    const json = (await res.json()) as {
+      skill?: MarketplaceSkillItem;
+      markdown?: string;
+      erro?: string;
+    };
+    if (!res.ok || !json.skill) {
+      throw new Error(json.erro ?? "Habilidade não encontrada.");
+    }
+    return { skill: json.skill, markdown: json.markdown ?? "" };
+  },
+
+  async createCustomSkill(payload: {
+    name: string;
+    slug?: string;
+    description: string;
+    category?: string;
+    instructions: string;
+    agentIds?: string[];
+  }): Promise<MarketplaceSkillItem> {
+    const res = await fetch("/api/loja/habilidades", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const json = (await res.json()) as { habilidade?: MarketplaceSkillItem; erro?: string };
+    if (!res.ok || !json.habilidade) {
+      throw new Error(json.erro ?? "Falha ao criar habilidade personalizada.");
+    }
+    return json.habilidade;
+  },
+
+  async installCatalogSkill(
+    slugOrId: string,
+    targetAgentIds?: string[]
+  ): Promise<MarketplaceSkillItem> {
+    const res = await fetch(`/api/loja/habilidades/${encodeURIComponent(slugOrId)}/instalar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetAgentIds: targetAgentIds ?? [] }),
+    });
+    const json = (await res.json()) as { habilidade?: MarketplaceSkillItem; erro?: string };
+    if (!res.ok || !json.habilidade) {
+      throw new Error(json.erro ?? "Falha ao instalar habilidade.");
+    }
+    return json.habilidade;
+  },
+
+  async setSkillAgentsBatch(
+    skillId: string,
+    agentIds: string[]
+  ): Promise<{ skillId: string; previousAgentIds: string[]; currentAgentIds: string[] }> {
+    const res = await fetch(`/api/loja/habilidades/${encodeURIComponent(skillId)}/agentes`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentIds }),
+    });
+    const json = (await res.json()) as {
+      skillId?: string;
+      previousAgentIds?: string[];
+      currentAgentIds?: string[];
+      erro?: string;
+    };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao vincular habilidade aos agentes.");
+    }
+    return {
+      skillId: json.skillId ?? skillId,
+      previousAgentIds: json.previousAgentIds ?? [],
+      currentAgentIds: json.currentAgentIds ?? agentIds,
+    };
+  },
+
+  async setAgentSkillEnabled(
+    agenteId: string,
+    skillId: string,
+    habilitada: boolean
+  ): Promise<{ ok: boolean }> {
+    const res = await fetch(
+      `/api/loja/agentes/${encodeURIComponent(agenteId)}/habilidades/${encodeURIComponent(skillId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ habilitada }),
+      }
+    );
+    const json = (await res.json()) as { ok?: boolean; erro?: string };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao alterar habilidade do agente.");
+    }
+    return { ok: Boolean(json.ok ?? true) };
+  },
+
+  async deleteLojaSkill(skillId: string): Promise<void> {
+    const res = await fetch(`/api/loja/habilidades/${encodeURIComponent(skillId)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const json = (await res.json().catch(() => ({}))) as { erro?: string };
+      throw new Error(json.erro ?? "Falha ao remover habilidade.");
+    }
   },
 };
