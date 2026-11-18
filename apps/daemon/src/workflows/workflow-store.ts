@@ -563,14 +563,8 @@ export class WorkflowStore {
         (n) => n.tipo !== "nota" && n.tipo !== "shape" && n.tipo !== "text"
       ).length;
       return {
-        workflow_id: visual.workflow_id,
-        nome: visual.nome,
-        descricao: visual.descricao,
-        ativo: visual.ativo,
+        ...visual,
         revisao_grafo: visual.revisao_grafo ?? 0,
-        ultima_execucao_em: visual.ultima_execucao_em,
-        atualizado_em: visual.atualizado_em,
-        last_run: visual.last_run ?? null,
         qtd_nos: execCount,
         qtd_arestas: visual.arestas.length,
       };

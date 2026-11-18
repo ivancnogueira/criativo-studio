@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, extname, relative, resolve, sep } from "node:path";
@@ -14,6 +14,7 @@ import type {
   ToolDefinition,
   WorkflowAresta,
   WorkflowNo,
+  WorkflowTraco,
   WorkflowVisual,
 } from "@criativo/contracts";
 import type { WhatsAppOrchestrator, WhatsAppSessionManager } from "@criativo/whatsapp";
@@ -48,17 +49,24 @@ import {
 import { tryHandleWhatsAppMcpStoreRoute } from "./routes-whatsapp-mcp-store.ts";
 import {
   buildStudioLiveContext,
+  executeChatWorkflowTool,
   executeStudioExtensionTool,
   executeStudioRoutineTool,
+  getChatWorkflowToolCatalog,
   isPhase10ExtensionTool,
   isRoutineToolName,
   isUpgradeUnlocked,
+  isWorkflowToolName,
   PHASE10_TOOL_DEFINITIONS,
   ROUTINE_AGENT_TOOLS_SCHEMA,
   syncWorkspaceFilesToDatabase,
   validateMetaIntegration,
 } from "./studio-tools-bridge.ts";
 import type { RoutineToolsDeps } from "../routines/routine-agent-tools.ts";
+import type { TelegramNotificationBot } from "../messaging/telegram-bot.ts";
+import type { WorkflowEngine } from "../workflows/workflow-engine.ts";
+import { WorkflowStore, WorkflowValidationError } from "../workflows/workflow-store.ts";
+import type { WorkflowTriggers } from "../workflows/workflow-triggers.ts";
 import type { WebSocketHub } from "./websocket-hub.ts";
 
 export interface StudioRoutesDeps {
@@ -70,6 +78,7 @@ export interface StudioRoutesDeps {
   wsHub: WebSocketHub;
   sendJson: (res: ServerResponse, statusCode: number, body: unknown) => void;
   readJsonBody: (req: IncomingMessage) => Promise<Record<string, unknown>>;
+  readRawBody?: (req: IncomingMessage) => Promise<Buffer>;
   workspaceRoot?: string;
   mcpGateway?: McpGateway;
   catalogService?: CatalogService;
@@ -78,6 +87,10 @@ export interface StudioRoutesDeps {
   whatsappManager?: WhatsAppSessionManager;
   whatsappOrchestrator?: WhatsAppOrchestrator;
   routineToolsDeps?: RoutineToolsDeps;
+  workflowStore?: WorkflowStore;
+  workflowEngine?: WorkflowEngine;
+  workflowTriggers?: WorkflowTriggers;
+  telegramBot?: TelegramNotificationBot;
 }
 
 const RAW_MIME_MAP: Record<string, string> = {
@@ -159,26 +172,118 @@ function mapChatRow(row: {
   };
 }
 
-function mapWorkflowRow(row: {
-  workflow_id: string;
-  nome: string;
-  descricao: string | null;
-  nos_json: string;
-  arestas_json: string;
-  ativo: number;
-  ultima_execucao_em: string | null;
-  atualizado_em: string;
-}): WorkflowVisual {
+async function readRawBodyFallback(req: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+function resolveWorkflowRuntime(deps: StudioRoutesDeps): {
+  store: WorkflowStore;
+  engine?: WorkflowEngine;
+  triggers?: WorkflowTriggers;
+} {
+  const store = deps.workflowStore ?? new WorkflowStore({ db: deps.db, vault: deps.vault });
   return {
-    workflow_id: row.workflow_id,
-    nome: row.nome,
-    descricao: row.descricao ?? "",
-    nos: safeJsonParse<WorkflowNo[]>(row.nos_json, []),
-    arestas: safeJsonParse<WorkflowAresta[]>(row.arestas_json, []),
-    ativo: row.ativo !== 0,
-    ultima_execucao_em: row.ultima_execucao_em,
-    atualizado_em: row.atualizado_em,
+    store,
+    engine: deps.workflowEngine,
+    triggers: deps.workflowTriggers,
   };
+}
+
+interface ParsedTextToolCall {
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+function parseWorkflowTextToolCalls(text: string): ParsedTextToolCall[] {
+  const calls: ParsedTextToolCall[] = [];
+  const regex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1]) as {
+        name?: unknown;
+        arguments?: unknown;
+      };
+      if (typeof parsed.name === "string" && isWorkflowToolName(parsed.name)) {
+        calls.push({
+          name: parsed.name,
+          arguments:
+            parsed.arguments && typeof parsed.arguments === "object"
+              ? (parsed.arguments as Record<string, unknown>)
+              : {},
+        });
+      }
+    } catch {
+      // ignora bloco inválido
+    }
+  }
+  return calls;
+}
+
+async function runTextModelWorkflowToolLoop(params: {
+  initialText: string;
+  invokeFollowUp: (promptFollowUp: string) => Promise<string>;
+  deps: StudioRoutesDeps;
+  agenteId: string;
+  turnId: string;
+  steps: PassoChat[];
+  onProgress?: (event: {
+    fase: "iniciado" | "etapa" | "chunk" | "concluido" | "erro";
+    mensagem_status?: string;
+    step?: PassoChat;
+    delta?: string;
+  }) => void;
+}): Promise<string> {
+  let currentText = params.initialText;
+  if (!params.deps.workflowStore || !params.deps.workflowEngine) {
+    return currentText;
+  }
+
+  for (let round = 0; round < 4; round += 1) {
+    const calls = parseWorkflowTextToolCalls(currentText);
+    if (calls.length === 0) break;
+
+    const toolResults: Array<{ name: string; output: unknown }> = [];
+    for (const call of calls) {
+      const t0 = Date.now();
+      let out: unknown;
+      let failed = false;
+      try {
+        out = await executeChatWorkflowTool(call.name, call.arguments, {
+          store: params.deps.workflowStore,
+          engine: params.deps.workflowEngine,
+          wsHub: params.deps.wsHub,
+          agenteId: params.agenteId,
+          requestSeed: params.turnId,
+        });
+      } catch (err) {
+        failed = true;
+        out = { erro: err instanceof Error ? err.message : String(err) };
+      }
+
+      const step: PassoChat = {
+        id: `step-${randomUUID().slice(0, 8)}`,
+        ferramenta: call.name,
+        titulo: failed ? `Falha em ${call.name}` : `Ferramenta ${call.name} executada`,
+        detalhes: JSON.stringify(out).slice(0, 800),
+        status: failed ? "erro" : "concluido",
+        duracao_ms: Date.now() - t0,
+      };
+      params.steps.push(step);
+      params.onProgress?.({ fase: "etapa", mensagem_status: step.titulo, step });
+      toolResults.push({ name: call.name, output: out });
+    }
+
+    currentText = await params.invokeFollowUp(
+      `Resultados das ferramentas executadas:\n${JSON.stringify(toolResults, null, 2)}\n\nContinue respondendo ao usuário em pt-br com base nesses resultados reais (ou chame nova ferramenta via <tool_call> se necessário).`
+    );
+  }
+
+  return currentText;
 }
 
 function extractMentionedAgentIds(text: string, excludeId?: string): string[] {
@@ -453,13 +558,26 @@ async function generateAgentChatReply(
     );
   }
 
+  if (deps.workflowStore && deps.workflowEngine) {
+    promptBaseParts.push(
+      `## Ferramentas de Workflow em Grafo Disponíveis\nVocê pode inspecionar, criar/editar, executar (completo ou parcial a partir de um nó) e consultar histórico de workflows pelas ferramentas: list_workflows, read_workflow, edit_workflow, delete_workflow, run_workflow e read_workflow_runs. Regra crítica de segurança: JAMAIS execute delete_workflow sem confirmação humana explícita prévia (confirmed_by_human: true).`
+    );
+  }
+
   const promptBase = promptBaseParts.join("\n\n");
   const mcpTools = deps.mcpGateway
     ? await deps.mcpGateway.getToolsForAgent(agente.agente_id).catch(() => [])
     : [];
   const availableChatToolsMap = new Map<string, ToolDefinition>();
   const studioRoutineTools = deps.routineToolsDeps ? ROUTINE_AGENT_TOOLS_SCHEMA : [];
-  for (const t of [...PHASE10_TOOL_DEFINITIONS, ...studioRoutineTools, ...mcpTools]) {
+  const studioWorkflowTools =
+    deps.workflowStore && deps.workflowEngine ? getChatWorkflowToolCatalog() : [];
+  for (const t of [
+    ...PHASE10_TOOL_DEFINITIONS,
+    ...studioRoutineTools,
+    ...studioWorkflowTools,
+    ...mcpTools,
+  ]) {
     if (!availableChatToolsMap.has(t.name)) {
       availableChatToolsMap.set(t.name, t);
     }
@@ -771,12 +889,41 @@ async function generateAgentChatReply(
             : userPrompt,
       });
 
+      const cliSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e objetiva. Nunca invente handles ou marcas reais.${
+        deps.workflowStore && deps.workflowEngine
+          ? "\nQuando precisar consultar/editar/executar workflows em grafo, responda contendo <tool_call>{\"name\":\"...\",\"arguments\":{...}}</tool_call>."
+          : ""
+      }`;
       const cliResult = await deps.providerConnection.getCliOAuthService().executeTurn({
         provedor: providerName as "claude" | "openai",
         modelId: agente.modelo_padrao,
-        systemPrompt: `${promptBase}\nResponda em pt-br de forma prática e objetiva. Nunca invente handles ou marcas reais.`,
+        systemPrompt: cliSystemPrompt,
         messages: cliMsgs,
         preferredAccountId: typeof config.provider_account_id === "string" ? config.provider_account_id : null,
+      });
+
+      const cliFinalText = await runTextModelWorkflowToolLoop({
+        initialText: cliResult.text,
+        invokeFollowUp: async (followUpPrompt) => {
+          const next = await deps.providerConnection.getCliOAuthService().executeTurn({
+            provedor: providerName as "claude" | "openai",
+            modelId: agente.modelo_padrao,
+            systemPrompt: cliSystemPrompt,
+            messages: [
+              ...cliMsgs,
+              { role: "assistant", text: cliResult.text },
+              { role: "user", text: followUpPrompt },
+            ],
+            preferredAccountId:
+              typeof config.provider_account_id === "string" ? config.provider_account_id : null,
+          });
+          return next.text;
+        },
+        deps,
+        agenteId: agente.agente_id,
+        turnId,
+        steps,
+        onProgress,
       });
 
       recordChatTurnUsage(deps.db, {
@@ -797,7 +944,7 @@ async function generateAgentChatReply(
         status: "concluido",
         duracao_ms: Date.now() - t0,
       });
-      return { markdown: cliResult.text, steps, tarefaCriadaId, anexosGerados };
+      return { markdown: cliFinalText, steps, tarefaCriadaId, anexosGerados };
     } catch (cliErr) {
       lastExecutionError = cliErr instanceof Error ? cliErr.message : String(cliErr);
       steps.push({
@@ -838,9 +985,14 @@ async function generateAgentChatReply(
             : userPrompt,
       });
 
+      const ocSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e especializada.${
+        deps.workflowStore && deps.workflowEngine
+          ? "\nQuando precisar consultar/editar/executar workflows em grafo, responda contendo <tool_call>{\"name\":\"...\",\"arguments\":{...}}</tool_call>."
+          : ""
+      }`;
       const ocResult = await deps.providerConnection.getOpenCodeService().executePrompt({
         modelId: agente.modelo_padrao,
-        systemPrompt: `${promptBase}\nResponda em pt-br de forma prática e especializada.`,
+        systemPrompt: ocSystemPrompt,
         messages: ocMsgs,
         agentId: agente.agente_id,
         onDelta: (delta) => {
@@ -853,6 +1005,28 @@ async function generateAgentChatReply(
       });
 
       if (ocResult.text) {
+        const ocFinalText = await runTextModelWorkflowToolLoop({
+          initialText: ocResult.text,
+          invokeFollowUp: async (followUpPrompt) => {
+            const next = await deps.providerConnection.getOpenCodeService().executePrompt({
+              modelId: agente.modelo_padrao,
+              systemPrompt: ocSystemPrompt,
+              messages: [
+                ...ocMsgs,
+                { role: "assistant", text: ocResult.text },
+                { role: "user", text: followUpPrompt },
+              ],
+              agentId: agente.agente_id,
+            });
+            return next.text;
+          },
+          deps,
+          agenteId: agente.agente_id,
+          turnId,
+          steps,
+          onProgress,
+        });
+
         recordChatTurnUsage(deps.db, {
           agentId: agente.agente_id,
           sessionId,
@@ -873,7 +1047,7 @@ async function generateAgentChatReply(
         };
         steps.push(doneStep);
         onProgress?.({ fase: "etapa", step: doneStep });
-        return { markdown: ocResult.text, steps, tarefaCriadaId, anexosGerados };
+        return { markdown: ocFinalText, steps, tarefaCriadaId, anexosGerados };
       }
     } catch (ocErr) {
       lastExecutionError = ocErr instanceof Error ? ocErr.message : String(ocErr);
@@ -914,7 +1088,7 @@ async function generateAgentChatReply(
       let totalOutputTokens = 0;
       let finalReplyText = "";
 
-      for (let iter = 0; iter < 6; iter += 1) {
+      for (let iter = 0; iter < 8; iter += 1) {
         const llmResult = await client.executeTurn({
           model: agente.modelo_padrao,
           systemPrompt: systemPromptChat,
@@ -972,6 +1146,14 @@ async function generateAgentChatReply(
                 agenteId: agente.agente_id,
                 turnOrigin: "human",
                 routineToolsDeps: deps.routineToolsDeps,
+              });
+            } else if (isWorkflowToolName(call.name)) {
+              toolOutput = await executeChatWorkflowTool(call.name, call.arguments, {
+                store: deps.workflowStore,
+                engine: deps.workflowEngine,
+                wsHub: deps.wsHub,
+                agenteId: agente.agente_id,
+                requestSeed: turnId,
               });
             } else if (deps.mcpGateway && call.name.startsWith("mcp_")) {
               toolOutput = await deps.mcpGateway.callMcpTool(call.name, call.arguments, {
@@ -1078,7 +1260,7 @@ async function generateAgentChatReply(
           });
         }
 
-        if (iter === 5 && !finalReplyText) {
+        if (iter === 7 && !finalReplyText) {
           const finalTurn = await client.executeTurn({
             model: agente.modelo_padrao,
             systemPrompt: systemPromptChat,
@@ -1153,9 +1335,14 @@ async function generateAgentChatReply(
             : userPrompt,
       });
 
+      const agSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e especializada como ${agente.nome}. Use tabelas Markdown quando ajudar na organização. Nunca invente handles ou marcas reais: utilize apenas os informados pelo usuário.${
+        deps.workflowStore && deps.workflowEngine
+          ? "\nQuando precisar consultar/editar/executar workflows em grafo, responda contendo <tool_call>{\"name\":\"...\",\"arguments\":{...}}</tool_call>."
+          : ""
+      }`;
       const liveResult = await agService.executeCodeAssistGenerate({
         model: agente.modelo_padrao,
-        systemPrompt: `${promptBase}\nResponda em pt-br de forma prática e especializada como ${agente.nome}. Use tabelas Markdown quando ajudar na organização. Nunca invente handles ou marcas reais: utilize apenas os informados pelo usuário.`,
+        systemPrompt: agSystemPrompt,
         messages: historyMsgs,
         imagePaths: resolvedImageDiskPaths,
         agentId: agente.agente_id,
@@ -1170,6 +1357,30 @@ async function generateAgentChatReply(
       });
 
       if (liveResult.text && liveResult.text.length > 0) {
+        const liveFinalText = await runTextModelWorkflowToolLoop({
+          initialText: liveResult.text,
+          invokeFollowUp: async (followUpPrompt) => {
+            const next = await agService.executeCodeAssistGenerate({
+              model: agente.modelo_padrao,
+              systemPrompt: agSystemPrompt,
+              messages: [
+                ...historyMsgs,
+                { role: "assistant", text: liveResult.text },
+                { role: "user", text: followUpPrompt },
+              ],
+              agentId: agente.agente_id,
+              preferredAccountId:
+                typeof config.provider_account_id === "string" ? config.provider_account_id : null,
+            });
+            return next.text;
+          },
+          deps,
+          agenteId: agente.agente_id,
+          turnId,
+          steps,
+          onProgress,
+        });
+
         recordChatTurnUsage(deps.db, {
           agentId: agente.agente_id,
           sessionId,
@@ -1188,7 +1399,7 @@ async function generateAgentChatReply(
           status: "concluido",
           duracao_ms: Date.now() - t0,
         });
-        return { markdown: liveResult.text, steps, tarefaCriadaId, anexosGerados };
+        return { markdown: liveFinalText, steps, tarefaCriadaId, anexosGerados };
       }
     } catch (liveErr) {
       lastExecutionError = liveErr instanceof Error ? liveErr.message : String(liveErr);
@@ -2372,159 +2583,477 @@ export async function tryHandleStudioRoute(
     return true;
   }
 
-  // 5. Fluxos de Trabalho Visuais (Workflows Dot-Grid)
+  // 5. Fluxos de Trabalho Visuais & Motor em Grafo (Fase 12)
+  const wfWebhookMatch = path.match(/^\/api\/workflows\/webhook\/([^/]+)$/);
+  if (method === "POST" && wfWebhookMatch) {
+    const routeId = decodeURIComponent(wfWebhookMatch[1]);
+    if (!deps.workflowTriggers) {
+      sendJson(res, 503, { erro: "WorkflowTriggers não inicializado neste daemon." });
+      return true;
+    }
+    const rawBody = deps.readRawBody
+      ? await deps.readRawBody(req)
+      : await readRawBodyFallback(req);
+    const sigHeader =
+      (typeof req.headers["x-criativo-signature"] === "string"
+        ? req.headers["x-criativo-signature"]
+        : undefined) ??
+      (typeof req.headers["x-hub-signature-256"] === "string"
+        ? req.headers["x-hub-signature-256"]
+        : undefined);
+    const deliveryIdHeader =
+      (typeof req.headers["x-delivery-id"] === "string"
+        ? req.headers["x-delivery-id"]
+        : undefined) ??
+      (typeof req.headers["x-request-id"] === "string"
+        ? req.headers["x-request-id"]
+        : undefined);
+
+    const result = await deps.workflowTriggers.handleWebhookRequest({
+      routeId,
+      rawBody,
+      signatureHeader: sigHeader,
+      deliveryIdHeader,
+    });
+    sendJson(res, result.httpStatus, result.body);
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/workflows/conector-evento") {
+    if (!deps.workflowTriggers) {
+      sendJson(res, 503, { erro: "WorkflowTriggers não inicializado neste daemon." });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    const conectorId = typeof body.conector_id === "string" ? body.conector_id : "";
+    const evento = typeof body.evento === "string" ? body.evento : "";
+    if (!conectorId || !evento) {
+      sendJson(res, 400, { erro: "Campos obrigatórios: 'conector_id' e 'evento'." });
+      return true;
+    }
+    const triggeredRuns = await deps.workflowTriggers.receiveConnectorTrigger({
+      conectorId,
+      evento,
+      dados: body.dados ?? {},
+      eventId: typeof body.event_id === "string" ? body.event_id : undefined,
+    });
+    sendJson(res, 202, { ok: true, triggered_runs: triggeredRuns });
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/mensageria/telegram/webhook") {
+    const expectedSecret =
+      deps.vault?.getSecret("TELEGRAM_WEBHOOK_SECRET") ??
+      deps.vault?.getSecret("telegram_webhook_secret");
+    if (expectedSecret) {
+      const provided =
+        typeof req.headers["x-telegram-bot-api-secret-token"] === "string"
+          ? req.headers["x-telegram-bot-api-secret-token"]
+          : "";
+      const a = Buffer.from(provided, "utf8");
+      const b = Buffer.from(expectedSecret, "utf8");
+      if (a.length !== b.length || !timingSafeEqual(a, b)) {
+        sendJson(res, 401, { erro: "Secret token Telegram inválido." });
+        return true;
+      }
+    }
+
+    const body = await readJsonBody(req);
+    if (body.callback_query && typeof body.callback_query === "object") {
+      const cq = body.callback_query as { id?: unknown; data?: unknown };
+      if (typeof cq.id === "string") {
+        await deps.telegramBot?.handleCallbackQuery({
+          id: cq.id,
+          data: typeof cq.data === "string" ? cq.data : undefined,
+        });
+      }
+    }
+    if (body.message && typeof body.message === "object") {
+      const msg = body.message as {
+        message_id?: unknown;
+        text?: unknown;
+        chat?: { id?: unknown; username?: unknown };
+        from?: { username?: unknown };
+      };
+      if (msg.chat?.id !== undefined && typeof msg.text === "string") {
+        await deps.workflowTriggers?.receiveTelegramTrigger({
+          chatId: String(msg.chat.id),
+          username:
+            typeof msg.from?.username === "string"
+              ? msg.from.username
+              : typeof msg.chat.username === "string"
+                ? msg.chat.username
+                : undefined,
+          text: msg.text,
+          messageId: String(msg.message_id ?? randomUUID()),
+        });
+      }
+    }
+    sendJson(res, 200, { ok: true });
+    return true;
+  }
+
+  const wfRunDetailMatch = path.match(/^\/api\/workflows\/execucoes\/([^/]+)$/);
+  if (method === "GET" && wfRunDetailMatch) {
+    const runId = decodeURIComponent(wfRunDetailMatch[1]);
+    const { store } = resolveWorkflowRuntime(deps);
+    const execucao = store.getRunDetail(runId);
+    if (!execucao) {
+      sendJson(res, 404, { erro: `Execução '${runId}' não encontrada.` });
+      return true;
+    }
+    sendJson(res, 200, { execucao });
+    return true;
+  }
+
+  const wfRunStopMatch = path.match(/^\/api\/workflows\/execucoes\/([^/]+)\/parar$/);
+  if (method === "POST" && wfRunStopMatch) {
+    const runId = decodeURIComponent(wfRunStopMatch[1]);
+    if (!deps.workflowEngine) {
+      sendJson(res, 503, { erro: "WorkflowEngine não inicializado neste daemon." });
+      return true;
+    }
+    const execucao = await deps.workflowEngine.stopRun(runId);
+    if (!execucao) {
+      sendJson(res, 404, { erro: `Execução '${runId}' não encontrada.` });
+      return true;
+    }
+    sendJson(res, 200, { ok: true, execucao });
+    return true;
+  }
+
+  const wfStepDecideMatch = path.match(/^\/api\/workflows\/etapas\/([^/]+)\/decidir$/);
+  if (method === "POST" && wfStepDecideMatch) {
+    const stepId = decodeURIComponent(wfStepDecideMatch[1]);
+    if (!deps.workflowEngine) {
+      sendJson(res, 503, { erro: "WorkflowEngine não inicializado neste daemon." });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    if (typeof body.approved !== "boolean") {
+      sendJson(res, 400, { erro: "Campo obrigatório: 'approved' (boolean)." });
+      return true;
+    }
+    try {
+      await deps.workflowEngine.decideStep(stepId, body.approved, "web");
+      sendJson(res, 200, { ok: true, step_id: stepId, approved: body.approved });
+    } catch (err) {
+      if (err instanceof WorkflowValidationError) {
+        sendJson(res, err.statusCode, { erro: err.message });
+      } else {
+        throw err;
+      }
+    }
+    return true;
+  }
+
+  const wfStepRetryMatch = path.match(/^\/api\/workflows\/etapas\/([^/]+)\/retentar$/);
+  if (method === "POST" && wfStepRetryMatch) {
+    const stepId = decodeURIComponent(wfStepRetryMatch[1]);
+    if (!deps.workflowEngine) {
+      sendJson(res, 503, { erro: "WorkflowEngine não inicializado neste daemon." });
+      return true;
+    }
+    try {
+      const resultado = await deps.workflowEngine.retryStep(stepId);
+      sendJson(res, 200, { ok: true, resultado });
+    } catch (err) {
+      if (err instanceof WorkflowValidationError) {
+        sendJson(res, err.statusCode, { erro: err.message });
+      } else {
+        throw err;
+      }
+    }
+    return true;
+  }
+
+  const wfStepStopMatch = path.match(/^\/api\/workflows\/etapas\/([^/]+)\/parar$/);
+  if (method === "POST" && wfStepStopMatch) {
+    const stepId = decodeURIComponent(wfStepStopMatch[1]);
+    if (!deps.workflowEngine) {
+      sendJson(res, 503, { erro: "WorkflowEngine não inicializado neste daemon." });
+      return true;
+    }
+    await deps.workflowEngine.stopStep(stepId);
+    sendJson(res, 200, { ok: true, step_id: stepId });
+    return true;
+  }
+
   if (method === "GET" && path === "/api/workflows") {
-    const rows = db.connection
-      .prepare(`SELECT * FROM projecao_workflows ORDER BY atualizado_em DESC;`)
-      .all() as Array<Parameters<typeof mapWorkflowRow>[0]>;
-    sendJson(res, 200, { workflows: rows.map(mapWorkflowRow) });
+    const { store } = resolveWorkflowRuntime(deps);
+    sendJson(res, 200, { workflows: store.listWorkflows() });
     return true;
   }
 
   if (method === "POST" && path === "/api/workflows") {
     const body = await readJsonBody(req);
-    const workflowId = `wf-${randomUUID().slice(0, 8)}`;
-    const nome =
-      typeof body.nome === "string" && body.nome.trim().length > 0
-        ? body.nome.trim()
-        : "Fluxo de trabalho sem título";
-    const descricao = typeof body.descricao === "string" ? body.descricao : "";
-    const nos = Array.isArray(body.nos) ? (body.nos as WorkflowNo[]) : [];
-    const arestas = Array.isArray(body.arestas) ? (body.arestas as WorkflowAresta[]) : [];
-    const agora = new Date().toISOString();
+    const { store } = resolveWorkflowRuntime(deps);
+    try {
+      const detail = store.createWorkflow({
+        workflow_id: typeof body.workflow_id === "string" ? body.workflow_id : undefined,
+        nome: typeof body.nome === "string" ? body.nome : undefined,
+        descricao: typeof body.descricao === "string" ? body.descricao : undefined,
+        nos: Array.isArray(body.nos) ? (body.nos as WorkflowNo[]) : [],
+        arestas: Array.isArray(body.arestas) ? (body.arestas as WorkflowAresta[]) : [],
+        tracos: Array.isArray(body.tracos) ? (body.tracos as WorkflowTraco[]) : [],
+        ativo: typeof body.ativo === "boolean" ? body.ativo : true,
+      });
+      wsHub.broadcast("workflow:updated", {
+        workflow_id: detail.workflow.workflow_id,
+        revisao_grafo: detail.workflow.revisao_grafo ?? 0,
+        acao: "created",
+      });
+      sendJson(res, 201, { workflow: detail.workflow, detail });
+    } catch (err) {
+      if (err instanceof WorkflowValidationError) {
+        sendJson(res, err.statusCode, { erro: err.message });
+      } else {
+        throw err;
+      }
+    }
+    return true;
+  }
 
-    db.connection
-      .prepare(
-        `INSERT INTO projecao_workflows (workflow_id, nome, descricao, nos_json, arestas_json, ativo, ultima_execucao_em, atualizado_em)
-         VALUES (?, ?, ?, ?, ?, 1, NULL, ?);`
-      )
-      .run(workflowId, nome, descricao, JSON.stringify(nos), JSON.stringify(arestas), agora);
+  const wfVersionsMatch = path.match(/^\/api\/workflows\/([^/]+)\/versoes$/);
+  if (method === "GET" && wfVersionsMatch) {
+    const wfId = decodeURIComponent(wfVersionsMatch[1]);
+    const { store } = resolveWorkflowRuntime(deps);
+    sendJson(res, 200, { versoes: store.listVersions(wfId) });
+    return true;
+  }
 
-    const created = db.connection
-      .prepare(`SELECT * FROM projecao_workflows WHERE workflow_id = ?;`)
-      .get(workflowId) as Parameters<typeof mapWorkflowRow>[0];
+  const wfVersionRestoreMatch = path.match(
+    /^\/api\/workflows\/([^/]+)\/versoes\/([^/]+)\/restaurar$/
+  );
+  if (method === "POST" && wfVersionRestoreMatch) {
+    const wfId = decodeURIComponent(wfVersionRestoreMatch[1]);
+    const versionId = decodeURIComponent(wfVersionRestoreMatch[2]);
+    const { store } = resolveWorkflowRuntime(deps);
+    try {
+      const detail = store.restoreVersion(wfId, versionId);
+      if (!detail) {
+        sendJson(res, 404, { erro: "Workflow ou versão não encontrados." });
+        return true;
+      }
+      wsHub.broadcast("workflow:updated", {
+        workflow_id: detail.workflow.workflow_id,
+        revisao_grafo: detail.workflow.revisao_grafo ?? 0,
+        acao: "restored",
+      });
+      sendJson(res, 200, { workflow: detail.workflow, detail });
+    } catch (err) {
+      if (err instanceof WorkflowValidationError) {
+        sendJson(res, err.statusCode, { erro: err.message });
+      } else {
+        throw err;
+      }
+    }
+    return true;
+  }
 
-    sendJson(res, 201, { workflow: mapWorkflowRow(created) });
+  const wfVersionGetMatch = path.match(/^\/api\/workflows\/([^/]+)\/versoes\/([^/]+)$/);
+  if (method === "GET" && wfVersionGetMatch) {
+    const wfId = decodeURIComponent(wfVersionGetMatch[1]);
+    const versionId = decodeURIComponent(wfVersionGetMatch[2]);
+    const { store } = resolveWorkflowRuntime(deps);
+    const versao = store.getVersion(wfId, versionId);
+    if (!versao) {
+      sendJson(res, 404, { erro: `Versão '${versionId}' não encontrada.` });
+      return true;
+    }
+    sendJson(res, 200, { versao });
     return true;
   }
 
   const wfExecMatch = path.match(/^\/api\/workflows\/([^/]+)\/executar$/);
   if (method === "POST" && wfExecMatch) {
     const wfId = decodeURIComponent(wfExecMatch[1]);
-    const row = db.connection
-      .prepare(`SELECT * FROM projecao_workflows WHERE workflow_id = ?;`)
-      .get(wfId) as Parameters<typeof mapWorkflowRow>[0] | undefined;
-    if (!row) {
-      sendJson(res, 404, { erro: `Workflow '${wfId}' não encontrado.` });
+    if (!deps.workflowEngine) {
+      sendJson(res, 503, { erro: "WorkflowEngine não inicializado neste daemon." });
       return true;
     }
+    const body = await readJsonBody(req);
+    try {
+      const execucao = await deps.workflowEngine.startRun({
+        workflowId: wfId,
+        origem: "manual",
+        fromNodeId: typeof body.from_node_id === "string" ? body.from_node_id : undefined,
+        triggerNodeId:
+          typeof body.trigger_node_id === "string" ? body.trigger_node_id : undefined,
+        payload: body.payload,
+        requestId: typeof body.request_id === "string" ? body.request_id : undefined,
+      });
+      const tarefasCriadas = execucao.steps
+        .map((s) => s.tarefa_id)
+        .filter((id): id is string => Boolean(id));
+      sendJson(res, 200, {
+        ok: true,
+        execucao,
+        workflow_id: wfId,
+        run_id: execucao.run.run_id,
+        numero: execucao.run.numero,
+        status: execucao.run.status,
+        tarefas_criadas: tarefasCriadas,
+      });
+    } catch (err) {
+      if (err instanceof WorkflowValidationError) {
+        sendJson(res, err.statusCode, { erro: err.message });
+      } else {
+        throw err;
+      }
+    }
+    return true;
+  }
 
-    const wf = mapWorkflowRow(row);
-    const nosExecutaveis = wf.nos.filter((n) => n.tipo !== "nota");
-    if (nosExecutaveis.length === 0) {
-      sendJson(res, 400, { erro: "Adicione ao menos um gatilho ou nó antes de executar o fluxo." });
+  const wfNodeRunMatch = path.match(/^\/api\/workflows\/([^/]+)\/nos\/([^/]+)\/executar$/);
+  if (method === "POST" && wfNodeRunMatch) {
+    const wfId = decodeURIComponent(wfNodeRunMatch[1]);
+    const nodeId = decodeURIComponent(wfNodeRunMatch[2]);
+    if (!deps.workflowEngine) {
+      sendJson(res, 503, { erro: "WorkflowEngine não inicializado neste daemon." });
       return true;
     }
-
-    wsHub.broadcast("workflow:status", {
-      workflow_id: wf.workflow_id,
-      status: "executando",
-      no_atual: nosExecutaveis[0]?.titulo ?? null,
-    });
-
-    const tarefasGeradas: string[] = [];
-    for (const no of nosExecutaveis) {
-      if (no.tipo === "gatilho") continue;
-      const agId =
-        typeof no.config?.agente_id === "string"
-          ? no.config.agente_id
-          : no.tipo === "render_video"
-            ? "editor_video"
-            : no.tipo === "gerar_imagem"
-              ? "designer_individual"
-              : "estrategista";
-
-      const t = deps.queue.enqueueTask({
-        agente_id: agId,
-        canal_origem: "web",
-        tipo: no.tipo === "render_video" ? "reels" : "workflow_step",
-        titulo: `${wf.nome} -> ${no.titulo}`,
-        prioridade: 3,
-        payload: {
-          workflow_id: wf.workflow_id,
-          no_id: no.id,
-          config: no.config,
-        },
+    const body = await readJsonBody(req);
+    try {
+      const step = await deps.workflowEngine.runStep({
+        workflowId: wfId,
+        nodeId,
+        requestId: typeof body.request_id === "string" ? body.request_id : undefined,
+        payload: body.payload,
       });
-      tarefasGeradas.push(t.tarefa_id);
-      wsHub.broadcast("task:queued", {
-        tarefa_id: t.tarefa_id,
-        tipo: t.tipo,
-        titulo: t.titulo,
-        prioridade: t.prioridade,
-        canal_origem: t.canal_origem,
-      });
+      sendJson(res, 200, { ok: true, step });
+    } catch (err) {
+      if (err instanceof WorkflowValidationError) {
+        sendJson(res, err.statusCode, { erro: err.message });
+      } else {
+        throw err;
+      }
     }
+    return true;
+  }
 
-    const agora = new Date().toISOString();
-    db.connection
-      .prepare(`UPDATE projecao_workflows SET ultima_execucao_em = ?, atualizado_em = ? WHERE workflow_id = ?;`)
-      .run(agora, agora, wfId);
+  const wfRunsListMatch = path.match(/^\/api\/workflows\/([^/]+)\/execucoes$/);
+  if (method === "GET" && wfRunsListMatch) {
+    const wfId = decodeURIComponent(wfRunsListMatch[1]);
+    const { store } = resolveWorkflowRuntime(deps);
+    const rawLimit = Number.parseInt(url.searchParams.get("limit") ?? "20", 10);
+    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(50, rawLimit)) : 20;
+    const rawBefore = url.searchParams.get("before");
+    const offset = rawBefore ? Math.max(0, Number.parseInt(rawBefore, 10) || 0) : 0;
+    const runs = store.listRunsPaginated(wfId, limit, offset);
+    const execucoes = runs
+      .map((r) => store.getRunDetail(r.run_id))
+      .filter((d): d is NonNullable<typeof d> => Boolean(d));
+    const soloSteps = store.listSoloSteps(wfId, 50);
+    sendJson(res, 200, { execucoes, solo_steps: soloSteps });
+    return true;
+  }
 
-    wsHub.broadcast("workflow:status", {
-      workflow_id: wf.workflow_id,
-      status: "concluido",
-      resumo: `${tarefasGeradas.length} etapa(s) enviada(s) para a Fila`,
-    });
-
-    sendJson(res, 200, {
-      ok: true,
-      workflow_id: wf.workflow_id,
-      tarefas_criadas: tarefasGeradas,
-      executado_em: agora,
-    });
+  const wfRotateWebhookMatch = path.match(
+    /^\/api\/workflows\/([^/]+)\/gatilhos\/([^/]+)\/rotacionar-webhook$/
+  );
+  if (method === "POST" && wfRotateWebhookMatch) {
+    const wfId = decodeURIComponent(wfRotateWebhookMatch[1]);
+    const nodeId = decodeURIComponent(wfRotateWebhookMatch[2]);
+    const { store } = resolveWorkflowRuntime(deps);
+    try {
+      const rotated = store.rotateWebhookSecret(wfId, nodeId);
+      sendJson(res, 200, {
+        ok: true,
+        route_id: rotated.routeId,
+        webhook_url: rotated.webhookUrl,
+        secret: rotated.secret,
+      });
+    } catch (err) {
+      if (err instanceof WorkflowValidationError) {
+        sendJson(res, err.statusCode, { erro: err.message });
+      } else {
+        throw err;
+      }
+    }
     return true;
   }
 
   const wfMatch = path.match(/^\/api\/workflows\/([^/]+)$/);
-  if (wfMatch && (method === "PUT" || method === "DELETE")) {
+  if (wfMatch && (method === "GET" || method === "PUT" || method === "DELETE")) {
     const wfId = decodeURIComponent(wfMatch[1]);
-    const existing = db.connection
-      .prepare(`SELECT * FROM projecao_workflows WHERE workflow_id = ?;`)
-      .get(wfId) as Parameters<typeof mapWorkflowRow>[0] | undefined;
+    const { store } = resolveWorkflowRuntime(deps);
 
-    if (!existing) {
-      sendJson(res, 404, { erro: `Workflow '${wfId}' não encontrado.` });
+    if (method === "GET") {
+      const detail = store.getWorkflowDetail(wfId);
+      if (!detail) {
+        sendJson(res, 404, { erro: `Workflow '${wfId}' não encontrado.` });
+        return true;
+      }
+      sendJson(res, 200, detail);
       return true;
     }
 
     if (method === "DELETE") {
-      db.connection.prepare(`DELETE FROM projecao_workflows WHERE workflow_id = ?;`).run(wfId);
+      if (deps.workflowEngine) {
+        const activeRuns = store
+          .listRunsPaginated(wfId, 50, 0)
+          .filter(
+            (r) => r.status === "running" || r.status === "approval" || r.status === "stopping"
+          );
+        for (const r of activeRuns) {
+          await deps.workflowEngine.stopRun(r.run_id);
+        }
+      }
+      const deleted = store.deleteWorkflow(wfId);
+      if (!deleted) {
+        sendJson(res, 404, { erro: `Workflow '${wfId}' não encontrado.` });
+        return true;
+      }
+      wsHub.broadcast("workflow:updated", {
+        workflow_id: wfId,
+        revisao_grafo: 0,
+        acao: "deleted",
+      });
       sendJson(res, 200, { ok: true, workflow_id: wfId });
       return true;
     }
 
     const body = await readJsonBody(req);
-    const nome = typeof body.nome === "string" ? body.nome : existing.nome;
-    const descricao = typeof body.descricao === "string" ? body.descricao : (existing.descricao ?? "");
-    const nosJson = Array.isArray(body.nos) ? JSON.stringify(body.nos) : existing.nos_json;
-    const arestasJson = Array.isArray(body.arestas)
-      ? JSON.stringify(body.arestas)
-      : existing.arestas_json;
-    const ativo = typeof body.ativo === "boolean" ? (body.ativo ? 1 : 0) : existing.ativo;
-    const agora = new Date().toISOString();
+    try {
+      const saved = store.saveWorkflow(wfId, {
+        nome: typeof body.nome === "string" ? body.nome : undefined,
+        descricao: typeof body.descricao === "string" ? body.descricao : undefined,
+        nos: Array.isArray(body.nos) ? (body.nos as WorkflowNo[]) : undefined,
+        arestas: Array.isArray(body.arestas) ? (body.arestas as WorkflowAresta[]) : undefined,
+        tracos: Array.isArray(body.tracos) ? (body.tracos as WorkflowTraco[]) : undefined,
+        ativo: typeof body.ativo === "boolean" ? body.ativo : undefined,
+        base_revision:
+          typeof body.base_revision === "number" ? body.base_revision : undefined,
+      });
 
-    db.connection
-      .prepare(
-        `UPDATE projecao_workflows SET nome = ?, descricao = ?, nos_json = ?, arestas_json = ?, ativo = ?, atualizado_em = ? WHERE workflow_id = ?;`
-      )
-      .run(nome, descricao, nosJson, arestasJson, ativo, agora, wfId);
+      if (!saved) {
+        sendJson(res, 404, { erro: `Workflow '${wfId}' não encontrado.` });
+        return true;
+      }
 
-    const updated = db.connection
-      .prepare(`SELECT * FROM projecao_workflows WHERE workflow_id = ?;`)
-      .get(wfId) as Parameters<typeof mapWorkflowRow>[0];
+      if (!saved.ok) {
+        sendJson(res, 409, {
+          ok: false,
+          erro: "O fluxo foi atualizado em outra sessão ou por um agente.",
+          conflict: saved.conflict,
+        });
+        return true;
+      }
 
-    sendJson(res, 200, { workflow: mapWorkflowRow(updated) });
+      wsHub.broadcast("workflow:updated", {
+        workflow_id: saved.detail.workflow.workflow_id,
+        revisao_grafo: saved.detail.workflow.revisao_grafo ?? 0,
+        acao: "saved",
+      });
+      sendJson(res, 200, { workflow: saved.detail.workflow, detail: saved.detail });
+    } catch (err) {
+      if (err instanceof WorkflowValidationError) {
+        sendJson(res, err.statusCode, { erro: err.message });
+      } else {
+        throw err;
+      }
+    }
     return true;
   }
 

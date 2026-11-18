@@ -253,15 +253,8 @@ export interface WorkflowVisual {
   last_run?: WorkflowRunRecord | null;
 }
 
-export interface WorkflowSummary {
-  workflow_id: string;
-  nome: string;
-  descricao: string;
-  ativo: boolean;
+export interface WorkflowSummary extends WorkflowVisual {
   revisao_grafo: number;
-  ultima_execucao_em: string | null;
-  atualizado_em: string;
-  last_run?: WorkflowRunRecord | null;
   qtd_nos: number;
   qtd_arestas: number;
 }

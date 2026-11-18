@@ -56,9 +56,27 @@ import type {
   WhatsAppModoOperacao,
   WhatsAppPairingRequest,
   WorkflowAresta,
+  WorkflowDetail,
   WorkflowNo,
+  WorkflowRunDetail,
+  WorkflowStepRecord,
+  WorkflowSummary,
+  WorkflowTraco,
+  WorkflowVersionRecord,
+  WorkflowVersionSummary,
   WorkflowVisual,
 } from "@criativo/contracts";
+
+export class WorkflowRevisionConflictError extends Error {
+  public readonly conflict: WorkflowDetail;
+  public readonly statusCode = 409;
+
+  constructor(message: string, conflict: WorkflowDetail) {
+    super(message);
+    this.name = "WorkflowRevisionConflictError";
+    this.conflict = conflict;
+  }
+}
 
 type EventName = keyof WebSocketEventMap;
 type EventListener<K extends EventName> = (
@@ -661,10 +679,19 @@ export const daemonApi = {
     };
   },
 
-  async listWorkflows(): Promise<WorkflowVisual[]> {
+  async listWorkflows(): Promise<WorkflowSummary[]> {
     const res = await fetch("/api/workflows");
-    const json = (await res.json()) as { workflows: WorkflowVisual[] };
+    const json = (await res.json()) as { workflows: WorkflowSummary[] };
     return json.workflows ?? [];
+  },
+
+  async getWorkflowDetail(workflowId: string): Promise<WorkflowDetail> {
+    const res = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}`);
+    const json = (await res.json()) as WorkflowDetail & { erro?: string };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao carregar detalhes do workflow.");
+    }
+    return json;
   },
 
   async saveWorkflow(wf: {
@@ -673,6 +700,9 @@ export const daemonApi = {
     descricao?: string;
     nos: WorkflowNo[];
     arestas: WorkflowAresta[];
+    tracos?: WorkflowTraco[];
+    ativo?: boolean;
+    base_revision?: number;
   }): Promise<WorkflowVisual> {
     const isUpdate = Boolean(wf.workflow_id);
     const res = await fetch(
@@ -683,15 +713,222 @@ export const daemonApi = {
         body: JSON.stringify(wf),
       }
     );
-    const json = (await res.json()) as { workflow: WorkflowVisual };
+    const json = (await res.json()) as {
+      ok?: boolean;
+      erro?: string;
+      workflow?: WorkflowVisual;
+      conflict?: WorkflowDetail;
+    };
+    if (res.status === 409 && json.conflict) {
+      throw new WorkflowRevisionConflictError(
+        json.erro ?? "O fluxo foi atualizado em outra sessão ou por um agente.",
+        json.conflict
+      );
+    }
+    if (!res.ok || !json.workflow) {
+      throw new Error(json.erro ?? "Falha ao salvar fluxo.");
+    }
     return json.workflow;
   },
 
-  async executeWorkflow(workflowId: string): Promise<{ tarefas_criadas: string[] }> {
+  async deleteWorkflow(workflowId: string): Promise<void> {
+    const res = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const json = (await res.json().catch(() => ({}))) as { erro?: string };
+      throw new Error(json.erro ?? "Falha ao excluir workflow.");
+    }
+  },
+
+  async listWorkflowVersions(workflowId: string): Promise<WorkflowVersionSummary[]> {
+    const res = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}/versoes`);
+    const json = (await res.json()) as { versoes?: WorkflowVersionSummary[] };
+    return json.versoes ?? [];
+  },
+
+  async getWorkflowVersion(workflowId: string, versionId: string): Promise<WorkflowVersionRecord> {
+    const res = await fetch(
+      `/api/workflows/${encodeURIComponent(workflowId)}/versoes/${encodeURIComponent(versionId)}`
+    );
+    const json = (await res.json()) as { versao?: WorkflowVersionRecord; erro?: string };
+    if (!res.ok || !json.versao) {
+      throw new Error(json.erro ?? "Versão de workflow não encontrada.");
+    }
+    return json.versao;
+  },
+
+  async restoreWorkflowVersion(workflowId: string, versionId: string): Promise<WorkflowDetail> {
+    const res = await fetch(
+      `/api/workflows/${encodeURIComponent(workflowId)}/versoes/${encodeURIComponent(versionId)}/restaurar`,
+      { method: "POST" }
+    );
+    const json = (await res.json()) as { detail?: WorkflowDetail; erro?: string };
+    if (!res.ok || !json.detail) {
+      throw new Error(json.erro ?? "Falha ao restaurar versão do workflow.");
+    }
+    return json.detail;
+  },
+
+  async executeWorkflow(
+    workflowId: string,
+    options?: {
+      from_node_id?: string;
+      trigger_node_id?: string;
+      payload?: string;
+      request_id?: string;
+    }
+  ): Promise<{ ok: boolean; execucao: WorkflowRunDetail; tarefas_criadas: string[] }> {
     const res = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}/executar`, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(options ?? {}),
     });
-    return (await res.json()) as { tarefas_criadas: string[] };
+    const json = (await res.json()) as {
+      ok?: boolean;
+      execucao?: WorkflowRunDetail;
+      tarefas_criadas?: string[];
+      erro?: string;
+    };
+    if (!res.ok || !json.execucao) {
+      throw new Error(json.erro ?? "Falha ao executar workflow.");
+    }
+    return {
+      ok: Boolean(json.ok ?? true),
+      execucao: json.execucao,
+      tarefas_criadas: json.tarefas_criadas ?? [],
+    };
+  },
+
+  async executeWorkflowStep(
+    workflowId: string,
+    nodeId: string,
+    requestId?: string
+  ): Promise<WorkflowStepRecord> {
+    const res = await fetch(
+      `/api/workflows/${encodeURIComponent(workflowId)}/nos/${encodeURIComponent(nodeId)}/executar`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: requestId }),
+      }
+    );
+    const json = (await res.json()) as { step?: WorkflowStepRecord; erro?: string };
+    if (!res.ok || !json.step) {
+      throw new Error(json.erro ?? "Falha ao executar nó individual do workflow.");
+    }
+    return json.step;
+  },
+
+  async listWorkflowRuns(
+    workflowId: string,
+    options?: { limit?: number; before?: string }
+  ): Promise<{ execucoes: WorkflowRunDetail[]; solo_steps: WorkflowStepRecord[] }> {
+    const qs = new URLSearchParams();
+    if (options?.limit) qs.set("limit", String(options.limit));
+    if (options?.before) qs.set("before", options.before);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    const res = await fetch(
+      `/api/workflows/${encodeURIComponent(workflowId)}/execucoes${suffix}`
+    );
+    const json = (await res.json()) as {
+      execucoes?: WorkflowRunDetail[];
+      solo_steps?: WorkflowStepRecord[];
+    };
+    return {
+      execucoes: json.execucoes ?? [],
+      solo_steps: json.solo_steps ?? [],
+    };
+  },
+
+  async getWorkflowRunDetail(runId: string): Promise<WorkflowRunDetail> {
+    const res = await fetch(`/api/workflows/execucoes/${encodeURIComponent(runId)}`);
+    const json = (await res.json()) as { execucao?: WorkflowRunDetail; erro?: string };
+    if (!res.ok || !json.execucao) {
+      throw new Error(json.erro ?? "Execução de workflow não encontrada.");
+    }
+    return json.execucao;
+  },
+
+  async stopWorkflowRun(runId: string): Promise<WorkflowRunDetail> {
+    const res = await fetch(`/api/workflows/execucoes/${encodeURIComponent(runId)}/parar`, {
+      method: "POST",
+    });
+    const json = (await res.json()) as { execucao?: WorkflowRunDetail; erro?: string };
+    if (!res.ok || !json.execucao) {
+      throw new Error(json.erro ?? "Falha ao parar execução.");
+    }
+    return json.execucao;
+  },
+
+  async decideWorkflowStep(
+    stepId: string,
+    approved: boolean
+  ): Promise<{ ok: boolean; step_id: string; approved: boolean }> {
+    const res = await fetch(`/api/workflows/etapas/${encodeURIComponent(stepId)}/decidir`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approved }),
+    });
+    const json = (await res.json()) as {
+      ok?: boolean;
+      step_id?: string;
+      approved?: boolean;
+      erro?: string;
+    };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao decidir etapa de aprovação.");
+    }
+    return {
+      ok: Boolean(json.ok ?? true),
+      step_id: json.step_id ?? stepId,
+      approved: Boolean(json.approved ?? approved),
+    };
+  },
+
+  async retryWorkflowStep(stepId: string): Promise<unknown> {
+    const res = await fetch(`/api/workflows/etapas/${encodeURIComponent(stepId)}/retentar`, {
+      method: "POST",
+    });
+    const json = (await res.json()) as { resultado?: unknown; erro?: string };
+    if (!res.ok) {
+      throw new Error(json.erro ?? "Falha ao retentar etapa.");
+    }
+    return json.resultado;
+  },
+
+  async stopWorkflowStep(stepId: string): Promise<void> {
+    const res = await fetch(`/api/workflows/etapas/${encodeURIComponent(stepId)}/parar`, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      const json = (await res.json().catch(() => ({}))) as { erro?: string };
+      throw new Error(json.erro ?? "Falha ao parar etapa.");
+    }
+  },
+
+  async rotateWorkflowWebhookSecret(
+    workflowId: string,
+    nodeId: string
+  ): Promise<{ route_id: string; webhook_url: string; secret: string }> {
+    const res = await fetch(
+      `/api/workflows/${encodeURIComponent(workflowId)}/gatilhos/${encodeURIComponent(nodeId)}/rotacionar-webhook`,
+      { method: "POST" }
+    );
+    const json = (await res.json()) as {
+      route_id?: string;
+      webhook_url?: string;
+      secret?: string;
+      erro?: string;
+    };
+    if (!res.ok || !json.route_id || !json.webhook_url || !json.secret) {
+      throw new Error(json.erro ?? "Falha ao rotacionar segredo de webhook.");
+    }
+    return {
+      route_id: json.route_id,
+      webhook_url: json.webhook_url,
+      secret: json.secret,
+    };
   },
 
   async listFiles(): Promise<ArquivoStudio[]> {

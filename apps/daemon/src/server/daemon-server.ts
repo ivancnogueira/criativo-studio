@@ -26,6 +26,11 @@ import { RoutineExecutionService } from "../routines/routine-execution-service.t
 import { WebhookRoutineService } from "../routines/webhook-routine-service.ts";
 import { RoutineFlowsEngine } from "../routines/routine-flows-engine.ts";
 import type { RoutineToolsDeps } from "../routines/routine-agent-tools.ts";
+import { TelegramNotificationBot } from "../messaging/telegram-bot.ts";
+import { WorkflowEngine } from "../workflows/workflow-engine.ts";
+import { WorkflowStore } from "../workflows/workflow-store.ts";
+import { executeWorkflowToolCall } from "../workflows/workflow-tools.ts";
+import { WorkflowTriggers } from "../workflows/workflow-triggers.ts";
 import { VaultService } from "../vault/vault-service.ts";
 import { ProviderRegistry } from "../engine/providers/provider-registry.ts";
 import type { FetchLike } from "../engine/providers/provider-interface.ts";
@@ -82,6 +87,10 @@ export interface DaemonRuntime {
   routineExecutionService: RoutineExecutionService;
   routineWebhookService: WebhookRoutineService;
   routineFlowsEngine: RoutineFlowsEngine;
+  workflowStore: WorkflowStore;
+  workflowEngine: WorkflowEngine;
+  workflowTriggers: WorkflowTriggers;
+  telegramBot: TelegramNotificationBot;
   providers: ProviderRegistry;
   runner: AgentRunner;
   mcpGateway: McpGateway;
@@ -107,14 +116,45 @@ function sendJson(res: ServerResponse, statusCode: number, body: unknown): void 
   res.end(payload);
 }
 
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+const MAX_RAW_BODY_BYTES = 2 * 1024 * 1024;
+
+async function readRawBody(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  let exceeded = false;
+
   for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buf.length;
+    if (totalBytes > MAX_RAW_BODY_BYTES) {
+      exceeded = true;
+      continue;
+    }
+    chunks.push(buf);
   }
-  const raw = Buffer.concat(chunks).toString("utf8").trim();
+
+  if (exceeded) {
+    const err = new Error("Payload excede o limite máximo de 2 MB.") as Error & {
+      statusCode?: number;
+    };
+    err.statusCode = 413;
+    throw err;
+  }
+
+  return Buffer.concat(chunks);
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const buf = await readRawBody(req);
+  const raw = buf.toString("utf8").trim();
   if (!raw) return {};
-  return JSON.parse(raw) as Record<string, unknown>;
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    const err = new Error("Corpo JSON malformado.") as Error & { statusCode?: number };
+    err.statusCode = 400;
+    throw err;
+  }
 }
 
 function hasRootMarkers(dir: string): boolean {
@@ -365,6 +405,54 @@ export async function createDaemonServer(
 
   const routineStore = new RoutineStore(db);
   const routineFlowStore = new RoutineFlowStore(db);
+  const workflowStore = new WorkflowStore({ db, vault });
+  let workflowEngineRef: WorkflowEngine | null = null;
+  const telegramBot = new TelegramNotificationBot({
+    vault,
+    fetchImpl: options.fetchImpl,
+    onApproveTask: async (tarefaId) => {
+      if (options.onApproveAndPublishHook) {
+        const tarefa = queue.getTask(tarefaId);
+        if (tarefa) await options.onApproveAndPublishHook(tarefa);
+      }
+    },
+    onWorkflowApproval: async (stepId, approved) => {
+      if (workflowEngineRef) {
+        await workflowEngineRef.decideStep(stepId, approved, "telegram");
+      }
+    },
+  });
+  const workflowEngine = new WorkflowEngine({
+    db,
+    store: workflowStore,
+    queue,
+    vault,
+    providers,
+    providerConnection,
+    wsHub,
+    whatsapp,
+    telegramBot,
+    workspaceRoot: resolvedWorkspaceRoot,
+    fetchImpl: options.fetchImpl,
+  });
+  workflowEngineRef = workflowEngine;
+  workflowEngine.setRunner(runner);
+  runner.setWorkflowToolExecutor((name, args, ctx) =>
+    executeWorkflowToolCall(name, args, {
+      store: workflowStore,
+      engine: workflowEngine,
+      wsHub,
+      agenteId: ctx.agenteId,
+      requestSeed: ctx.tarefa.tarefa_id,
+    })
+  );
+  const workflowTriggers = new WorkflowTriggers({
+    db,
+    store: workflowStore,
+    engine: workflowEngine,
+    vault,
+  });
+
   const routineResultDispatcher = new RoutineResultDispatcher({
     db,
     routineStore,
@@ -383,11 +471,15 @@ export async function createDaemonServer(
   });
   const routineTimer = new RoutineTimer({
     getEarliestDue: () => {
-      const iso = routineStore.getEarliestNextRunAt();
-      return iso ? new Date(iso) : null;
+      const rIso = routineStore.getEarliestNextRunAt();
+      const wIso = workflowTriggers.nextDueAt();
+      if (!rIso) return wIso ? new Date(wIso) : null;
+      if (!wIso) return new Date(rIso);
+      return Date.parse(rIso) <= Date.parse(wIso) ? new Date(rIso) : new Date(wIso);
     },
     onTick: async (now) => {
       await routineExecutionService.processDueRoutines(now);
+      await workflowTriggers.processDue(now);
     },
   });
   const routineWebhookService = new WebhookRoutineService({
@@ -419,6 +511,29 @@ export async function createDaemonServer(
   };
   runner.setRoutineToolsDeps(routineToolsDeps);
   cron.attachRoutineEngine(routineTimer, routineExecutionService);
+  cron.registerDueProcessor(async (now) => {
+    await workflowTriggers.processDue(now);
+  });
+
+  whatsapp.onMessage(async (msg) => {
+    if (msg.fromMe) return;
+    try {
+      await workflowTriggers.receiveWhatsAppTrigger({
+        jid: msg.remoteJid,
+        sender: msg.pushName,
+        isGroup: msg.remoteJid.endsWith("@g.us"),
+        text: msg.text,
+        messageId: msg.messageId,
+      });
+    } catch (err) {
+      console.warn("[Daemon] Erro ao avaliar gatilho WhatsApp de workflow:", err);
+    }
+  });
+
+  const wfRecovery = await workflowEngine.recoverAndSweep();
+  if (wfRecovery.recoveredRuns > 0 || wfRecovery.uncertainDeliveries > 0) {
+    console.info("[Daemon] Workflow crash recovery:", wfRecovery);
+  }
 
   let workerTimer: NodeJS.Timeout | null = null;
   let isProcessingTask = false;
@@ -590,6 +705,11 @@ export async function createDaemonServer(
           whatsappManager,
           whatsappOrchestrator,
           routineToolsDeps,
+          workflowStore,
+          workflowEngine,
+          workflowTriggers,
+          telegramBot,
+          readRawBody,
         })
       ) {
         return;
@@ -912,7 +1032,14 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
       sendJson(res, 404, { erro: `Rota não encontrada: ${method} ${path}` });
     } catch (error) {
       const mensagem = error instanceof Error ? error.message : String(error);
-      sendJson(res, 500, { erro: mensagem });
+      const statusCode =
+        error &&
+        typeof error === "object" &&
+        "statusCode" in error &&
+        typeof (error as { statusCode?: unknown }).statusCode === "number"
+          ? (error as { statusCode: number }).statusCode
+          : 500;
+      sendJson(res, statusCode, { erro: mensagem });
     }
   });
 
@@ -993,6 +1120,10 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
     routineExecutionService,
     routineWebhookService,
     routineFlowsEngine,
+    workflowStore,
+    workflowEngine,
+    workflowTriggers,
+    telegramBot,
     providers,
     runner,
     mcpGateway,
@@ -1007,6 +1138,7 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
     async close(): Promise<void> {
       cron.stop();
       routineTimer.dispose();
+      await workflowEngine.dispose();
       whatsappArchiveService.stopPeriodicCleanup();
       whatsappOrchestrator.stop();
       if (workerTimer) {
