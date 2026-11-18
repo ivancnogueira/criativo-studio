@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { CriativoDatabase } from "../database/client.ts";
 import type { FifoQueueManager } from "../queue/fifo-queue.ts";
+import type { RoutineExecutionService } from "./routine-execution-service.ts";
+import type { RoutineTimer } from "./routine-timer.ts";
 
 export interface RotinaRow {
   rotina_id: string;
@@ -173,6 +175,8 @@ export class CronScheduler {
   private readonly queue: FifoQueueManager;
   private readonly onEnqueued?: (tarefaId: string, rotinaId: string) => void;
   private timer: NodeJS.Timeout | null = null;
+  private attachedRoutineTimer: RoutineTimer | null = null;
+  private attachedExecutionService: RoutineExecutionService | null = null;
 
   constructor(
     db: CriativoDatabase,
@@ -182,6 +186,14 @@ export class CronScheduler {
     this.db = db;
     this.queue = queue;
     this.onEnqueued = onEnqueued;
+  }
+
+  public attachRoutineEngine(
+    routineTimer: RoutineTimer,
+    executionService: RoutineExecutionService
+  ): void {
+    this.attachedRoutineTimer = routineTimer;
+    this.attachedExecutionService = executionService;
   }
 
   public createRoutine(input: CreateRotinaInput): RotinaRow {
@@ -279,6 +291,17 @@ export class CronScheduler {
   }
 
   public start(intervalMs = 60_000): void {
+    if (this.attachedExecutionService && this.attachedRoutineTimer) {
+      void this.attachedExecutionService
+        .skipMissed()
+        .then(() => {
+          this.attachedRoutineTimer?.arm();
+        })
+        .catch((error) => {
+          console.error("[CronScheduler] Falha ao iniciar RoutineTimer:", error);
+        });
+    }
+
     if (this.timer) return;
     this.timer = setInterval(() => {
       try {
@@ -291,6 +314,9 @@ export class CronScheduler {
   }
 
   public stop(): void {
+    if (this.attachedRoutineTimer) {
+      this.attachedRoutineTimer.dispose();
+    }
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
