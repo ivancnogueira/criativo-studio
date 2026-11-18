@@ -79,6 +79,18 @@ export class CriativoDatabase {
   }
 
   /**
+   * Verifica se determinada tabela já existe no schema SQLite.
+   */
+  public hasTable(tableName: string): boolean {
+    const row = this.connection
+      .prepare(
+        "SELECT 1 AS existe FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1;"
+      )
+      .get(tableName) as { existe?: number } | undefined;
+    return row?.existe === 1;
+  }
+
+  /**
    * Fecha a conexão com o SQLite com segurança.
    */
   public close(): void {

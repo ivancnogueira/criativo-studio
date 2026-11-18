@@ -5,6 +5,10 @@
 
 import type { McpOAuthStatus } from "./mcp-contracts.ts";
 import type {
+  RoutineOwnerKind,
+  RoutineRunStatus,
+} from "./routines.ts";
+import type {
   WhatsAppMensagemRegistro,
   WhatsAppPairingRequest,
 } from "./whatsapp-contracts.ts";
@@ -257,6 +261,38 @@ export type WebSocketEventMap = {
   "loja.agente_instalado": {
     agente_id: string;
     slug: string;
+  };
+  "routine:updated": {
+    owner_kind: RoutineOwnerKind;
+    owner_id: string;
+    rotina_id: string;
+    acao: "created" | "updated" | "deleted";
+  };
+  "routine:run_updated": {
+    rotina_id: string;
+    execucao_id: string;
+    owner_kind: RoutineOwnerKind;
+    owner_id: string;
+    status: RoutineRunStatus;
+    silenciada: boolean;
+  };
+  "routine:webhook_received": {
+    rotina_id: string;
+    recibo_id: string;
+    status: "started" | "ignored";
+    reason: "event-type" | "filter" | "inactive" | null;
+  };
+  "routine_flow:updated": {
+    affected_agent_ids: string[];
+    rotina_id: string;
+    execucao_id?: string;
+  };
+  "routine:notification": {
+    rotina_id: string;
+    rotina_nome: string;
+    owner_id: string;
+    resumo: string;
+    execucao_id: string;
   };
 };
 
@@ -602,3 +638,4 @@ export interface WebSocketEnvelope<K extends keyof WebSocketEventMap = keyof Web
 export * from "./whatsapp-contracts.ts";
 export * from "./mcp-contracts.ts";
 export * from "./marketplace-contracts.ts";
+export * from "./routines.ts";
