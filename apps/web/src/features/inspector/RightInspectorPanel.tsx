@@ -40,8 +40,18 @@ import { InstagramMobilePreview } from "../preview/InstagramMobilePreview";
 import { AgentRoutinesSettings } from "../routines/AgentRoutinesSettings";
 import { BackupModelsEditor } from "./BackupModelsEditor";
 
+export type InspectorSubView =
+  | "hub"
+  | "config"
+  | "preview"
+  | "files"
+  | "routines"
+  | "backup_models"
+  | "browser_profiles";
+
 export interface RightInspectorPanelProps {
   open: boolean;
+  initialSubView?: InspectorSubView;
   agente: AgenteRegistro | null;
   arquivos: ArquivoStudio[];
   canais?: CanalEquipe[];
@@ -128,17 +138,9 @@ const PERMISSION_OPTIONS: readonly CarbonSelectOption<PermissionLevel>[] = [
   },
 ];
 
-type InspectorSubView =
-  | "hub"
-  | "config"
-  | "preview"
-  | "files"
-  | "routines"
-  | "backup_models"
-  | "browser_profiles";
-
 export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   open,
+  initialSubView = "hub",
   agente,
   arquivos,
   canais = [],
@@ -171,7 +173,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   onInspectAgentBrowsingLog,
 }) => {
   const [subView, setSubView] = useState<InspectorSubView>(
-    routineFocusSignal?.subView === "routines" ? "routines" : "hub"
+    routineFocusSignal?.subView === "routines" ? "routines" : initialSubView
   );
   const [nomeDraft, setNomeDraft] = useState(agente?.nome ?? "");
   const [promptDraft, setPromptDraft] = useState("");

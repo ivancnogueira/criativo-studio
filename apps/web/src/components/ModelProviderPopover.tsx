@@ -246,7 +246,7 @@ export const ModelProviderPopover: React.FC<ModelProviderPopoverProps> = ({
             )}
           </div>
 
-          {/* Seletor Esforço segmentado limpo (zero <select> nativo) */}
+          {/* Seletor Esforço segmentado limpo (zero dropdown nativo) */}
           <div className="pt-2.5 border-t border-white/[0.06] flex items-center justify-between gap-3">
             <span className="text-[12px] text-[#DCDCDC]">Esforço</span>
             <div className="inline-flex items-center rounded-lg bg-[#1A1A1A] border border-white/10 p-0.5">

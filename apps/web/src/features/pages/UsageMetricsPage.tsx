@@ -238,7 +238,7 @@ export const UsageMetricsPage: React.FC<UsageMetricsPageProps> = ({
   return (
     <div className="flex-1 h-full bg-[#171717] overflow-y-auto px-6 py-5">
       <div className="max-w-[920px] mx-auto space-y-6">
-        {/* Filtros discretos customizados no topo (ZERO <select> nativo) */}
+        {/* Filtros discretos customizados no topo (ZERO dropdown nativo) */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             {/* Filtro de período */}

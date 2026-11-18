@@ -2484,8 +2484,17 @@ export function App() {
                             action: "open",
                             agenteId,
                             url: "about:blank",
-                          })) as { tabId?: string; tab?: { tabId?: string } };
-                          tabId = openRes?.tabId ?? openRes?.tab?.tabId ?? null;
+                          })) as {
+                            tabId?: string;
+                            tab?: { tabId?: string };
+                            result?: { tabId?: string; tab?: { tabId?: string } };
+                          };
+                          tabId =
+                            openRes?.result?.tabId ??
+                            openRes?.result?.tab?.tabId ??
+                            openRes?.tabId ??
+                            openRes?.tab?.tabId ??
+                            null;
                         }
                         if (!tabId) return;
                         const tkRes = await daemonApi.startBrowserTakeover(tabId, {

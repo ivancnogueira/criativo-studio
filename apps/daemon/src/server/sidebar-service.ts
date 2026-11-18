@@ -647,16 +647,16 @@ export function duplicateAgent(
 
     // Clona vínculos de habilidades instaladas do agente original
     const skillLinks = db.connection
-      .prepare("SELECT skill_id, ativo FROM projecao_agente_habilidades WHERE agente_id = ?")
-      .all(source.agente_id) as Array<{ skill_id: string; ativo: number }>;
+      .prepare("SELECT skill_id, habilitada FROM projecao_agente_habilidades WHERE agente_id = ?")
+      .all(source.agente_id) as Array<{ skill_id: string; habilitada: number }>;
 
     if (skillLinks.length > 0) {
       const insertLink = db.connection.prepare(`
-        INSERT OR IGNORE INTO projecao_agente_habilidades (agente_id, skill_id, ativo, vinculado_em)
-        VALUES (?, ?, ?, ?)
+        INSERT OR IGNORE INTO projecao_agente_habilidades (agente_id, skill_id, habilitada, instalada_em, atualizado_em)
+        VALUES (?, ?, ?, ?, ?)
       `);
       for (const link of skillLinks) {
-        insertLink.run(newAgentId, link.skill_id, link.ativo, now);
+        insertLink.run(newAgentId, link.skill_id, link.habilitada, now, now);
       }
     }
 
