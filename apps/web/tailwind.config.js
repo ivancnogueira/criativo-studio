@@ -1,6 +1,14 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
+  content: [
+    join(__dirname, "index.html").replaceAll("\\", "/"),
+    join(__dirname, "src/**/*.{js,ts,jsx,tsx}").replaceAll("\\", "/"),
+  ],
   theme: {
     extend: {
       colors: {

@@ -28,6 +28,7 @@ declare module "electron" {
     minHeight?: number;
     title?: string;
     backgroundColor?: string;
+    icon?: string;
     show?: boolean;
     autoHideMenuBar?: boolean;
     webPreferences?: WebPreferences;

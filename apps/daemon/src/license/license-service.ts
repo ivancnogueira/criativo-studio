@@ -22,7 +22,7 @@ import { resolveMachineFingerprint, type MachineFingerprint } from "./machine-id
 
 const VAULT_KEY_CERTIFICATE = "license_certificate_json";
 const VAULT_KEY_DEVICES_CACHE = "license_devices_cache_json";
-const DEFAULT_HUB_URL = "http://127.0.0.1:3007";
+const DEFAULT_HUB_URL = "https://painel.criativoaistudio.com.br";
 const HEARTBEAT_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export class LicenseValidationError extends Error {

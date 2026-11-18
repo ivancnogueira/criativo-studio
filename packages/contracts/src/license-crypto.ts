@@ -40,7 +40,7 @@ export const LICENSE_PLAN_MATRIX: Record<LicensePlanTier, LicenseLimitsConfig> =
 /** Chave pública Ed25519 padrão (material público; pode ser sobrescrita via CRIATIVO_LICENSE_PUBLIC_KEY_PEM). */
 export const DEFAULT_LICENSE_PUBLIC_KEY_PEM = [
   "-----BEGIN PUBLIC KEY-----",
-  "MCowBQYDK2VwAyEAwNhY9x8gzbqvzpsjpUBfCYGiujGM++r07p3wQ6Vi7ds=",
+  "MCowBQYDK2VwAyEAbEYLkt47VtYTHqy6BdaIIwBlHb8XOPDnZZcfl1JbtaY=",
   "-----END PUBLIC KEY-----",
   "",
 ].join("\n");

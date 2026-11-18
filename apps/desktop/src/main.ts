@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, shell, type Tray } from "electron";
@@ -16,7 +16,25 @@ let daemonHandle: EmbeddedDaemonHandle | null = null;
 let trayHandle: Tray | null = null;
 let isQuitting = false;
 
-function buildSplashDataUrl(): string {
+function resolveWindowIconPath(productRoot: string): string | undefined {
+  const candidates = [
+    join(productRoot, "apps", "desktop", "build", "icon.png"),
+    join(productRoot, "build", "icon.png"),
+    join(__dirname, "..", "build", "icon.png"),
+  ];
+  return candidates.find((p) => existsSync(p));
+}
+
+function buildSplashDataUrl(iconPath?: string): string {
+  let logoMarkup = '<div class="dot"></div>';
+  if (iconPath && existsSync(iconPath)) {
+    try {
+      const b64 = readFileSync(iconPath).toString("base64");
+      logoMarkup = `<img src="data:image/png;base64,${b64}" alt="Criativo AI Studio" class="logo-img" />`;
+    } catch {
+      // mantém fallback SVG/CSS
+    }
+  }
   const html = `<!doctype html>
   <html lang="pt-BR">
     <head>
@@ -24,16 +42,17 @@ function buildSplashDataUrl(): string {
       <title>Criativo AI Studio</title>
       <style>
         html,body{margin:0;height:100%;background:#0D0D0D;color:#F0F0F0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;display:flex;align-items:center;justify-content:center}
-        .card{display:flex;flex-direction:column;align-items:center;gap:14px;padding:32px 40px;border-radius:18px;background:#161616;border:1px solid rgba(255,255,255,.08)}
-        .dot{width:34px;height:34px;border-radius:10px;background:#31CF76;animation:pulse 1.2s ease-in-out infinite}
-        .title{font-size:16px;font-weight:600}
+        .card{display:flex;flex-direction:column;align-items:center;gap:14px;padding:34px 44px;border-radius:20px;background:#161616;border:1px solid rgba(255,255,255,.08);box-shadow:0 24px 64px rgba(0,0,0,.6)}
+        .logo-img{width:54px;height:54px;object-fit:contain;animation:pulse 1.4s ease-in-out infinite}
+        .dot{width:34px;height:34px;border-radius:10px;background:#FF6B00;animation:pulse 1.2s ease-in-out infinite}
+        .title{font-size:16px;font-weight:600;letter-spacing:-.01em}
         .sub{font-size:13px;color:#979797}
-        @keyframes pulse{0%,100%{opacity:.55;transform:scale(.95)}50%{opacity:1;transform:scale(1)}}
+        @keyframes pulse{0%,100%{opacity:.78;transform:scale(.96)}50%{opacity:1;transform:scale(1.02)}}
       </style>
     </head>
     <body>
       <div class="card">
-        <div class="dot"></div>
+        ${logoMarkup}
         <div class="title">Criativo AI Studio Online</div>
         <div class="sub">Iniciando seus 15 Agentes Especialistas...</div>
       </div>
@@ -73,7 +92,7 @@ function focusOrShowMainWindow(): void {
   mainWindow.focus();
 }
 
-function createWindow(daemonPort: number): BrowserWindow {
+function createWindow(daemonPort: number, iconPath?: string): BrowserWindow {
   const win = new BrowserWindow({
     width: 1380,
     height: 880,
@@ -81,6 +100,7 @@ function createWindow(daemonPort: number): BrowserWindow {
     minHeight: 680,
     title: "Criativo AI Studio Online",
     backgroundColor: "#0D0D0D",
+    ...(iconPath ? { icon: iconPath } : {}),
     autoHideMenuBar: true,
     show: false,
     webPreferences: {
@@ -202,11 +222,12 @@ async function bootstrapDesktop(): Promise<void> {
   });
   writeDesktopLog(`productRoot=${productRoot} | userDataDir=${userDataDir}`);
 
+  const iconPath = resolveWindowIconPath(productRoot);
   registerIpcHandlers(userDataDir);
 
   // Inicia janela imediata com Splash enquanto Daemon sobe silenciosamente em background
-  mainWindow = createWindow(3000);
-  await mainWindow.loadURL(buildSplashDataUrl());
+  mainWindow = createWindow(3000, iconPath);
+  await mainWindow.loadURL(buildSplashDataUrl(iconPath));
 
   daemonHandle = await startEmbeddedDaemon({
     productRoot,

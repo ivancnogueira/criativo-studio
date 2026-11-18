@@ -3,6 +3,23 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    sourcemap: false,
+    chunkSizeWarningLimit: 2000,
+    rollupOptions: {
+      maxParallelFileOps: 2,
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules/mermaid") || id.includes("node_modules/cytoscape") || id.includes("node_modules/elkjs")) {
+            return "vendor-diagrams";
+          }
+          if (id.includes("node_modules/katex")) {
+            return "vendor-math";
+          }
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {

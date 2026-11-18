@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import type { LicenseActivationStatus, LicenseDeviceRecord } from "@criativo/contracts";
 import { AlertTriangle, CheckCircle2, KeyRound, Laptop, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
-import { MascoteAvatar } from "../../components/MascoteAvatar";
 import { DaemonHttpError } from "../../services/websocket-client";
 
 export interface LicenseActivationGateProps {
@@ -131,8 +130,12 @@ export const LicenseActivationGate: React.FC<LicenseActivationGateProps> = ({
     <div className="min-h-screen w-full bg-[#0D0D0D] text-[#F0F0F0] flex flex-col items-center justify-center p-6">
       <div className="w-full max-w-[520px] rounded-2xl border border-white/[0.08] bg-[#1A1A1A] p-7 shadow-2xl space-y-6">
         <div className="flex items-start gap-4">
-          <div className="h-12 w-12 rounded-2xl bg-[#242424] border border-white/10 flex items-center justify-center shrink-0">
-            <MascoteAvatar shape="rounded_square" color="#31CF76" size={32} />
+          <div className="h-12 w-12 rounded-2xl bg-[#242424] border border-white/10 flex items-center justify-center shrink-0 p-1.5">
+            <img
+              src="/logo-criativo.png"
+              alt="Criativo AI Studio"
+              className="h-full w-full object-contain"
+            />
           </div>
           <div className="min-w-0 flex-1 space-y-1">
             <div className="inline-flex items-center gap-1.5 rounded-full bg-[#242424] border border-white/[0.06] px-2.5 py-0.5 text-[11px] font-semibold text-[#979797]">

@@ -123,6 +123,15 @@ export function prepareDesktopBundle(options = {}) {
     }
   }
 
+  const desktopIconsDir = join(outDir, "apps/desktop/build");
+  for (const iconName of ["icon.png", "tray-icon.png"]) {
+    const iconSrc = join(desktopRoot, "build", iconName);
+    if (existsSync(iconSrc)) {
+      mkdirSync(desktopIconsDir, { recursive: true });
+      cpSync(iconSrc, join(desktopIconsDir, iconName));
+    }
+  }
+
   // ─── Fase opcional de bundling com esbuild ────────────────────────────────
   if (options.bundleWithEsbuild) {
     bundleDaemonSync(outDir, repoRoot);

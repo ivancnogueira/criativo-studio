@@ -6,6 +6,8 @@
 node_modules/
 dist/
 build/
+!apps/desktop/build/
+!apps/desktop/build/**
 .cache/
 *.tsbuildinfo
 apps/desktop/build-product/

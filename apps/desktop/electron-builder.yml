@@ -25,7 +25,7 @@ extraResources:
       - "!**/*.db"
 
 win:
-  signAndEditExecutable: false
+  signExecutable: false
   target:
     - target: nsis
       arch:
@@ -64,4 +64,4 @@ linux:
 
 publish:
   provider: generic
-  url: https://criativoaistudio.com.br/api/releases
+  url: https://painel.criativoaistudio.com.br/api/releases

@@ -56,7 +56,7 @@ jobs:
         run: npm run build
 
       - name: Compilar aplicação Web
-        run: npx vite build apps/web
+        run: npm run build:web
 
       - name: Compilar TypeScript do Desktop
         run: npm run build:desktop
