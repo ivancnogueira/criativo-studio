@@ -66,6 +66,27 @@ import type { ApiKeysBridge, OrigemTurnoApiKey } from "../vault/api-keys-bridge.
 import type { WorkflowStore } from "../workflows/workflow-store.ts";
 import type { VaultService } from "../vault/vault-service.ts";
 import type { WebSocketHub } from "./websocket-hub.ts";
+import type {
+  BackupModelsConfig,
+  BrowserTakeoverReason,
+  BrowserTargetSelector,
+  PermissionLevel,
+} from "@criativo/contracts";
+import type {
+  BrowserAutomationService,
+  BrowserCdpActionName,
+} from "../engine/tools/browser-automation.ts";
+import { readVideoTool } from "../engine/tools/video-reader.ts";
+import { readImageTool } from "../engine/tools/image-reader.ts";
+import type { ScreenCaptureBridge } from "../engine/tools/screen-capture-bridge.ts";
+import { parseBackupModelsJson } from "../engine/runner/backup-models-resolver.ts";
+import type { TranscriptionService } from "../voice/transcription-service.ts";
+import { executeSidebarTool, SIDEBAR_AGENT_TOOL_NAMES } from "./sidebar-service.ts";
+import {
+  executeShowcaseTool,
+  SHOWCASE_AGENT_TOOL_NAMES,
+  type ShowcaseSiteService,
+} from "./showcase-service.ts";
 
 export {
   isRoutineToolName,
@@ -568,6 +589,14 @@ export function buildStudioLiveContext(deps: {
   } catch {
     // Ignora caso tabela de memórias não esteja pronta em ambiente mínimo
   }
+
+  lines.push(
+    "",
+    "### Navegador CDP, Mídia, Sidebar & Showcase (Fase 15)",
+    "- Use `openbot_browser` (ou `browser_open`, `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_fill_fields`, `browser_request_takeover`, `browser_submit_secret`) para navegar em sites dinâmicos JS com perfis persistentes.",
+    "- Use `read_video(url, frames?)` para resumir Reels/TikTok/YouTube públicos, `read_image(path)` para inspecionar imagens do workspace e `capture_screen(purpose)` para solicitar captura pontual da tela ao usuário.",
+    "- Use `list_sections`/`create_section`/`rename_section`/`delete_section`/`assign_agent_section` para organizar a Sidebar e `list_sites`/`publish_site`/`replace_site`/`delete_site` para Showcase local.",
+  );
 
   return lines.join("\n");
 }
@@ -3068,3 +3097,656 @@ export async function executePhase14ToolCall(
       throw new Error(`Ferramenta da Fase 14 desconhecida: ${toolName}`);
   }
 }
+
+// ============================================================================
+// Fase 15 — Chromium CDP, Mídia (read_video/read_image/capture_screen),
+// Governança de Permissão, Sidebar & Showcase Local
+// ============================================================================
+
+export interface AgentGovernanceState {
+  agenteId: string;
+  permissionLevel: PermissionLevel;
+  allowNewChat: boolean;
+  allowQuickAck: boolean;
+  browserProfileId: string | null;
+  backupModels: BackupModelsConfig;
+}
+
+export function readAgentGovernance(
+  db: CriativoDatabase,
+  agenteId: string,
+): AgentGovernanceState {
+  const row = db.connection
+    .prepare(
+      `SELECT permission_level, allow_new_chat, allow_quick_ack, browser_profile_id, backup_models_json
+       FROM projecao_agentes
+       WHERE agente_id = ?
+       LIMIT 1;`,
+    )
+    .get(agenteId) as
+    | {
+        permission_level?: string | null;
+        allow_new_chat?: number | null;
+        allow_quick_ack?: number | null;
+        browser_profile_id?: string | null;
+        backup_models_json?: string | null;
+      }
+    | undefined;
+
+  const perm: PermissionLevel =
+    row?.permission_level === "ask" || row?.permission_level === "full"
+      ? row.permission_level
+      : "workspace";
+
+  return {
+    agenteId,
+    permissionLevel: perm,
+    allowNewChat: row?.allow_new_chat !== 0,
+    allowQuickAck: row?.allow_quick_ack !== 0,
+    browserProfileId: row?.browser_profile_id ?? null,
+    backupModels: parseBackupModelsJson(row?.backup_models_json),
+  };
+}
+
+export class PermissionEscalationRequiredError extends Error {
+  public readonly code = "permission_ask_required";
+  constructor(message: string) {
+    super(message);
+    this.name = "PermissionEscalationRequiredError";
+  }
+}
+
+export function assertAgentPermissionForPath(params: {
+  rawPath: string;
+  workspaceRoot: string;
+  permissionLevel: PermissionLevel;
+  agenteId: string;
+  operation: "read" | "write" | "publish";
+}): void {
+  const trimmed = String(params.rawPath ?? "").trim();
+  if (!trimmed || trimmed.includes("\0")) {
+    throw new Error("Caminho de arquivo inválido.");
+  }
+
+  const rootAbs = resolve(params.workspaceRoot);
+  const absTarget = isAbsolute(trimmed) ? resolve(trimmed) : resolve(rootAbs, trimmed);
+  const relToRoot = relative(rootAbs, absTarget);
+  const insideWorkspace =
+    relToRoot === "" ||
+    (!relToRoot.startsWith("..") && !relToRoot.includes(`..${sep}`) && !isAbsolute(relToRoot));
+
+  if (!insideWorkspace) {
+    if (params.permissionLevel === "ask" && params.operation !== "read") {
+      throw new PermissionEscalationRequiredError(
+        `Nível de permissão 'ask': confirme com o usuário antes de ${params.operation === "publish" ? "publicar" : "gravar"} fora do workspace (${trimmed}).`,
+      );
+    }
+    throw new Error(
+      `Acesso bloqueado fora do workspace raiz (${trimmed}) no nível de permissão '${params.permissionLevel}'.`,
+    );
+  }
+
+  if (params.permissionLevel === "workspace") {
+    const allowedWorkspaceRoots = [
+      resolve(rootAbs, "recursos"),
+      resolve(rootAbs, "saidas"),
+      resolve(rootAbs, "previas"),
+      resolve(rootAbs, "dados", "agentes", params.agenteId),
+    ];
+    const inStrictDirs = allowedWorkspaceRoots.some((allowed) => {
+      const subRel = relative(allowed, absTarget);
+      return (
+        subRel === "" ||
+        (!subRel.startsWith("..") && !subRel.includes(`..${sep}`) && !isAbsolute(subRel))
+      );
+    });
+    if (!inStrictDirs) {
+      throw new Error(
+        `Nível de permissão 'workspace': '${trimmed}' está fora de recursos/, saidas/, previas/ ou dados/agentes/${params.agenteId}/. Altere a permissão do agente em Governança & Navegador se necessário.`,
+      );
+    }
+  } else if (params.permissionLevel === "ask" && params.operation !== "read") {
+    const allowedWriteRoots = [
+      resolve(rootAbs, "recursos"),
+      resolve(rootAbs, "saidas"),
+      resolve(rootAbs, "previas"),
+    ];
+    const inStandardOut = allowedWriteRoots.some((allowed) => {
+      const subRel = relative(allowed, absTarget);
+      return (
+        subRel === "" ||
+        (!subRel.startsWith("..") && !subRel.includes(`..${sep}`) && !isAbsolute(subRel))
+      );
+    });
+    if (!inStandardOut) {
+      throw new PermissionEscalationRequiredError(
+        `Nível de permissão 'ask': operação '${params.operation}' em '${trimmed}' requer confirmação humana.`,
+      );
+    }
+  }
+}
+
+export const BROWSER_DIRECT_ALIASES = [
+  "browser_open",
+  "browser_list_tabs",
+  "browser_status",
+  "browser_navigate",
+  "browser_snapshot",
+  "browser_click",
+  "browser_type",
+  "browser_fill_fields",
+  "browser_press",
+  "browser_hover",
+  "browser_scroll",
+  "browser_select_option",
+  "browser_set_checked",
+  "browser_drag",
+  "browser_upload_files",
+  "browser_wait_for",
+  "browser_evaluate",
+  "browser_screenshot",
+  "browser_set_environment",
+  "browser_handle_dialog",
+  "browser_request_takeover",
+  "browser_submit_secret",
+  "browser_close_tab",
+] as const;
+
+export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
+  {
+    name: "openbot_browser",
+    description:
+      "Controla o navegador real Chromium via Chrome DevTools Protocol (open, list_tabs, status, navigate, snapshot, click, type, fill_fields, press, hover, scroll, select_option, set_checked, drag, upload_files, wait_for, evaluate, screenshot, set_environment, handle_dialog, request_takeover, submit_secret, close_tab).",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: [
+            "open",
+            "list_tabs",
+            "status",
+            "navigate",
+            "snapshot",
+            "click",
+            "type",
+            "fill_fields",
+            "press",
+            "hover",
+            "scroll",
+            "select_option",
+            "set_checked",
+            "drag",
+            "upload_files",
+            "wait_for",
+            "evaluate",
+            "screenshot",
+            "set_environment",
+            "handle_dialog",
+            "request_takeover",
+            "submit_secret",
+            "close_tab",
+          ],
+        },
+        tabId: { type: "string" },
+        perfilId: { type: "string" },
+        url: { type: "string" },
+        target: { type: "object" },
+        toTarget: { type: "object" },
+        text: { type: "string" },
+        clear: { type: "boolean" },
+        pressEnter: { type: "boolean" },
+        key: { type: "string" },
+        fields: { type: "array", items: { type: "object" } },
+        deltaX: { type: "number" },
+        deltaY: { type: "number" },
+        values: { type: "array", items: { type: "string" } },
+        checked: { type: "boolean" },
+        paths: { type: "array", items: { type: "string" } },
+        waitKind: { type: "string", enum: ["text", "selector", "url", "load"] },
+        waitValue: { type: "string" },
+        timeoutMs: { type: "number" },
+        image: { type: "boolean" },
+        expression: { type: "string" },
+        accept: { type: "boolean" },
+        promptText: { type: "string" },
+        viewport: { type: "object" },
+        userAgent: { type: "string" },
+        locale: { type: "string" },
+        timezoneId: { type: "string" },
+        colorScheme: { type: "string", enum: ["dark", "light"] },
+        reason: {
+          type: "string",
+          enum: ["login", "2fa", "captcha", "passkey", "payment", "sign-in-blocked", "manual"],
+        },
+        waitForTakeover: { type: "boolean" },
+        method: { type: "string", enum: ["password", "otp", "authenticator"] },
+        targets: { type: "array", items: { type: "object" } },
+        loginId: { type: "string" },
+        username: { type: "string" },
+        submission: { type: "string", enum: ["enter", "click", "none"] },
+        submitTarget: { type: "object" },
+      },
+      required: ["action"],
+    },
+  },
+  ...BROWSER_DIRECT_ALIASES.map((aliasName): ToolDefinition => ({
+    name: aliasName,
+    description: `Atalho direto para openbot_browser(action="${aliasName.slice("browser_".length)}").`,
+    parameters: {
+      type: "object",
+      properties: {
+        tabId: { type: "string" },
+        perfilId: { type: "string" },
+        url: { type: "string" },
+        target: { type: "object" },
+        toTarget: { type: "object" },
+        text: { type: "string" },
+        fields: { type: "array", items: { type: "object" } },
+        key: { type: "string" },
+        paths: { type: "array", items: { type: "string" } },
+        expression: { type: "string" },
+        reason: { type: "string" },
+        image: { type: "boolean" },
+      },
+    },
+  })),
+  {
+    name: "read_video",
+    description:
+      "Lê vídeo público (Reels, TikTok, YouTube ou MP4 direto) extraindo metadados, legendas/transcrição e até 12 frames-chave JPEG.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "URL pública http(s) do vídeo." },
+        frames: { type: "number", description: "Quantidade de frames-chave JPEG (0 a 12, padrão 6)." },
+        timeoutMs: { type: "number" },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "read_image",
+    description:
+      "Lê uma imagem PNG/JPEG/WebP do workspace permitido, validando assinatura binária e retornando imagem redimensionada com orientação EXIF correta.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Caminho relativo no workspace permitido." },
+        maxDimension: { type: "number", description: "Dimensão máxima em pixels (padrão 1568)." },
+      },
+      required: ["path"],
+    },
+  },
+  {
+    name: "capture_screen",
+    description:
+      "Solicita ao usuário autorização explícita via getDisplayMedia() no navegador para capturar uma imagem única da tela ou janela atual.",
+    parameters: {
+      type: "object",
+      properties: {
+        purpose: {
+          type: "string",
+          description: "Explicação clara para o usuário sobre o motivo da captura pontual.",
+        },
+        targetHint: { type: "string", description: "Sugestão opcional de aba/janela alvo." },
+        timeoutMs: { type: "number" },
+      },
+      required: ["purpose"],
+    },
+  },
+  {
+    name: "list_sections",
+    description: "Lista todas as seções hierárquicas da Sidebar e os vínculos de agentes.",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "create_section",
+    description: "Cria uma nova seção na Sidebar (até 3 níveis de profundidade e máx 40 seções).",
+    parameters: {
+      type: "object",
+      properties: {
+        nome: { type: "string" },
+        parentId: { type: "string" },
+      },
+      required: ["nome"],
+    },
+  },
+  {
+    name: "rename_section",
+    description: "Renomeia uma seção existente da Sidebar.",
+    parameters: {
+      type: "object",
+      properties: {
+        sectionId: { type: "string" },
+        nome: { type: "string" },
+      },
+      required: ["sectionId", "nome"],
+    },
+  },
+  {
+    name: "delete_section",
+    description: "Remove uma seção da Sidebar promovendo suas subseções e agentes sem apagar nenhum agente.",
+    parameters: {
+      type: "object",
+      properties: {
+        sectionId: { type: "string" },
+      },
+      required: ["sectionId"],
+    },
+  },
+  {
+    name: "assign_agent_section",
+    description: "Move ou ordena um agente para dentro de uma seção da Sidebar (ou raiz com sectionId=null).",
+    parameters: {
+      type: "object",
+      properties: {
+        agentId: { type: "string" },
+        sectionId: { type: "string" },
+        beforeAgentId: { type: "string" },
+      },
+      required: ["agentId"],
+    },
+  },
+  {
+    name: "list_sites",
+    description: "Lista os sites estáticos locais publicados no Showcase (/showcase/:slug/).",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "publish_site",
+    description: "Publica um diretório estático do workspace no Showcase local (/showcase/:slug/) mediante aprovação humana.",
+    parameters: {
+      type: "object",
+      properties: {
+        slug: { type: "string" },
+        titulo: { type: "string" },
+        descricao: { type: "string" },
+        sourceDir: { type: "string" },
+        spaFallback: { type: "boolean" },
+        aprovadoPorHumano: { type: "boolean" },
+      },
+      required: ["slug", "titulo", "sourceDir"],
+    },
+  },
+  {
+    name: "replace_site",
+    description: "Atualiza/substitui os arquivos estáticos de um site Showcase local mediante aprovação humana.",
+    parameters: {
+      type: "object",
+      properties: {
+        siteId: { type: "string" },
+        sourceDir: { type: "string" },
+        titulo: { type: "string" },
+        descricao: { type: "string" },
+        spaFallback: { type: "boolean" },
+        aprovadoPorHumano: { type: "boolean" },
+      },
+      required: ["siteId", "sourceDir"],
+    },
+  },
+  {
+    name: "delete_site",
+    description: "Remove um site estático publicado no Showcase local mediante aprovação humana.",
+    parameters: {
+      type: "object",
+      properties: {
+        siteId: { type: "string" },
+        aprovadoPorHumano: { type: "boolean" },
+      },
+      required: ["siteId"],
+    },
+  },
+];
+
+export const PHASE15_TOOL_NAMES: ReadonlySet<string> = new Set(
+  PHASE15_TOOLS_SCHEMA.map((t) => t.name),
+);
+
+export function isPhase15ToolName(name: string): boolean {
+  return PHASE15_TOOL_NAMES.has(name);
+}
+
+export interface Phase15ToolServices {
+  db: CriativoDatabase;
+  wsHub?: WebSocketHub;
+  workspaceRoot: string;
+  browserService?: BrowserAutomationService;
+  screenCapture?: ScreenCaptureBridge;
+  showcaseService?: ShowcaseSiteService;
+  transcription?: TranscriptionService;
+}
+
+export interface Phase15ToolContext {
+  agenteId: string;
+  canalId: string;
+  permissionLevel?: PermissionLevel;
+  browserProfileId?: string | null;
+  aprovadoPorHumano?: boolean;
+  generatedArtifacts?: string[];
+}
+
+export async function executePhase15ToolCall(
+  toolName: string,
+  args: Record<string, unknown>,
+  ctx: Phase15ToolContext,
+  services: Phase15ToolServices,
+): Promise<unknown> {
+  const governance = readAgentGovernance(services.db, ctx.agenteId);
+  const permissionLevel = ctx.permissionLevel ?? governance.permissionLevel;
+  const browserProfileId = ctx.browserProfileId ?? governance.browserProfileId;
+
+  if (toolName === "openbot_browser" || toolName.startsWith("browser_")) {
+    if (!services.browserService) {
+      throw new Error("BrowserAutomationService não inicializado neste daemon.");
+    }
+    const rawAction =
+      toolName === "openbot_browser"
+        ? readStringArg(args, "action", "acao")
+        : toolName.slice("browser_".length);
+    if (!rawAction) {
+      throw new Error("Informe 'action' para openbot_browser.");
+    }
+    const action = rawAction as BrowserCdpActionName;
+
+    if (action === "upload_files") {
+      const paths = readStringArrayArg(args, "paths", "files");
+      for (const p of paths) {
+        assertAgentPermissionForPath({
+          rawPath: p,
+          workspaceRoot: services.workspaceRoot,
+          permissionLevel,
+          agenteId: ctx.agenteId,
+          operation: "read",
+        });
+      }
+    }
+
+    if (action === "submit_secret") {
+      const tabId = readStringArg(args, "tabId");
+      if (!tabId) {
+        throw new Error("Informe 'tabId' em submit_secret.");
+      }
+      const loginId = readStringArg(args, "loginId");
+      const targets = (Array.isArray(args.targets) ? args.targets : []) as BrowserTargetSelector[];
+      const method =
+        args.method === "otp" || args.method === "authenticator" ? args.method : "password";
+
+      if (loginId) {
+        return await services.browserService.submitSecret({
+          tabId,
+          method,
+          targets,
+          loginId,
+          username: readStringArg(args, "username") ?? null,
+          submission:
+            args.submission === "click" || args.submission === "none" ? args.submission : "enter",
+          submitTarget: (args.submitTarget as BrowserTargetSelector | undefined) ?? null,
+        });
+      }
+
+      const tab = services.browserService.sessionManager.getTab(tabId);
+      let host = "site";
+      try {
+        host = new URL(tab?.page ? tab.page.url() : tab?.virtualUrl || "https://example.invalid").hostname;
+      } catch {
+        host = "site";
+      }
+
+      return {
+        ok: false,
+        requiresSecretInput: true,
+        secretRequest: {
+          requestId: `sec-${randomUUID().slice(0, 8)}`,
+          tabId,
+          agenteId: ctx.agenteId,
+          canalId: ctx.canalId,
+          host,
+          method,
+          targets,
+          digits: typeof args.digits === "number" ? args.digits : method === "otp" ? 6 : undefined,
+          loginId: null,
+          username: readStringArg(args, "username") ?? null,
+          submission:
+            args.submission === "click" || args.submission === "none" ? args.submission : "enter",
+          submitTarget: (args.submitTarget as BrowserTargetSelector | undefined) ?? null,
+        },
+      };
+    }
+
+    return await services.browserService.executeAction({
+      action,
+      agenteId: ctx.agenteId,
+      canalId: ctx.canalId,
+      perfilId: readStringArg(args, "perfilId") ?? browserProfileId ?? undefined,
+      permissionLevel,
+      tabId: readStringArg(args, "tabId"),
+      url: readStringArg(args, "url"),
+      target: (args.target as BrowserTargetSelector | undefined) ?? undefined,
+      toTarget: (args.toTarget as BrowserTargetSelector | undefined) ?? undefined,
+      text: typeof args.text === "string" ? args.text : undefined,
+      clear: typeof args.clear === "boolean" ? args.clear : undefined,
+      pressEnter: typeof args.pressEnter === "boolean" ? args.pressEnter : undefined,
+      key: readStringArg(args, "key"),
+      fields: Array.isArray(args.fields)
+        ? (args.fields as Array<{ target: BrowserTargetSelector; value: string }>)
+        : undefined,
+      deltaX: typeof args.deltaX === "number" ? args.deltaX : undefined,
+      deltaY: typeof args.deltaY === "number" ? args.deltaY : undefined,
+      values: Array.isArray(args.values) ? args.values.map(String) : undefined,
+      checked: typeof args.checked === "boolean" ? args.checked : undefined,
+      paths: Array.isArray(args.paths) ? args.paths.map(String) : undefined,
+      waitKind:
+        args.waitKind === "text" ||
+        args.waitKind === "selector" ||
+        args.waitKind === "url" ||
+        args.waitKind === "load"
+          ? args.waitKind
+          : undefined,
+      waitValue: readStringArg(args, "waitValue"),
+      timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : undefined,
+      image: typeof args.image === "boolean" ? args.image : undefined,
+      expression: typeof args.expression === "string" ? args.expression : undefined,
+      accept: typeof args.accept === "boolean" ? args.accept : undefined,
+      promptText: typeof args.promptText === "string" ? args.promptText : undefined,
+      viewport:
+        args.viewport && typeof args.viewport === "object"
+          ? (args.viewport as { width: number; height: number })
+          : undefined,
+      userAgent: readStringArg(args, "userAgent"),
+      locale: readStringArg(args, "locale"),
+      timezoneId: readStringArg(args, "timezoneId"),
+      colorScheme:
+        args.colorScheme === "dark" || args.colorScheme === "light" ? args.colorScheme : undefined,
+      reason: readStringArg(args, "reason") as BrowserTakeoverReason | undefined,
+      waitForTakeover: typeof args.waitForTakeover === "boolean" ? args.waitForTakeover : undefined,
+    });
+  }
+
+  if (toolName === "read_video") {
+    const url = readStringArg(args, "url") ?? "";
+    const frames = typeof args.frames === "number" ? args.frames : undefined;
+    const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : undefined;
+    return await readVideoTool(
+      { url, frames, timeoutMs },
+      { transcription: services.transcription },
+    );
+  }
+
+  if (toolName === "read_image") {
+    const rawPath = readStringArg(args, "path", "caminho") ?? "";
+    assertAgentPermissionForPath({
+      rawPath,
+      workspaceRoot: services.workspaceRoot,
+      permissionLevel,
+      agenteId: ctx.agenteId,
+      operation: "read",
+    });
+    const maxDimension =
+      typeof args.maxDimension === "number" ? args.maxDimension : undefined;
+    return await readImageTool({ path: rawPath, maxDimension }, services.workspaceRoot);
+  }
+
+  if (toolName === "capture_screen") {
+    if (!services.screenCapture) {
+      throw new Error("ScreenCaptureBridge não inicializado neste daemon.");
+    }
+    const purpose = readStringArg(args, "purpose", "motivo") ?? "Inspecionar a tela atual.";
+    const targetHint = readStringArg(args, "targetHint") ?? null;
+    const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : undefined;
+    return await services.screenCapture.requestCapture({
+      agenteId: ctx.agenteId,
+      canalId: ctx.canalId,
+      purpose,
+      targetHint,
+      timeoutMs,
+    });
+  }
+
+  if ((SIDEBAR_AGENT_TOOL_NAMES as readonly string[]).includes(toolName)) {
+    return executeSidebarTool(services.db, toolName, args, services.wsHub);
+  }
+
+  if ((SHOWCASE_AGENT_TOOL_NAMES as readonly string[]).includes(toolName)) {
+    if (!services.showcaseService) {
+      throw new Error("ShowcaseSiteService não inicializado neste daemon.");
+    }
+    const sourceDir = readStringArg(args, "sourceDir", "source_dir");
+    if (sourceDir && (toolName === "publish_site" || toolName === "replace_site")) {
+      assertAgentPermissionForPath({
+        rawPath: sourceDir,
+        workspaceRoot: services.workspaceRoot,
+        permissionLevel,
+        agenteId: ctx.agenteId,
+        operation: "publish",
+      });
+    }
+    return executeShowcaseTool(services.showcaseService, toolName, args, {
+      agenteId: ctx.agenteId,
+      aprovadoPorHumano: ctx.aprovadoPorHumano,
+    });
+  }
+
+  throw new Error(`Ferramenta da Fase 15 desconhecida: ${toolName}`);
+}
+
+export async function executePhase15ChatTool(params: {
+  toolName: string;
+  args: Record<string, unknown>;
+  agenteId: string;
+  canalId: string;
+  deps: Phase15ToolServices;
+  aprovadoPorHumano?: boolean;
+}): Promise<unknown> {
+  return await executePhase15ToolCall(
+    params.toolName,
+    params.args,
+    {
+      agenteId: params.agenteId,
+      canalId: params.canalId,
+      aprovadoPorHumano: params.aprovadoPorHumano,
+    },
+    params.deps,
+  );
+}
+

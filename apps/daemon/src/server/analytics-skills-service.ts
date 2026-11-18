@@ -809,6 +809,14 @@ export function buildConnectorsList(db: CriativoDatabase, vault: VaultService): 
   const tgOk = secrets.has("telegram_bot_token") || secrets.has("TELEGRAM_BOT_TOKEN");
   const elevenOk = secrets.has("elevenlabs_api_key") || secrets.has("ELEVENLABS_API_KEY");
   const fishOk = secrets.has("fish_audio_api_key") || secrets.has("FISH_AUDIO_API_KEY");
+  const slackBotOk = secrets.has("slack_bot_token");
+  const slackSecretOk = secrets.has("slack_signing_secret");
+  const discordBotOk = secrets.has("discord_bot_token");
+  const discordAppOk = secrets.has("discord_application_id");
+  const discordPubOk = secrets.has("discord_public_key");
+  const discordWebhookOk = secrets.has("discord_webhook_url");
+  const githubTokenOk = secrets.has("github_token");
+  const githubSecretOk = secrets.has("github_webhook_secret");
 
   const connectedAccounts = waAccounts.filter((a) => a.status === "conectado");
   const awaitingAccounts = waAccounts.filter(
@@ -979,6 +987,117 @@ export function buildConnectorsList(db: CriativoDatabase, vault: VaultService): 
           configurado: m.ativo === 1,
         };
       }),
+    },
+    {
+      id: "slack",
+      nome: "Slack",
+      categoria: "mensageria",
+      descricao: "Receba menções com verificação HMAC-SHA256 e publique atualizações automáticas de campanhas em canais Slack.",
+      subtitulo: "Webhook assinado + notificações de canal",
+      status:
+        slackBotOk && slackSecretOk
+          ? "conectado"
+          : slackBotOk || slackSecretOk
+            ? "atencao"
+            : "desconectado",
+      resumo_estado:
+        slackBotOk && slackSecretOk
+          ? "Bot Token + Signing Secret cifrados no Cofre"
+          : slackBotOk || slackSecretOk
+            ? "Credencial parcial configurada no Cofre"
+            : "Opcional · não configurado",
+      cor_marca: "#E01E5A",
+      agente_orquestrador_id: orquestradores.slack ?? "estrategista",
+      detalhes: [
+        {
+          chave: "slack_bot_token",
+          rotulo: "Slack Bot Token",
+          configurado: slackBotOk,
+          valor_mascarado: slackBotOk ? "•••• (cifrado no Cofre)" : null,
+        },
+        {
+          chave: "slack_signing_secret",
+          rotulo: "Slack Signing Secret",
+          configurado: slackSecretOk,
+          valor_mascarado: slackSecretOk ? "•••• (cifrado no Cofre)" : null,
+        },
+      ],
+    },
+    {
+      id: "discord",
+      nome: "Discord",
+      categoria: "mensageria",
+      descricao: "Verificação Ed25519 para interações/comandos Discord e envios via Bot ou Webhook.",
+      subtitulo: "Interações Ed25519 + alertas de equipe",
+      status:
+        (discordBotOk && discordPubOk) || discordWebhookOk
+          ? "conectado"
+          : discordBotOk || discordAppOk || discordPubOk
+            ? "atencao"
+            : "desconectado",
+      resumo_estado:
+        (discordBotOk && discordPubOk) || discordWebhookOk
+          ? "Credenciais Discord cifradas no Cofre"
+          : discordBotOk || discordAppOk || discordPubOk
+            ? "Falta completar Public Key ou Bot Token"
+            : "Opcional · não configurado",
+      cor_marca: "#5865F2",
+      agente_orquestrador_id: orquestradores.discord ?? "estrategista",
+      detalhes: [
+        {
+          chave: "discord_bot_token",
+          rotulo: "Discord Bot Token",
+          configurado: discordBotOk,
+          valor_mascarado: discordBotOk ? "•••• (cifrado no Cofre)" : null,
+        },
+        {
+          chave: "discord_application_id",
+          rotulo: "Discord Application ID",
+          configurado: discordAppOk,
+          valor_mascarado: discordAppOk ? "•••• (cifrado no Cofre)" : null,
+        },
+        {
+          chave: "discord_public_key",
+          rotulo: "Discord Public Key (Ed25519)",
+          configurado: discordPubOk,
+          valor_mascarado: discordPubOk ? "•••• (cifrado no Cofre)" : null,
+        },
+      ],
+    },
+    {
+      id: "github",
+      nome: "GitHub",
+      categoria: "sistema",
+      descricao: "Conecte repositórios GitHub com webhook HMAC-SHA256 para disparar workflows, releases e abrir issues.",
+      subtitulo: "Webhooks de push/PR/release + ações em issues",
+      status:
+        githubTokenOk && githubSecretOk
+          ? "conectado"
+          : githubTokenOk || githubSecretOk
+            ? "atencao"
+            : "desconectado",
+      resumo_estado:
+        githubTokenOk && githubSecretOk
+          ? "Personal Token + Webhook Secret cifrados no Cofre"
+          : githubTokenOk || githubSecretOk
+            ? "Configuração parcial no Cofre"
+            : "Opcional · não configurado",
+      cor_marca: "#F0F0F0",
+      agente_orquestrador_id: orquestradores.github ?? "estrategista",
+      detalhes: [
+        {
+          chave: "github_token",
+          rotulo: "GitHub Token (PAT)",
+          configurado: githubTokenOk,
+          valor_mascarado: githubTokenOk ? "•••• (cifrado no Cofre)" : null,
+        },
+        {
+          chave: "github_webhook_secret",
+          rotulo: "GitHub Webhook Secret",
+          configurado: githubSecretOk,
+          valor_mascarado: githubSecretOk ? "•••• (cifrado no Cofre)" : null,
+        },
+      ],
     },
   ];
 }

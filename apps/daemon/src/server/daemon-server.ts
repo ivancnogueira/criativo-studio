@@ -69,6 +69,12 @@ import { ChatVisualPreviewService } from "../engine/runner/chat-visual-preview-s
 import { UiBlockRegistry } from "../engine/runner/ui-block-registry.ts";
 import { ApiKeysBridge } from "../vault/api-keys-bridge.ts";
 import type { Phase14ToolServices } from "./studio-tools-bridge.ts";
+import { BrowserAutomationService } from "../engine/tools/browser-automation.ts";
+import { ScreenCaptureBridge } from "../engine/tools/screen-capture-bridge.ts";
+import { BackupModelsResolver } from "../engine/runner/backup-models-resolver.ts";
+import { ConnectorsWebhookService } from "./connectors-webhook-service.ts";
+import { ShowcaseSiteService } from "./showcase-service.ts";
+import { tryHandlePhase15Route } from "./phase15-routes.ts";
 import type { WaVersionFetcher, WhatsAppStudioClient } from "@criativo/whatsapp";
 
 export interface TaskExecutorHook {
@@ -139,6 +145,10 @@ export interface DaemonRuntime {
   visualPreview: ChatVisualPreviewService;
   uiBlockRegistry: UiBlockRegistry;
   apiKeysBridge: ApiKeysBridge;
+  browserService: BrowserAutomationService;
+  screenCapture: ScreenCaptureBridge;
+  showcaseService: ShowcaseSiteService;
+  connectorsWebhook: ConnectorsWebhookService;
   port: number;
   close(): Promise<void>;
 }
@@ -449,6 +459,32 @@ export async function createDaemonServer(
     getDefaultPlanStartAfterMs: () => skillLearning.getLearningConfig().plan_start_after_ms,
   });
 
+  const browserService = new BrowserAutomationService(db, vault, wsHub, resolvedWorkspaceRoot);
+  browserService.ensureDefaultSharedProfile();
+  const screenCapture = new ScreenCaptureBridge(wsHub);
+  const showcaseService = new ShowcaseSiteService({
+    db,
+    workspaceRoot: resolvedWorkspaceRoot,
+    wsHub,
+  });
+  const backupResolver = new BackupModelsResolver();
+  let workflowTriggersRef: WorkflowTriggers | null = null;
+  const connectorsWebhook = new ConnectorsWebhookService({
+    db,
+    vault,
+    wsHub,
+    onTriggerWorkflow: async (evt) => {
+      if (!workflowTriggersRef) return;
+      await workflowTriggersRef
+        .receiveConnectorTrigger({
+          conectorId: evt.conector_id,
+          evento: evt.evento,
+          dados: evt.dados,
+        })
+        .catch(() => {});
+    },
+  });
+
   const runner = new AgentRunner({
     db,
     queue,
@@ -465,6 +501,11 @@ export async function createDaemonServer(
     customTools: options.customTools,
     memoryManager,
     handoffBus,
+    browserService,
+    screenCapture,
+    showcaseService,
+    transcription,
+    backupResolver,
   });
   const threadStore = new AgentThreadStore(db);
   const pagination = new ConversationPaginationReader(db);
@@ -571,6 +612,7 @@ export async function createDaemonServer(
     engine: workflowEngine,
     vault,
   });
+  workflowTriggersRef = workflowTriggers;
 
   const routineResultDispatcher = new RoutineResultDispatcher({
     db,
@@ -840,6 +882,12 @@ export async function createDaemonServer(
     uiBlockRegistry,
     apiKeysBridge,
     phase14: phase14Services,
+    browserService,
+    screenCapture,
+    showcaseService,
+    connectorsWebhook,
+    transcription,
+    backupResolver,
   };
 
   const scheduleLaneDrain = (agenteId: string, threadId: string | null): void => {
@@ -1212,43 +1260,71 @@ export async function createDaemonServer(
         return;
       }
 
+      const studioDepsForRequest = {
+        db,
+        queue,
+        vault,
+        providers,
+        providerConnection,
+        wsHub,
+        sendJson,
+        readJsonBody,
+        workspaceRoot: resolvedWorkspaceRoot,
+        mcpGateway,
+        catalogService,
+        githubImporter,
+        skillsManager,
+        whatsappManager,
+        whatsappOrchestrator,
+        routineToolsDeps,
+        workflowStore,
+        workflowEngine,
+        workflowTriggers,
+        telegramBot,
+        readRawBody,
+        phase13: phase13Bundle,
+        sharedTables,
+        memoryManager,
+        memoryReview,
+        skillLearning,
+        historySearch,
+        libraryFolders,
+        handoffBus,
+        visualPreview,
+        uiBlockRegistry,
+        apiKeysBridge,
+        phase14: phase14Services,
+        browserService,
+        screenCapture,
+        showcaseService,
+        connectorsWebhook,
+        transcription,
+        backupResolver,
+      };
+
       if (
-        await tryHandleStudioRoute(req, res, path, method, url, {
+        await tryHandlePhase15Route(req, res, path, method, url, {
           db,
-          queue,
-          vault,
+          wsHub,
+          workspaceRoot: resolvedWorkspaceRoot,
           providers,
           providerConnection,
-          wsHub,
+          browserService,
+          screenCapture,
+          showcaseService,
+          connectorsWebhook,
+          transcription,
+          backupResolver,
+          studioRoutesDeps: studioDepsForRequest,
           sendJson,
           readJsonBody,
-          workspaceRoot: resolvedWorkspaceRoot,
-          mcpGateway,
-          catalogService,
-          githubImporter,
-          skillsManager,
-          whatsappManager,
-          whatsappOrchestrator,
-          routineToolsDeps,
-          workflowStore,
-          workflowEngine,
-          workflowTriggers,
-          telegramBot,
           readRawBody,
-          phase13: phase13Bundle,
-          sharedTables,
-          memoryManager,
-          memoryReview,
-          skillLearning,
-          historySearch,
-          libraryFolders,
-          handoffBus,
-          visualPreview,
-          uiBlockRegistry,
-          apiKeysBridge,
-          phase14: phase14Services,
         })
       ) {
+        return;
+      }
+
+      if (await tryHandleStudioRoute(req, res, path, method, url, studioDepsForRequest)) {
         return;
       }
 
@@ -1592,6 +1668,14 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
   return true;
 }
 
+      if (
+        method === "GET" &&
+        (path === "/showcase" || path.startsWith("/showcase/")) &&
+        showcaseService.tryServePublicRoute(path, res)
+      ) {
+        return;
+      }
+
       if (method === "GET" && tryServeWebStatic(path, res)) {
         return;
       }
@@ -1717,12 +1801,18 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
     visualPreview,
     uiBlockRegistry,
     apiKeysBridge,
+    browserService,
+    screenCapture,
+    showcaseService,
+    connectorsWebhook,
     port: resolvedPort,
     async close(): Promise<void> {
       cron.stop();
       routineTimer.dispose();
       memoryReview.dispose();
       uiBlockRegistry.dispose();
+      screenCapture.dispose();
+      await browserService.closeAll();
       await workflowEngine.dispose();
       whatsappArchiveService.stopPeriodicCleanup();
       whatsappOrchestrator.stop();

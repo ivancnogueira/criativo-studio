@@ -3,9 +3,12 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, extname, relative, resolve, sep } from "node:path";
 import type {
+  AgentNotificationLevel,
   AnexoChat,
   AprendizadoConfig,
   ArquivoStudio,
+  BackupModelChoice,
+  BackupModelsConfig,
   CanalEquipe,
   ChatVisualMeta,
   ConversationMessage,
@@ -15,10 +18,12 @@ import type {
   MensagemChat,
   OnboardingEstado,
   PassoChat,
+  PermissionLevel,
   ProviderName,
   SkillSugestaoItem,
   ToolDefinition,
   UiBlockSubmitPayload,
+  UsageLimitAskPayload,
   WorkflowAresta,
   WorkflowNo,
   WorkflowTraco,
@@ -60,24 +65,39 @@ import {
   executeChatWorkflowTool,
   executePhase13Tool,
   executePhase14ToolCall,
+  executePhase15ChatTool,
   executeStudioExtensionTool,
   executeStudioRoutineTool,
   getChatWorkflowToolCatalog,
   isPhase10ExtensionTool,
   isPhase13ToolName,
   isPhase14ToolName,
+  isPhase15ToolName,
   isRoutineToolName,
   isUpgradeUnlocked,
   isWorkflowToolName,
   PHASE10_TOOL_DEFINITIONS,
   PHASE13_TOOLS_SCHEMA,
   PHASE14_TOOLS_SCHEMA,
+  PHASE15_TOOLS_SCHEMA,
   readAgentContextCutoffAt,
+  readAgentGovernance,
   ROUTINE_AGENT_TOOLS_SCHEMA,
   syncWorkspaceFilesToDatabase,
   validateMetaIntegration,
   type Phase14ToolServices,
 } from "./studio-tools-bridge.ts";
+import {
+  BackupModelsResolver,
+  isRetryableQuotaOrProviderError,
+  MAX_BACKUP_MODELS,
+  parseBackupModelsJson,
+} from "../engine/runner/backup-models-resolver.ts";
+import type { BrowserAutomationService } from "../engine/tools/browser-automation.ts";
+import type { ScreenCaptureBridge } from "../engine/tools/screen-capture-bridge.ts";
+import type { ShowcaseSiteService } from "./showcase-service.ts";
+import type { ConnectorsWebhookService } from "./connectors-webhook-service.ts";
+import type { TranscriptionService } from "../voice/transcription-service.ts";
 import { tryHandleThreadsRoute, type Phase13ServicesBundle } from "./threads-routes.ts";
 import type { SharedTablesService } from "../agent-data/shared-tables-service.ts";
 import { SharedTablesError } from "../agent-data/shared-tables-service.ts";
@@ -130,6 +150,12 @@ export interface StudioRoutesDeps {
   apiKeysBridge?: ApiKeysBridge;
   visualPreview?: ChatVisualPreviewService;
   phase14?: Phase14ToolServices;
+  browserService?: BrowserAutomationService;
+  screenCapture?: ScreenCaptureBridge;
+  showcaseService?: ShowcaseSiteService;
+  connectorsWebhook?: ConnectorsWebhookService;
+  transcription?: TranscriptionService;
+  backupResolver?: BackupModelsResolver;
 }
 
 const RAW_MIME_MAP: Record<string, string> = {
@@ -342,7 +368,8 @@ function parseWorkflowTextToolCalls(text: string): ParsedTextToolCall[] {
         typeof parsed.name === "string" &&
         (isWorkflowToolName(parsed.name) ||
           isPhase13ToolName(parsed.name) ||
-          isPhase14ToolName(parsed.name))
+          isPhase14ToolName(parsed.name) ||
+          isPhase15ToolName(parsed.name))
       ) {
         calls.push({
           name: parsed.name,
@@ -383,7 +410,13 @@ async function runTextModelWorkflowToolLoop(params: {
   const hasWorkflow = Boolean(params.deps.workflowStore && params.deps.workflowEngine);
   const hasPhase13 = Boolean(params.deps.phase13);
   const hasPhase14 = Boolean(params.deps.phase14);
-  if (!hasWorkflow && !hasPhase13 && !hasPhase14) {
+  const hasPhase15 = Boolean(
+    params.deps.browserService ||
+      params.deps.screenCapture ||
+      params.deps.showcaseService ||
+      params.deps.db,
+  );
+  if (!hasWorkflow && !hasPhase13 && !hasPhase14 && !hasPhase15) {
     return currentText;
   }
 
@@ -402,7 +435,27 @@ async function runTextModelWorkflowToolLoop(params: {
       let out: unknown;
       let failed = false;
       try {
-        if (isPhase14ToolName(call.name) && params.deps.phase14) {
+        if (isPhase15ToolName(call.name)) {
+          const canalId =
+            params.threadId && !params.threadId.startsWith("main:")
+              ? `thread:${params.threadId}`
+              : `agente:${params.agenteId}`;
+          out = await executePhase15ChatTool({
+            toolName: call.name,
+            args: call.arguments,
+            agenteId: params.agenteId,
+            canalId,
+            deps: {
+              db: params.deps.db,
+              wsHub: params.deps.wsHub,
+              workspaceRoot: params.deps.workspaceRoot ?? process.cwd(),
+              browserService: params.deps.browserService,
+              screenCapture: params.deps.screenCapture,
+              showcaseService: params.deps.showcaseService,
+              transcription: params.deps.transcription,
+            },
+          });
+        } else if (isPhase14ToolName(call.name) && params.deps.phase14) {
           const canalId =
             params.threadId && !params.threadId.startsWith("main:")
               ? `thread:${params.threadId}`
@@ -582,6 +635,15 @@ function enrichAgentRow(
     memoria_resumo: string | null;
     ordem_exibicao: number;
     config_json: string;
+    backup_models_json?: string | null;
+    permission_level?: string | null;
+    allow_new_chat?: number | null;
+    allow_quick_ack?: number | null;
+    browser_profile_id?: string | null;
+    pinned?: number | null;
+    hidden?: number | null;
+    section_id?: string | null;
+    notification_level?: string | null;
     atualizado_em: string;
   },
   workspaceRoot = process.cwd()
@@ -611,6 +673,22 @@ function enrichAgentRow(
       ? parsedConfig.prompt_base
       : def?.prompt_base ?? "";
 
+  const backupModels = parseBackupModelsJson(row.backup_models_json);
+  const permissionLevel: PermissionLevel =
+    row.permission_level === "ask" || row.permission_level === "full"
+      ? row.permission_level
+      : "workspace";
+  const allowNewChat = row.allow_new_chat !== 0;
+  const allowQuickAck = row.allow_quick_ack !== 0;
+  const browserProfileId = row.browser_profile_id ?? null;
+  const notificationLevel: AgentNotificationLevel =
+    row.notification_level === "mentions" || row.notification_level === "muted"
+      ? row.notification_level
+      : "all";
+  const pinned = row.pinned === 1;
+  const hidden = row.hidden === 1;
+  const sectionId = row.section_id ?? null;
+
   const config = {
     ...parsedConfig,
     pacote,
@@ -620,11 +698,30 @@ function enrichAgentRow(
       ? parsedConfig.ferramentas
       : def?.ferramentas ?? ["handoff_agente"],
     prompt_base: promptBase,
+    backup_models: backupModels,
+    permission_level: permissionLevel,
+    allow_new_chat: allowNewChat,
+    allow_quick_ack: allowQuickAck,
+    allow_quick_acknowledgement: allowQuickAck,
+    browser_profile_id: browserProfileId,
+    notification_level: notificationLevel,
+    pinned,
+    hidden,
+    section_id: sectionId,
   };
 
   return {
     ...row,
     config,
+    backup_models: backupModels,
+    permission_level: permissionLevel,
+    allow_new_chat: allowNewChat,
+    allow_quick_ack: allowQuickAck,
+    browser_profile_id: browserProfileId,
+    notification_level: notificationLevel,
+    pinned,
+    hidden,
+    section_id: sectionId,
     nao_lidas: Number(unreadRow?.total ?? 0),
     ultima_mensagem: lastRow ? lastRow.conteudo_markdown.replace(/\s+/g, " ").slice(0, 96) : null,
     ultima_mensagem_em: lastRow?.criado_em ?? row.atualizado_em,
@@ -638,7 +735,7 @@ interface ChatProgressReport {
   delta?: string;
 }
 
-async function generateAgentChatReply(
+export async function generateAgentChatReply(
   deps: StudioRoutesDeps,
   agente: {
     agente_id: string;
@@ -646,6 +743,7 @@ async function generateAgentChatReply(
     papel: string;
     modelo_padrao: string;
     config_json: string;
+    backup_models_json?: string | null;
   },
   userPrompt: string,
   anexos: AnexoChat[],
@@ -660,12 +758,15 @@ async function generateAgentChatReply(
     wokenWaitsBlock?: string | null;
     entregaOrigemId?: string;
     isRoutine?: boolean;
+    overrideModel?: string;
+    overrideAccountId?: string | null;
   }
 ): Promise<{
   markdown: string;
   steps: PassoChat[];
   tarefaCriadaId: string | null;
   anexosGerados: AnexoChat[];
+  usageLimitAsk?: UsageLimitAskPayload;
 }> {
   onProgress?.({
     fase: "iniciado",
@@ -785,12 +886,17 @@ async function generateAgentChatReply(
     deps.workflowStore && deps.workflowEngine ? getChatWorkflowToolCatalog() : [];
   const studioPhase13Tools = deps.phase13 ? PHASE13_TOOLS_SCHEMA : [];
   const studioPhase14Tools = deps.phase14 ? PHASE14_TOOLS_SCHEMA : [];
+  const studioPhase15Tools =
+    deps.browserService || deps.screenCapture || deps.showcaseService
+      ? PHASE15_TOOLS_SCHEMA
+      : [];
   for (const t of [
     ...PHASE10_TOOL_DEFINITIONS,
     ...studioRoutineTools,
     ...studioWorkflowTools,
     ...studioPhase13Tools,
     ...studioPhase14Tools,
+    ...studioPhase15Tools,
     ...mcpTools,
   ]) {
     if (!availableChatToolsMap.has(t.name)) {
@@ -799,26 +905,21 @@ async function generateAgentChatReply(
   }
   const availableChatTools = Array.from(availableChatToolsMap.values());
 
-  const providerName = deps.providers.resolveProviderName(agente.modelo_padrao);
+  const governance = readAgentGovernance(deps.db, agente.agente_id);
+  const initialModel = options?.overrideModel?.trim() || agente.modelo_padrao;
+  const providerName = deps.providers.resolveProviderName(initialModel);
   const agService = deps.providerConnection.getAntigravityService();
   const [statusList, agSnapshot] = await Promise.all([
     deps.providerConnection.getProvidersStatus(false),
     agService.getLiveSnapshot(false),
   ]);
-  const providerStatus = statusList.find((item) => item.provedor === providerName);
   const claudeOAuthStatus = statusList.find((item) => item.provedor === "claude");
   const openaiOAuthStatus = statusList.find((item) => item.provedor === "openai");
   const opencodeStatus = statusList.find((item) => item.provedor === "opencode");
 
   const hasAntigravityAccount = agSnapshot.contas.some((c) => c.estado === "conectado" || Boolean(c.token_valido));
-  const modelBelongsToAntigravity =
-    hasAntigravityAccount &&
-    (providerName === "gemini" || agSnapshot.modelos.some((m) => m.id === agente.modelo_padrao));
   const hasClaudeOAuthAccount = Boolean(claudeOAuthStatus?.contas && claudeOAuthStatus.contas.length > 0);
   const hasOpenAIOAuthAccount = Boolean(openaiOAuthStatus?.contas && openaiOAuthStatus.contas.length > 0);
-  const canCallOpenCode = providerName === "opencode" && Boolean(opencodeStatus?.conectado);
-  const canCallVaultOrLocal =
-    Boolean(providerStatus?.vault_configurado) || (providerName === "ollama" && Boolean(providerStatus?.conectado));
 
   const skillStep: PassoChat = {
     id: `step-${randomUUID().slice(0, 8)}`,
@@ -1076,176 +1177,94 @@ async function generateAgentChatReply(
     }
   }
 
-  let lastExecutionError: string | null = null;
-  let hadConnectedRoute = false;
+  const execState: {
+    lastExecutionError: string | null;
+    lastErrorRetryable: boolean;
+    hadConnectedRoute: boolean;
+  } = {
+    lastExecutionError: null,
+    lastErrorRetryable: false,
+    hadConnectedRoute: false,
+  };
 
-  // 1. Execução via Claude OAuth / ChatGPT (Codex) OAuth conectados no navegador
-  if (
-    ((providerName === "claude" && hasClaudeOAuthAccount) ||
-      (providerName === "openai" && hasOpenAIOAuthAccount)) &&
-    !providerStatus?.vault_configurado
-  ) {
-    hadConnectedRoute = true;
-    const providerLabel = providerName === "claude" ? "Claude" : "ChatGPT";
-    const activeCliStepId = `step-${randomUUID().slice(0, 8)}`;
-    onProgress?.({
-      fase: "etapa",
-      mensagem_status: `Consultando ${providerLabel} (${agente.modelo_padrao})...`,
-      step: {
-        id: activeCliStepId,
-        ferramenta: `${providerName}:${agente.modelo_padrao}`,
-        titulo: `Executando via ${providerLabel} (${agente.modelo_padrao})...`,
-        status: "executando",
-      },
-    });
-    const t0 = Date.now();
-    try {
-      const cliMsgs = history.slice(-8).map((item) => ({
-        role: (item.autor === "usuario" ? "user" : "assistant") as "user" | "assistant",
-        text: item.conteudo_markdown,
-      }));
-      cliMsgs.push({
-        role: "user",
-        text:
-          anexos.length > 0
-            ? `${userPrompt}\n\n[Anexos ImagePaths disponíveis: ${anexos.map((a) => a.caminho_relativo).join(", ")}]`
-            : userPrompt,
-      });
+  const invokeModelAttempt = async (
+    targetModel: string,
+    preferredAccId: string | null,
+  ): Promise<string | null> => {
+    const targetProvider = deps.providers.resolveProviderName(targetModel);
+    const targetProvStatus = statusList.find((item) => item.provedor === targetProvider);
+    const targetVaultOrLocal =
+      Boolean(targetProvStatus?.vault_configurado) ||
+      (targetProvider === "ollama" && Boolean(targetProvStatus?.conectado));
+    const targetOpenCode = targetProvider === "opencode" && Boolean(opencodeStatus?.conectado);
+    const targetAntigravity =
+      hasAntigravityAccount &&
+      (targetProvider === "gemini" || agSnapshot.modelos.some((m) => m.id === targetModel));
 
-      const cliSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e objetiva. Nunca invente handles ou marcas reais.${
-        deps.workflowStore && deps.workflowEngine
-          ? "\nQuando precisar consultar/editar/executar workflows em grafo, responda contendo <tool_call>{\"name\":\"...\",\"arguments\":{...}}</tool_call>."
-          : ""
-      }`;
-      const cliResult = await deps.providerConnection.getCliOAuthService().executeTurn({
-        provedor: providerName as "claude" | "openai",
-        modelId: agente.modelo_padrao,
-        systemPrompt: cliSystemPrompt,
-        messages: cliMsgs,
-        preferredAccountId: typeof config.provider_account_id === "string" ? config.provider_account_id : null,
-      });
-
-      const cliFinalText = await runTextModelWorkflowToolLoop({
-        initialText: cliResult.text,
-        invokeFollowUp: async (followUpPrompt) => {
-          const next = await deps.providerConnection.getCliOAuthService().executeTurn({
-            provedor: providerName as "claude" | "openai",
-            modelId: agente.modelo_padrao,
-            systemPrompt: cliSystemPrompt,
-            messages: [
-              ...cliMsgs,
-              { role: "assistant", text: cliResult.text },
-              { role: "user", text: followUpPrompt },
-            ],
-            preferredAccountId:
-              typeof config.provider_account_id === "string" ? config.provider_account_id : null,
-          });
-          return next.text;
-        },
-        deps,
-        agenteId: agente.agente_id,
-        turnId,
-        threadId: options?.threadId,
-        entregaOrigemId: options?.entregaOrigemId,
-        pedidoTexto: userPrompt,
-        isRoutine: options?.isRoutine,
-        isResumingWait: Boolean(options?.wokenWaitsBlock),
-        signal: options?.signal,
-        steps,
-        onProgress,
-      });
-
-      recordChatTurnUsage(deps.db, {
-        agentId: agente.agente_id,
-        sessionId,
-        turnId,
-        provider: providerName,
-        model: cliResult.modelUsed,
-        uncachedInput: cliResult.usage.uncachedInput,
-        cachedInput: cliResult.usage.cachedInput,
-        output: cliResult.usage.output,
-      });
-
-      steps.push({
-        id: `step-${randomUUID().slice(0, 8)}`,
-        ferramenta: `${providerName}:${cliResult.modelUsed}`,
-        titulo: `Executado via ${cliResult.modelUsed}${cliResult.accountEmail ? ` (${cliResult.accountEmail})` : ""} · ${cliResult.usage.uncachedInput + cliResult.usage.cachedInput + cliResult.usage.output} tokens`,
-        status: "concluido",
-        duracao_ms: Date.now() - t0,
-      });
-      return { markdown: cliFinalText, steps, tarefaCriadaId, anexosGerados };
-    } catch (cliErr) {
-      lastExecutionError = cliErr instanceof Error ? cliErr.message : String(cliErr);
-      steps.push({
-        id: `step-${randomUUID().slice(0, 8)}`,
-        ferramenta: `${providerName}:erro`,
-        titulo: `Falha na execução ${providerName}: ${lastExecutionError.slice(0, 120)}`,
-        status: "erro",
-        duracao_ms: Date.now() - t0,
-      });
-    }
-  }
-
-  // 2. Execução via OpenCode local (modelos gratuitos ou com API key opencode_api_key)
-  if (canCallOpenCode) {
-    hadConnectedRoute = true;
-    const activeOcStepId = `step-${randomUUID().slice(0, 8)}`;
-    onProgress?.({
-      fase: "etapa",
-      mensagem_status: `Executando ${agente.modelo_padrao} via OpenCode...`,
-      step: {
-        id: activeOcStepId,
-        ferramenta: `opencode:${agente.modelo_padrao}`,
-        titulo: `Gerando resposta em tempo real (${agente.modelo_padrao})...`,
-        status: "executando",
-      },
-    });
-    const t0 = Date.now();
-    try {
-      const ocMsgs = history.slice(-8).map((item) => ({
-        role: (item.autor === "usuario" ? "user" : "assistant") as "user" | "assistant",
-        text: item.conteudo_markdown,
-      }));
-      ocMsgs.push({
-        role: "user",
-        text:
-          anexos.length > 0
-            ? `${userPrompt}\n\n[Anexos disponíveis: ${anexos.map((a) => a.caminho_relativo).join(", ")}]`
-            : userPrompt,
-      });
-
-      const ocSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e especializada.${
-        deps.workflowStore && deps.workflowEngine
-          ? "\nQuando precisar consultar/editar/executar workflows em grafo, responda contendo <tool_call>{\"name\":\"...\",\"arguments\":{...}}</tool_call>."
-          : ""
-      }`;
-      const ocResult = await deps.providerConnection.getOpenCodeService().executePrompt({
-        modelId: agente.modelo_padrao,
-        systemPrompt: ocSystemPrompt,
-        messages: ocMsgs,
-        agentId: agente.agente_id,
-        onDelta: (delta) => {
-          onProgress?.({
-            fase: "chunk",
-            mensagem_status: `Escrevendo resposta (${agente.modelo_padrao})...`,
-            delta,
-          });
+    // 1. Execução via Claude OAuth / ChatGPT (Codex) OAuth conectados no navegador
+    if (
+      ((targetProvider === "claude" && hasClaudeOAuthAccount) ||
+        (targetProvider === "openai" && hasOpenAIOAuthAccount)) &&
+      !targetProvStatus?.vault_configurado
+    ) {
+      execState.hadConnectedRoute = true;
+      const providerLabel = targetProvider === "claude" ? "Claude" : "ChatGPT";
+      const activeCliStepId = `step-${randomUUID().slice(0, 8)}`;
+      onProgress?.({
+        fase: "etapa",
+        mensagem_status: `Consultando ${providerLabel} (${targetModel})...`,
+        step: {
+          id: activeCliStepId,
+          ferramenta: `${targetProvider}:${targetModel}`,
+          titulo: `Executando via ${providerLabel} (${targetModel})...`,
+          status: "executando",
         },
       });
+      const t0 = Date.now();
+      try {
+        const cliMsgs = history.slice(-8).map((item) => ({
+          role: (item.autor === "usuario" ? "user" : "assistant") as "user" | "assistant",
+          text: item.conteudo_markdown,
+        }));
+        cliMsgs.push({
+          role: "user",
+          text:
+            anexos.length > 0
+              ? `${userPrompt}\n\n[Anexos ImagePaths disponíveis: ${anexos.map((a) => a.caminho_relativo).join(", ")}]`
+              : userPrompt,
+        });
 
-      if (ocResult.text) {
-        const ocFinalText = await runTextModelWorkflowToolLoop({
-          initialText: ocResult.text,
+        const cliSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e objetiva. Nunca invente handles ou marcas reais.${
+          deps.workflowStore && deps.workflowEngine
+            ? "\nQuando precisar consultar/editar/executar workflows em grafo, responda contendo <tool_call>{\"name\":\"...\",\"arguments\":{...}}</tool_call>."
+            : ""
+        }`;
+        const poolAccount = await deps.providerConnection
+          .pickPoolAccount(targetProvider, preferredAccId)
+          .catch(() => null);
+        const effAccountId = preferredAccId ?? poolAccount?.id ?? null;
+
+        const cliResult = await deps.providerConnection.getCliOAuthService().executeTurn({
+          provedor: targetProvider as "claude" | "openai",
+          modelId: targetModel,
+          systemPrompt: cliSystemPrompt,
+          messages: cliMsgs,
+          preferredAccountId: effAccountId,
+        });
+
+        const cliFinalText = await runTextModelWorkflowToolLoop({
+          initialText: cliResult.text,
           invokeFollowUp: async (followUpPrompt) => {
-            const next = await deps.providerConnection.getOpenCodeService().executePrompt({
-              modelId: agente.modelo_padrao,
-              systemPrompt: ocSystemPrompt,
+            const next = await deps.providerConnection.getCliOAuthService().executeTurn({
+              provedor: targetProvider as "claude" | "openai",
+              modelId: targetModel,
+              systemPrompt: cliSystemPrompt,
               messages: [
-                ...ocMsgs,
-                { role: "assistant", text: ocResult.text },
+                ...cliMsgs,
+                { role: "assistant", text: cliResult.text },
                 { role: "user", text: followUpPrompt },
               ],
-              agentId: agente.agente_id,
+              preferredAccountId: effAccountId,
             });
             return next.text;
           },
@@ -1266,442 +1285,672 @@ async function generateAgentChatReply(
           agentId: agente.agente_id,
           sessionId,
           turnId,
-          provider: "opencode",
-          model: ocResult.modelUsed,
-          uncachedInput: ocResult.usage.uncachedInput,
-          cachedInput: ocResult.usage.cachedInput,
-          output: ocResult.usage.output,
+          provider: targetProvider,
+          model: cliResult.modelUsed,
+          uncachedInput: cliResult.usage.uncachedInput,
+          cachedInput: cliResult.usage.cachedInput,
+          output: cliResult.usage.output,
         });
 
-        const doneStep: PassoChat = {
-          id: activeOcStepId,
-          ferramenta: `opencode:${ocResult.modelUsed}`,
-          titulo: `Executado via OpenCode (${ocResult.modelUsed}) · ${ocResult.usage.uncachedInput + ocResult.usage.output} tokens`,
+        steps.push({
+          id: `step-${randomUUID().slice(0, 8)}`,
+          ferramenta: `${targetProvider}:${cliResult.modelUsed}`,
+          titulo: `Executado via ${cliResult.modelUsed}${cliResult.accountEmail ? ` (${cliResult.accountEmail})` : ""} · ${cliResult.usage.uncachedInput + cliResult.usage.cachedInput + cliResult.usage.output} tokens`,
           status: "concluido",
           duracao_ms: Date.now() - t0,
-        };
-        steps.push(doneStep);
-        onProgress?.({ fase: "etapa", step: doneStep });
-        return { markdown: ocFinalText, steps, tarefaCriadaId, anexosGerados };
+        });
+        return cliFinalText;
+      } catch (cliErr) {
+        const classified = isRetryableQuotaOrProviderError(cliErr);
+        execState.lastExecutionError = classified.message;
+        execState.lastErrorRetryable = classified.retryable;
+        steps.push({
+          id: `step-${randomUUID().slice(0, 8)}`,
+          ferramenta: `${targetProvider}:erro`,
+          titulo: `Falha na execução ${targetProvider}: ${classified.message.slice(0, 120)}`,
+          status: "erro",
+          duracao_ms: Date.now() - t0,
+        });
+        return null;
       }
-    } catch (ocErr) {
-      lastExecutionError = ocErr instanceof Error ? ocErr.message : String(ocErr);
-      steps.push({
-        id: `step-${randomUUID().slice(0, 8)}`,
-        ferramenta: "opencode:erro",
-        titulo: `Falha ao executar modelo OpenCode: ${lastExecutionError.slice(0, 120)}`,
-        status: "erro",
-        duracao_ms: Date.now() - t0,
-      });
     }
-  }
 
-  // 3. Execução via API Key cadastrada no Cofre ou Ollama local (com loop multi-turn de tools até 6 iterações)
-  if (canCallVaultOrLocal) {
-    hadConnectedRoute = true;
-    onProgress?.({
-      fase: "etapa",
-      mensagem_status: `Consultando ${providerName} (${agente.modelo_padrao})...`,
-    });
-    const t0 = Date.now();
-    try {
-      const client = deps.providers.getClientForModel(agente.modelo_padrao);
-      const turnMessages: ConversationMessage[] = history.slice(-8).map((item) => ({
-        role: (item.autor === "usuario" ? "user" : "assistant") as "user" | "assistant",
-        content: item.conteudo_markdown,
-      }));
-      turnMessages.push({
-        role: "user",
-        content:
-          anexos.length > 0
-            ? `${userPrompt}\n\n[Anexos ImagePaths disponíveis: ${anexos.map((a) => a.caminho_relativo).join(", ")}]`
-            : userPrompt,
+    // 2. Execução via OpenCode local (modelos gratuitos ou com API key opencode_api_key)
+    if (targetOpenCode) {
+      execState.hadConnectedRoute = true;
+      const activeOcStepId = `step-${randomUUID().slice(0, 8)}`;
+      onProgress?.({
+        fase: "etapa",
+        mensagem_status: `Executando ${targetModel} via OpenCode...`,
+        step: {
+          id: activeOcStepId,
+          ferramenta: `opencode:${targetModel}`,
+          titulo: `Gerando resposta em tempo real (${targetModel})...`,
+          status: "executando",
+        },
       });
-
-      const systemPromptChat = `${promptBase}\nResponda sempre em pt-br com objetividade, tabelas Markdown quando útil e zero dados fictícios de clientes reais.`;
-      let totalInputTokens = 0;
-      let totalOutputTokens = 0;
-      let finalReplyText = "";
-
-      for (let iter = 0; iter < 8; iter += 1) {
-        assertNotAborted();
-        const llmResult = await client.executeTurn({
-          model: agente.modelo_padrao,
-          systemPrompt: systemPromptChat,
-          messages: turnMessages,
-          tools: availableChatTools,
-        });
-        assertNotAborted();
-
-        totalInputTokens += llmResult.usage?.inputTokens ?? 0;
-        totalOutputTokens += llmResult.usage?.outputTokens ?? 0;
-
-        if (!llmResult.toolCalls || llmResult.toolCalls.length === 0) {
-          finalReplyText = llmResult.text?.trim() ?? "";
-          break;
-        }
-
-        turnMessages.push({
-          role: "assistant",
-          content: llmResult.text ?? "",
-          toolCalls: llmResult.toolCalls,
+      const t0 = Date.now();
+      try {
+        const ocMsgs = history.slice(-8).map((item) => ({
+          role: (item.autor === "usuario" ? "user" : "assistant") as "user" | "assistant",
+          text: item.conteudo_markdown,
+        }));
+        ocMsgs.push({
+          role: "user",
+          text:
+            anexos.length > 0
+              ? `${userPrompt}\n\n[Anexos disponíveis: ${anexos.map((a) => a.caminho_relativo).join(", ")}]`
+              : userPrompt,
         });
 
-        for (const call of llmResult.toolCalls) {
-          const stepStart = Date.now();
-          const runningStep: PassoChat = {
-            id: `step-${randomUUID().slice(0, 8)}`,
-            ferramenta: call.name,
-            titulo: `Executando ${call.name}...`,
-            status: "executando",
-          };
-          onProgress?.({
-            fase: "etapa",
-            mensagem_status: `Executando ferramenta ${call.name}...`,
-            step: runningStep,
+        const ocSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e especializada.${
+          deps.workflowStore && deps.workflowEngine
+            ? "\nQuando precisar consultar/editar/executar workflows em grafo, responda contendo <tool_call>{\"name\":\"...\",\"arguments\":{...}}</tool_call>."
+            : ""
+        }`;
+        const ocResult = await deps.providerConnection.getOpenCodeService().executePrompt({
+          modelId: targetModel,
+          systemPrompt: ocSystemPrompt,
+          messages: ocMsgs,
+          agentId: agente.agente_id,
+          onDelta: (delta) => {
+            onProgress?.({
+              fase: "chunk",
+              mensagem_status: `Escrevendo resposta (${targetModel})...`,
+              delta,
+            });
+          },
+        });
+
+        if (ocResult.text) {
+          const ocFinalText = await runTextModelWorkflowToolLoop({
+            initialText: ocResult.text,
+            invokeFollowUp: async (followUpPrompt) => {
+              const next = await deps.providerConnection.getOpenCodeService().executePrompt({
+                modelId: targetModel,
+                systemPrompt: ocSystemPrompt,
+                messages: [
+                  ...ocMsgs,
+                  { role: "assistant", text: ocResult.text },
+                  { role: "user", text: followUpPrompt },
+                ],
+                agentId: agente.agente_id,
+              });
+              return next.text;
+            },
+            deps,
+            agenteId: agente.agente_id,
+            turnId,
+            threadId: options?.threadId,
+            entregaOrigemId: options?.entregaOrigemId,
+            pedidoTexto: userPrompt,
+            isRoutine: options?.isRoutine,
+            isResumingWait: Boolean(options?.wokenWaitsBlock),
+            signal: options?.signal,
+            steps,
+            onProgress,
           });
 
-          let toolOutput: unknown;
-          let toolFailed = false;
-          try {
-            if (isPhase10ExtensionTool(call.name)) {
-              toolOutput = await executeStudioExtensionTool(call.name, call.arguments, {
-                db: deps.db,
-                vault: deps.vault,
-                wsHub: deps.wsHub,
-                workspaceRoot,
-                agenteId: agente.agente_id,
-                canalId: `agente:${agente.agente_id}`,
-                mcpGateway: deps.mcpGateway,
-                catalogService: deps.catalogService,
-                skillsManager: deps.skillsManager,
-                whatsappManager: deps.whatsappManager,
-                whatsappOrchestrator: deps.whatsappOrchestrator,
-              });
-            } else if (isRoutineToolName(call.name)) {
-              toolOutput = await executeStudioRoutineTool(call.name, call.arguments, {
-                agenteId: agente.agente_id,
-                turnOrigin: "human",
-                routineToolsDeps: deps.routineToolsDeps,
-              });
-            } else if (isWorkflowToolName(call.name)) {
-              toolOutput = await executeChatWorkflowTool(call.name, call.arguments, {
-                store: deps.workflowStore,
-                engine: deps.workflowEngine,
-                wsHub: deps.wsHub,
-                agenteId: agente.agente_id,
-                requestSeed: turnId,
-              });
-            } else if (isPhase14ToolName(call.name) && deps.phase14) {
+          recordChatTurnUsage(deps.db, {
+            agentId: agente.agente_id,
+            sessionId,
+            turnId,
+            provider: "opencode",
+            model: ocResult.modelUsed,
+            uncachedInput: ocResult.usage.uncachedInput,
+            cachedInput: ocResult.usage.cachedInput,
+            output: ocResult.usage.output,
+          });
+
+          const doneStep: PassoChat = {
+            id: activeOcStepId,
+            ferramenta: `opencode:${ocResult.modelUsed}`,
+            titulo: `Executado via OpenCode (${ocResult.modelUsed}) · ${ocResult.usage.uncachedInput + ocResult.usage.output} tokens`,
+            status: "concluido",
+            duracao_ms: Date.now() - t0,
+          };
+          steps.push(doneStep);
+          onProgress?.({ fase: "etapa", step: doneStep });
+          return ocFinalText;
+        }
+      } catch (ocErr) {
+        const classified = isRetryableQuotaOrProviderError(ocErr);
+        execState.lastExecutionError = classified.message;
+        execState.lastErrorRetryable = classified.retryable;
+        steps.push({
+          id: `step-${randomUUID().slice(0, 8)}`,
+          ferramenta: "opencode:erro",
+          titulo: `Falha ao executar modelo OpenCode: ${classified.message.slice(0, 120)}`,
+          status: "erro",
+          duracao_ms: Date.now() - t0,
+        });
+        return null;
+      }
+    }
+
+    // 3. Execução via API Key cadastrada no Cofre ou Ollama local
+    if (targetVaultOrLocal) {
+      execState.hadConnectedRoute = true;
+      onProgress?.({
+        fase: "etapa",
+        mensagem_status: `Consultando ${targetProvider} (${targetModel})...`,
+      });
+      const t0 = Date.now();
+      try {
+        const client = deps.providers.getClientForModel(targetModel);
+        const turnMessages: ConversationMessage[] = history.slice(-8).map((item) => ({
+          role: (item.autor === "usuario" ? "user" : "assistant") as "user" | "assistant",
+          content: item.conteudo_markdown,
+        }));
+        turnMessages.push({
+          role: "user",
+          content:
+            anexos.length > 0
+              ? `${userPrompt}\n\n[Anexos ImagePaths disponíveis: ${anexos.map((a) => a.caminho_relativo).join(", ")}]`
+              : userPrompt,
+        });
+
+        const systemPromptChat = `${promptBase}\nResponda sempre em pt-br com objetividade, tabelas Markdown quando útil e zero dados fictícios de clientes reais.`;
+        let totalInputTokens = 0;
+        let totalOutputTokens = 0;
+        let finalReplyText = "";
+
+        for (let iter = 0; iter < 8; iter += 1) {
+          assertNotAborted();
+          const llmResult = await client.executeTurn({
+            model: targetModel,
+            systemPrompt: systemPromptChat,
+            messages: turnMessages,
+            tools: availableChatTools,
+          });
+          assertNotAborted();
+
+          totalInputTokens += llmResult.usage?.inputTokens ?? 0;
+          totalOutputTokens += llmResult.usage?.outputTokens ?? 0;
+
+          if (!llmResult.toolCalls || llmResult.toolCalls.length === 0) {
+            finalReplyText = llmResult.text?.trim() ?? "";
+            break;
+          }
+
+          turnMessages.push({
+            role: "assistant",
+            content: llmResult.text ?? "",
+            toolCalls: llmResult.toolCalls,
+          });
+
+          for (const call of llmResult.toolCalls) {
+            const stepStart = Date.now();
+            const runningStep: PassoChat = {
+              id: `step-${randomUUID().slice(0, 8)}`,
+              ferramenta: call.name,
+              titulo: `Executando ${call.name}...`,
+              status: "executando",
+            };
+            onProgress?.({
+              fase: "etapa",
+              mensagem_status: `Executando ferramenta ${call.name}...`,
+              step: runningStep,
+            });
+
+            let toolOutput: unknown;
+            let toolFailed = false;
+            try {
               const effectiveCanal =
                 options?.threadId && !options.threadId.startsWith("main:")
                   ? `thread:${options.threadId}`
                   : `agente:${agente.agente_id}`;
-              toolOutput = await executePhase14ToolCall(
-                call.name,
-                call.arguments,
-                {
+              if (isPhase15ToolName(call.name)) {
+                toolOutput = await executePhase15ChatTool({
+                  toolName: call.name,
+                  args: call.arguments,
                   agenteId: agente.agente_id,
                   canalId: effectiveCanal,
-                  threadId: options?.threadId ?? `main:${agente.agente_id}`,
-                  tarefaId: tarefaCriadaId,
-                  turnId,
-                  origemTurno: options?.isRoutine
-                    ? "rotina"
-                    : options?.isHandoff
-                      ? "inter_agente"
-                      : "usuario_local",
-                  isOneToOneUserChat:
-                    !options?.isRoutine &&
-                    !options?.isHandoff &&
-                    effectiveCanal === `agente:${agente.agente_id}`,
-                  lastUserMessageId: options?.entregaOrigemId ?? null,
-                  generatedAnexos: anexosGerados,
-                },
-                deps.phase14,
-              );
-            } else if (isPhase13ToolName(call.name) && deps.phase13) {
-              const p13 = await executePhase13Tool(
-                call.name,
-                call.arguments,
-                {
+                  deps: {
+                    db: deps.db,
+                    wsHub: deps.wsHub,
+                    workspaceRoot,
+                    browserService: deps.browserService,
+                    screenCapture: deps.screenCapture,
+                    showcaseService: deps.showcaseService,
+                    transcription: deps.transcription,
+                  },
+                });
+              } else if (isPhase10ExtensionTool(call.name)) {
+                toolOutput = await executeStudioExtensionTool(call.name, call.arguments, {
+                  db: deps.db,
+                  vault: deps.vault,
+                  wsHub: deps.wsHub,
+                  workspaceRoot,
                   agenteId: agente.agente_id,
-                  turnoId: turnId,
-                  callId: call.id,
-                  threadId: options?.threadId ?? `main:${agente.agente_id}`,
-                  canalId:
-                    options?.threadId && !options.threadId.startsWith("main:")
-                      ? `thread:${options.threadId}`
-                      : `agente:${agente.agente_id}`,
-                  entregaOrigemId: options?.entregaOrigemId ?? turnId,
-                  pedidoTexto: userPrompt,
-                  isRoutine: options?.isRoutine,
-                  isResumingWait: Boolean(options?.wokenWaitsBlock),
-                },
-                deps.phase13,
-              );
-              toolOutput = p13.result;
-            } else if (deps.mcpGateway && call.name.startsWith("mcp_")) {
-              toolOutput = await deps.mcpGateway.callMcpTool(call.name, call.arguments, {
-                agentId: agente.agente_id,
-              });
-            } else {
+                  canalId: `agente:${agente.agente_id}`,
+                  mcpGateway: deps.mcpGateway,
+                  catalogService: deps.catalogService,
+                  skillsManager: deps.skillsManager,
+                  whatsappManager: deps.whatsappManager,
+                  whatsappOrchestrator: deps.whatsappOrchestrator,
+                });
+              } else if (isRoutineToolName(call.name)) {
+                toolOutput = await executeStudioRoutineTool(call.name, call.arguments, {
+                  agenteId: agente.agente_id,
+                  turnOrigin: "human",
+                  routineToolsDeps: deps.routineToolsDeps,
+                });
+              } else if (isWorkflowToolName(call.name)) {
+                toolOutput = await executeChatWorkflowTool(call.name, call.arguments, {
+                  store: deps.workflowStore,
+                  engine: deps.workflowEngine,
+                  wsHub: deps.wsHub,
+                  agenteId: agente.agente_id,
+                  requestSeed: turnId,
+                });
+              } else if (isPhase14ToolName(call.name) && deps.phase14) {
+                toolOutput = await executePhase14ToolCall(
+                  call.name,
+                  call.arguments,
+                  {
+                    agenteId: agente.agente_id,
+                    canalId: effectiveCanal,
+                    threadId: options?.threadId ?? `main:${agente.agente_id}`,
+                    tarefaId: tarefaCriadaId,
+                    turnId,
+                    origemTurno: options?.isRoutine
+                      ? "rotina"
+                      : options?.isHandoff
+                        ? "inter_agente"
+                        : "usuario_local",
+                    isOneToOneUserChat:
+                      !options?.isRoutine &&
+                      !options?.isHandoff &&
+                      effectiveCanal === `agente:${agente.agente_id}`,
+                    lastUserMessageId: options?.entregaOrigemId ?? null,
+                    generatedAnexos: anexosGerados,
+                  },
+                  deps.phase14,
+                );
+              } else if (isPhase13ToolName(call.name) && deps.phase13) {
+                const p13 = await executePhase13Tool(
+                  call.name,
+                  call.arguments,
+                  {
+                    agenteId: agente.agente_id,
+                    turnoId: turnId,
+                    callId: call.id,
+                    threadId: options?.threadId ?? `main:${agente.agente_id}`,
+                    canalId: effectiveCanal,
+                    entregaOrigemId: options?.entregaOrigemId ?? turnId,
+                    pedidoTexto: userPrompt,
+                    isRoutine: options?.isRoutine,
+                    isResumingWait: Boolean(options?.wokenWaitsBlock),
+                  },
+                  deps.phase13,
+                );
+                toolOutput = p13.result;
+              } else if (deps.mcpGateway && call.name.startsWith("mcp_")) {
+                toolOutput = await deps.mcpGateway.callMcpTool(call.name, call.arguments, {
+                  agentId: agente.agente_id,
+                });
+              } else {
+                toolFailed = true;
+                toolOutput = { erro: `Ferramenta '${call.name}' indisponível no contexto atual.` };
+              }
+            } catch (toolErr) {
               toolFailed = true;
-              toolOutput = { erro: `Ferramenta '${call.name}' indisponível no contexto atual.` };
+              const rawErrMsg = toolErr instanceof Error ? toolErr.message : String(toolErr);
+              toolOutput = { erro: redactMcpSecrets(rawErrMsg, []) };
             }
-          } catch (toolErr) {
-            toolFailed = true;
-            const rawErrMsg = toolErr instanceof Error ? toolErr.message : String(toolErr);
-            toolOutput = { erro: redactMcpSecrets(rawErrMsg, []) };
-          }
 
-          if (
-            toolOutput &&
-            typeof toolOutput === "object" &&
-            (toolOutput as { action?: unknown }).action === "sign_in"
-          ) {
-            const notice = toolOutput as McpOAuthRequiredNotice;
-            const safeReason = redactMcpSecrets(notice.motivo, []);
-            deps.wsHub.broadcast("mcp.oauth_solicitado", {
-              mcp_id: notice.mcpId,
-              nome: notice.nome,
-              app_slug: notice.appSlug ?? null,
-              authorize_url: notice.authorizeUrl ?? null,
-              canal_id: `agente:${agente.agente_id}`,
-              agente_id: agente.agente_id,
-              motivo: safeReason,
-            });
-            const promptPayload = {
-              type: "mcp_oauth_prompt",
-              mcpId: notice.mcpId,
-              nome: notice.nome,
-              appSlug: notice.appSlug ?? null,
-              authorizeUrl: notice.authorizeUrl ?? null,
-              motivo: safeReason,
+            if (
+              toolOutput &&
+              typeof toolOutput === "object" &&
+              (toolOutput as { action?: unknown }).action === "sign_in"
+            ) {
+              const notice = toolOutput as McpOAuthRequiredNotice;
+              const safeReason = redactMcpSecrets(notice.motivo, []);
+              deps.wsHub.broadcast("mcp.oauth_solicitado", {
+                mcp_id: notice.mcpId,
+                nome: notice.nome,
+                app_slug: notice.appSlug ?? null,
+                authorize_url: notice.authorizeUrl ?? null,
+                canal_id: `agente:${agente.agente_id}`,
+                agente_id: agente.agente_id,
+                motivo: safeReason,
+              });
+              const promptPayload = {
+                type: "mcp_oauth_prompt",
+                mcpId: notice.mcpId,
+                nome: notice.nome,
+                appSlug: notice.appSlug ?? null,
+                authorizeUrl: notice.authorizeUrl ?? null,
+                motivo: safeReason,
+              };
+              steps.push({
+                id: `step-${randomUUID().slice(0, 8)}`,
+                ferramenta: "mcp_oauth_prompt",
+                titulo: `Autenticação OAuth solicitada: ${notice.nome}`,
+                detalhes: JSON.stringify(promptPayload),
+                status: "erro",
+                duracao_ms: Date.now() - stepStart,
+              });
+              anexosGerados.push({
+                arquivo_id: `oauth-${notice.mcpId}`,
+                nome: notice.nome,
+                caminho_relativo: notice.mcpId,
+                url: notice.authorizeUrl ?? "",
+                mime_type: "application/vnd.criativo.mcp-oauth+json",
+                tipo_uso: "mcp_oauth_prompt",
+              });
+            } else if (
+              toolOutput &&
+              typeof toolOutput === "object" &&
+              (toolOutput as { type?: unknown }).type === "marketplace_app_suggestion" &&
+              (toolOutput as { app?: { slug?: string; name?: string } | null }).app
+            ) {
+              const appInfo = (toolOutput as { app: { slug: string; name: string } }).app;
+              steps.push({
+                id: `step-${randomUUID().slice(0, 8)}`,
+                ferramenta: "marketplace_app_suggestion",
+                titulo: `App sugerido da Loja: ${appInfo.name}`,
+                detalhes: JSON.stringify(toolOutput),
+                status: "concluido",
+                duracao_ms: Date.now() - stepStart,
+              });
+              anexosGerados.push({
+                arquivo_id: `app-${appInfo.slug}`,
+                nome: appInfo.name,
+                caminho_relativo: appInfo.slug,
+                url: `/loja/apps/${encodeURIComponent(appInfo.slug)}`,
+                mime_type: "application/vnd.criativo.marketplace-app+json",
+                tipo_uso: "marketplace_app_suggestion",
+              });
+            }
+
+            const redactedOut = redactMcpPayload(toolOutput, []);
+            const doneToolStep: PassoChat = {
+              id: runningStep.id,
+              ferramenta: call.name,
+              titulo: toolFailed
+                ? `Falha em ${call.name}`
+                : `Ferramenta ${call.name} executada`,
+              detalhes: JSON.stringify(redactedOut).slice(0, 800),
+              status: toolFailed ? "erro" : "concluido",
+              duracao_ms: Date.now() - stepStart,
             };
-            steps.push({
-              id: `step-${randomUUID().slice(0, 8)}`,
-              ferramenta: "mcp_oauth_prompt",
-              titulo: `Autenticação OAuth solicitada: ${notice.nome}`,
-              detalhes: JSON.stringify(promptPayload),
-              status: "erro",
-              duracao_ms: Date.now() - stepStart,
+            steps.push(doneToolStep);
+            onProgress?.({
+              fase: "etapa",
+              mensagem_status: doneToolStep.titulo,
+              step: doneToolStep,
             });
-            anexosGerados.push({
-              arquivo_id: `oauth-${notice.mcpId}`,
-              nome: notice.nome,
-              caminho_relativo: notice.mcpId,
-              url: notice.authorizeUrl ?? "",
-              mime_type: "application/vnd.criativo.mcp-oauth+json",
-              tipo_uso: "mcp_oauth_prompt",
-            });
-          } else if (
-            toolOutput &&
-            typeof toolOutput === "object" &&
-            (toolOutput as { type?: unknown }).type === "marketplace_app_suggestion" &&
-            (toolOutput as { app?: { slug?: string; name?: string } | null }).app
-          ) {
-            const appInfo = (toolOutput as { app: { slug: string; name: string } }).app;
-            steps.push({
-              id: `step-${randomUUID().slice(0, 8)}`,
-              ferramenta: "marketplace_app_suggestion",
-              titulo: `App sugerido da Loja: ${appInfo.name}`,
-              detalhes: JSON.stringify(toolOutput),
-              status: "concluido",
-              duracao_ms: Date.now() - stepStart,
-            });
-            anexosGerados.push({
-              arquivo_id: `app-${appInfo.slug}`,
-              nome: appInfo.name,
-              caminho_relativo: appInfo.slug,
-              url: `/loja/apps/${encodeURIComponent(appInfo.slug)}`,
-              mime_type: "application/vnd.criativo.marketplace-app+json",
-              tipo_uso: "marketplace_app_suggestion",
+
+            turnMessages.push({
+              role: "tool",
+              toolCallId: call.id,
+              toolName: call.name,
+              content: JSON.stringify(redactedOut),
             });
           }
 
-          const redactedOut = redactMcpPayload(toolOutput, []);
-          const doneToolStep: PassoChat = {
-            id: runningStep.id,
-            ferramenta: call.name,
-            titulo: toolFailed
-              ? `Falha em ${call.name}`
-              : `Ferramenta ${call.name} executada`,
-            detalhes: JSON.stringify(redactedOut).slice(0, 800),
-            status: toolFailed ? "erro" : "concluido",
-            duracao_ms: Date.now() - stepStart,
-          };
-          steps.push(doneToolStep);
-          onProgress?.({
-            fase: "etapa",
-            mensagem_status: doneToolStep.titulo,
-            step: doneToolStep,
-          });
-
-          turnMessages.push({
-            role: "tool",
-            toolCallId: call.id,
-            toolName: call.name,
-            content: JSON.stringify(redactedOut),
-          });
+          if (iter === 7 && !finalReplyText) {
+            const finalTurn = await client.executeTurn({
+              model: targetModel,
+              systemPrompt: systemPromptChat,
+              messages: turnMessages,
+            });
+            totalInputTokens += finalTurn.usage?.inputTokens ?? 0;
+            totalOutputTokens += finalTurn.usage?.outputTokens ?? 0;
+            finalReplyText = finalTurn.text?.trim() ?? "";
+          }
         }
 
-        if (iter === 7 && !finalReplyText) {
-          const finalTurn = await client.executeTurn({
-            model: agente.modelo_padrao,
-            systemPrompt: systemPromptChat,
-            messages: turnMessages,
+        if (finalReplyText.length > 0) {
+          const estIn = Math.max(50, Math.round((promptBase.length + userPrompt.length) / 4));
+          const estOut = Math.max(20, Math.round(finalReplyText.length / 4));
+          recordChatTurnUsage(deps.db, {
+            agentId: agente.agente_id,
+            sessionId,
+            turnId,
+            provider: targetProvider,
+            model: targetModel,
+            uncachedInput: totalInputTokens > 0 ? totalInputTokens : estIn,
+            cachedInput: 0,
+            output: totalOutputTokens > 0 ? totalOutputTokens : estOut,
           });
-          totalInputTokens += finalTurn.usage?.inputTokens ?? 0;
-          totalOutputTokens += finalTurn.usage?.outputTokens ?? 0;
-          finalReplyText = finalTurn.text?.trim() ?? "";
+
+          steps.push({
+            id: `step-${randomUUID().slice(0, 8)}`,
+            ferramenta: `${targetProvider}:chat`,
+            titulo: `Resposta gerada via ${targetModel}`,
+            status: "concluido",
+            duracao_ms: Date.now() - t0,
+          });
+          return finalReplyText;
         }
-      }
-
-      if (finalReplyText.length > 0) {
-        const estIn = Math.max(50, Math.round((promptBase.length + userPrompt.length) / 4));
-        const estOut = Math.max(20, Math.round(finalReplyText.length / 4));
-        recordChatTurnUsage(deps.db, {
-          agentId: agente.agente_id,
-          sessionId,
-          turnId,
-          provider: providerName,
-          model: agente.modelo_padrao,
-          uncachedInput: totalInputTokens > 0 ? totalInputTokens : estIn,
-          cachedInput: 0,
-          output: totalOutputTokens > 0 ? totalOutputTokens : estOut,
-        });
-
+      } catch (vaultErr) {
+        const classified = isRetryableQuotaOrProviderError(vaultErr);
+        execState.lastExecutionError = classified.message;
+        execState.lastErrorRetryable = classified.retryable;
         steps.push({
           id: `step-${randomUUID().slice(0, 8)}`,
-          ferramenta: `${providerName}:chat`,
-          titulo: `Resposta gerada via ${agente.modelo_padrao}`,
-          status: "concluido",
+          ferramenta: `${targetProvider}:erro`,
+          titulo: `Falha API Key / Ollama: ${classified.message.slice(0, 120)}`,
+          status: "erro",
           duracao_ms: Date.now() - t0,
         });
-        return { markdown: finalReplyText, steps, tarefaCriadaId, anexosGerados };
+        return null;
       }
-    } catch (vaultErr) {
-      lastExecutionError = vaultErr instanceof Error ? vaultErr.message : String(vaultErr);
-      steps.push({
-        id: `step-${randomUUID().slice(0, 8)}`,
-        ferramenta: `${providerName}:erro`,
-        titulo: `Falha API Key / Ollama: ${lastExecutionError.slice(0, 120)}`,
-        status: "erro",
-        duracao_ms: Date.now() - t0,
-      });
     }
-  }
 
-  // 4. Execução real via Conta Google/Antigravity conectada no navegador (ACP aquecido / Code Assist)
-  if (modelBelongsToAntigravity && hasAntigravityAccount) {
-    hadConnectedRoute = true;
-    const activeAgStepId = `step-${randomUUID().slice(0, 8)}`;
-    onProgress?.({
-      fase: "etapa",
-      mensagem_status: `Executando ${agente.modelo_padrao} via Google Antigravity...`,
-      step: {
-        id: activeAgStepId,
-        ferramenta: `antigravity:${agente.modelo_padrao}`,
-        titulo: `Consultando ${agente.modelo_padrao} em tempo real...`,
-        status: "executando",
-      },
-    });
-    const t0 = Date.now();
-    try {
-      const historyMsgs = history.slice(-8).map((item) => ({
-        role: (item.autor === "usuario" ? "user" : "assistant") as "user" | "assistant",
-        text: item.conteudo_markdown,
-      }));
-      historyMsgs.push({
-        role: "user",
-        text:
-          anexosGerados.length > 0
-            ? `${userPrompt}\n\n[Uma imagem acabou de ser gerada e salva em: ${anexosGerados.map((a) => a.caminho_relativo).join(", ")}. Descreva o resultado e proponha legenda/próximos passos.]`
-            : userPrompt,
-      });
-
-      const agSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e especializada como ${agente.nome}. Use tabelas Markdown quando ajudar na organização. Nunca invente handles ou marcas reais: utilize apenas os informados pelo usuário.${
-        deps.workflowStore && deps.workflowEngine
-          ? "\nQuando precisar consultar/editar/executar workflows em grafo, responda contendo <tool_call>{\"name\":\"...\",\"arguments\":{...}}</tool_call>."
-          : ""
-      }`;
-      const liveResult = await agService.executeCodeAssistGenerate({
-        model: agente.modelo_padrao,
-        systemPrompt: agSystemPrompt,
-        messages: historyMsgs,
-        imagePaths: resolvedImageDiskPaths,
-        agentId: agente.agente_id,
-        preferredAccountId: typeof config.provider_account_id === "string" ? config.provider_account_id : null,
-        onDelta: (delta) => {
-          onProgress?.({
-            fase: "chunk",
-            mensagem_status: `Escrevendo resposta (${agente.modelo_padrao})...`,
-            delta,
-          });
+    // 4. Execução real via Conta Google/Antigravity conectada no navegador
+    if (targetAntigravity && hasAntigravityAccount) {
+      execState.hadConnectedRoute = true;
+      const activeAgStepId = `step-${randomUUID().slice(0, 8)}`;
+      onProgress?.({
+        fase: "etapa",
+        mensagem_status: `Executando ${targetModel} via Google Antigravity...`,
+        step: {
+          id: activeAgStepId,
+          ferramenta: `antigravity:${targetModel}`,
+          titulo: `Consultando ${targetModel} em tempo real...`,
+          status: "executando",
         },
       });
-
-      if (liveResult.text && liveResult.text.length > 0) {
-        const liveFinalText = await runTextModelWorkflowToolLoop({
-          initialText: liveResult.text,
-          invokeFollowUp: async (followUpPrompt) => {
-            const next = await agService.executeCodeAssistGenerate({
-              model: agente.modelo_padrao,
-              systemPrompt: agSystemPrompt,
-              messages: [
-                ...historyMsgs,
-                { role: "assistant", text: liveResult.text },
-                { role: "user", text: followUpPrompt },
-              ],
-              agentId: agente.agente_id,
-              preferredAccountId:
-                typeof config.provider_account_id === "string" ? config.provider_account_id : null,
-            });
-            return next.text;
-          },
-          deps,
-          agenteId: agente.agente_id,
-          turnId,
-          threadId: options?.threadId,
-          entregaOrigemId: options?.entregaOrigemId,
-          pedidoTexto: userPrompt,
-          isRoutine: options?.isRoutine,
-          isResumingWait: Boolean(options?.wokenWaitsBlock),
-          signal: options?.signal,
-          steps,
-          onProgress,
+      const t0 = Date.now();
+      try {
+        const historyMsgs = history.slice(-8).map((item) => ({
+          role: (item.autor === "usuario" ? "user" : "assistant") as "user" | "assistant",
+          text: item.conteudo_markdown,
+        }));
+        historyMsgs.push({
+          role: "user",
+          text:
+            anexosGerados.length > 0
+              ? `${userPrompt}\n\n[Uma imagem acabou de ser gerada e salva em: ${anexosGerados.map((a) => a.caminho_relativo).join(", ")}. Descreva o resultado e proponha legenda/próximos passos.]`
+              : userPrompt,
         });
 
-        recordChatTurnUsage(deps.db, {
+        const agSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e especializada como ${agente.nome}. Use tabelas Markdown quando ajudar na organização. Nunca invente handles ou marcas reais: utilize apenas os informados pelo usuário.${
+          deps.workflowStore && deps.workflowEngine
+            ? "\nQuando precisar consultar/editar/executar workflows em grafo, responda contendo <tool_call>{\"name\":\"...\",\"arguments\":{...}}</tool_call>."
+            : ""
+        }`;
+        const liveResult = await agService.executeCodeAssistGenerate({
+          model: targetModel,
+          systemPrompt: agSystemPrompt,
+          messages: historyMsgs,
+          imagePaths: resolvedImageDiskPaths,
           agentId: agente.agente_id,
-          sessionId,
-          turnId,
-          provider: "antigravity",
-          model: liveResult.modelUsed,
-          uncachedInput: liveResult.usage.uncachedInput,
-          cachedInput: liveResult.usage.cachedInput,
-          output: liveResult.usage.output,
+          preferredAccountId: preferredAccId,
+          onDelta: (delta) => {
+            onProgress?.({
+              fase: "chunk",
+              mensagem_status: `Escrevendo resposta (${targetModel})...`,
+              delta,
+            });
+          },
         });
 
+        if (liveResult.text && liveResult.text.length > 0) {
+          const liveFinalText = await runTextModelWorkflowToolLoop({
+            initialText: liveResult.text,
+            invokeFollowUp: async (followUpPrompt) => {
+              const next = await agService.executeCodeAssistGenerate({
+                model: targetModel,
+                systemPrompt: agSystemPrompt,
+                messages: [
+                  ...historyMsgs,
+                  { role: "assistant", text: liveResult.text },
+                  { role: "user", text: followUpPrompt },
+                ],
+                agentId: agente.agente_id,
+                preferredAccountId: preferredAccId,
+              });
+              return next.text;
+            },
+            deps,
+            agenteId: agente.agente_id,
+            turnId,
+            threadId: options?.threadId,
+            entregaOrigemId: options?.entregaOrigemId,
+            pedidoTexto: userPrompt,
+            isRoutine: options?.isRoutine,
+            isResumingWait: Boolean(options?.wokenWaitsBlock),
+            signal: options?.signal,
+            steps,
+            onProgress,
+          });
+
+          recordChatTurnUsage(deps.db, {
+            agentId: agente.agente_id,
+            sessionId,
+            turnId,
+            provider: "antigravity",
+            model: liveResult.modelUsed,
+            uncachedInput: liveResult.usage.uncachedInput,
+            cachedInput: liveResult.usage.cachedInput,
+            output: liveResult.usage.output,
+          });
+
+          steps.push({
+            id: `step-${randomUUID().slice(0, 8)}`,
+            ferramenta: `antigravity:${liveResult.modelUsed}`,
+            titulo: `Executado via ${liveResult.modelUsed}${liveResult.accountEmail ? ` (${liveResult.accountEmail})` : ""} · ${liveResult.usage.uncachedInput + liveResult.usage.cachedInput + liveResult.usage.output} tokens`,
+            status: "concluido",
+            duracao_ms: Date.now() - t0,
+          });
+          return liveFinalText;
+        }
+      } catch (liveErr) {
+        const classified = isRetryableQuotaOrProviderError(liveErr);
+        execState.lastExecutionError = classified.message;
+        execState.lastErrorRetryable = classified.retryable;
         steps.push({
           id: `step-${randomUUID().slice(0, 8)}`,
-          ferramenta: `antigravity:${liveResult.modelUsed}`,
-          titulo: `Executado via ${liveResult.modelUsed}${liveResult.accountEmail ? ` (${liveResult.accountEmail})` : ""} · ${liveResult.usage.uncachedInput + liveResult.usage.cachedInput + liveResult.usage.output} tokens`,
-          status: "concluido",
+          ferramenta: "antigravity:erro",
+          titulo: `Falha ao consultar conta Google conectada: ${classified.message.slice(0, 120)}`,
+          status: "erro",
           duracao_ms: Date.now() - t0,
         });
-        return { markdown: liveFinalText, steps, tarefaCriadaId, anexosGerados };
+        return null;
       }
-    } catch (liveErr) {
-      lastExecutionError = liveErr instanceof Error ? liveErr.message : String(liveErr);
-      steps.push({
-        id: `step-${randomUUID().slice(0, 8)}`,
-        ferramenta: "antigravity:erro",
-        titulo: `Falha ao consultar conta Google conectada: ${lastExecutionError.slice(0, 120)}`,
-        status: "erro",
-        duracao_ms: Date.now() - t0,
+    }
+
+    return null;
+  };
+
+  const preferredAcc =
+    options?.overrideAccountId !== undefined
+      ? options.overrideAccountId
+      : typeof config.provider_account_id === "string"
+        ? config.provider_account_id
+        : null;
+
+  const primaryReplyText = await invokeModelAttempt(initialModel, preferredAcc);
+  if (primaryReplyText !== null) {
+    return { markdown: primaryReplyText, steps, tarefaCriadaId, anexosGerados };
+  }
+
+  // Cascade / Ask via BackupModelsResolver quando ocorrer erro retentável (rate limit, cota, 5xx)
+  const backupResolver = deps.backupResolver ?? new BackupModelsResolver();
+  const backupCfg = parseBackupModelsJson(agente.backup_models_json ?? null);
+  const effectiveBackupCfg =
+    backupCfg.order.length > 0 ? backupCfg : governance.backupModels;
+
+  if (execState.lastErrorRetryable) {
+    backupResolver.markModelCooldown(providerName, initialModel);
+
+    if (effectiveBackupCfg.automatic && !options?.overrideModel) {
+      const candidates = backupResolver.resolveCandidates({
+        primaryModel: initialModel,
+        backupConfig: effectiveBackupCfg,
+        statuses: statusList,
       });
+
+      for (const candidate of candidates) {
+        const failoverStep: PassoChat = {
+          id: `step-${randomUUID().slice(0, 8)}`,
+          ferramenta: "backup_model_failover",
+          titulo: `Alternou para modelo reserva: ${candidate.modelo} (${candidate.provedor})`,
+          detalhes: `Failover automático após ${execState.lastExecutionError?.slice(0, 90) ?? "limite de uso"}`,
+          status: "concluido",
+          duracao_ms: 15,
+        };
+        steps.push(failoverStep);
+        onProgress?.({
+          fase: "etapa",
+          mensagem_status: failoverStep.titulo,
+          step: failoverStep,
+        });
+
+        const backupText = await invokeModelAttempt(candidate.modelo, candidate.conta_id ?? null);
+        if (backupText !== null) {
+          return { markdown: backupText, steps, tarefaCriadaId, anexosGerados };
+        }
+        backupResolver.markModelCooldown(candidate.provedor, candidate.modelo);
+      }
+    }
+
+    const canalIdForAsk =
+      options?.threadId && !options.threadId.startsWith("main:")
+        ? `thread:${options.threadId}`
+        : `agente:${agente.agente_id}`;
+    const usageLimitAsk = backupResolver.buildUsageLimitAsk({
+      agenteId: agente.agente_id,
+      canalId: canalIdForAsk,
+      currentModel: initialModel,
+      currentProvider: providerName,
+      reason: execState.lastExecutionError ?? "Limite temporário ou cota atingida.",
+      backupConfig: effectiveBackupCfg,
+      statuses: statusList,
+    });
+
+    if (usageLimitAsk.opcoes.length > 0) {
+      deps.db.connection
+        .prepare(
+          `INSERT INTO projecao_studio_config (chave, valor_json, atualizado_em)
+           VALUES (?, ?, ?)
+           ON CONFLICT(chave) DO UPDATE SET valor_json = excluded.valor_json, atualizado_em = excluded.atualizado_em;`,
+        )
+        .run(
+          `usage_limit_ask:${usageLimitAsk.ask_id}`,
+          JSON.stringify({
+            ask: usageLimitAsk,
+            agenteId: agente.agente_id,
+            canalId: canalIdForAsk,
+            threadId: options?.threadId ?? `main:${agente.agente_id}`,
+            userPrompt,
+            anexos,
+          }),
+          new Date().toISOString(),
+        );
+
+      return {
+        markdown: `O modelo **${initialModel}** atingiu seu limite ou retornou indisponibilidade temporária (\`${(execState.lastExecutionError ?? "quota_exceeded").slice(0, 120)}\`). Escolha abaixo um modelo reserva para continuar sem alterar seu modelo padrão:`,
+        steps,
+        tarefaCriadaId,
+        anexosGerados,
+        usageLimitAsk,
+      };
     }
   }
 
@@ -1722,9 +1971,9 @@ async function generateAgentChatReply(
   }
 
   // 5. Resposta honesta: diferencia erro técnico em provedor conectado vs ausência real de conexão
-  const statusLabel = hadConnectedRoute ? "Falha na chamada" : "Não conectado";
-  const detailLine = hadConnectedRoute
-    ? `Erro técnico ao executar **${agente.modelo_padrao}** (${providerName}): \`${lastExecutionError ?? "sem resposta do servidor"}\`. Tente novamente ou reautentique sua conta em **Conexões**.`
+  const statusLabel = execState.hadConnectedRoute ? "Falha na chamada" : "Não conectado";
+  const detailLine = execState.hadConnectedRoute
+    ? `Erro técnico ao executar **${agente.modelo_padrao}** (${providerName}): \`${execState.lastExecutionError ?? "sem resposta do servidor"}\`. Tente novamente ou reautentique sua conta em **Conexões**.`
     : anexosGerados.length > 0
       ? `Arte gerada e salva em \`${anexosGerados[0].caminho_relativo}\`.`
       : `Nenhum provedor conectado para o modelo **${agente.modelo_padrao}** (\`${providerName}\`). Abra **Conexões** e clique para conectar via navegador (Google, Claude ou ChatGPT), utilize modelos gratuitos do **OpenCode** ou salve uma API Key.`;
@@ -1737,7 +1986,7 @@ async function generateAgentChatReply(
     "| Etapa do Plano | Ação | Status |",
     "|---|---|---|",
     `| 1. Diagnóstico | Contexto de \`${skillSlug}\` (${agente.modelo_padrao}) | Pronto |`,
-    `| 2. Execução IA | ${anexosGerados.length > 0 ? `Arte gerada em \`${anexosGerados[0].caminho_relativo}\`` : hadConnectedRoute ? `Falha técnica: ${(lastExecutionError ?? "erro").slice(0, 70)}` : "Aguardando conta conectada ou API Key"} | ${anexosGerados.length > 0 ? "Concluído" : statusLabel} |`,
+    `| 2. Execução IA | ${anexosGerados.length > 0 ? `Arte gerada em \`${anexosGerados[0].caminho_relativo}\`` : execState.hadConnectedRoute ? `Falha técnica: ${(execState.lastExecutionError ?? "erro").slice(0, 70)}` : "Aguardando conta conectada ou API Key"} | ${anexosGerados.length > 0 ? "Concluído" : statusLabel} |`,
     `| 3. Segurança Meta | Aprovação humana obrigatória antes da publicação | Ativo |`,
     "",
     detailLine,
@@ -1871,6 +2120,10 @@ export async function executeAgentConversationTurn(params: {
   const nextOrdinal = maxOrdRow.max_ord + 1;
   const nowIso = new Date(Date.now() + 2).toISOString();
 
+  const replyMetadados: Record<string, unknown> | undefined = reply.usageLimitAsk
+    ? { usage_limit_ask: reply.usageLimitAsk }
+    : undefined;
+
   const agentMsg: MensagemChat = {
     mensagem_id: `msg-${randomUUID()}`,
     canal_id: canalId,
@@ -1887,6 +2140,7 @@ export async function executeAgentConversationTurn(params: {
     status: "completed",
     resposta_para_mensagem_id: params.respostaParaMensagemId ?? null,
     ordinal: nextOrdinal,
+    ...(replyMetadados ? { metadados: replyMetadados } : {}),
     lida: true,
     criado_em: nowIso,
   };
@@ -1899,7 +2153,7 @@ export async function executeAgentConversationTurn(params: {
         anexos_json, steps_json, tarefa_id, lida, criado_em,
         thread_id, turno_id, item_type, status, resposta_para_mensagem_id,
         ordinal, branch_origem_mensagem_id, metadados_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'mensagem', 'completed', ?, ?, NULL, '{}');
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'mensagem', 'completed', ?, ?, NULL, ?);
     `,
     )
     .run(
@@ -1918,6 +2172,7 @@ export async function executeAgentConversationTurn(params: {
       params.turnoId,
       agentMsg.resposta_para_mensagem_id ?? null,
       nextOrdinal,
+      JSON.stringify(replyMetadados ?? {}),
     );
 
   if (isSubThread) {
@@ -2430,6 +2685,103 @@ export async function tryHandleStudioRoute(
       body.config && typeof body.config === "object"
         ? (body.config as Record<string, unknown>)
         : {};
+
+    const rawBackupInput =
+      body.backup_models && typeof body.backup_models === "object"
+        ? (body.backup_models as Partial<BackupModelsConfig>)
+        : incomingConfig.backup_models && typeof incomingConfig.backup_models === "object"
+          ? (incomingConfig.backup_models as Partial<BackupModelsConfig>)
+          : null;
+
+    let nextBackupModelsJson = existing.backup_models_json ?? '{"automatic":false,"order":[]}';
+    if (rawBackupInput) {
+      const normalizedOrder: BackupModelChoice[] = [];
+      if (Array.isArray(rawBackupInput.order)) {
+        for (const item of rawBackupInput.order.slice(0, MAX_BACKUP_MODELS)) {
+          if (item && typeof item === "object" && typeof item.modelo === "string" && item.modelo.trim()) {
+            normalizedOrder.push({
+              provedor: (typeof item.provedor === "string"
+                ? item.provedor
+                : deps.providers.resolveProviderName(item.modelo)) as ProviderName,
+              modelo: item.modelo.trim(),
+              conta_id: typeof item.conta_id === "string" ? item.conta_id : null,
+            });
+          }
+        }
+      }
+      const prevParsed = parseBackupModelsJson(existing.backup_models_json);
+      nextBackupModelsJson = JSON.stringify({
+        automatic:
+          typeof rawBackupInput.automatic === "boolean"
+            ? rawBackupInput.automatic
+            : prevParsed.automatic,
+        order: Array.isArray(rawBackupInput.order) ? normalizedOrder : prevParsed.order,
+      });
+    }
+
+    const rawPerm = body.permission_level ?? incomingConfig.permission_level ?? existing.permission_level;
+    const nextPermissionLevel: PermissionLevel =
+      rawPerm === "ask" || rawPerm === "full" || rawPerm === "workspace"
+        ? rawPerm
+        : "workspace";
+
+    const nextAllowNewChat =
+      typeof body.allow_new_chat === "boolean"
+        ? body.allow_new_chat
+        : typeof incomingConfig.allow_new_chat === "boolean"
+          ? incomingConfig.allow_new_chat
+          : existing.allow_new_chat !== 0;
+
+    const rawAllowQuickAck =
+      body.allow_quick_ack ??
+      body.allow_quick_acknowledgement ??
+      incomingConfig.allow_quick_ack ??
+      incomingConfig.allow_quick_acknowledgement;
+    const nextAllowQuickAck =
+      typeof rawAllowQuickAck === "boolean" ? rawAllowQuickAck : existing.allow_quick_ack !== 0;
+
+    const nextBrowserProfileId =
+      body.browser_profile_id !== undefined
+        ? typeof body.browser_profile_id === "string" && body.browser_profile_id.trim()
+          ? body.browser_profile_id.trim()
+          : null
+        : incomingConfig.browser_profile_id !== undefined
+          ? typeof incomingConfig.browser_profile_id === "string" &&
+            incomingConfig.browser_profile_id.trim()
+            ? incomingConfig.browser_profile_id.trim()
+            : null
+          : (existing.browser_profile_id ?? null);
+
+    const rawNotif =
+      body.notification_level ?? incomingConfig.notification_level ?? existing.notification_level;
+    const nextNotificationLevel: AgentNotificationLevel =
+      rawNotif === "mentions" || rawNotif === "muted" ? rawNotif : "all";
+
+    const nextPinned =
+      typeof body.pinned === "boolean"
+        ? body.pinned
+        : typeof incomingConfig.pinned === "boolean"
+          ? incomingConfig.pinned
+          : existing.pinned === 1;
+
+    const nextHidden =
+      typeof body.hidden === "boolean"
+        ? body.hidden
+        : typeof incomingConfig.hidden === "boolean"
+          ? incomingConfig.hidden
+          : existing.hidden === 1;
+
+    const nextSectionId =
+      body.section_id !== undefined
+        ? typeof body.section_id === "string" && body.section_id.trim()
+          ? body.section_id.trim()
+          : null
+        : incomingConfig.section_id !== undefined
+          ? typeof incomingConfig.section_id === "string" && incomingConfig.section_id.trim()
+            ? incomingConfig.section_id.trim()
+            : null
+          : (existing.section_id ?? null);
+
     const nextConfig = {
       ...currentConfig,
       ...incomingConfig,
@@ -2440,7 +2792,16 @@ export async function tryHandleStudioRoute(
       ...(body.modo_ocupado === "steer" || body.modo_ocupado === "queue"
         ? { modo_ocupado: body.modo_ocupado }
         : {}),
-      ...(typeof body.allow_new_chat === "boolean" ? { allow_new_chat: body.allow_new_chat } : {}),
+      allow_new_chat: nextAllowNewChat,
+      allow_quick_ack: nextAllowQuickAck,
+      allow_quick_acknowledgement: nextAllowQuickAck,
+      backup_models: parseBackupModelsJson(nextBackupModelsJson),
+      permission_level: nextPermissionLevel,
+      browser_profile_id: nextBrowserProfileId,
+      notification_level: nextNotificationLevel,
+      pinned: nextPinned,
+      hidden: nextHidden,
+      section_id: nextSectionId,
       ...(typeof body.task_limit === "number" && Number.isFinite(body.task_limit)
         ? { task_limit: Math.max(1, Math.min(4, Math.floor(body.task_limit))) }
         : {}),
@@ -2453,13 +2814,37 @@ export async function tryHandleStudioRoute(
 
     db.connection
       .prepare(
-        `UPDATE projecao_agentes SET nome = ?, papel = ?, modelo_padrao = ?, config_json = ?, atualizado_em = ? WHERE agente_id = ?;`
+        `UPDATE projecao_agentes SET
+           nome = ?,
+           papel = ?,
+           modelo_padrao = ?,
+           config_json = ?,
+           backup_models_json = ?,
+           permission_level = ?,
+           allow_new_chat = ?,
+           allow_quick_ack = ?,
+           browser_profile_id = ?,
+           notification_level = ?,
+           pinned = ?,
+           hidden = ?,
+           section_id = ?,
+           atualizado_em = ?
+         WHERE agente_id = ?;`
       )
       .run(
         nextNome,
         nextPapel,
         nextModel,
         JSON.stringify(nextConfig),
+        nextBackupModelsJson,
+        nextPermissionLevel,
+        nextAllowNewChat ? 1 : 0,
+        nextAllowQuickAck ? 1 : 0,
+        nextBrowserProfileId,
+        nextNotificationLevel,
+        nextPinned ? 1 : 0,
+        nextHidden ? 1 : 0,
+        nextSectionId,
         new Date().toISOString(),
         agenteId
       );
