@@ -14,6 +14,7 @@ import type {
   NivelEsforco,
   PassoChat,
   ProvedorStatusInfo,
+  UiBlockSubmitPayload,
 } from "@criativo/contracts";
 import {
   Check,
@@ -22,7 +23,9 @@ import {
   ChevronUp,
   Copy,
   CornerUpLeft,
+  Database,
   Download,
+  Eye,
   FileText,
   GitBranch,
   Image as ImageIcon,
@@ -36,6 +39,7 @@ import {
   Plus,
   RotateCcw,
   Send,
+  Sparkles,
   Square,
   Wrench,
   X,
@@ -51,12 +55,20 @@ import {
 } from "../../components/ModelProviderPopover";
 import { ProviderLogo } from "../../components/ProviderLogo";
 import { AppBrandIcon } from "../../components/ui/CarbonControls";
+import { AcknowledgeRequestCard } from "./AcknowledgeRequestCard";
+import { ApiKeyRequestCard } from "./ApiKeyRequestCard";
 import { BranchDivider } from "./BranchDivider";
+import { ChatVisualReply } from "./ChatVisualReply";
+import { CodePreview } from "./CodePreview";
+import { ConversationQuestionPrompt } from "./ConversationQuestionPrompt";
+import { MathFormula, MermaidDiagram } from "./MarkdownMathMermaidPreview";
 import { OpenWaitsCard } from "./OpenWaitsCard";
 import { PinnedMessagesPopover } from "./PinnedMessagesPopover";
 import { QueuePanel } from "./QueuePanel";
 import { SideQuestionPanel } from "./SideQuestionPanel";
+import { SkillSuggestionChatCard } from "./SkillSuggestionChatCard";
 import { ThreadTabsBar } from "./ThreadTabsBar";
+import { UiBlockPrompt } from "./UiBlockPrompt";
 
 export interface McpSignInCardState {
   mcpId: string;
@@ -198,7 +210,7 @@ interface AgentConversationViewProps {
   liveRun?: ChatLiveRunState | null;
   inspectorOpen: boolean;
   onToggleInspector: () => void;
-  onSendMessage: (conteudo: string, anexos: AnexoChat[]) => Promise<void>;
+  onSendMessage: (conteudo: string, anexos: AnexoChat[], pageContext?: string | null) => Promise<void>;
   onUploadFile: (file: File) => Promise<AnexoChat>;
   onUpdateModelAndEffort: (modelo: string, effort: NivelEsforco) => Promise<void>;
   onOpenConnectors?: () => void;
@@ -245,6 +257,13 @@ interface AgentConversationViewProps {
     historico: Array<{ pergunta: string; resposta: string }>
   ) => Promise<string>;
   onStartNewChat?: () => Promise<void>;
+  // Fase 14 — Generative UI, UI Blocks, Sugestões de Habilidade, Tabelas SQL & Previews Ricos
+  onSubmitUiBlock?: (payload: UiBlockSubmitPayload) => Promise<void>;
+  onSaveSkillSuggestion?: (mensagemId: string) => Promise<void>;
+  onDismissSkillSuggestion?: (mensagemId: string) => Promise<void>;
+  onOpenSharedTables?: () => void;
+  onOpenFilePreview?: (anexo: AnexoChat) => void;
+  onOpenImageLightbox?: (url: string, alt?: string) => void;
 }
 
 const EFFORT_LABELS: Record<NivelEsforco, string> = {
@@ -421,6 +440,15 @@ function renderFormattedMarkdownText(content: string): React.ReactNode {
         const trimmed = line.trim();
         if (!trimmed) return <div key={idx} className="h-1" />;
 
+        // Fórmula matemática display $$...$$
+        if (trimmed.startsWith("$$") && trimmed.endsWith("$$") && trimmed.length > 4) {
+          return (
+            <div key={idx} className="my-2 overflow-x-auto">
+              <MathFormula formula={trimmed.slice(2, -2).trim()} displayMode />
+            </div>
+          );
+        }
+
         // Separador horizontal --- / *** / ___
         if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
           return <hr key={idx} className="border-0 border-t border-white/10 my-2.5" />;
@@ -572,9 +600,16 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
   onTogglePinMessage,
   onAskSideQuestion,
   onStartNewChat,
+  onSubmitUiBlock,
+  onSaveSkillSuggestion,
+  onDismissSkillSuggestion,
+  onOpenSharedTables,
+  onOpenFilePreview,
+  onOpenImageLightbox,
 }) => {
   const [draft, setDraft] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<AnexoChat[]>([]);
+  const [pageContext, setPageContext] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof prefilledDraft === "string" && prefilledDraft.trim().length > 0) {
@@ -727,9 +762,10 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
     if (mode === "channel" && sending) return;
     const textToSend = draft.trim();
     const filesToSend = [...pendingAttachments];
+    const ctxToSend = pageContext;
     setDraft("");
     setPendingAttachments([]);
-    await onSendMessage(textToSend, filesToSend);
+    await onSendMessage(textToSend, filesToSend, ctxToSend);
   };
 
   const handleVoiceDictation = () => {
@@ -822,6 +858,17 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
           </button>
 
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => onOpenSharedTables?.()}
+              aria-label="Abrir tabelas SQL compartilhadas"
+              title="Tabelas SQL"
+              className="inline-flex h-8 items-center gap-1 rounded-lg border border-white/[0.06] bg-[#212121] px-2 text-[12px] font-semibold text-[#DCDCDC] transition hover:bg-[#242424] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
+            >
+              <Database className="h-3.5 w-3.5 text-[#42A0FF]" />
+              <span>Tabelas SQL</span>
+            </button>
+
             {mode === "agent" && onTogglePinMessage && onJumpToMessage && (
               <PinnedMessagesPopover
                 pins={pins}
@@ -948,6 +995,87 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
               );
             }
 
+            if (msg.item_type === "memory-changes") {
+              const count = msg.memory_changes?.length ?? 0;
+              const summaryText =
+                msg.conteudo_markdown?.trim() ||
+                (count > 0
+                  ? `${count} memória(s) revisada(s) automaticamente em segundo plano`
+                  : "Memórias revisadas automaticamente");
+              return (
+                <div
+                  key={msg.mensagem_id}
+                  id={`msg-anchor-${msg.mensagem_id}`}
+                  className="my-2 flex items-center gap-2 max-w-[820px] mr-auto px-2 text-[12px] font-normal text-[#979797]"
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-[#42A0FF] shrink-0" />
+                  <span className="truncate">{summaryText}</span>
+                </div>
+              );
+            }
+
+            if (msg.item_type?.startsWith("visual-reply:") && msg.visual_page) {
+              return (
+                <div
+                  key={msg.mensagem_id}
+                  id={`msg-anchor-${msg.mensagem_id}`}
+                  className="max-w-[820px] mr-auto w-full"
+                >
+                  <ChatVisualReply
+                    agenteId={msg.agente_id ?? agente?.agente_id ?? "estrategista"}
+                    visualMeta={msg.visual_page}
+                    onSendMessageFromPage={(text) => {
+                      void onSendMessage(text, [], pageContext);
+                    }}
+                    onUpdatePageContext={(ctxText) => setPageContext(ctxText || null)}
+                    onOpenImageLightbox={onOpenImageLightbox}
+                  />
+                </div>
+              );
+            }
+
+            if (msg.item_type === "ui-block" && msg.ui_block) {
+              const handleCardSubmit = async (payload: UiBlockSubmitPayload) => {
+                await onSubmitUiBlock?.(payload);
+              };
+              return (
+                <div
+                  key={msg.mensagem_id}
+                  id={`msg-anchor-${msg.mensagem_id}`}
+                  className="max-w-[820px] mr-auto w-full"
+                >
+                  {msg.ui_block.tipo_ferramenta === "ask_user" && (
+                    <ConversationQuestionPrompt bloco={msg.ui_block} onSubmit={handleCardSubmit} />
+                  )}
+                  {msg.ui_block.tipo_ferramenta === "ask_ui" && (
+                    <UiBlockPrompt bloco={msg.ui_block} onSubmit={handleCardSubmit} />
+                  )}
+                  {msg.ui_block.tipo_ferramenta === "acknowledge_request" && (
+                    <AcknowledgeRequestCard bloco={msg.ui_block} onSubmit={handleCardSubmit} />
+                  )}
+                  {msg.ui_block.tipo_ferramenta === "request_api_key" && (
+                    <ApiKeyRequestCard bloco={msg.ui_block} onSubmit={handleCardSubmit} />
+                  )}
+                </div>
+              );
+            }
+
+            if (msg.item_type?.startsWith("skill-suggestion:") && msg.skill_sugestao) {
+              return (
+                <div
+                  key={msg.mensagem_id}
+                  id={`msg-anchor-${msg.mensagem_id}`}
+                  className="max-w-[820px] mr-auto w-full"
+                >
+                  <SkillSuggestionChatCard
+                    sugestao={msg.skill_sugestao}
+                    onSave={onSaveSkillSuggestion}
+                    onDismiss={onDismissSkillSuggestion}
+                  />
+                </div>
+              );
+            }
+
             const isUser = msg.autor === "usuario";
             const blocks = splitMarkdownBlocks(msg.conteudo_markdown);
             const isHighlighted = highlightedMessageId === msg.mensagem_id;
@@ -973,10 +1101,17 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                 <div
                   className={`min-w-0 ${
                     isUser
-                      ? "bg-[#2A2A2A] border border-white/10 rounded-[18px] px-4 py-2.5 max-w-[78%] text-white"
+                      ? "flex flex-col items-end max-w-[78%]"
                       : "flex-1 space-y-3"
                   }`}
                 >
+                  <div
+                    className={`min-w-0 w-full ${
+                      isUser
+                        ? "bg-[#2A2A2A] border border-white/10 rounded-[18px] px-4 py-2.5 text-white"
+                        : "space-y-3"
+                    }`}
+                  >
                   {!isUser && msg.autor_nome && (
                     <div className="text-[11.5px] font-semibold text-[#979797] flex items-center gap-2">
                       <span>{msg.autor_nome}</span>
@@ -1040,31 +1175,15 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                   <div className="space-y-3 text-[13.5px] leading-relaxed text-[#DCDCDC]">
                     {blocks.map((block, bIdx) => {
                       if (block.type === "code") {
-                        const codeKey = `${msg.mensagem_id}-code-${bIdx}`;
+                        if (block.language?.toLowerCase() === "mermaid") {
+                          return <MermaidDiagram key={bIdx} chart={block.content} />;
+                        }
                         return (
-                          <div
+                          <CodePreview
                             key={bIdx}
-                            className="rounded-xl border border-[#303030] bg-[#121212] overflow-hidden"
-                          >
-                            <div className="px-3 py-1.5 bg-[#191919] border-b border-white/[0.06] flex items-center justify-between text-[11px] text-[#8E8E8E]">
-                              <span className="font-terminal">{block.language}</span>
-                              <button
-                                type="button"
-                                onClick={() => handleCopy(codeKey, block.content)}
-                                className="inline-flex items-center gap-1 hover:text-white transition-colors"
-                              >
-                                {copiedId === codeKey ? (
-                                  <Check className="h-3 w-3 text-[#31CF76]" />
-                                ) : (
-                                  <Copy className="h-3 w-3" />
-                                )}
-                                <span>{copiedId === codeKey ? "Copiado" : "Copiar"}</span>
-                              </button>
-                            </div>
-                            <pre className="p-3 overflow-x-auto text-[12px] font-terminal text-[#E6E6E6] leading-relaxed">
-                              <code>{block.content}</code>
-                            </pre>
-                          </div>
+                            code={block.content}
+                            language={block.language}
+                          />
                         );
                       }
 
@@ -1145,11 +1264,24 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                             className="rounded-xl bg-[#212121] border border-white/10 overflow-hidden max-w-[260px]"
                           >
                             {isImage && (
-                              <img
-                                src={anexo.url}
-                                alt={anexo.nome}
-                                className="max-h-44 w-full object-cover bg-[#101010]"
-                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onOpenImageLightbox) {
+                                    onOpenImageLightbox(anexo.url, anexo.nome);
+                                  } else {
+                                    onOpenFilePreview?.(anexo);
+                                  }
+                                }}
+                                aria-label={`Ampliar imagem ${anexo.nome}`}
+                                className="block w-full text-left"
+                              >
+                                <img
+                                  src={anexo.url}
+                                  alt={anexo.nome}
+                                  className="max-h-44 w-full object-cover bg-[#101010]"
+                                />
+                              </button>
                             )}
                             {isVideo && (
                               <video
@@ -1159,22 +1291,45 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                               />
                             )}
                             <div className="px-3 py-2 flex items-center justify-between gap-2">
-                              <div className="flex items-center gap-2 min-w-0">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (isImage && onOpenImageLightbox) {
+                                    onOpenImageLightbox(anexo.url, anexo.nome);
+                                  } else {
+                                    onOpenFilePreview?.(anexo);
+                                  }
+                                }}
+                                className="flex items-center gap-2 min-w-0 text-left hover:opacity-90"
+                              >
                                 {isImage ? (
                                   <ImageIcon className="h-3.5 w-3.5 text-[#31CF76] shrink-0" />
                                 ) : (
                                   <FileText className="h-3.5 w-3.5 text-[#42A0FF] shrink-0" />
                                 )}
                                 <span className="text-[12px] text-white truncate">{anexo.nome}</span>
+                              </button>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {onOpenFilePreview && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onOpenFilePreview(anexo)}
+                                    title="Abrir prévia"
+                                    aria-label={`Abrir prévia de ${anexo.nome}`}
+                                    className="text-[#979797] hover:text-white"
+                                  >
+                                    <Eye className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
+                                <a
+                                  href={anexo.url}
+                                  download={anexo.nome}
+                                  title="Baixar arquivo"
+                                  className="text-[#979797] hover:text-white shrink-0"
+                                >
+                                  <Download className="h-3.5 w-3.5" />
+                                </a>
                               </div>
-                              <a
-                                href={anexo.url}
-                                download={anexo.nome}
-                                title="Baixar arquivo"
-                                className="text-[#979797] hover:text-white shrink-0"
-                              >
-                                <Download className="h-3.5 w-3.5" />
-                              </a>
                             </div>
                           </div>
                         );
@@ -1246,6 +1401,17 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                         </span>
                       )}
                     </div>
+                  )}
+                  </div>
+
+                  {isUser && msg.reacao_emoji && (
+                    <span
+                      data-testid={`reaction-pill-${msg.mensagem_id}`}
+                      aria-label={`Reação do agente: ${msg.reacao_emoji}`}
+                      className="mt-1 bg-[#242424] border border-white/12 px-2 py-1 rounded-full text-[12px] leading-none select-none"
+                    >
+                      {msg.reacao_emoji}
+                    </span>
                   )}
                 </div>
               </div>
@@ -1474,6 +1640,26 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                   {savingEdit ? "Aplicando edição..." : "Aplicar edição"}
                 </button>
               </div>
+            </div>
+          )}
+          {pageContext && (
+            <div className="mb-2 flex items-center justify-between gap-2 rounded-xl bg-[#242424] border border-white/12 px-3 py-1.5 text-[12px]">
+              <div className="flex items-center gap-2 min-w-0">
+                <Sparkles className="h-3.5 w-3.5 text-[#42A0FF] shrink-0" />
+                <span className="font-semibold text-white shrink-0">
+                  Contexto ativo da página
+                </span>
+                <span className="text-[#DCDCDC] truncate">{pageContext}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPageContext(null)}
+                aria-label="Remover contexto da página"
+                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] font-semibold text-[#979797] hover:text-white shrink-0"
+              >
+                <X className="h-3.5 w-3.5" />
+                <span>Limpar contexto</span>
+              </button>
             </div>
           )}
         </div>

@@ -8,6 +8,7 @@ import type {
   AnexoChat,
   ArquivoStudio,
   AvatarShape,
+  BibliotecasPastasSnapshot,
   CanalEquipe,
   ConectorIntegracaoInfo,
   FilaChatEntrega,
@@ -25,6 +26,7 @@ import type {
   RelatorioAnalyticsHost,
   StatusMensageria,
   TarefaRegistro,
+  UiBlockSubmitPayload,
   UsoProvedoresSnapshot,
   WhatsAppContaResumo,
   WorkflowAresta,
@@ -42,6 +44,12 @@ import {
   type ChatLiveRunState,
   type McpSignInCardState,
 } from "./features/chat/AgentConversationView";
+import {
+  FilePreviewPanel,
+  ImageLightbox,
+  type PreviewableFileItem,
+} from "./features/chat/FilePreviewPanel";
+import { SharedTablesModal } from "./features/chat/SharedTablesModal";
 import { RightInspectorPanel } from "./features/inspector/RightInspectorPanel";
 import { MarketplacePage } from "./features/marketplace/MarketplacePage";
 import { OnboardingFlow } from "./features/onboarding/OnboardingFlow";
@@ -200,6 +208,26 @@ export function App() {
   >({});
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
 
+  // Fase 14 — Tabelas SQL compartilhadas, Previews ricos e Pastas hierárquicas da Biblioteca
+  const [sharedTablesOpen, setSharedTablesOpen] = useState(false);
+  const [sharedTablesRefreshNonce, setSharedTablesRefreshNonce] = useState(0);
+  const [previewFile, setPreviewFile] = useState<PreviewableFileItem | null>(null);
+  const [lightboxImage, setLightboxImage] = useState<{ url: string; alt?: string } | null>(null);
+  const [foldersSnapshot, setFoldersSnapshot] = useState<BibliotecasPastasSnapshot | null>(null);
+
+  const refreshLibraryFolders = useCallback(async () => {
+    try {
+      const [snap, fileList] = await Promise.all([
+        daemonApi.listLibraryFolders(),
+        daemonApi.listFiles(),
+      ]);
+      setFoldersSnapshot(snap);
+      setArquivos(fileList);
+    } catch {
+      // silencioso
+    }
+  }, []);
+
   const refreshRoutineCounts = useCallback(async () => {
     try {
       const all = await daemonApi.listAllRoutines();
@@ -268,6 +296,7 @@ export function App() {
         keys,
         waAccountsList,
         threadsList,
+        foldersSnap,
       ] = await Promise.all([
         daemonApi.getOnboarding(),
         daemonApi.listAgents(),
@@ -285,6 +314,7 @@ export function App() {
         daemonApi.getVaultStatus(),
         daemonApi.listWhatsAppAccounts().catch(() => [] as WhatsAppContaResumo[]),
         daemonApi.listAllThreads().catch(() => [] as AgenteThreadRegistro[]),
+        daemonApi.listLibraryFolders().catch(() => null),
       ]);
 
       setOnboarding(onb);
@@ -304,6 +334,7 @@ export function App() {
       setVaultKeys(keys);
       setWhatsappAccounts(waAccountsList);
       setAllThreads(threadsList);
+      if (foldersSnap) setFoldersSnapshot(foldersSnap);
       void refreshRoutineCounts();
 
       if (tList.length > 0) {
@@ -689,6 +720,116 @@ export function App() {
       }));
     });
 
+    // Fase 14 — Eventos reativos de UI Blocks, Reações, Memórias, Skills, Pastas, SQL e Handoffs
+    const unsubChatUiBlock = ws.on("chat:ui_block", (evt) => {
+      const upsertBlockInList = (list: MensagemChat[]): MensagemChat[] => {
+        const exists = list.some((m) => m.mensagem_id === evt.mensagem_id);
+        if (exists) {
+          return list.map((m) =>
+            m.mensagem_id === evt.mensagem_id
+              ? { ...m, item_type: "ui-block", ui_block: evt.bloco }
+              : m
+          );
+        }
+        const syntheticMsg: MensagemChat = {
+          mensagem_id: evt.mensagem_id,
+          canal_id: evt.canal_id,
+          agente_id: evt.agente_id,
+          autor: "agente",
+          conteudo_markdown: "",
+          anexos: [],
+          steps: [],
+          item_type: "ui-block",
+          ui_block: evt.bloco,
+          lida: true,
+          criado_em: evt.bloco.criado_em,
+        };
+        return mergeUniqueMessages(list, [syntheticMsg]);
+      };
+
+      if (evt.canal_id.startsWith("thread:")) {
+        const thId = evt.canal_id.slice("thread:".length);
+        setThreadChatById((prev) => ({
+          ...prev,
+          [thId]: upsertBlockInList(prev[thId] ?? []),
+        }));
+      } else {
+        setChatByKey((prev) => ({
+          ...prev,
+          [evt.canal_id]: upsertBlockInList(prev[evt.canal_id] ?? []),
+        }));
+      }
+    });
+
+    const unsubChatReaction = ws.on("chat:reaction", (evt) => {
+      if (evt.canal_id.startsWith("thread:")) {
+        const thId = evt.canal_id.slice("thread:".length);
+        setThreadChatById((prev) => ({
+          ...prev,
+          [thId]: (prev[thId] ?? []).map((m) =>
+            m.mensagem_id === evt.mensagem_id ? { ...m, reacao_emoji: evt.emoji } : m
+          ),
+        }));
+      } else {
+        setChatByKey((prev) => ({
+          ...prev,
+          [evt.canal_id]: (prev[evt.canal_id] ?? []).map((m) =>
+            m.mensagem_id === evt.mensagem_id ? { ...m, reacao_emoji: evt.emoji } : m
+          ),
+        }));
+      }
+    });
+
+    const unsubMemoryReviewed = ws.on("memory:reviewed", (evt) => {
+      const key = `agente:${evt.agente_id}`;
+      void daemonApi
+        .readAgentMessagesPage(evt.agente_id, { limit: 50 })
+        .then((pagina) => {
+          setChatByKey((prev) =>
+            prev[key] ? { ...prev, [key]: mergeUniqueMessages(prev[key], pagina.mensagens) } : prev
+          );
+        })
+        .catch(() => {});
+    });
+
+    const unsubSkillSuggested = ws.on("skill:suggested", (evt) => {
+      const key = `agente:${evt.agente_id}`;
+      void daemonApi
+        .readAgentMessagesPage(evt.agente_id, { limit: 50 })
+        .then((pagina) => {
+          setChatByKey((prev) => ({
+            ...prev,
+            [key]: mergeUniqueMessages(prev[key] ?? [], pagina.mensagens),
+          }));
+        })
+        .catch(() => {});
+      void daemonApi.listSkills().then(setHabilidades).catch(() => {});
+    });
+
+    const unsubLibraryFoldersChanged = ws.on("library:folders_changed", () => {
+      void daemonApi.listLibraryFolders().then(setFoldersSnapshot).catch(() => {});
+      void daemonApi.listFiles().then(setArquivos).catch(() => {});
+    });
+
+    const unsubSharedTableChanged = ws.on("shared_table:changed", () => {
+      setSharedTablesRefreshNonce((n) => n + 1);
+    });
+
+    const unsubAgentMessageQueued = ws.on("agent:message_queued", (evt) => {
+      void refreshAgentThreadsState(evt.para_agente_id, null);
+      const targetKey = `agente:${evt.para_agente_id}`;
+      void daemonApi
+        .readAgentMessagesPage(evt.para_agente_id, { limit: 50 })
+        .then((pagina) => {
+          setChatByKey((prev) =>
+            prev[targetKey]
+              ? { ...prev, [targetKey]: mergeUniqueMessages(prev[targetKey], pagina.mensagens) }
+              : prev
+          );
+        })
+        .catch(() => {});
+    });
+
     ws.connect();
     return () => {
       unsubConn();
@@ -724,9 +865,16 @@ export function App() {
       unsubChatQueueChanged();
       unsubPinsChanged();
       unsubContextReset();
+      unsubChatUiBlock();
+      unsubChatReaction();
+      unsubMemoryReviewed();
+      unsubSkillSuggested();
+      unsubLibraryFoldersChanged();
+      unsubSharedTableChanged();
+      unsubAgentMessageQueued();
       ws.disconnect();
     };
-  }, [refreshRoutineCounts]);
+  }, [refreshAgentThreadsState, refreshRoutineCounts]);
 
   const ensureAndActivateTab = useCallback((tab: StudioTabItem, mode: AgentCenterMode) => {
     setOpenTabs((prev) => (prev.some((t) => t.id === tab.id) ? prev : [...prev, tab]));
@@ -970,12 +1118,97 @@ export function App() {
 
   const handleUploadFile = async (file: File): Promise<AnexoChat> => {
     const uploaded = await daemonApi.uploadFile(file, activeAgent?.agente_id ?? null);
-    const refreshedFiles = await daemonApi.listFiles();
+    const [refreshedFiles, refreshedFolders] = await Promise.all([
+      daemonApi.listFiles(),
+      daemonApi.listLibraryFolders().catch(() => null),
+    ]);
     setArquivos(refreshedFiles);
+    if (refreshedFolders) setFoldersSnapshot(refreshedFolders);
     return uploaded;
   };
 
-  const handleSendChatMessage = async (conteudo: string, anexos: AnexoChat[]) => {
+  const handleSubmitUiBlock = async (payload: UiBlockSubmitPayload): Promise<void> => {
+    const res = await daemonApi.submitChatUiResponse(payload);
+    if (payload.canal_id.startsWith("thread:")) {
+      const thId = payload.canal_id.slice("thread:".length);
+      setThreadChatById((prev) => ({
+        ...prev,
+        [thId]: (prev[thId] ?? []).map((m) =>
+          m.ui_block?.bloco_id === payload.bloco_id ? { ...m, ui_block: res.bloco } : m
+        ),
+      }));
+    } else {
+      setChatByKey((prev) => ({
+        ...prev,
+        [payload.canal_id]: (prev[payload.canal_id] ?? []).map((m) =>
+          m.ui_block?.bloco_id === payload.bloco_id ? { ...m, ui_block: res.bloco } : m
+        ),
+      }));
+    }
+    if (payload.api_key_payload) {
+      const updatedKeys = await daemonApi.getVaultStatus().catch(() => null);
+      if (updatedKeys) setVaultKeys(updatedKeys);
+    }
+  };
+
+  const handleSaveSkillSuggestion = async (mensagemId: string): Promise<void> => {
+    const res = await daemonApi.saveSkillSuggestion(mensagemId);
+    setChatByKey((prev) => {
+      const next: Record<string, MensagemChat[]> = {};
+      for (const [k, list] of Object.entries(prev)) {
+        next[k] = list.map((m) =>
+          m.mensagem_id === mensagemId ? { ...m, skill_sugestao: res.sugestao } : m
+        );
+      }
+      return next;
+    });
+    setThreadChatById((prev) => {
+      const next: Record<string, MensagemChat[]> = {};
+      for (const [k, list] of Object.entries(prev)) {
+        next[k] = list.map((m) =>
+          m.mensagem_id === mensagemId ? { ...m, skill_sugestao: res.sugestao } : m
+        );
+      }
+      return next;
+    });
+    const nextSkills = await daemonApi.listSkills().catch(() => null);
+    if (nextSkills) setHabilidades(nextSkills);
+  };
+
+  const handleDismissSkillSuggestion = async (mensagemId: string): Promise<void> => {
+    const res = await daemonApi.dismissSkillSuggestion(mensagemId);
+    setChatByKey((prev) => {
+      const next: Record<string, MensagemChat[]> = {};
+      for (const [k, list] of Object.entries(prev)) {
+        next[k] = list.map((m) =>
+          m.mensagem_id === mensagemId ? { ...m, skill_sugestao: res.sugestao } : m
+        );
+      }
+      return next;
+    });
+    setThreadChatById((prev) => {
+      const next: Record<string, MensagemChat[]> = {};
+      for (const [k, list] of Object.entries(prev)) {
+        next[k] = list.map((m) =>
+          m.mensagem_id === mensagemId ? { ...m, skill_sugestao: res.sugestao } : m
+        );
+      }
+      return next;
+    });
+  };
+
+  const handleSendChatMessage = async (
+    conteudo: string,
+    anexos: AnexoChat[],
+    pageContext?: string | null
+  ) => {
+    const payloadContent =
+      pageContext && pageContext.trim().length > 0
+        ? [conteudo.trim(), `[Contexto da página visual]\n${pageContext.trim()}`]
+            .filter(Boolean)
+            .join("\n\n")
+        : conteudo;
+
     if (centerMode.type === "thread" && activeAgent) {
       const threadId = centerMode.threadId;
       const optimisticId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -1014,7 +1247,7 @@ export function App() {
       setSendingChat(true);
       let keepLiveRun = hadExistingRun;
       try {
-        const res = await daemonApi.sendThreadMessage(threadId, conteudo, anexos);
+        const res = await daemonApi.sendThreadMessage(threadId, payloadContent, anexos);
         if (res.enfileirada || res.steered) {
           keepLiveRun = true;
           setThreadChatById((prev) => ({
@@ -1099,7 +1332,11 @@ export function App() {
     let keepLiveRun = hadExistingRun;
     try {
       if (centerMode.type === "channel" && activeChannel) {
-        const res = await daemonApi.sendChannelMessage(activeChannel.canal_id, conteudo, anexos);
+        const res = await daemonApi.sendChannelMessage(
+          activeChannel.canal_id,
+          payloadContent,
+          anexos
+        );
         setChatByKey((prev) => {
           const withoutTemp = (prev[targetKey] ?? []).filter((m) => m.mensagem_id !== optimisticId);
           return {
@@ -1111,7 +1348,11 @@ export function App() {
           };
         });
       } else if (activeAgent) {
-        const res = await daemonApi.sendAgentMessage(activeAgent.agente_id, conteudo, anexos);
+        const res = await daemonApi.sendAgentMessage(
+          activeAgent.agente_id,
+          payloadContent,
+          anexos
+        );
         if (res.enfileirada || res.steered) {
           keepLiveRun = true;
           setChatByKey((prev) => {
@@ -1606,11 +1847,17 @@ export function App() {
                         liveRun={activeLiveRun}
                         inspectorOpen={inspectorOpen}
                         onToggleInspector={() => setInspectorOpen((o) => !o)}
-                        onSendMessage={async (conteudo, anexos) => {
+                        onSendMessage={async (conteudo, anexos, pageContext) => {
                           setPrefilledChatPrompt(null);
-                          await handleSendChatMessage(conteudo, anexos);
+                          await handleSendChatMessage(conteudo, anexos, pageContext);
                         }}
                         onUploadFile={handleUploadFile}
+                        onSubmitUiBlock={handleSubmitUiBlock}
+                        onSaveSkillSuggestion={handleSaveSkillSuggestion}
+                        onDismissSkillSuggestion={handleDismissSkillSuggestion}
+                        onOpenSharedTables={() => setSharedTablesOpen(true)}
+                        onOpenFilePreview={(anexo) => setPreviewFile(anexo)}
+                        onOpenImageLightbox={(url, alt) => setLightboxImage({ url, alt })}
                         pendingMcpSignIn={pendingMcpSignIn}
                         prefilledDraft={prefilledChatPrompt}
                         onAuthenticateMcp={async (mcpId) => {
@@ -1956,7 +2203,14 @@ export function App() {
           )}
 
           {activeSection === "arquivos" && (
-            <FilesVaultPage arquivos={arquivos} onUploadFile={handleUploadFile} />
+            <FilesVaultPage
+              arquivos={arquivos}
+              onUploadFile={handleUploadFile}
+              agentes={agentes}
+              foldersSnapshot={foldersSnapshot}
+              onRefreshFolders={refreshLibraryFolders}
+              onPreviewFile={(arq) => setPreviewFile(arq)}
+            />
           )}
 
           {activeSection === "loja" && (
@@ -2075,8 +2329,29 @@ export function App() {
               }}
             />
           )}
+
+          {previewFile && (
+            <FilePreviewPanel
+              file={previewFile}
+              onClose={() => setPreviewFile(null)}
+              onOpenImageLightbox={(url, alt) => setLightboxImage({ url, alt })}
+            />
+          )}
         </main>
       </div>
+
+      <SharedTablesModal
+        open={sharedTablesOpen}
+        onClose={() => setSharedTablesOpen(false)}
+        refreshToken={sharedTablesRefreshNonce}
+      />
+
+      <ImageLightbox
+        open={Boolean(lightboxImage)}
+        url={lightboxImage?.url ?? ""}
+        alt={lightboxImage?.alt}
+        onClose={() => setLightboxImage(null)}
+      />
 
       {/* Modal Pareamento WhatsApp */}
       <WhatsAppPairingModal
