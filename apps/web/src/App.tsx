@@ -40,6 +40,8 @@ import { ConnectorsPage } from "./features/pages/ConnectorsPage";
 import { FilesVaultPage } from "./features/pages/FilesVaultPage";
 import { TasksQueuePage } from "./features/pages/TasksQueuePage";
 import { UsageMetricsPage } from "./features/pages/UsageMetricsPage";
+import { RoutineFlowsCanvas } from "./features/routines/RoutineFlowsCanvas";
+import { SchedulePage } from "./features/schedule/SchedulePage";
 import type { AgentStepLog } from "./features/trace/AgentStepsWaterfall";
 import { WhatsAppPairingModal } from "./features/whatsapp/WhatsAppPairingModal";
 import { WorkflowsCanvasPage } from "./features/workflows/WorkflowsCanvasPage";
@@ -149,6 +151,35 @@ export function App() {
   ]);
   const [activeTabId, setActiveTabId] = useState<string>("agent:estrategista");
 
+  const [sidebarViewMode, setSidebarViewMode] = useState<"agents" | "routines">("agents");
+  const [routineCountsByAgent, setRoutineCountsByAgent] = useState<Record<string, number>>({});
+  const [routinesRefreshNonce, setRoutinesRefreshNonce] = useState(0);
+  const [flowRefreshNonce, setFlowRefreshNonce] = useState(0);
+  const [routineInspectorSignal, setRoutineInspectorSignal] = useState<{
+    subView?: "routines";
+    rotinaId?: string | null;
+    nonce: number;
+  } | null>(null);
+  const [routineNotifications, setRoutineNotifications] = useState<
+    Array<{ id: string; rotina_nome: string; resumo: string; owner_id: string }>
+  >([]);
+  const [activeSideThreadId, setActiveSideThreadId] = useState<string | null>(null);
+
+  const refreshRoutineCounts = useCallback(async () => {
+    try {
+      const all = await daemonApi.listAllRoutines();
+      const counts: Record<string, number> = {};
+      for (const item of all) {
+        if (item.owner_kind === "agente") {
+          counts[item.owner_id] = (counts[item.owner_id] ?? 0) + 1;
+        }
+      }
+      setRoutineCountsByAgent(counts);
+    } catch {
+      // Silencioso caso endpoint ainda não responda
+    }
+  }, []);
+
   const hydrateAll = useCallback(async () => {
     try {
       const [
@@ -201,6 +232,7 @@ export function App() {
       setArquivos(fileList);
       setVaultKeys(keys);
       setWhatsappAccounts(waAccountsList);
+      void refreshRoutineCounts();
 
       if (tList.length > 0) {
         const pending =
@@ -220,6 +252,14 @@ export function App() {
 
   // Carrega mensagens da conversa ativa
   useEffect(() => {
+    if (activeSideThreadId && activeSideThreadId.startsWith("rotina:") && centerMode.type === "agent") {
+      const rotinaId = activeSideThreadId.slice("rotina:".length);
+      void daemonApi.listRoutineThreadMessages(centerMode.agenteId, rotinaId).then((msgs) => {
+        setChatByKey((prev) => ({ ...prev, [activeSideThreadId]: msgs }));
+      });
+      return;
+    }
+
     if (centerMode.type === "agent") {
       const key = `agente:${centerMode.agenteId}`;
       void daemonApi.listAgentMessages(centerMode.agenteId).then((msgs) => {
@@ -236,7 +276,7 @@ export function App() {
         setChatByKey((prev) => ({ ...prev, [key]: msgs }));
       });
     }
-  }, [centerMode]);
+  }, [centerMode, activeSideThreadId]);
 
   // Assinatura WebSocket ao vivo
   useEffect(() => {
@@ -284,6 +324,13 @@ export function App() {
       setWhatsappQr(evt.qrcode);
     });
     const unsubChat = ws.on("chat:message", (evt) => {
+      if (evt.canal_id.startsWith("rotina:")) {
+        setChatByKey((prev) => ({
+          ...prev,
+          [evt.canal_id]: mergeUniqueMessages(prev[evt.canal_id] ?? [], [evt.mensagem]),
+        }));
+        return;
+      }
       setChatByKey((prev) => {
         const cleaned = (prev[evt.canal_id] ?? []).filter(
           (m) =>
@@ -392,6 +439,32 @@ export function App() {
       void daemonApi.listAgents().then(setAgentes).catch(() => {});
     });
 
+    const unsubRoutineUpdated = ws.on("routine:updated", () => {
+      setRoutinesRefreshNonce((n) => n + 1);
+      void refreshRoutineCounts();
+    });
+    const unsubRoutineRunUpdated = ws.on("routine:run_updated", () => {
+      setRoutinesRefreshNonce((n) => n + 1);
+      setFlowRefreshNonce((n) => n + 1);
+    });
+    const unsubRoutineWebhook = ws.on("routine:webhook_received", () => {
+      setRoutinesRefreshNonce((n) => n + 1);
+    });
+    const unsubRoutineFlowUpdated = ws.on("routine_flow:updated", () => {
+      setFlowRefreshNonce((n) => n + 1);
+    });
+    const unsubRoutineNotification = ws.on("routine:notification", (evt) => {
+      setRoutineNotifications((prev) => [
+        ...prev.slice(-3),
+        {
+          id: `${evt.rotina_id}-${evt.execucao_id}-${Date.now()}`,
+          rotina_nome: evt.rotina_nome,
+          resumo: evt.resumo,
+          owner_id: evt.owner_id,
+        },
+      ]);
+    });
+
     ws.connect();
     return () => {
       unsubConn();
@@ -412,9 +485,14 @@ export function App() {
       unsubMcpOAuthDone();
       unsubLojaSkill();
       unsubLojaAgente();
+      unsubRoutineUpdated();
+      unsubRoutineRunUpdated();
+      unsubRoutineWebhook();
+      unsubRoutineFlowUpdated();
+      unsubRoutineNotification();
       ws.disconnect();
     };
-  }, []);
+  }, [refreshRoutineCounts]);
 
   const ensureAndActivateTab = useCallback((tab: StudioTabItem, mode: AgentCenterMode) => {
     setOpenTabs((prev) => (prev.some((t) => t.id === tab.id) ? prev : [...prev, tab]));
@@ -424,6 +502,7 @@ export function App() {
   }, []);
 
   const handleSelectAgent = (agenteId: string) => {
+    setActiveSideThreadId(null);
     const ag = agentes.find((a) => a.agente_id === agenteId);
     const vis = getAgentAvatar(ag);
     ensureAndActivateTab(
@@ -433,6 +512,7 @@ export function App() {
   };
 
   const handleSelectChannel = (canalId: string) => {
+    setActiveSideThreadId(null);
     const canal = canais.find((c) => c.canal_id === canalId);
     ensureAndActivateTab(
       { id: `channel:${canalId}`, titulo: canal?.nome ?? canalId, shape: "rounded_square", color: "#31cf76" },
@@ -488,11 +568,13 @@ export function App() {
   }, [canais, centerMode]);
 
   const activeChatKey =
-    centerMode.type === "channel"
-      ? centerMode.canalId
-      : centerMode.type === "agent"
-        ? `agente:${activeAgent?.agente_id ?? "estrategista"}`
-        : "";
+    activeSideThreadId && activeSideThreadId.startsWith("rotina:")
+      ? activeSideThreadId
+      : centerMode.type === "channel"
+        ? centerMode.canalId
+        : centerMode.type === "agent"
+          ? `agente:${activeAgent?.agente_id ?? "estrategista"}`
+          : "";
 
   const activeMessages = activeChatKey ? chatByKey[activeChatKey] ?? [] : [];
 
@@ -762,6 +844,9 @@ export function App() {
                   onCreateChannel={() => setChannelModalOpen(true)}
                   whatsappStatus={whatsappStatus}
                   onOpenWhatsAppModal={() => setWhatsappModalOpen(true)}
+                  viewMode={sidebarViewMode}
+                  onChangeViewMode={setSidebarViewMode}
+                  routineCountsByAgent={routineCountsByAgent}
                 />
               )}
 
@@ -773,88 +858,144 @@ export function App() {
                 />
               ) : (
                 <>
-                  <AgentConversationView
-                    mode={centerMode.type === "channel" ? "channel" : "agent"}
-                    agente={activeAgent}
-                    canal={activeChannel}
-                    allAgentes={agentes}
-                    mensagens={activeMessages}
-                    provedores={provedores}
-                    sending={sendingChat}
-                    liveRun={activeChatKey ? liveRunByChat[activeChatKey] ?? null : null}
-                    inspectorOpen={inspectorOpen}
-                    onToggleInspector={() => setInspectorOpen((o) => !o)}
-                    onSendMessage={async (conteudo, anexos) => {
-                      setPrefilledChatPrompt(null);
-                      await handleSendChatMessage(conteudo, anexos);
-                    }}
-                    onUploadFile={handleUploadFile}
-                    pendingMcpSignIn={pendingMcpSignIn}
-                    prefilledDraft={prefilledChatPrompt}
-                    onAuthenticateMcp={async (mcpId) => {
-                      setPendingMcpSignIn((prev) =>
-                        prev ? { ...prev, status: "signing_in", errorMessage: null } : prev
-                      );
-                      try {
-                        const res = await daemonApi.startMcpOAuth(mcpId);
-                        if (typeof window !== "undefined") {
-                          window.open(res.authorizeUrl, "_blank", "noopener,noreferrer");
-                        }
-                      } catch (err) {
-                        setPendingMcpSignIn((prev) =>
-                          prev
-                            ? {
-                                ...prev,
-                                status: "error",
-                                errorMessage:
-                                  err instanceof Error ? err.message : "Falha ao iniciar OAuth.",
-                              }
-                            : prev
-                        );
-                      }
-                    }}
-                    onOpenStoreApp={(slug) => {
-                      setLojaInitialAppSlug(slug);
-                      setActiveSection("loja");
-                    }}
-                    onRetryMcpContinue={async () => {
-                      setPendingMcpSignIn(null);
-                      await handleSendChatMessage("Pode continuar utilizando as ferramentas conectadas.", []);
-                    }}
-                    onUpdateModelAndEffort={async (modelo: string, effort: NivelEsforco) => {
-                      if (!activeAgent) return;
-                      const targetId = activeAgent.agente_id;
-                      setAgentes((prev) =>
-                        prev.map((a) =>
-                          a.agente_id === targetId
-                            ? {
-                                ...a,
-                                modelo_padrao: modelo,
-                                config: { ...(a.config ?? {}), effort },
-                              }
-                            : a
-                        )
-                      );
-                      const updated = await daemonApi.updateAgentSettings(targetId, {
-                        modelo_padrao: modelo,
-                        effort,
-                      });
-                      setAgentes((prev) =>
-                        prev.map((a) => (a.agente_id === updated.agente_id ? updated : a))
-                      );
-                    }}
-                    onOpenConnectors={() => setActiveSection("conexoes")}
-                  />
+                  {sidebarViewMode === "routines" ? (
+                    <RoutineFlowsCanvas
+                      agente={activeAgent ?? agentes[0] ?? null}
+                      allAgentes={agentes}
+                      refreshSignal={flowRefreshNonce}
+                      onOpenRoutineSettings={(rotinaId) => {
+                        setInspectorOpen(true);
+                        setRoutineInspectorSignal({
+                          subView: "routines",
+                          rotinaId: rotinaId ?? null,
+                          nonce: Date.now(),
+                        });
+                      }}
+                      onOpenAgentChat={(agenteId) => {
+                        setSidebarViewMode("agents");
+                        handleSelectAgent(agenteId);
+                      }}
+                    />
+                  ) : (
+                    <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+                      {activeSideThreadId && (
+                        <div className="shrink-0 px-4 py-2 bg-[#212121] border-b border-white/[0.06] flex items-center justify-between gap-2 text-[12px]">
+                          <span className="text-[#42A0FF] font-semibold">
+                            Visualizando conversa isolada da rotina ({activeSideThreadId})
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setActiveSideThreadId(null)}
+                            className="rounded-lg bg-[#2A2A2A] hover:bg-[#333336] px-3 py-1 font-semibold text-[#F0F0F0]"
+                          >
+                            Voltar ao chat principal
+                          </button>
+                        </div>
+                      )}
+                      <AgentConversationView
+                        mode={centerMode.type === "channel" ? "channel" : "agent"}
+                        agente={activeAgent}
+                        canal={activeChannel}
+                        allAgentes={agentes}
+                        mensagens={activeMessages}
+                        provedores={provedores}
+                        sending={sendingChat}
+                        liveRun={activeChatKey ? liveRunByChat[activeChatKey] ?? null : null}
+                        inspectorOpen={inspectorOpen}
+                        onToggleInspector={() => setInspectorOpen((o) => !o)}
+                        onSendMessage={async (conteudo, anexos) => {
+                          setPrefilledChatPrompt(null);
+                          await handleSendChatMessage(conteudo, anexos);
+                        }}
+                        onUploadFile={handleUploadFile}
+                        pendingMcpSignIn={pendingMcpSignIn}
+                        prefilledDraft={prefilledChatPrompt}
+                        onAuthenticateMcp={async (mcpId) => {
+                          setPendingMcpSignIn((prev) =>
+                            prev ? { ...prev, status: "signing_in", errorMessage: null } : prev
+                          );
+                          try {
+                            const res = await daemonApi.startMcpOAuth(mcpId);
+                            if (typeof window !== "undefined") {
+                              window.open(res.authorizeUrl, "_blank", "noopener,noreferrer");
+                            }
+                          } catch (err) {
+                            setPendingMcpSignIn((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    status: "error",
+                                    errorMessage:
+                                      err instanceof Error ? err.message : "Falha ao iniciar OAuth.",
+                                  }
+                                : prev
+                            );
+                          }
+                        }}
+                        onOpenStoreApp={(slug) => {
+                          setLojaInitialAppSlug(slug);
+                          setActiveSection("loja");
+                        }}
+                        onRetryMcpContinue={async () => {
+                          setPendingMcpSignIn(null);
+                          await handleSendChatMessage("Pode continuar utilizando as ferramentas conectadas.", []);
+                        }}
+                        onUpdateModelAndEffort={async (modelo: string, effort: NivelEsforco) => {
+                          if (!activeAgent) return;
+                          const targetId = activeAgent.agente_id;
+                          setAgentes((prev) =>
+                            prev.map((a) =>
+                              a.agente_id === targetId
+                                ? {
+                                    ...a,
+                                    modelo_padrao: modelo,
+                                    config: { ...(a.config ?? {}), effort },
+                                  }
+                                : a
+                            )
+                          );
+                          const updated = await daemonApi.updateAgentSettings(targetId, {
+                            modelo_padrao: modelo,
+                            effort,
+                          });
+                          setAgentes((prev) =>
+                            prev.map((a) => (a.agente_id === updated.agente_id ? updated : a))
+                          );
+                        }}
+                        onOpenConnectors={() => setActiveSection("conexoes")}
+                      />
+                    </div>
+                  )}
 
                   <div className="hidden xl:flex">
                     <RightInspectorPanel
                       open={inspectorOpen}
                       agente={activeAgent}
                       arquivos={arquivos}
+                      canais={canais}
+                      routineCount={
+                        activeAgent ? routineCountsByAgent[activeAgent.agente_id] ?? 0 : 0
+                      }
+                      routineFocusSignal={routineInspectorSignal}
                       previewTarefa={previewTarefa}
                       onClose={() => setInspectorOpen(false)}
                       onOpenFilesPage={() => setActiveSection("arquivos")}
                       onOpenWhatsAppModal={() => setWhatsappModalOpen(true)}
+                      onOpenRoutineThread={(canalId) => {
+                        setSidebarViewMode("agents");
+                        if (canalId.startsWith("rotina:")) {
+                          setActiveSideThreadId(canalId);
+                        } else if (canalId.startsWith("agente:")) {
+                          handleSelectAgent(canalId.slice("agente:".length));
+                        } else {
+                          handleSelectChannel(canalId);
+                        }
+                      }}
+                      onRoutinesChanged={() => {
+                        void refreshRoutineCounts();
+                        setRoutinesRefreshNonce((n) => n + 1);
+                        setFlowRefreshNonce((n) => n + 1);
+                      }}
                       onSaveAgentSettings={async (agenteId, patch) => {
                         const updated = await daemonApi.updateAgentSettings(agenteId, patch);
                         setAgentes((prev) =>
@@ -942,6 +1083,42 @@ export function App() {
                   agente_id: t.agente_id,
                 });
                 setTarefas(await daemonApi.listTasks());
+              }}
+            />
+          )}
+
+          {activeSection === "agenda" && (
+            <SchedulePage
+              agentes={agentes}
+              canais={canais}
+              refreshNonce={routinesRefreshNonce}
+              onOpenRoutine={(ownerKind, ownerId, rotinaId) => {
+                setSidebarViewMode("agents");
+                if (ownerKind === "agente") {
+                  handleSelectAgent(ownerId);
+                } else {
+                  handleSelectChannel(ownerId);
+                }
+                setInspectorOpen(true);
+                setRoutineInspectorSignal({
+                  subView: "routines",
+                  rotinaId,
+                  nonce: Date.now(),
+                });
+              }}
+              onOpenAgentChat={(agenteId) => {
+                setSidebarViewMode("agents");
+                handleSelectAgent(agenteId);
+              }}
+              onCreateFirstRoutine={(defaultAgentId) => {
+                setSidebarViewMode("agents");
+                handleSelectAgent(defaultAgentId);
+                setInspectorOpen(true);
+                setRoutineInspectorSignal({
+                  subView: "routines",
+                  rotinaId: "__new__",
+                  nonce: Date.now(),
+                });
               }}
             />
           )}
@@ -1266,6 +1443,54 @@ export function App() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Toasts de notificações de rotinas */}
+      {routineNotifications.length > 0 && (
+        <div
+          aria-live="polite"
+          className="fixed bottom-4 right-4 z-50 w-80 space-y-2"
+        >
+          {routineNotifications.map((toast) => (
+            <div
+              key={toast.id}
+              className="rounded-xl bg-[#212121] border border-[#007CF7] p-3.5 shadow-2xl space-y-2"
+            >
+              <p className="text-[13px] font-semibold text-[#F0F0F0]">
+                {toast.rotina_nome}
+              </p>
+              <p className="text-[12px] font-normal text-[#DCDCDC] line-clamp-3">
+                {toast.resumo}
+              </p>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSidebarViewMode("agents");
+                    handleSelectAgent(toast.owner_id);
+                    setRoutineNotifications((prev) =>
+                      prev.filter((item) => item.id !== toast.id)
+                    );
+                  }}
+                  className="rounded-lg bg-[#007CF7] px-2.5 py-1 text-[12px] font-semibold text-white"
+                >
+                  Abrir agente
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setRoutineNotifications((prev) =>
+                      prev.filter((item) => item.id !== toast.id)
+                    )
+                  }
+                  className="rounded-lg bg-[#2A2A2A] px-2.5 py-1 text-[12px] font-normal text-[#DCDCDC]"
+                >
+                  Fechar aviso
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>

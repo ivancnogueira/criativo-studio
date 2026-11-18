@@ -47,18 +47,38 @@ export class CriativoDatabase {
     });
   }
 
+  private transactionDepth = 0;
+
   /**
-   * Executa um bloco de operações em transação atômica com rollback automático em caso de erro.
+   * Executa um bloco de operações em transação atômica (suportando SAVEPOINT reentrante) com rollback em erro.
    */
   public runInTransaction<T>(fn: () => T): T {
-    this.connection.exec("BEGIN IMMEDIATE;");
+    const isNested = this.transactionDepth > 0;
+    const spName = isNested ? `sp_${this.transactionDepth}_${Date.now()}` : null;
+    if (isNested && spName) {
+      this.connection.exec(`SAVEPOINT ${spName};`);
+    } else {
+      this.connection.exec("BEGIN IMMEDIATE;");
+    }
+    this.transactionDepth += 1;
     try {
       const result = fn();
-      this.connection.exec("COMMIT;");
+      this.transactionDepth -= 1;
+      if (isNested && spName) {
+        this.connection.exec(`RELEASE SAVEPOINT ${spName};`);
+      } else {
+        this.connection.exec("COMMIT;");
+      }
       return result;
     } catch (error) {
+      this.transactionDepth = Math.max(0, this.transactionDepth - 1);
       try {
-        this.connection.exec("ROLLBACK;");
+        if (isNested && spName) {
+          this.connection.exec(`ROLLBACK TO SAVEPOINT ${spName};`);
+          this.connection.exec(`RELEASE SAVEPOINT ${spName};`);
+        } else {
+          this.connection.exec("ROLLBACK;");
+        }
       } catch {
         // Ignora erro secundário se a transação já estiver encerrada
       }

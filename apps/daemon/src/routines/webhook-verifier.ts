@@ -43,15 +43,22 @@ export async function readRawBodyWithLimit(
 ): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let totalBytes = 0;
+  let exceeded = false;
 
   for await (const chunk of req) {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     totalBytes += buf.length;
     if (totalBytes > maxBytes) {
-      req.destroy();
-      throw new PayloadTooLargeError();
+      exceeded = true;
+      continue;
     }
-    chunks.push(buf);
+    if (!exceeded) {
+      chunks.push(buf);
+    }
+  }
+
+  if (exceeded) {
+    throw new PayloadTooLargeError();
   }
 
   return Buffer.concat(chunks);
@@ -150,8 +157,12 @@ export function verifyWebhookHmacSignature(params: {
       : { ok: false, error: "Assinatura HMAC-SHA256 inválida." };
   }
 
-  // Standard Webhooks / Svix: tokens separados por espaço como "v1,<base64>"
+  // Standard Webhooks / Svix: suporta especificação oficial (id.timestamp.body) e formato timestamp.id.body
   const keyBytes = decodeStandardWebhookKey(secret);
+  const stdSignedOfficial = `${deliveryId.trim()}.${tsNum}.${rawBodyUtf8}`;
+  const expectedOfficialB64 = createHmac("sha256", keyBytes)
+    .update(stdSignedOfficial, "utf8")
+    .digest("base64");
   const expectedB64 = createHmac("sha256", keyBytes)
     .update(signedContent, "utf8")
     .digest("base64");
@@ -160,7 +171,7 @@ export function verifyWebhookHmacSignature(params: {
   for (const token of parts) {
     if (!token.startsWith("v1,")) continue;
     const candidateB64 = token.slice("v1,".length).trim();
-    if (safeEqualUtf8(candidateB64, expectedB64)) {
+    if (safeEqualUtf8(candidateB64, expectedOfficialB64) || safeEqualUtf8(candidateB64, expectedB64)) {
       return { ok: true };
     }
   }
