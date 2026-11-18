@@ -49,12 +49,16 @@ import { tryHandleWhatsAppMcpStoreRoute } from "./routes-whatsapp-mcp-store.ts";
 import {
   buildStudioLiveContext,
   executeStudioExtensionTool,
+  executeStudioRoutineTool,
   isPhase10ExtensionTool,
+  isRoutineToolName,
   isUpgradeUnlocked,
   PHASE10_TOOL_DEFINITIONS,
+  ROUTINE_AGENT_TOOLS_SCHEMA,
   syncWorkspaceFilesToDatabase,
   validateMetaIntegration,
 } from "./studio-tools-bridge.ts";
+import type { RoutineToolsDeps } from "../routines/routine-agent-tools.ts";
 import type { WebSocketHub } from "./websocket-hub.ts";
 
 export interface StudioRoutesDeps {
@@ -73,6 +77,7 @@ export interface StudioRoutesDeps {
   skillsManager?: SkillsManager;
   whatsappManager?: WhatsAppSessionManager;
   whatsappOrchestrator?: WhatsAppOrchestrator;
+  routineToolsDeps?: RoutineToolsDeps;
 }
 
 const RAW_MIME_MAP: Record<string, string> = {
@@ -453,7 +458,8 @@ async function generateAgentChatReply(
     ? await deps.mcpGateway.getToolsForAgent(agente.agente_id).catch(() => [])
     : [];
   const availableChatToolsMap = new Map<string, ToolDefinition>();
-  for (const t of [...PHASE10_TOOL_DEFINITIONS, ...mcpTools]) {
+  const studioRoutineTools = deps.routineToolsDeps ? ROUTINE_AGENT_TOOLS_SCHEMA : [];
+  for (const t of [...PHASE10_TOOL_DEFINITIONS, ...studioRoutineTools, ...mcpTools]) {
     if (!availableChatToolsMap.has(t.name)) {
       availableChatToolsMap.set(t.name, t);
     }
@@ -960,6 +966,12 @@ async function generateAgentChatReply(
                 skillsManager: deps.skillsManager,
                 whatsappManager: deps.whatsappManager,
                 whatsappOrchestrator: deps.whatsappOrchestrator,
+              });
+            } else if (isRoutineToolName(call.name)) {
+              toolOutput = await executeStudioRoutineTool(call.name, call.arguments, {
+                agenteId: agente.agente_id,
+                turnOrigin: "human",
+                routineToolsDeps: deps.routineToolsDeps,
               });
             } else if (deps.mcpGateway && call.name.startsWith("mcp_")) {
               toolOutput = await deps.mcpGateway.callMcpTool(call.name, call.arguments, {
@@ -1818,10 +1830,27 @@ export async function tryHandleStudioRoute(
     return true;
   }
 
+  const agentRoutineMsgMatch = path.match(/^\/api\/agentes\/([^/]+)\/rotinas\/([^/]+)\/mensagens$/);
+  if (agentRoutineMsgMatch && method === "GET") {
+    const rotinaId = decodeURIComponent(agentRoutineMsgMatch[2]);
+    const canalId = `rotina:${rotinaId}`;
+    const rows = db.connection
+      .prepare(
+        `SELECT * FROM projecao_conversas_chat WHERE canal_id = ? ORDER BY criado_em ASC LIMIT 120;`
+      )
+      .all(canalId) as Array<Parameters<typeof mapChatRow>[0]>;
+    sendJson(res, 200, { mensagens: rows.map(mapChatRow) });
+    return true;
+  }
+
   const agentMsgMatch = path.match(/^\/api\/agentes\/([^/]+)\/mensagens$/);
   if (agentMsgMatch && (method === "GET" || method === "POST")) {
     const agenteId = decodeURIComponent(agentMsgMatch[1]);
-    const canalId = `agente:${agenteId}`;
+    const canalIdQuery = url.searchParams.get("canal_id");
+    const canalId =
+      method === "GET" && canalIdQuery && canalIdQuery.startsWith("rotina:")
+        ? canalIdQuery
+        : `agente:${agenteId}`;
 
     if (method === "GET") {
       const rows = db.connection

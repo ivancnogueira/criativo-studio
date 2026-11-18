@@ -29,8 +29,17 @@ import {
   redactMcpSecrets,
 } from "../mcp/mcp-redaction.ts";
 import type { ProviderConnectionService } from "../providers/provider-connection-service.ts";
+import {
+  executeRoutineToolCall,
+  isRoutineToolName,
+  ROUTINE_AGENT_TOOLS_SCHEMA,
+  type RoutineToolExecutionContext,
+  type RoutineToolsDeps,
+} from "../routines/routine-agent-tools.ts";
 import type { VaultService } from "../vault/vault-service.ts";
 import type { WebSocketHub } from "./websocket-hub.ts";
+
+export { isRoutineToolName, ROUTINE_AGENT_TOOLS_SCHEMA };
 
 export interface MetaCredentialsResolved {
   accessToken: string | null;
@@ -487,6 +496,25 @@ export function buildStudioLiveContext(deps: {
     ROSTER_15_AGENTES.map((a) => `- \`@${a.agente_id}\`: ${a.nome} — ${a.papel}`).join("\n"),
     "IMPORTANTE SOBRE HANDOFF: Só emita a tag `[HANDOFF:agente_id]` quando o usuário tiver pedido explicitamente para executar uma tarefa prática que exija passar o bastão para aquele especialista. NUNCA emita `[HANDOFF:...]` nem transfira a conversa quando estiver apenas se apresentando, respondendo 'oi', explicando o que você/sua equipe fazem ou tirando dúvidas."
   );
+
+  try {
+    if (deps.db.hasTable("projecao_agente_rotinas")) {
+      const rotinasRows = deps.db.connection
+        .prepare(
+          `SELECT nome, owner_id, trigger_kind, ativa FROM projecao_agente_rotinas ORDER BY atualizado_em DESC LIMIT 15;`
+        )
+        .all() as Array<{ nome: string; owner_id: string; trigger_kind: string; ativa: number }>;
+      const ativasCount = rotinasRows.filter((r) => r.ativa === 1).length;
+      lines.push(
+        "",
+        "### Rotinas, Webhooks e Agenda",
+        `- Rotinas registradas no estúdio: ${rotinasRows.length} (${ativasCount} ativas).`,
+        "- Use `create_routine`, `update_routine`, `delete_routine`, `list_routines` ou `test_routine` para gerenciar rotinas agendadas; `create_webhook_routine`/`update_webhook_routine` apenas mediante pedido explícito humano no chat; e `routine_no_update`/`routine_report_failure` quando rodando em turno automático."
+      );
+    }
+  } catch {
+    // Tabela opcional em contextos legados
+  }
 
   return lines.join("\n");
 }
@@ -1375,4 +1403,35 @@ export async function executeStudioExtensionTool(
     default:
       throw new Error(`Ferramenta de extensão desconhecida: ${toolName}`);
   }
+}
+
+export async function executeStudioRoutineTool(
+  toolName: string,
+  args: Record<string, unknown>,
+  options: {
+    agenteId: string;
+    turnOrigin?: RoutineToolExecutionContext["turnOrigin"];
+    execucaoId?: string | null;
+    routineToolsDeps?: RoutineToolsDeps;
+    flags?: RoutineToolExecutionContext["flags"];
+  }
+): Promise<unknown> {
+  if (!options.routineToolsDeps) {
+    throw new Error("Serviço de rotinas e webhooks ainda não inicializado neste daemon.");
+  }
+  const ctx: RoutineToolExecutionContext = {
+    agenteId: options.agenteId,
+    turnOrigin: options.turnOrigin ?? "human",
+    execucaoId: options.execucaoId ?? null,
+    flags: options.flags ?? { noUpdateCalled: false, failureReason: null },
+  };
+  return await executeRoutineToolCall(
+    {
+      id: `studio-rot-${randomUUID().slice(0, 8)}`,
+      name: toolName,
+      arguments: args,
+    },
+    ctx,
+    options.routineToolsDeps
+  );
 }

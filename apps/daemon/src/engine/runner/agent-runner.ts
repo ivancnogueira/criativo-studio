@@ -16,6 +16,13 @@ import {
   isPhase10ExtensionTool,
   PHASE10_TOOL_DEFINITIONS,
 } from "../../server/studio-tools-bridge.ts";
+import {
+  executeRoutineToolCall,
+  isRoutineToolName,
+  ROUTINE_AGENT_TOOLS_SCHEMA,
+  type RoutineToolExecutionContext,
+  type RoutineToolsDeps,
+} from "../../routines/routine-agent-tools.ts";
 import type { WebSocketHub } from "../../server/websocket-hub.ts";
 import type { VaultService } from "../../vault/vault-service.ts";
 import type { McpClient } from "../providers/mcp-client.ts";
@@ -53,6 +60,7 @@ export interface AgentRunnerOptions {
   workspaceRoot?: string;
   maxTurns?: number;
   customTools?: Record<string, CustomToolExecutor>;
+  routineToolsDeps?: RoutineToolsDeps;
 }
 
 export interface AgentRunResult {
@@ -62,6 +70,8 @@ export interface AgentRunResult {
   finalText: string;
   generatedArtifacts: string[];
   awaitingApproval: boolean;
+  silenciada?: boolean;
+  failureReason?: string | null;
 }
 
 const NATIVE_TOOLS_SCHEMA: ToolDefinition[] = [
@@ -190,6 +200,7 @@ export class AgentRunner {
   private readonly workspaceRoot?: string;
   private readonly maxTurns: number;
   private readonly customTools: Record<string, CustomToolExecutor>;
+  private routineToolsDeps?: RoutineToolsDeps;
 
   constructor(options: AgentRunnerOptions) {
     this.db = options.db;
@@ -211,8 +222,13 @@ export class AgentRunner {
     this.workspaceRoot = options.workspaceRoot;
     this.maxTurns = options.maxTurns ?? 8;
     this.customTools = options.customTools ?? {};
+    this.routineToolsDeps = options.routineToolsDeps;
 
     seedDefaultAgents(this.db);
+  }
+
+  public setRoutineToolsDeps(deps: RoutineToolsDeps): void {
+    this.routineToolsDeps = deps;
   }
 
   private resolveTargetAgentId(tarefa: TarefaRegistro): string {
@@ -252,8 +268,25 @@ export class AgentRunner {
 
   private async executeToolCall(
     call: ToolCallRequest,
-    context: { tarefa: TarefaRegistro; agenteId: string; generatedArtifacts: string[] }
+    context: {
+      tarefa: TarefaRegistro;
+      agenteId: string;
+      generatedArtifacts: string[];
+      routineCtx?: RoutineToolExecutionContext;
+    }
   ): Promise<unknown> {
+    if (isRoutineToolName(call.name)) {
+      if (!this.routineToolsDeps) {
+        throw new Error("Sistema de rotinas ainda não inicializado neste runner.");
+      }
+      const ctx: RoutineToolExecutionContext = context.routineCtx ?? {
+        agenteId: context.agenteId,
+        turnOrigin: "human",
+        execucaoId: null,
+        flags: { noUpdateCalled: false, failureReason: null },
+      };
+      return await executeRoutineToolCall(call, ctx, this.routineToolsDeps);
+    }
     if (this.customTools[call.name]) {
       const customResult = await this.customTools[call.name](call.arguments, {
         tarefa: context.tarefa,
@@ -403,6 +436,38 @@ export class AgentRunner {
     const agenteId = this.resolveTargetAgentId(tarefa);
     this.setAgentStatus(agenteId, "trabalhando");
 
+    const payloadRec = (tarefa.payload ?? {}) as Record<string, unknown>;
+    const rotinaExecucaoId =
+      typeof payloadRec.rotina_execucao_id === "string"
+        ? payloadRec.rotina_execucao_id
+        : null;
+    const flowStepId =
+      typeof payloadRec.routine_flow_step_id === "string"
+        ? payloadRec.routine_flow_step_id
+        : null;
+    const turnOrigin: RoutineToolExecutionContext["turnOrigin"] =
+      tarefa.canal_origem === "webhook"
+        ? "webhook"
+        : flowStepId
+          ? "flow"
+          : tarefa.canal_origem === "rotina_cron" || Boolean(rotinaExecucaoId)
+            ? "routine"
+            : "human";
+
+    const routineCtx: RoutineToolExecutionContext = {
+      agenteId,
+      turnOrigin,
+      execucaoId: rotinaExecucaoId,
+      flags: {
+        noUpdateCalled: false,
+        failureReason: null,
+      },
+    };
+
+    if (rotinaExecucaoId && !flowStepId && this.routineToolsDeps) {
+      this.routineToolsDeps.executionService.markExecutionRunning(rotinaExecucaoId);
+    }
+
     const generatedArtifacts: string[] = [];
     let stepIndex = 0;
 
@@ -433,6 +498,7 @@ export class AgentRunner {
       for (const tool of [
         ...NATIVE_TOOLS_SCHEMA,
         ...PHASE10_TOOL_DEFINITIONS,
+        ...ROUTINE_AGENT_TOOLS_SCHEMA,
         ...legacyMcpTools,
         ...gatewayTools,
       ]) {
@@ -547,6 +613,7 @@ export class AgentRunner {
             tarefa,
             agenteId,
             generatedArtifacts,
+            routineCtx,
           });
 
           messages.push({
@@ -588,6 +655,32 @@ export class AgentRunner {
         });
       }
 
+      const trimmedLower = finalText.trim().toLowerCase();
+      const silentMarker =
+        trimmedLower === "[[no-update]]" || trimmedLower === "[silent]";
+      const noUpdateEffective = routineCtx.flags.noUpdateCalled || silentMarker;
+      const silenciada = noUpdateEffective && generatedArtifacts.length === 0;
+      const failureReason = routineCtx.flags.failureReason;
+
+      if (rotinaExecucaoId && !flowStepId && this.routineToolsDeps) {
+        await this.routineToolsDeps.executionService.completeRoutineTaskExecution({
+          execucaoId: rotinaExecucaoId,
+          finalText,
+          artifacts: generatedArtifacts,
+          noUpdateCalled: noUpdateEffective,
+          failureReason,
+        });
+      }
+
+      if (flowStepId && this.routineToolsDeps?.flowsEngine) {
+        await this.routineToolsDeps.flowsEngine.onFlowStepTaskSettled({
+          stepId: flowStepId,
+          status: failureReason ? "failed" : "succeeded",
+          output: failureReason || silenciada ? null : finalText,
+          erro: failureReason,
+        });
+      }
+
       this.memoryManager.addMemory(
         agenteId,
         `Tarefa '${tarefa.titulo}' (${tarefa.tipo}) concluída com ${generatedArtifacts.length} artefatos.`,
@@ -601,7 +694,34 @@ export class AgentRunner {
         finalText,
         generatedArtifacts,
         awaitingApproval,
+        silenciada,
+        failureReason,
       };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (rotinaExecucaoId && !flowStepId && this.routineToolsDeps) {
+        await this.routineToolsDeps.executionService
+          .completeRoutineTaskExecution({
+            execucaoId: rotinaExecucaoId,
+            finalText: "",
+            artifacts: [],
+            noUpdateCalled: false,
+            failureReason: null,
+            erro: errMsg,
+          })
+          .catch(() => {});
+      }
+      if (flowStepId && this.routineToolsDeps?.flowsEngine) {
+        await this.routineToolsDeps.flowsEngine
+          .onFlowStepTaskSettled({
+            stepId: flowStepId,
+            status: "failed",
+            output: null,
+            erro: errMsg,
+          })
+          .catch(() => {});
+      }
+      throw err;
     } finally {
       this.setAgentStatus(agenteId, "ocioso");
     }

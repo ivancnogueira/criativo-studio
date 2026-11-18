@@ -93,17 +93,41 @@ export class WebSocketHub {
     return Buffer.concat([header, body]);
   }
 
+  private readonly eventListeners = new Set<{
+    onEvent: (envelope: WebSocketEnvelope<keyof WebSocketEventMap>) => void;
+    onClose?: () => void;
+  }>();
+
+  public subscribe(
+    onEvent: (envelope: WebSocketEnvelope<keyof WebSocketEventMap>) => void,
+    onClose?: () => void
+  ): () => void {
+    const entry = { onEvent, onClose };
+    this.eventListeners.add(entry);
+    return () => {
+      this.eventListeners.delete(entry);
+    };
+  }
+
   public broadcast<K extends keyof WebSocketEventMap>(
     event: K,
     data: WebSocketEventMap[K]
   ): void {
-    if (this.clients.size === 0) return;
-
     const envelope: WebSocketEnvelope<K> = {
       event,
       data,
       timestamp: new Date().toISOString(),
     };
+
+    for (const entry of this.eventListeners) {
+      try {
+        entry.onEvent(envelope as WebSocketEnvelope<keyof WebSocketEventMap>);
+      } catch {
+        // Ignora falhas de subscribers individuais (ex: stream SSE já encerrado)
+      }
+    }
+
+    if (this.clients.size === 0) return;
     const frame = this.encodeTextFrame(JSON.stringify(envelope));
 
     for (const socket of this.clients) {

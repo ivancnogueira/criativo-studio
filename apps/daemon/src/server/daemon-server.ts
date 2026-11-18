@@ -18,6 +18,14 @@ import {
   type SocketFactory,
 } from "@criativo/whatsapp";
 import { CronScheduler } from "../routines/cron-scheduler.ts";
+import { RoutineStore } from "../routines/routine-store.ts";
+import { RoutineFlowStore } from "../routines/routine-flow-store.ts";
+import { RoutineTimer } from "../routines/routine-timer.ts";
+import { RoutineResultDispatcher } from "../routines/routine-result-dispatcher.ts";
+import { RoutineExecutionService } from "../routines/routine-execution-service.ts";
+import { WebhookRoutineService } from "../routines/webhook-routine-service.ts";
+import { RoutineFlowsEngine } from "../routines/routine-flows-engine.ts";
+import type { RoutineToolsDeps } from "../routines/routine-agent-tools.ts";
 import { VaultService } from "../vault/vault-service.ts";
 import { ProviderRegistry } from "../engine/providers/provider-registry.ts";
 import type { FetchLike } from "../engine/providers/provider-interface.ts";
@@ -31,6 +39,7 @@ import { ProviderConnectionService } from "../providers/provider-connection-serv
 import { TranscriptionService } from "../voice/transcription-service.ts";
 import { ControlSocketServer } from "./control-socket.ts";
 import { importOpenBotTelemetryIfAvailable } from "./analytics-skills-service.ts";
+import { tryHandleRoutineRoute } from "./routine-routes.ts";
 import { tryHandleStudioRoute } from "./studio-routes.ts";
 import { WebSocketHub } from "./websocket-hub.ts";
 import type { WaVersionFetcher, WhatsAppStudioClient } from "@criativo/whatsapp";
@@ -66,6 +75,13 @@ export interface DaemonRuntime {
   queue: FifoQueueManager;
   vault: VaultService;
   cron: CronScheduler;
+  routineStore: RoutineStore;
+  routineFlowStore: RoutineFlowStore;
+  routineTimer: RoutineTimer;
+  routineResultDispatcher: RoutineResultDispatcher;
+  routineExecutionService: RoutineExecutionService;
+  routineWebhookService: WebhookRoutineService;
+  routineFlowsEngine: RoutineFlowsEngine;
   providers: ProviderRegistry;
   runner: AgentRunner;
   mcpGateway: McpGateway;
@@ -347,6 +363,63 @@ export async function createDaemonServer(
     }
   });
 
+  const routineStore = new RoutineStore(db);
+  const routineFlowStore = new RoutineFlowStore(db);
+  const routineResultDispatcher = new RoutineResultDispatcher({
+    db,
+    routineStore,
+    wsHub,
+    vault,
+    whatsapp,
+    fetchImpl: options.fetchImpl,
+  });
+  const routineExecutionService = new RoutineExecutionService({
+    db,
+    queue,
+    routineStore,
+    dispatcher: routineResultDispatcher,
+    wsHub,
+    providerConnection,
+  });
+  const routineTimer = new RoutineTimer({
+    getEarliestDue: () => {
+      const iso = routineStore.getEarliestNextRunAt();
+      return iso ? new Date(iso) : null;
+    },
+    onTick: async (now) => {
+      await routineExecutionService.processDueRoutines(now);
+    },
+  });
+  const routineWebhookService = new WebhookRoutineService({
+    routineStore,
+    vault,
+    executionService: routineExecutionService,
+    wsHub,
+  });
+  const routineFlowsEngine = new RoutineFlowsEngine({
+    db,
+    queue,
+    routineStore,
+    flowStore: routineFlowStore,
+    wsHub,
+  });
+  routineExecutionService.setTimer(routineTimer);
+  routineExecutionService.setOnRunSettled(async () => {
+    await routineFlowsEngine.sweep();
+  });
+
+  const routineToolsDeps: RoutineToolsDeps = {
+    db,
+    routineStore,
+    timer: routineTimer,
+    executionService: routineExecutionService,
+    webhookService: routineWebhookService,
+    flowsEngine: routineFlowsEngine,
+    wsHub,
+  };
+  runner.setRoutineToolsDeps(routineToolsDeps);
+  cron.attachRoutineEngine(routineTimer, routineExecutionService);
+
   let workerTimer: NodeJS.Timeout | null = null;
   let isProcessingTask = false;
 
@@ -362,8 +435,69 @@ export async function createDaemonServer(
     });
 
     try {
+      const execucaoId =
+        typeof nextTask.payload?.rotina_execucao_id === "string"
+          ? nextTask.payload.rotina_execucao_id
+          : null;
+      if (options.taskExecutor && execucaoId) {
+        routineExecutionService.markExecutionRunning(execucaoId);
+      }
+
       await activeExecutor.execute(nextTask);
       const refreshedTask = queue.getTask(nextTask.tarefa_id);
+
+      if (options.taskExecutor && refreshedTask) {
+        if (execucaoId) {
+          const currentExec = routineStore.getRun(execucaoId);
+          if (currentExec && (currentExec.status === "queued" || currentExec.status === "running")) {
+            const outText =
+              typeof refreshedTask.resultado?.texto === "string"
+                ? refreshedTask.resultado.texto
+                : typeof refreshedTask.resultado?.resumo === "string"
+                  ? refreshedTask.resultado.resumo
+                  : JSON.stringify(refreshedTask.resultado ?? {});
+            const failureMsg =
+              refreshedTask.status === "falha"
+                ? refreshedTask.erro_detalhes ?? "Falha na execução da tarefa."
+                : null;
+            await routineExecutionService.completeRoutineTaskExecution({
+              execucaoId,
+              finalText: outText,
+              artifacts: [],
+              noUpdateCalled: false,
+              failureReason: failureMsg,
+              erro: failureMsg,
+            });
+          }
+        }
+        const flowStepId =
+          typeof nextTask.payload?.routine_flow_step_id === "string"
+            ? nextTask.payload.routine_flow_step_id
+            : null;
+        if (flowStepId) {
+          const currentStep = routineFlowStore.getStepByTaskId(nextTask.tarefa_id);
+          if (currentStep && currentStep.status === "running") {
+            const stepStatus =
+              refreshedTask.status === "falha"
+                ? "failed"
+                : refreshedTask.status === "cancelado"
+                  ? "cancelled"
+                  : "succeeded";
+            const outText =
+              typeof refreshedTask.resultado?.texto === "string"
+                ? refreshedTask.resultado.texto
+                : typeof refreshedTask.resultado?.resumo === "string"
+                  ? refreshedTask.resultado.resumo
+                  : null;
+            await routineFlowsEngine.onFlowStepTaskSettled({
+              stepId: flowStepId,
+              status: stepStatus,
+              output: outText,
+              erro: refreshedTask.status === "falha" ? refreshedTask.erro_detalhes : null,
+            });
+          }
+        }
+      }
       const targetJid =
         typeof nextTask.payload?.remetente_jid === "string"
           ? nextTask.payload.remetente_jid
@@ -421,6 +555,24 @@ export async function createDaemonServer(
       const method = req.method ?? "GET";
 
       if (
+        await tryHandleRoutineRoute(req, res, path, method, url, {
+          db,
+          routineStore,
+          flowStore: routineFlowStore,
+          timer: routineTimer,
+          resultDispatcher: routineResultDispatcher,
+          executionService: routineExecutionService,
+          webhookService: routineWebhookService,
+          flowsEngine: routineFlowsEngine,
+          wsHub,
+          sendJson,
+          readJsonBody,
+        })
+      ) {
+        return;
+      }
+
+      if (
         await tryHandleStudioRoute(req, res, path, method, url, {
           db,
           queue,
@@ -437,6 +589,7 @@ export async function createDaemonServer(
           skillsManager,
           whatsappManager,
           whatsappOrchestrator,
+          routineToolsDeps,
         })
       ) {
         return;
@@ -784,6 +937,7 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
 
   const address = httpServer.address();
   const resolvedPort = typeof address === "object" && address ? address.port : listenPort;
+  routineStore.setPublicBaseUrl(`http://${listenHost}:${resolvedPort}`);
 
   const resolvedControlSocketPath =
     options.controlSocketPath === null
@@ -806,6 +960,9 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
 
   if (options.autoStartLoops !== false) {
     cron.start(options.cronIntervalMs ?? 60_000);
+    await routineExecutionService.skipMissed();
+    routineTimer.arm();
+    await routineFlowsEngine.sweep();
     whatsappArchiveService.startPeriodicCleanup();
     workerTimer = setInterval(() => {
       void processNextQueuedTask();
@@ -829,6 +986,13 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
     queue,
     vault,
     cron,
+    routineStore,
+    routineFlowStore,
+    routineTimer,
+    routineResultDispatcher,
+    routineExecutionService,
+    routineWebhookService,
+    routineFlowsEngine,
     providers,
     runner,
     mcpGateway,
@@ -842,6 +1006,7 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
     port: resolvedPort,
     async close(): Promise<void> {
       cron.stop();
+      routineTimer.dispose();
       whatsappArchiveService.stopPeriodicCleanup();
       whatsappOrchestrator.stop();
       if (workerTimer) {
@@ -855,6 +1020,7 @@ function tryServeWebStatic(pathName: string, res: ServerResponse): boolean {
       await mcpGateway.close();
       providerConnection.close();
       wsHub.closeAll();
+      httpServer.closeAllConnections?.();
       await new Promise<void>((resolveClose) => {
         httpServer.close(() => resolveClose());
       });
