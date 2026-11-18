@@ -1,15 +1,22 @@
 import type {
   AgenteEspera,
+  AgenteMemoria,
+  AgenteMemoriasSnapshot,
   AgenteRegistro,
   AgenteThreadRegistro,
   AgenteThreadsSnapshot,
   AgentRoutine,
   AnexoChat,
+  ApiKeyMetadata,
+  AprendizadoConfig,
   ArquivoStudio,
   AvatarShape,
+  BibliotecaPasta,
+  BibliotecasPastasSnapshot,
   CanalEquipe,
   ConectorIntegracaoInfo,
   ContaProvedorInfo,
+  ConversationUiBlock,
   EventFilter,
   FilaChatEntrega,
   FilaChatSnapshot,
@@ -29,6 +36,8 @@ import type {
   McpProbeResultado,
   McpServidorConfig,
   McpTransporte,
+  MemoriaInclusao,
+  MemoryReviewAlteracao,
   MensagemChat,
   MensagemFixada,
   NivelEsforco,
@@ -49,8 +58,13 @@ import type {
   RoutineRun,
   RoutineWebhookConfig,
   SaveAgentRoutineInput,
+  SharedTableDetail,
+  SharedTableQueryResult,
+  SharedTableSummary,
+  SkillSugestaoItem,
   StatusMensageria,
   TarefaRegistro,
+  UiBlockSubmitPayload,
   UpdateAgentRoutineInput,
   UsoProvedoresSnapshot,
   WebhookReceipt,
@@ -2423,5 +2437,275 @@ export const daemonApi = {
       );
     }
     return await this.listPins(agenteId);
+  },
+
+  // ------------------------------------------------------------------
+  // Fase 14 — Shared Tables, Biblioteca Hierárquica, UI Blocks,
+  // Generative UI, Cofre de API Keys & Aprendizado Autônomo
+  // ------------------------------------------------------------------
+
+  async listSharedTables(): Promise<SharedTableSummary[]> {
+    const data = await requestJson<{ tables?: SharedTableSummary[] }>(
+      "/api/tabelas-compartilhadas"
+    );
+    return data.tables ?? [];
+  },
+
+  async inspectSharedTable(
+    nome: string,
+    params?: { limit?: number; offset?: number; busca?: string }
+  ): Promise<SharedTableDetail> {
+    const qs = new URLSearchParams();
+    if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+    if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+    if (params?.busca) qs.set("busca", params.busca);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return await requestJson<SharedTableDetail>(
+      `/api/tabelas-compartilhadas/${encodeURIComponent(nome)}${suffix}`
+    );
+  },
+
+  async querySharedTable(
+    sql: string,
+    params?: Array<string | number | boolean | null>
+  ): Promise<SharedTableQueryResult> {
+    return await requestJson<SharedTableQueryResult>(
+      "/api/tabelas-compartilhadas/query",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sql, ...(params ? { params } : {}) }),
+      }
+    );
+  },
+
+  getSharedTableExportUrl(nome: string, formato: "csv" | "json"): string {
+    return `/api/tabelas-compartilhadas/${encodeURIComponent(nome)}/export?formato=${formato}`;
+  },
+
+  async deleteSharedTable(nome: string): Promise<{ deleted: string }> {
+    return await requestJson<{ deleted: string }>(
+      `/api/tabelas-compartilhadas/${encodeURIComponent(nome)}`,
+      { method: "DELETE" }
+    );
+  },
+
+  async listLibraryFolders(): Promise<BibliotecasPastasSnapshot> {
+    return await requestJson<BibliotecasPastasSnapshot>("/api/bibliotecas/pastas");
+  },
+
+  async createLibraryFolder(input: {
+    agente_id: string;
+    nome: string;
+    parent_id?: string | null;
+  }): Promise<{ pasta: BibliotecaPasta; snapshot: BibliotecasPastasSnapshot }> {
+    return await requestJson<{ pasta: BibliotecaPasta; snapshot: BibliotecasPastasSnapshot }>(
+      "/api/bibliotecas/pastas",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+  },
+
+  async updateLibraryFolder(
+    pastaId: string,
+    patch: { nome?: string; parent_id?: string | null }
+  ): Promise<{ pasta: BibliotecaPasta; snapshot: BibliotecasPastasSnapshot }> {
+    return await requestJson<{ pasta: BibliotecaPasta; snapshot: BibliotecasPastasSnapshot }>(
+      `/api/bibliotecas/pastas/${encodeURIComponent(pastaId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      }
+    );
+  },
+
+  async deleteLibraryFolder(
+    pastaId: string
+  ): Promise<{ deletedIds: string[]; snapshot: BibliotecasPastasSnapshot }> {
+    return await requestJson<{ deletedIds: string[]; snapshot: BibliotecasPastasSnapshot }>(
+      `/api/bibliotecas/pastas/${encodeURIComponent(pastaId)}`,
+      { method: "DELETE" }
+    );
+  },
+
+  async moveFilesToLibraryFolder(
+    arquivoIds: string[],
+    pastaId: string | null
+  ): Promise<{ moved: number; snapshot: BibliotecasPastasSnapshot }> {
+    return await requestJson<{ moved: number; snapshot: BibliotecasPastasSnapshot }>(
+      "/api/bibliotecas/pastas/mover",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ arquivo_ids: arquivoIds, pasta_id: pastaId }),
+      }
+    );
+  },
+
+  async submitChatUiResponse(
+    payload: UiBlockSubmitPayload
+  ): Promise<{ ok: boolean; bloco: ConversationUiBlock }> {
+    return await requestJson<{ ok: boolean; bloco: ConversationUiBlock }>(
+      "/api/chat/ui-response",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  async saveSkillSuggestion(mensagemId: string): Promise<{
+    ok: boolean;
+    sugestao?: SkillSugestaoItem;
+    fallbackToReply?: boolean;
+    erro?: string;
+  }> {
+    return await requestJson(
+      `/api/chat/skill-sugestao/${encodeURIComponent(mensagemId)}/salvar`,
+      { method: "POST" }
+    );
+  },
+
+  async dismissSkillSuggestion(mensagemId: string): Promise<{
+    ok: boolean;
+    sugestao: SkillSugestaoItem;
+  }> {
+    return await requestJson(
+      `/api/chat/skill-sugestao/${encodeURIComponent(mensagemId)}/dispensar`,
+      { method: "POST" }
+    );
+  },
+
+  async getVisualPage(
+    agenteId: string,
+    arquivoId: string
+  ): Promise<{ arquivo_id: string; titulo: string; html: string }> {
+    return await requestJson<{ arquivo_id: string; titulo: string; html: string }>(
+      `/api/agentes/${encodeURIComponent(agenteId)}/visual-pages/${encodeURIComponent(arquivoId)}`
+    );
+  },
+
+  async listVaultApiKeys(agenteId?: string | null): Promise<ApiKeyMetadata[]> {
+    const suffix = agenteId ? `?agente_id=${encodeURIComponent(agenteId)}` : "";
+    const data = await requestJson<{ keys?: ApiKeyMetadata[] }>(
+      `/api/cofre/api-keys${suffix}`
+    );
+    return data.keys ?? [];
+  },
+
+  async saveVaultApiKey(input: {
+    name: string;
+    value: string;
+    scope: "todos_agentes" | "agente_especifico";
+    agente_id?: string | null;
+  }): Promise<{ status: "saved"; name: string; scope: "todos_agentes" | "agente_especifico" }> {
+    return await requestJson(
+      "/api/cofre/api-keys",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+  },
+
+  async removeVaultApiKey(
+    nome: string,
+    scope: "todos_agentes" | "agente_especifico",
+    agenteId?: string | null
+  ): Promise<{ removed: boolean }> {
+    const qs = new URLSearchParams({ scope });
+    if (agenteId) qs.set("agente_id", agenteId);
+    return await requestJson<{ removed: boolean }>(
+      `/api/cofre/api-keys/${encodeURIComponent(nome)}?${qs.toString()}`,
+      { method: "DELETE" }
+    );
+  },
+
+  async listAgentMemoriesSnapshot(
+    agenteId: string,
+    filters?: {
+      categoria?: MemoriaInclusao;
+      site?: string;
+      busca?: string;
+      after?: string;
+    }
+  ): Promise<AgenteMemoriasSnapshot> {
+    const qs = new URLSearchParams();
+    if (filters?.categoria) qs.set("categoria", filters.categoria);
+    if (filters?.site) qs.set("site", filters.site);
+    if (filters?.busca) qs.set("busca", filters.busca);
+    if (filters?.after) qs.set("after", filters.after);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return await requestJson<AgenteMemoriasSnapshot>(
+      `/api/agentes/${encodeURIComponent(agenteId)}/memorias${suffix}`
+    );
+  },
+
+  async updateAgentMemory(
+    agenteId: string,
+    memoriaId: string,
+    patch: {
+      texto?: string;
+      categoria?: MemoriaInclusao;
+      escopo_site?: string | null;
+    }
+  ): Promise<{ memoria: AgenteMemoria; snapshot: AgenteMemoriasSnapshot }> {
+    return await requestJson<{ memoria: AgenteMemoria; snapshot: AgenteMemoriasSnapshot }>(
+      `/api/agentes/${encodeURIComponent(agenteId)}/memorias/${encodeURIComponent(memoriaId)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      }
+    );
+  },
+
+  async deleteAgentMemory(
+    agenteId: string,
+    memoriaId: string
+  ): Promise<{ ok: boolean; snapshot: AgenteMemoriasSnapshot }> {
+    return await requestJson<{ ok: boolean; snapshot: AgenteMemoriasSnapshot }>(
+      `/api/agentes/${encodeURIComponent(agenteId)}/memorias/${encodeURIComponent(memoriaId)}`,
+      { method: "DELETE" }
+    );
+  },
+
+  async triggerMemoryReview(
+    agenteId: string,
+    threadId?: string | null
+  ): Promise<{ ok: boolean; alteracoes: MemoryReviewAlteracao[] }> {
+    return await requestJson<{ ok: boolean; alteracoes: MemoryReviewAlteracao[] }>(
+      `/api/agentes/${encodeURIComponent(agenteId)}/memorias/revisar`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(threadId ? { thread_id: threadId } : {}),
+      }
+    );
+  },
+
+  async getLearningConfig(): Promise<AprendizadoConfig> {
+    const data = await requestJson<{ configuracao: AprendizadoConfig }>(
+      "/api/configuracoes/aprendizado"
+    );
+    return data.configuracao;
+  },
+
+  async updateLearningConfig(patch: Partial<AprendizadoConfig>): Promise<AprendizadoConfig> {
+    const data = await requestJson<{ configuracao: AprendizadoConfig }>(
+      "/api/configuracoes/aprendizado",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      }
+    );
+    return data.configuracao;
   },
 };
