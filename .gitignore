@@ -13,8 +13,8 @@ apps/desktop/release-dist/
 
 # Banco de dados, dados de execução e mídia local (anti-contaminação)
 dados/
-servidores/
-updates/
+/servidores/
+/updates/
 *.db
 *.db-wal
 *.db-shm
