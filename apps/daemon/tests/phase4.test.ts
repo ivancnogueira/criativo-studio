@@ -98,7 +98,11 @@ describe("Fase 4 — Hub de Mensageria Nativo (WhatsApp Baileys, Voz & Telegram)
 
     await client.connect();
     socket.emit("connection.update", { qr: "criativo-qr-payload-teste-123" });
-    for (let i = 0; i < 40 && client.getStatus().status !== "aguardando_qrcode"; i += 1) {
+    for (
+      let i = 0;
+      i < 40 && !client.getStatus().qrcode_base64?.startsWith("data:image/png;base64,");
+      i += 1
+    ) {
       await new Promise((r) => setTimeout(r, 25));
     }
 

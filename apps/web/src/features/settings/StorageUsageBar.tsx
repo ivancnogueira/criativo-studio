@@ -344,12 +344,14 @@ export const SettingsStorageTab: React.FC<SettingsStorageTabProps> = ({
 export interface WhatsNewPanelProps {
   whatsNew: WhatsNewReleaseInfo | null;
   checking?: boolean;
+  hideSummaryHeader?: boolean;
   onCheckUpdates?: () => Promise<void>;
 }
 
 export const WhatsNewPanel: React.FC<WhatsNewPanelProps> = ({
   whatsNew,
   checking = false,
+  hideSummaryHeader = false,
   onCheckUpdates,
 }) => {
   const [showAllHistory, setShowAllHistory] = useState(false);
@@ -359,48 +361,50 @@ export const WhatsNewPanel: React.FC<WhatsNewPanelProps> = ({
 
   return (
     <div className="space-y-4">
-      <div className="rounded-xl border border-white/[0.06] bg-[#212121] p-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-[#42A0FF]" />
-            <span className="text-[14px] font-semibold text-white">
-              Versão instalada
-            </span>
-            <span className="rounded-md bg-[#141414] border border-white/10 px-2 py-0.5 font-mono text-[12px] text-[#42A0FF]">
-              v{whatsNew?.versao_atual ?? "1.0.0"}
-            </span>
+      {!hideSummaryHeader && (
+        <div className="rounded-xl border border-white/[0.06] bg-[#212121] p-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-[#42A0FF]" />
+              <span className="text-[14px] font-semibold text-white">
+                Versão instalada
+              </span>
+              <span className="rounded-md bg-[#141414] border border-white/10 px-2 py-0.5 font-mono text-[12px] text-[#42A0FF]">
+                v{whatsNew?.versao_atual ?? "1.0.0"}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 text-[12px] text-[#979797]">
+              <CheckCircle2 className="h-3.5 w-3.5 text-[#31CF76]" />
+              <span>
+                {whatsNew?.atualizacao_disponivel
+                  ? "Nova versão local detectada nas notas de lançamento."
+                  : "Ambiente local atualizado conforme manifesto."}
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-1.5 text-[12px] text-[#979797]">
-            <CheckCircle2 className="h-3.5 w-3.5 text-[#31CF76]" />
-            <span>
-              {whatsNew?.atualizacao_disponivel
-                ? "Nova versão local detectada nas notas de lançamento."
-                : "Ambiente local atualizado conforme manifesto."}
-            </span>
-          </div>
-        </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {onCheckUpdates && (
+          <div className="flex flex-wrap items-center gap-2">
+            {onCheckUpdates && (
+              <button
+                type="button"
+                disabled={checking}
+                onClick={() => void onCheckUpdates()}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[#F0F0F0] px-3 py-1.5 text-[12px] font-semibold text-[#141414] hover:bg-white disabled:opacity-50"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${checking ? "animate-spin" : ""}`} />
+                <span>Verificar atualizações</span>
+              </button>
+            )}
             <button
               type="button"
-              disabled={checking}
-              onClick={() => void onCheckUpdates()}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[#F0F0F0] px-3 py-1.5 text-[12px] font-semibold text-[#141414] hover:bg-white disabled:opacity-50"
+              onClick={() => setShowAllHistory((v) => !v)}
+              className="rounded-lg border border-white/10 bg-[#141414] px-3 py-1.5 text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#242424]"
             >
-              <RefreshCw className={`h-3.5 w-3.5 ${checking ? "animate-spin" : ""}`} />
-              <span>Verificar atualizações</span>
+              {showAllHistory ? "Recolher histórico" : "Abrir histórico de versões"}
             </button>
-          )}
-          <button
-            type="button"
-            onClick={() => setShowAllHistory((v) => !v)}
-            className="rounded-lg border border-white/10 bg-[#141414] px-3 py-1.5 text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#242424]"
-          >
-            {showAllHistory ? "Recolher histórico" : "Abrir histórico de versões"}
-          </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {visibleNotes.map((rel) => (
         <div
@@ -454,6 +458,18 @@ export const WhatsNewPanel: React.FC<WhatsNewPanelProps> = ({
           )}
         </div>
       ))}
+
+      {hideSummaryHeader && notes.length > 2 && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => setShowAllHistory((v) => !v)}
+            className="rounded-lg border border-white/10 bg-[#141414] px-3 py-1.5 text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#242424]"
+          >
+            {showAllHistory ? "Recolher histórico" : "Abrir histórico completo"}
+          </button>
+        </div>
+      )}
     </div>
   );
 };

@@ -28,6 +28,7 @@ import {
   SECRET_REDACTED_PLACEHOLDER,
 } from "./mcp-redaction.ts";
 import { isAgentAuthorizedForServer, McpServerStore } from "./mcp-server-store.ts";
+import { sanitizeJsonSchemaForGemini } from "./gemini-schema-sanitizer.ts";
 
 export interface McpOAuthRequiredNotice {
   ok: false;
@@ -358,7 +359,10 @@ export class McpGateway {
       })
     );
 
-    return toNativeProviderTools(collected);
+    return toNativeProviderTools(collected).map((tool) => ({
+      ...tool,
+      parameters: sanitizeJsonSchemaForGemini(tool.parameters),
+    }));
   }
 
   private resolveToolTarget(

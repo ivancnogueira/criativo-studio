@@ -13,6 +13,7 @@ import type {
   BrowserProxyProtocol,
   BrowserSnapshotResult,
   BrowserStatusReport,
+  BrowserTabSummary,
   BrowserTakeoverReason,
   BrowserTakeoverSession,
   BrowserTargetSelector,
@@ -351,6 +352,7 @@ export class BrowserAutomationService {
     patch: {
       nome?: string;
       cor_hex?: string;
+      cdp_porta?: number | null;
       proxy_json?: BrowserProfileProxyPayload | null;
     },
   ): Promise<{ perfil: BrowserProfileInfo; closedTabs: number }> {
@@ -369,6 +371,22 @@ export class BrowserAutomationService {
       patch.cor_hex && /^#[0-9a-fA-F]{6}$/.test(patch.cor_hex)
         ? patch.cor_hex
         : (existing.cor_hex ?? "#42A0FF");
+
+    let nextCdpPort = existing.cdp_porta ?? null;
+    let cdpChanged = false;
+    if (patch.cdp_porta !== undefined) {
+      if (patch.cdp_porta === null) {
+        if (nextCdpPort !== null) cdpChanged = true;
+        nextCdpPort = null;
+      } else {
+        const parsedPort = Number(patch.cdp_porta);
+        if (!Number.isInteger(parsedPort) || parsedPort < 1024 || parsedPort > 65535) {
+          throw new Error("Porta CDP inválida: informe null ou inteiro entre 1024 e 65535.");
+        }
+        if (nextCdpPort !== parsedPort) cdpChanged = true;
+        nextCdpPort = parsedPort;
+      }
+    }
 
     let nextProxyJsonStr = existing.proxy_json ?? "{}";
     let nextProxyUrl = existing.proxy_url;
@@ -392,21 +410,71 @@ export class BrowserAutomationService {
     }
 
     let closedTabs = 0;
-    if (proxyChanged) {
+    if (proxyChanged || cdpChanged) {
       closedTabs = await this.sessionManager.closeProfileContext(perfilId);
     }
 
     this.db.connection
       .prepare(
         `UPDATE projecao_perfis_navegador
-         SET nome = ?, cor_hex = ?, proxy_json = ?, proxy_url = ?
+         SET nome = ?, cor_hex = ?, cdp_porta = ?, proxy_json = ?, proxy_url = ?
          WHERE perfil_id = ?;`,
       )
-      .run(nextNome, nextCor, nextProxyJsonStr, nextProxyUrl, perfilId);
+      .run(nextNome, nextCor, nextCdpPort, nextProxyJsonStr, nextProxyUrl, perfilId);
 
     return {
       perfil: this.getProfileInfo(perfilId)!,
       closedTabs,
+    };
+  }
+
+  public async openProfileWindow(
+    perfilId: string,
+    initialUrl = "about:blank",
+  ): Promise<{ tab: BrowserTabSummary; cdpPort?: number | null }> {
+    const resolvedId = perfilId.trim() || SHARED_BROWSER_PROFILE_ID;
+    this.ensureDefaultSharedProfile();
+    const row = this.db.connection
+      .prepare("SELECT * FROM projecao_perfis_navegador WHERE perfil_id = ? LIMIT 1;")
+      .get(resolvedId) as BrowserProfile | undefined;
+    if (!row) {
+      throw new Error(`Perfil '${resolvedId}' não encontrado.`);
+    }
+
+    const { profile, proxy } = this.resolveProfileAndLaunchProxy(resolvedId, null);
+    const targetUrl =
+      initialUrl && initialUrl.trim() && initialUrl.trim() !== "about:blank"
+        ? assertSafeNavigationUrl(initialUrl).toString()
+        : "about:blank";
+    const cdpUrl = profile.cdp_porta ? `http://127.0.0.1:${profile.cdp_porta}` : null;
+
+    const tab = await this.sessionManager.openTab({
+      perfilId: profile.perfil_id,
+      userDataDir: profile.user_data_dir,
+      agenteId: null,
+      url: targetUrl,
+      cdpUrl,
+      headless: false,
+      proxy,
+    });
+
+    this.db.connection
+      .prepare("UPDATE projecao_perfis_navegador SET ultimo_uso_em = ? WHERE perfil_id = ?;")
+      .run(new Date().toISOString(), profile.perfil_id);
+
+    return {
+      tab: {
+        tabId: tab.tabId,
+        perfilId: tab.perfilId,
+        agenteId: tab.agenteId,
+        url: tab.page ? tab.page.url() : tab.virtualUrl,
+        title: tab.virtualTitle,
+        revision: tab.revision,
+        userControl: tab.userControl,
+        screencastActive: tab.screencastActive,
+        lastActivityAt: new Date(tab.lastActivityAt).toISOString(),
+      },
+      cdpPort: profile.cdp_porta ?? null,
     };
   }
 
@@ -779,6 +847,7 @@ export class BrowserAutomationService {
           userDataDir: profile.user_data_dir,
           agenteId: input.agenteId ?? null,
           url: safeUrl.toString(),
+          cdpUrl: profile.cdp_porta ? `http://127.0.0.1:${profile.cdp_porta}` : null,
           proxy,
           onPageNavigated: (t, navUrl, navTitle) => {
             if (t.teachRecording && t.agenteId) {

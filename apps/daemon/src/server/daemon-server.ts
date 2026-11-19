@@ -51,6 +51,7 @@ import { ControlSocketServer } from "./control-socket.ts";
 import { importOpenBotTelemetryIfAvailable } from "./analytics-skills-service.ts";
 import { tryHandleRoutineRoute } from "./routine-routes.ts";
 import { executeAgentConversationTurn, tryHandleStudioRoute } from "./studio-routes.ts";
+import { getBrandIdentity, syncBrandPlaceholdersInDatabase } from "./brand-onboarding-service.ts";
 import { WebSocketHub } from "./websocket-hub.ts";
 import { AgentThreadStore } from "../threads/agent-thread-store.ts";
 import { AgentTasksService } from "../threads/agent-tasks-service.ts";
@@ -153,6 +154,7 @@ export interface DaemonRuntime {
   workflowTriggers: WorkflowTriggers;
   telegramBot: TelegramNotificationBot;
   providers: ProviderRegistry;
+  providerConnection: ProviderConnectionService;
   runner: AgentRunner;
   mcpGateway: McpGateway;
   studioMcpBridge: CriativoStudioMcpBridge;
@@ -384,6 +386,7 @@ export async function createDaemonServer(
     workspaceRoot: resolvedWorkspaceRoot,
     sharedAuthDir: options.sharedAuthDir ?? null,
   });
+  syncBrandPlaceholdersInDatabase(db, getBrandIdentity(providerConnection));
   const mcpGateway = new McpGateway({
     db,
     vault,
@@ -425,6 +428,7 @@ export async function createDaemonServer(
     mcpStore: mcpGateway.store,
     oauthProvider: mcpGateway.oauthProvider,
     skillsManager,
+    providerConnection,
     workspaceRoot: resolvedWorkspaceRoot,
     fetchImpl: options.fetchImpl,
   });
@@ -466,6 +470,7 @@ export async function createDaemonServer(
       }
     },
   });
+  catalogService.attachWhatsAppManager(whatsappManager);
 
   const whatsappOrchestrator = new WhatsAppOrchestrator({
     db: db.connection,
@@ -802,12 +807,14 @@ export async function createDaemonServer(
   });
 
   whatsapp.onMessage(async (msg) => {
-    if (msg.fromMe) return;
+    if (whatsapp.isEchoMessageId(msg.messageId)) return;
+    const isGroup = msg.isGroup ?? msg.remoteJid.endsWith("@g.us");
+    if (msg.fromMe && isGroup) return;
     try {
       await workflowTriggers.receiveWhatsAppTrigger({
         jid: msg.remoteJid,
         sender: msg.pushName,
-        isGroup: msg.remoteJid.endsWith("@g.us"),
+        isGroup,
         text: msg.text,
         messageId: msg.messageId,
       });
@@ -1457,6 +1464,7 @@ export async function createDaemonServer(
         sendJson,
         readJsonBody,
         workspaceRoot: resolvedWorkspaceRoot,
+        productRoot: studioPaths.productRoot,
         mcpGateway,
         catalogService,
         githubImporter,
@@ -1670,8 +1678,13 @@ export async function createDaemonServer(
       }
 
       if (method === "POST" && path === "/api/mensageria/whatsapp/conectar") {
-        await whatsapp.connect();
-        sendJson(res, 200, whatsapp.getStatus());
+        try {
+          await whatsapp.connect();
+          sendJson(res, 200, whatsapp.getStatus());
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          sendJson(res, 500, { erro: msg, status: whatsapp.getStatus() });
+        }
         return;
       }
 
@@ -2000,6 +2013,7 @@ function tryServeWebStatic(
     workflowTriggers,
     telegramBot,
     providers,
+    providerConnection,
     runner,
     mcpGateway,
     studioMcpBridge,
@@ -2082,6 +2096,13 @@ const isEntryPoint =
   process.env.CRIATIVO_LOCAL_CHILD !== "1";
 
 if (isEntryPoint) {
+  process.on("unhandledRejection", (reason) => {
+    console.error("[Criativo Daemon] unhandledRejection capturada:", reason);
+  });
+  process.on("uncaughtException", (err) => {
+    console.error("[Criativo Daemon] uncaughtException capturada:", err);
+  });
+
   createDaemonServer()
     .then((runtime) => {
       console.info(

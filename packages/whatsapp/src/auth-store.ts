@@ -1,3 +1,4 @@
+import { initAuthCreds } from "@whiskeysockets/baileys";
 import type { WhatsAppModoOperacao } from "@criativo/contracts";
 import type { SqliteConnectionLike } from "./types.ts";
 
@@ -58,11 +59,34 @@ export const BufferJSONReviver = (_key: string, value: unknown): unknown => {
   return value;
 };
 
+function isKeyByteArray(value: unknown): boolean {
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    return value.byteLength >= 16;
+  }
+  if (
+    value &&
+    typeof value === "object" &&
+    (value as { type?: unknown }).type === "Buffer" &&
+    typeof (value as { data?: unknown }).data === "string"
+  ) {
+    return Buffer.from((value as { data: string }).data, "base64").byteLength >= 16;
+  }
+  return false;
+}
+
+export function hasValidBaileysCreds(creds: unknown): boolean {
+  if (!creds || typeof creds !== "object") return false;
+  const rec = creds as Record<string, unknown>;
+  const noiseKey = rec.noiseKey as Record<string, unknown> | undefined;
+  const signedIdentityKey = rec.signedIdentityKey as Record<string, unknown> | undefined;
+  return Boolean(isKeyByteArray(noiseKey?.public) && isKeyByteArray(signedIdentityKey?.public));
+}
+
 function createDefaultCreds(): Record<string, unknown> {
   return {
-    registered: false,
+    ...initAuthCreds(),
     accountSettings: { unarchiveChats: false },
-  };
+  } as unknown as Record<string, unknown>;
 }
 
 function normalizeModoOperacao(raw: unknown): WhatsAppModoOperacao {
@@ -172,8 +196,12 @@ export async function useSqliteAuthState(
 
     try {
       const parsed = JSON.parse(rawJson, BufferJSONReviver) as SerializedAuthState;
+      if (!hasValidBaileysCreds(parsed?.creds)) {
+        // Auto-cura sessões legadas criadas sem pares criptográficos completos (noiseKey / signedIdentityKey)
+        return { creds: createDefaultCreds(), keys: {} };
+      }
       return {
-        creds: parsed?.creds ?? createDefaultCreds(),
+        creds: parsed.creds,
         keys: parsed?.keys ?? {},
       };
     } catch {

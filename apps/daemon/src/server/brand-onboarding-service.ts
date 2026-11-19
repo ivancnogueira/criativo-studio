@@ -67,10 +67,159 @@ export function getBrandIdentity(
   };
 }
 
+export function isRealBrandValue(
+  value: string | null | undefined,
+  ...placeholders: string[]
+): boolean {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.includes("[A PREENCHER]")) return false;
+  for (const ph of placeholders) {
+    if (ph && trimmed.includes(ph)) return false;
+  }
+  return true;
+}
+
+export function hasConfiguredBrand(
+  brand: Pick<IdentidadeMarcaStudio, "marca_nome" | "perfil_handle"> | null | undefined
+): boolean {
+  if (!brand) return false;
+  return (
+    isRealBrandValue(brand.marca_nome, "[NOME_DA_MARCA]") ||
+    isRealBrandValue(brand.perfil_handle, "[@SEU_PERFIL]")
+  );
+}
+
+export function interpolateBrandPlaceholders(
+  text: string,
+  brand: Pick<IdentidadeMarcaStudio, "marca_nome" | "perfil_handle">
+): string {
+  if (!text || (!text.includes("[NOME_DA_MARCA]") && !text.includes("[@SEU_PERFIL]"))) {
+    return text;
+  }
+  const realBrand = isRealBrandValue(brand.marca_nome, "[NOME_DA_MARCA]")
+    ? brand.marca_nome.trim()
+    : "sua marca";
+  const rawHandle = isRealBrandValue(brand.perfil_handle, "[@SEU_PERFIL]")
+    ? brand.perfil_handle.trim()
+    : null;
+  const realHandle = rawHandle
+    ? rawHandle.startsWith("@")
+      ? rawHandle
+      : `@${rawHandle}`
+    : "seu perfil";
+
+  return text
+    .replaceAll("[NOME_DA_MARCA]", realBrand)
+    .replaceAll("[@SEU_PERFIL]", realHandle);
+}
+
+function interpolateJsonStringValuesRecursively(
+  value: unknown,
+  brand: Pick<IdentidadeMarcaStudio, "marca_nome" | "perfil_handle">
+): unknown {
+  if (typeof value === "string") {
+    return interpolateBrandPlaceholders(value, brand);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => interpolateJsonStringValuesRecursively(item, brand));
+  }
+  if (value && typeof value === "object") {
+    const next: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      next[k] = interpolateJsonStringValuesRecursively(v, brand);
+    }
+    return next;
+  }
+  return value;
+}
+
+export function syncBrandPlaceholdersInDatabase(
+  db: CriativoDatabase,
+  brand: Pick<IdentidadeMarcaStudio, "marca_nome" | "perfil_handle">
+): number {
+  if (!hasConfiguredBrand(brand)) {
+    return 0;
+  }
+
+  let updatedCount = 0;
+
+  const chatRows = db.connection
+    .prepare(
+      `SELECT mensagem_id, conteudo_markdown, steps_json
+       FROM projecao_conversas_chat
+       WHERE autor = 'agente'
+         AND (
+           conteudo_markdown LIKE '%[NOME_DA_MARCA]%'
+           OR conteudo_markdown LIKE '%[@SEU_PERFIL]%'
+           OR steps_json LIKE '%[NOME_DA_MARCA]%'
+           OR steps_json LIKE '%[@SEU_PERFIL]%'
+         );`
+    )
+    .all() as Array<{
+    mensagem_id: string;
+    conteudo_markdown: string;
+    steps_json: string | null;
+  }>;
+
+  const updateChatStmt = db.connection.prepare(
+    `UPDATE projecao_conversas_chat
+     SET conteudo_markdown = ?, steps_json = ?
+     WHERE mensagem_id = ?;`
+  );
+
+  for (const row of chatRows) {
+    const nextContent = interpolateBrandPlaceholders(row.conteudo_markdown, brand);
+    const nextSteps =
+      typeof row.steps_json === "string"
+        ? interpolateBrandPlaceholders(row.steps_json, brand)
+        : row.steps_json;
+    if (nextContent !== row.conteudo_markdown || nextSteps !== row.steps_json) {
+      updateChatStmt.run(nextContent, nextSteps, row.mensagem_id);
+      updatedCount += 1;
+    }
+  }
+
+  const agentRows = db.connection
+    .prepare(
+      `SELECT agente_id, papel, config_json
+       FROM projecao_agentes
+       WHERE config_json LIKE '%[NOME_DA_MARCA]%'
+          OR config_json LIKE '%[@SEU_PERFIL]%'
+          OR papel LIKE '%[NOME_DA_MARCA]%'
+          OR papel LIKE '%[@SEU_PERFIL]%';`
+    )
+    .all() as Array<{ agente_id: string; papel: string; config_json: string }>;
+
+  const updateAgentStmt = db.connection.prepare(
+    `UPDATE projecao_agentes
+     SET papel = ?, config_json = ?
+     WHERE agente_id = ?;`
+  );
+
+  for (const row of agentRows) {
+    const nextPapel = interpolateBrandPlaceholders(row.papel, brand);
+    let nextConfigJson = row.config_json;
+    try {
+      const parsed = JSON.parse(row.config_json) as Record<string, unknown>;
+      nextConfigJson = JSON.stringify(interpolateJsonStringValuesRecursively(parsed, brand));
+    } catch {
+      nextConfigJson = interpolateBrandPlaceholders(row.config_json, brand);
+    }
+    if (nextPapel !== row.papel || nextConfigJson !== row.config_json) {
+      updateAgentStmt.run(nextPapel, nextConfigJson, row.agente_id);
+      updatedCount += 1;
+    }
+  }
+
+  return updatedCount;
+}
+
 export async function saveBrandIdentity(
   providerConnection: ProviderConnectionService,
   workspaceRoot: string,
-  patch: Partial<IdentidadeMarcaStudio>
+  patch: Partial<IdentidadeMarcaStudio>,
+  db?: CriativoDatabase
 ): Promise<IdentidadeMarcaStudio> {
   const atual = getBrandIdentity(providerConnection);
   const perfilPreenchido =
@@ -101,6 +250,10 @@ export async function saveBrandIdentity(
     perfil_handle: next.perfil_handle,
     marcos: next.marcos,
   });
+
+  if (db) {
+    syncBrandPlaceholdersInDatabase(db, next);
+  }
 
   if (process.env.CRIATIVO_SKIP_LOCAL_PROBE !== "1") {
     await syncBrandFilesToWorkspace(workspaceRoot, next);
@@ -452,7 +605,8 @@ export function parseBrandIdentityFromExtractedText(
 export async function importBrandPdfFromBuffer(
   providerConnection: ProviderConnectionService,
   workspaceRoot: string,
-  buf: Buffer
+  buf: Buffer,
+  db?: CriativoDatabase
 ): Promise<{
   ok: boolean;
   extracted_chars: number;
@@ -487,7 +641,7 @@ export async function importBrandPdfFromBuffer(
 
   const identidade =
     Object.keys(safePatch).length > 0
-      ? await saveBrandIdentity(providerConnection, workspaceRoot, safePatch)
+      ? await saveBrandIdentity(providerConnection, workspaceRoot, safePatch, db)
       : atual;
 
   return {

@@ -42,6 +42,7 @@ import {
   type Phase14ToolServices,
 } from "../server/studio-tools-bridge.ts";
 import type { WebSocketHub } from "../server/websocket-hub.ts";
+import { sanitizeJsonSchemaForGemini } from "./gemini-schema-sanitizer.ts";
 import type { McpGateway } from "./mcp-gateway.ts";
 import type { AcpMcpServer } from "./mcp-provider-shapes.ts";
 import { redactMcpPayload, redactMcpSecrets } from "./mcp-redaction.ts";
@@ -76,10 +77,16 @@ export const INTERNAL_MCP_ROUTE_PATH = "/api/internal/mcp";
 const DEFAULT_MCP_PROTOCOL_VERSION = "2024-11-05";
 const SUPPORTED_MCP_PROTOCOL_VERSIONS = new Set(["2024-11-05", "2025-03-26", "2025-06-18"]);
 
-function sendJsonRpc(res: ServerResponse, statusCode: number, body: unknown): void {
+function sendJsonRpc(
+  res: ServerResponse,
+  statusCode: number,
+  body: unknown,
+  extraHeaders?: Record<string, string>
+): void {
   res.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store, no-cache, must-revalidate",
+    ...(extraHeaders ?? {}),
   });
   res.end(JSON.stringify(body));
 }
@@ -100,6 +107,7 @@ function readHeaderValue(req: IncomingMessage, headerName: string): string | nul
 export class CriativoStudioMcpBridge {
   private readonly deps: CriativoStudioMcpBridgeOptions;
   private readonly authToken: string;
+  private readonly activeSessionIds = new Set<string>();
   private boundPort: number | null = null;
 
   constructor(options: CriativoStudioMcpBridgeOptions) {
@@ -248,7 +256,10 @@ export class CriativoStudioMcpBridge {
       ) {
         continue;
       }
-      dedup.set(tool.name, tool);
+      dedup.set(tool.name, {
+        ...tool,
+        parameters: sanitizeJsonSchemaForGemini(tool.parameters ?? { type: "object", properties: {} }),
+      });
     }
 
     return Array.from(dedup.values());
@@ -259,7 +270,11 @@ export class CriativoStudioMcpBridge {
     args: Record<string, unknown>,
     agentId?: string | null
   ): Promise<unknown> {
-    const toolName = rawToolName.replace(/^mcp__criativo_studio__/, "").trim();
+    const toolName = rawToolName
+      .replace(/^mcp__criativo_studio__/, "")
+      .replace(/^criativo_studio[_.:-]+/, "")
+      .replace(/^criativo-studio[_.:-]+/, "")
+      .trim();
     const resolvedAgentId = agentId?.trim() || "sistema";
     const canalId = `agente:${resolvedAgentId}`;
     const nativeStore = this.resolveNativeStore();
@@ -409,6 +424,10 @@ export class CriativoStudioMcpBridge {
     }
 
     if (method === "DELETE") {
+      const incomingSessionId = readHeaderValue(req, "mcp-session-id");
+      if (incomingSessionId) {
+        this.activeSessionIds.delete(incomingSessionId);
+      }
       res.writeHead(204);
       res.end();
       return true;
@@ -473,20 +492,31 @@ export class CriativoStudioMcpBridge {
         SUPPORTED_MCP_PROTOCOL_VERSIONS.has(params.protocolVersion)
           ? params.protocolVersion
           : DEFAULT_MCP_PROTOCOL_VERSION;
-      sendJsonRpc(res, 200, {
-        jsonrpc: "2.0",
-        id,
-        result: {
-          protocolVersion: requestedProtocol,
-          capabilities: {
-            tools: { listChanged: false },
-          },
-          serverInfo: {
-            name: "criativo-studio",
-            version: "1.0.0",
+      const incomingSessionId = readHeaderValue(req, "mcp-session-id");
+      const sessionId =
+        incomingSessionId && this.activeSessionIds.has(incomingSessionId)
+          ? incomingSessionId
+          : randomUUID();
+      this.activeSessionIds.add(sessionId);
+      sendJsonRpc(
+        res,
+        200,
+        {
+          jsonrpc: "2.0",
+          id,
+          result: {
+            protocolVersion: requestedProtocol,
+            capabilities: {
+              tools: { listChanged: false },
+            },
+            serverInfo: {
+              name: "criativo-studio",
+              version: "1.0.0",
+            },
           },
         },
-      });
+        { "Mcp-Session-Id": sessionId }
+      );
       return true;
     }
 
@@ -494,7 +524,7 @@ export class CriativoStudioMcpBridge {
       const tools = this.listToolsForAgent(resolvedAgentId).map((t) => ({
         name: t.name,
         description: t.description,
-        inputSchema: t.parameters ?? { type: "object", properties: {} },
+        inputSchema: sanitizeJsonSchemaForGemini(t.parameters ?? { type: "object", properties: {} }),
       }));
       sendJsonRpc(res, 200, {
         jsonrpc: "2.0",

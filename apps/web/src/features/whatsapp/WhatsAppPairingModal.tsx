@@ -161,6 +161,19 @@ export function WhatsAppIntegrationPanel({
     }
   }, [activeAccount?.conta_id]);
 
+  const isWaitingPairCode =
+    activeAccount?.status === "aguardando_qrcode" &&
+    !activeAccount.qrcode_base64 &&
+    !activeAccount.pairing_code;
+
+  useEffect(() => {
+    if (!isWaitingPairCode || typeof window === "undefined") return;
+    const timer = window.setInterval(() => {
+      void refreshAll();
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [isWaitingPairCode, activeAccount?.conta_id]);
+
   const refreshAll = async () => {
     if (onRefreshAccounts) {
       await onRefreshAccounts();
@@ -312,6 +325,28 @@ export function WhatsAppIntegrationPanel({
     }
   };
 
+  const handleResetAndReconnectClick = async () => {
+    setBusyAction(true);
+    setErrorMessage(null);
+    try {
+      await daemonApi.disconnectWhatsAppAccount(activeAccount.conta_id, true);
+      if (onConnect && activeAccount.conta_id === "whatsapp-principal" && pairMethod === "qr") {
+        await onConnect({ mode: "qr" });
+      } else {
+        await daemonApi.connectWhatsAppAccount(activeAccount.conta_id, {
+          mode: pairMethod,
+          phoneNumber: pairMethod === "pairing_code" ? phoneNumberInput.trim() : undefined,
+        });
+      }
+      await refreshAll();
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Falha ao resetar sessão WhatsApp.");
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const visibleError = errorMessage || activeAccount.ultimo_erro || null;
   const badge = statusBadgeMeta(activeAccount.status);
 
   return (
@@ -359,8 +394,8 @@ export function WhatsAppIntegrationPanel({
               value={newAccountMode}
               onChange={setNewAccountMode}
               tabs={[
-                { id: "dedicated", label: "Número dedicado" },
-                { id: "ownNumber", label: "Número próprio" },
+                { id: "ownNumber", label: "Meu número (Conversa comigo mesmo)" },
+                { id: "dedicated", label: "Número dedicado (Bot)" },
               ]}
             />
             <button
@@ -450,14 +485,26 @@ export function WhatsAppIntegrationPanel({
                 <p className="text-[12px] text-[#979797]">
                   Abra o WhatsApp &gt; Aparelhos Conectados &gt; Conectar Aparelho
                 </p>
-                <button
-                  type="button"
-                  disabled={busyAction}
-                  onClick={() => void handleConnectClick()}
-                  className="w-full rounded-full bg-[#F0F0F0] py-2.5 text-[14px] font-semibold text-[#141414] hover:bg-white disabled:opacity-50"
-                >
-                  Gerar código
-                </button>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <button
+                    type="button"
+                    disabled={busyAction}
+                    onClick={() => void handleConnectClick()}
+                    className="flex-1 rounded-full bg-[#F0F0F0] py-2.5 text-[14px] font-semibold text-[#141414] hover:bg-white disabled:opacity-50"
+                  >
+                    Gerar código
+                  </button>
+                  {(activeAccount.status === "aguardando_qrcode" || visibleError) && (
+                    <button
+                      type="button"
+                      disabled={busyAction}
+                      onClick={() => void handleResetAndReconnectClick()}
+                      className="rounded-full border border-white/15 bg-[#242424] px-4 py-2.5 text-[13px] font-semibold text-[#F0F0F0] hover:bg-[#2E2E2E] disabled:opacity-50"
+                    >
+                      Resetar sessão e gerar novo QR
+                    </button>
+                  )}
+                </div>
               </div>
             ) : (
               <div className="space-y-3">
@@ -484,6 +531,16 @@ export function WhatsAppIntegrationPanel({
                   >
                     <Phone size={14} /> Gerar código
                   </button>
+                  {(activeAccount.status === "aguardando_qrcode" || visibleError) && (
+                    <button
+                      type="button"
+                      disabled={busyAction}
+                      onClick={() => void handleResetAndReconnectClick()}
+                      className="rounded-full border border-white/15 bg-[#242424] px-4 py-2 text-[13px] font-semibold text-[#F0F0F0] hover:bg-[#2E2E2E] disabled:opacity-50"
+                    >
+                      Resetar sessão e gerar novo QR
+                    </button>
+                  )}
                 </div>
 
                 {activeAccount.pairing_code && (
@@ -527,15 +584,35 @@ export function WhatsAppIntegrationPanel({
               value={activeAccount.modo_operacao}
               onChange={(mode) => void handleUpdateAccountPatch({ modo_operacao: mode })}
               tabs={[
-                { id: "dedicated", label: "Número dedicado" },
-                { id: "ownNumber", label: "Número próprio" },
+                { id: "ownNumber", label: "Meu número (Conversa comigo mesmo)" },
+                { id: "dedicated", label: "Número dedicado (Bot)" },
               ]}
             />
-            <p className="text-[12px] text-[#979797]">
-              {activeAccount.modo_operacao === "ownNumber"
-                ? "Número próprio: ignora desconhecidos silenciosamente e permite self-chat protegido."
-                : "Número dedicado: desconhecidos recebem desafio de pareamento com código de 6 caracteres."}
-            </p>
+            {activeAccount.modo_operacao === "ownNumber" ? (
+              <div className="rounded-[10px] border border-[#31CF76]/25 bg-[#31CF76]/10 p-3 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[12px] font-semibold text-white">
+                    Conversa Interna (estilo OpenBot)
+                  </span>
+                  {contacts.length === 0 && (
+                    <span className="rounded-full bg-[#31CF76]/20 px-2 py-0.5 text-[10.5px] font-semibold text-[#31CF76]">
+                      Somente conversa interna ativa
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11.5px] leading-relaxed text-[#D7F5E3]">
+                  Modo Conversa Interna ativo: o agente monitora e responde apenas às mensagens que
+                  você enviar na conversa consigo mesmo (&lsquo;Você / Mensagens salvas&rsquo;).
+                  Conversas com outras pessoas ou clientes não recebem resposta automática, salvo
+                  contatos/grupos que você autorizar abaixo.
+                </p>
+              </div>
+            ) : (
+              <p className="text-[12px] text-[#979797]">
+                Número dedicado: desconhecidos recebem desafio de pareamento com código de 6
+                caracteres.
+              </p>
+            )}
           </div>
 
           <div className="space-y-2.5 rounded-[10px] border border-[#2A2A2A] bg-[#1A1A1A] p-3">
@@ -564,9 +641,10 @@ export function WhatsAppIntegrationPanel({
           </div>
         </div>
 
-        {errorMessage && (
-          <div className="rounded-[10px] border border-[#FD2F3B]/40 bg-[#FD2F3B]/10 px-4 py-2 text-[12px] text-[#FD2F3B]">
-            {errorMessage}
+        {visibleError && (
+          <div className="rounded-[10px] border border-[#FD2F3B]/40 bg-[#FD2F3B]/10 px-4 py-2.5 text-[12px] text-[#FF8A91]">
+            <strong className="font-semibold text-[#FD2F3B]">Falha no pareamento:</strong>{" "}
+            {visibleError}
           </div>
         )}
       </section>

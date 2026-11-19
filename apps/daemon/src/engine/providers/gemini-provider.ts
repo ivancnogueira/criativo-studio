@@ -12,6 +12,7 @@ import {
   type FetchLike,
   type ProviderAdapterOptions,
 } from "./provider-interface.ts";
+import { sanitizeJsonSchemaForGemini } from "../../mcp/gemini-schema-sanitizer.ts";
 
 interface GeminiPart {
   text?: string;
@@ -109,7 +110,7 @@ export class GeminiProvider implements AIProviderClient {
           functionDeclarations: turnContext.tools.map((tool) => ({
             name: tool.name,
             description: tool.description,
-            parameters: tool.parameters,
+            parameters: sanitizeJsonSchemaForGemini(tool.parameters),
           })),
         },
       ];

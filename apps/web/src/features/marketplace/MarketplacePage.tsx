@@ -1196,6 +1196,8 @@ export interface MarketplacePageProps {
     apps?: MarketplaceAppItem[];
     agents?: MarketplaceAgentPackage[];
     skills?: MarketplaceSkillItem[];
+    nativeAccounts?: NativeAppAccountSummary[];
+    connectedNativeSlugs?: string[];
   };
   initialTab?: MarketplaceTab;
   initialAppSlug?: string | null;
@@ -1245,6 +1247,12 @@ export function MarketplacePage({
     }>
   >([]);
   const [nativeAccounts, setNativeAccounts] = useState<NativeAppAccountSummary[]>(initialNativeAccounts);
+  const [allNativeAccounts, setAllNativeAccounts] =
+    useState<NativeAppAccountSummary[]>(initialNativeAccounts);
+  const [connectedNativeSlugs, setConnectedNativeSlugs] = useState<string[]>(() =>
+    initialCatalog?.connectedNativeSlugs ??
+    Array.from(new Set(initialNativeAccounts.map((a) => a.app_slug)))
+  );
   const [selectedNativeContaId, setSelectedNativeContaId] = useState<string | null>(
     initialNativeAccounts[0]?.conta_id ?? null
   );
@@ -1287,6 +1295,37 @@ export function MarketplacePage({
   const [githubUrlInput, setGithubUrlInput] = useState("");
 
   const [feedbackBanner, setFeedbackBanner] = useState<string | null>(null);
+  const nativeSidebarEntries = useMemo(() => {
+    const grouped = new Map<string, NativeAppAccountSummary[]>();
+    for (const acc of allNativeAccounts) {
+      if (!acc.configurado) continue;
+      const list = grouped.get(acc.app_slug) ?? [];
+      list.push(acc);
+      grouped.set(acc.app_slug, list);
+    }
+    for (const slug of connectedNativeSlugs) {
+      if (!grouped.has(slug)) {
+        grouped.set(slug, []);
+      }
+    }
+    return Array.from(grouped.entries()).map(([slug, accounts]) => {
+      const meta = apps.find((a) => a.slug === slug);
+      const primary = accounts[0];
+      const handle = primary?.perfil_conectado?.username
+        ? `@${primary.perfil_conectado.username.replace(/^@/, "")}`
+        : primary?.conta_rotulo ?? "";
+      return {
+        slug,
+        name: meta?.name ?? slug,
+        accountsCount: accounts.length,
+        subtitle:
+          accounts.length > 1
+            ? `${accounts.length} contas conectadas`
+            : handle || "Conectado",
+        allOk: accounts.length === 0 ? true : accounts.every((a) => a.testado_ok || a.configurado),
+      };
+    });
+  }, [allNativeAccounts, connectedNativeSlugs, apps]);
   const [undoState, setUndoState] = useState<{
     skillId: string;
     skillName: string;
@@ -1304,6 +1343,11 @@ export function MarketplacePage({
       setAgentTemplates(snap.agents);
       setSkills(snap.skills);
       setYourApps(servers);
+      setAllNativeAccounts(snap.nativeAccounts ?? []);
+      setConnectedNativeSlugs(
+        snap.connectedNativeSlugs ??
+          Array.from(new Set((snap.nativeAccounts ?? []).map((a) => a.app_slug)))
+      );
     } catch {
       // Silencioso em SSR ou daemon indisponível antes do boot
     }
@@ -1537,11 +1581,16 @@ export function MarketplacePage({
       } else if (res.nativeAccount) {
         const acc = res.nativeAccount;
         const ok = Boolean(res.validationReport?.ok ?? acc.testado_ok);
-        const username = acc.perfil_conectado?.username ? ` (@${acc.perfil_conectado.username})` : "";
-        const text = res.validationReport?.resumo
-          ? `${res.validationReport.resumo}${username}`
+        const rawHandle = acc.perfil_conectado?.username?.replace(/^@/, "") ?? "";
+        const usernameSuffix = rawHandle ? ` (@${rawHandle})` : "";
+        const resumo = res.validationReport?.resumo ?? "";
+        const resumoHasHandle =
+          Boolean(rawHandle) &&
+          resumo.toLowerCase().includes(rawHandle.toLowerCase());
+        const text = resumo
+          ? `${resumo}${resumoHasHandle ? "" : usernameSuffix}`
           : ok
-            ? `Conta "${acc.conta_rotulo}" conectada no Cofre${username}.`
+            ? `Conta "${acc.conta_rotulo}" conectada no Cofre${usernameSuffix}.`
             : acc.ultimo_erro || "Credenciais salvas no Cofre AES-256-GCM. Verifique os dados na Meta.";
         setConnectFeedback({ ok, text });
       } else {
@@ -1639,6 +1688,7 @@ export function MarketplacePage({
             ? "Acesso liberado para todos os agentes do estúdio."
             : `Acesso atualizado para ${acessoPayload.agentIds.length} agente(s) selecionado(s).`
         );
+        await loadCatalogAndApps();
         await onRefreshStudio?.();
       } catch (err) {
         setAccessFeedback(
@@ -2224,7 +2274,7 @@ export function MarketplacePage({
 
         <div className="space-y-2 border-t border-[#2A2A2A] pt-4">
           <p className="px-2 text-[12px] font-semibold text-[#979797]">Seus apps</p>
-          {yourApps.length === 0 ? (
+          {yourApps.length === 0 && nativeSidebarEntries.length === 0 ? (
             <div className="space-y-2 rounded-[10px] border border-[#2A2A2A] bg-[#1A1A1A] p-3">
               <p className="text-[12px] font-semibold text-[#F0F0F0]">
                 Nenhum aplicativo conectado ainda
@@ -2245,6 +2295,31 @@ export function MarketplacePage({
             </div>
           ) : (
             <div className="space-y-1">
+              {nativeSidebarEntries.map((entry) => (
+                <button
+                  key={`native:${entry.slug}`}
+                  type="button"
+                  onClick={() => {
+                    setTab("apps");
+                    setSelectedAppSlug(entry.slug);
+                  }}
+                  className="flex w-full items-center justify-between gap-2 rounded-[8px] px-2.5 py-2 text-left text-[12px] text-[#DCDCDC] hover:bg-[#212121]"
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <AppBrandIcon slug={entry.slug} name={entry.name} size={20} />
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium text-[#F0F0F0]">{entry.name}</span>
+                      <span className="block truncate text-[10.5px] text-[#979797]">
+                        {entry.subtitle}
+                      </span>
+                    </span>
+                  </span>
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-full"
+                    style={{ backgroundColor: entry.allOk ? "#31CF76" : "#FF9412" }}
+                  />
+                </button>
+              ))}
               {yourApps.map((srv) => (
                 <button
                   key={srv.mcp_id}
@@ -2465,15 +2540,23 @@ export function MarketplacePage({
                         </div>
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
                           {visible.map((app) => {
-                            const connected = yourApps.some(
-                              (s) => s.origemAppSlug === app.slug && s.ativo
+                            const nativeAccountsForApp = allNativeAccounts.filter(
+                              (a) => a.app_slug === app.slug && a.configurado
                             );
+                            const hasNativeConn =
+                              nativeAccountsForApp.length > 0 ||
+                              connectedNativeSlugs.includes(app.slug);
+                            const connected =
+                              hasNativeConn ||
+                              yourApps.some((s) => s.origemAppSlug === app.slug && s.ativo);
                             return (
                               <button
                                 key={app.slug}
                                 type="button"
                                 onClick={() => setSelectedAppSlug(app.slug)}
-                                className="flex flex-col justify-between gap-3 rounded-[12px] border border-[#2A2A2A] bg-[#212121] p-4 text-left transition-colors hover:border-[#42A0FF]/50"
+                                className={`flex flex-col justify-between gap-3 rounded-[12px] border bg-[#212121] p-4 text-left transition-colors hover:border-[#42A0FF]/50 ${
+                                  connected ? "border-[#31CF76]/35" : "border-[#2A2A2A]"
+                                }`}
                               >
                                 <div className="flex items-start justify-between gap-2">
                                   <div className="flex items-center gap-3 min-w-0">
@@ -2489,7 +2572,9 @@ export function MarketplacePage({
                                   </div>
                                   {connected && (
                                     <span className="shrink-0 rounded-full bg-[#31CF76]/15 px-2 py-0.5 text-[12px] font-semibold text-[#31CF76]">
-                                      Conectado
+                                      {nativeAccountsForApp.length > 1
+                                        ? `${nativeAccountsForApp.length} contas`
+                                        : "Conectado"}
                                     </span>
                                   )}
                                 </div>

@@ -27,6 +27,7 @@ import {
   Activity,
   ChevronDown,
   Hand,
+  LayoutGrid,
   ListChecks,
   Map as MapIcon,
   Maximize2,
@@ -35,12 +36,14 @@ import {
   Pencil,
   Play,
   Plus,
+  Redo2,
   Save,
   Search,
   Square,
   StickyNote,
   Trash2,
   Type,
+  Undo2,
   Zap,
 } from "lucide-react";
 import { ProviderLogo } from "../../components/ProviderLogo";
@@ -65,6 +68,114 @@ import {
   defaultTitleForNodeType,
   getWorkflowNodeWidth,
 } from "./workflow-canvas-helpers";
+
+export interface CanvasHistorySnapshot {
+  nos: WorkflowNo[];
+  arestas: WorkflowAresta[];
+  tracos: WorkflowTraco[];
+}
+
+export function cloneCanvasSnapshot(
+  nos: WorkflowNo[],
+  arestas: WorkflowAresta[],
+  tracos: WorkflowTraco[]
+): CanvasHistorySnapshot {
+  return {
+    nos: nos.map((n) => ({
+      ...n,
+      config: { ...(n.config ?? {}) },
+    })),
+    arestas: arestas.map((a) => ({ ...a })),
+    tracos: tracos.map((t) => ({
+      ...t,
+      points: t.points.map(([x, y]) => [x, y] as [number, number]),
+    })),
+  };
+}
+
+function canvasSnapshotsEqual(a: CanvasHistorySnapshot, b: CanvasHistorySnapshot): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * Ordena nós por camadas topológicas esquerda -> direita (colunas x=180+col*340, linhas y=160+row*190).
+ */
+export function computeWorkflowAutoLayout(
+  nos: WorkflowNo[],
+  arestas: WorkflowAresta[]
+): WorkflowNo[] {
+  if (nos.length === 0) return [];
+  const nodeIds = new Set(nos.map((n) => n.id));
+  const inDegree = new Map<string, number>();
+  const outgoing = new Map<string, string[]>();
+  const layer = new Map<string, number>();
+
+  for (const n of nos) {
+    inDegree.set(n.id, 0);
+    outgoing.set(n.id, []);
+    layer.set(n.id, 0);
+  }
+
+  for (const edge of arestas) {
+    if (!nodeIds.has(edge.origem) || !nodeIds.has(edge.destino)) continue;
+    if (edge.origem === edge.destino) continue;
+    outgoing.get(edge.origem)!.push(edge.destino);
+    inDegree.set(edge.destino, (inDegree.get(edge.destino) ?? 0) + 1);
+  }
+
+  const queue: string[] = [];
+  for (const n of nos) {
+    if ((inDegree.get(n.id) ?? 0) === 0 || n.tipo === "gatilho") {
+      queue.push(n.id);
+    }
+  }
+
+  const processed = new Set<string>();
+  let steps = 0;
+  const maxSteps = nos.length * Math.max(2, arestas.length + 1);
+
+  while (queue.length > 0 && steps < maxSteps) {
+    steps += 1;
+    const u = queue.shift()!;
+    processed.add(u);
+    const baseLayer = layer.get(u) ?? 0;
+    for (const v of outgoing.get(u) ?? []) {
+      const candidateLayer = baseLayer + 1;
+      if (candidateLayer <= nos.length && candidateLayer > (layer.get(v) ?? 0)) {
+        layer.set(v, candidateLayer);
+      }
+      const nextDeg = (inDegree.get(v) ?? 0) - 1;
+      inDegree.set(v, nextDeg);
+      if (nextDeg <= 0 && !processed.has(v)) {
+        queue.push(v);
+      }
+    }
+  }
+
+  const cols = new Map<number, WorkflowNo[]>();
+  for (const n of nos) {
+    const col = layer.get(n.id) ?? 0;
+    const arr = cols.get(col) ?? [];
+    arr.push(n);
+    cols.set(col, arr);
+  }
+
+  const posById = new Map<string, { x: number; y: number }>();
+  for (const [col, group] of cols.entries()) {
+    const ordered = [...group].sort((a, b) => a.y - b.y || a.x - b.x);
+    ordered.forEach((node, row) => {
+      posById.set(node.id, {
+        x: 180 + col * 340,
+        y: 160 + row * 190,
+      });
+    });
+  }
+
+  return nos.map((n) => {
+    const nextPos = posById.get(n.id);
+    return nextPos ? { ...n, x: nextPos.x, y: nextPos.y } : n;
+  });
+}
 
 export interface WorkflowEventSignal {
   nonce: number;
@@ -224,6 +335,26 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
 
   const [statusFeedback, setStatusFeedback] = useState<string | null>(null);
   const [executing, setExecuting] = useState(false);
+  const [undoStack, setUndoStack] = useState<CanvasHistorySnapshot[]>([]);
+  const [redoStack, setRedoStack] = useState<CanvasHistorySnapshot[]>([]);
+
+  const undoStackRef = useRef<CanvasHistorySnapshot[]>([]);
+  const redoStackRef = useRef<CanvasHistorySnapshot[]>([]);
+  const localNosRef = useRef<WorkflowNo[]>(localNos);
+  const localArestasRef = useRef<WorkflowAresta[]>(localArestas);
+  const localTracosRef = useRef<WorkflowTraco[]>(localTracos);
+  const patchCoalesceRef = useRef<{ nodeId: string; ts: number } | null>(null);
+  const preStrokeSnapshotRef = useRef<CanvasHistorySnapshot | null>(null);
+
+  useEffect(() => {
+    localNosRef.current = localNos;
+  }, [localNos]);
+  useEffect(() => {
+    localArestasRef.current = localArestas;
+  }, [localArestas]);
+  useEffect(() => {
+    localTracosRef.current = localTracos;
+  }, [localTracos]);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const draggingNodeRef = useRef<{
@@ -232,6 +363,7 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
     startClientY: number;
     origX: number;
     origY: number;
+    startSnapshot: CanvasHistorySnapshot;
   } | null>(null);
   const panningRef = useRef<{
     startClientX: number;
@@ -325,6 +457,12 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
     setPreviewVersion(null);
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+    patchCoalesceRef.current = null;
+    preStrokeSnapshotRef.current = null;
+    setUndoStack([]);
+    setRedoStack([]);
     void hydrateWorkflowSideData(currentWf.workflow_id);
   }, [currentWf?.workflow_id]);
 
@@ -340,22 +478,7 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
     void hydrateWorkflowSideData(currentWf.workflow_id);
   }, [workflowEventSignal?.nonce, currentWf?.workflow_id, hydrateWorkflowSideData]);
 
-  // Atalho Ctrl/Cmd + F para busca no canvas
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
-        e.preventDefault();
-        setSearchOpen(true);
-      } else if (e.key === "Escape") {
-        setConnectingFrom(null);
-        setAddNodeMenuOpen(false);
-        setRunsMenuOpen(false);
-        setTriggerMenuOpen(false);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  // Atalhos globais de teclado (Ctrl+F, Ctrl+Z/Y, Delete, etc.) registrados após handlers do grafo.
 
   const flushQueuedSave = useCallback(async () => {
     if (inFlightSaveRef.current || !pendingSavePayloadRef.current) return;
@@ -517,8 +640,28 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
     });
   }, [displayNos, displayTracos]);
 
+  const pushUndoSnapshot = useCallback((snapshot?: CanvasHistorySnapshot) => {
+    const snap = snapshot
+      ? cloneCanvasSnapshot(snapshot.nos, snapshot.arestas, snapshot.tracos)
+      : cloneCanvasSnapshot(
+          localNosRef.current,
+          localArestasRef.current,
+          localTracosRef.current
+        );
+    const prevUndo = undoStackRef.current;
+    const last = prevUndo[prevUndo.length - 1];
+    if (last && canvasSnapshotsEqual(last, snap)) return;
+    const nextUndo = [...prevUndo.slice(-49), snap];
+    undoStackRef.current = nextUndo;
+    redoStackRef.current = [];
+    setUndoStack(nextUndo);
+    setRedoStack([]);
+  }, []);
+
   const handleAddNode = (tipo: TipoNoWorkflow, extra?: Partial<WorkflowNo>) => {
     if (isReadOnly) return;
+    pushUndoSnapshot();
+    patchCoalesceRef.current = null;
     const x =
       displayNos.length > 0
         ? Math.max(...displayNos.map((n) => n.x)) + 360
@@ -534,52 +677,68 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
       ...extra,
     };
     const newNode = normalizeWorkflowNode(rawNode);
-    const nextNos = [...localNos, newNode];
+    const nextNos = [...localNosRef.current, newNode];
+    localNosRef.current = nextNos;
     setLocalNos(nextNos);
     setSelectedNodeId(newNode.id);
     setAddNodeMenuOpen(false);
     setTriggerMenuOpen(false);
-    scheduleDebouncedSave(nextNos, localArestas);
+    scheduleDebouncedSave(nextNos, localArestasRef.current);
   };
 
   const handlePatchNode = useCallback(
     (nodeId: string, patch: Partial<WorkflowNo>) => {
       if (isReadOnly) return;
-      setLocalNos((prev) => {
-        const next = prev.map((n) =>
-          n.id === nodeId
-            ? {
-                ...n,
-                ...patch,
-                config: patch.config ? { ...n.config, ...patch.config } : n.config,
-              }
-            : n
-        );
-        scheduleDebouncedSave(next, localArestas);
-        return next;
-      });
+      const now = Date.now();
+      const sameBurst =
+        patchCoalesceRef.current !== null &&
+        patchCoalesceRef.current.nodeId === nodeId &&
+        now - patchCoalesceRef.current.ts < 800;
+      if (!sameBurst) {
+        pushUndoSnapshot();
+      }
+      patchCoalesceRef.current = { nodeId, ts: now };
+
+      const next = localNosRef.current.map((n) =>
+        n.id === nodeId
+          ? {
+              ...n,
+              ...patch,
+              config: patch.config ? { ...n.config, ...patch.config } : n.config,
+            }
+          : n
+      );
+      localNosRef.current = next;
+      setLocalNos(next);
+      scheduleDebouncedSave(next, localArestasRef.current);
     },
-    [isReadOnly, localArestas, scheduleDebouncedSave]
+    [isReadOnly, pushUndoSnapshot, scheduleDebouncedSave]
   );
 
   const handleDeleteNode = useCallback(
     (nodeId: string) => {
       if (isReadOnly) return;
-      const nextNos = localNos.filter((n) => n.id !== nodeId);
-      const nextArestas = localArestas.filter(
+      pushUndoSnapshot();
+      patchCoalesceRef.current = null;
+      const nextNos = localNosRef.current.filter((n) => n.id !== nodeId);
+      const nextArestas = localArestasRef.current.filter(
         (a) => a.origem !== nodeId && a.destino !== nodeId
       );
+      localNosRef.current = nextNos;
+      localArestasRef.current = nextArestas;
       setLocalNos(nextNos);
       setLocalArestas(nextArestas);
       if (selectedNodeId === nodeId) setSelectedNodeId(null);
       scheduleDebouncedSave(nextNos, nextArestas);
     },
-    [isReadOnly, localNos, localArestas, selectedNodeId, scheduleDebouncedSave]
+    [isReadOnly, pushUndoSnapshot, selectedNodeId, scheduleDebouncedSave]
   );
 
   const handleDuplicateNode = useCallback(
     (node: WorkflowNo) => {
       if (isReadOnly) return;
+      pushUndoSnapshot();
+      patchCoalesceRef.current = null;
       const clone: WorkflowNo = {
         ...node,
         id: `no_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`,
@@ -587,19 +746,34 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
         y: node.y + 32,
         config: { ...(node.config ?? {}) },
       };
-      const nextNos = [...localNos, clone];
+      const nextNos = [...localNosRef.current, clone];
+      localNosRef.current = nextNos;
       setLocalNos(nextNos);
       setSelectedNodeId(clone.id);
-      scheduleDebouncedSave(nextNos, localArestas);
+      scheduleDebouncedSave(nextNos, localArestasRef.current);
     },
-    [isReadOnly, localNos, localArestas, scheduleDebouncedSave]
+    [isReadOnly, pushUndoSnapshot, scheduleDebouncedSave]
+  );
+
+  const handleDeleteEdge = useCallback(
+    (edgeId: string) => {
+      if (isReadOnly) return;
+      pushUndoSnapshot();
+      patchCoalesceRef.current = null;
+      const nextEdges = localArestasRef.current.filter((a) => a.id !== edgeId);
+      localArestasRef.current = nextEdges;
+      setLocalArestas(nextEdges);
+      setSelectedEdgeId((prev) => (prev === edgeId ? null : prev));
+      scheduleDebouncedSave(localNosRef.current, nextEdges);
+    },
+    [isReadOnly, pushUndoSnapshot, scheduleDebouncedSave]
   );
 
   const handleFinishConnect = useCallback(
     (targetNodeId: string) => {
       if (!connectingFrom || isReadOnly) return;
-      const src = localNos.find((n) => n.id === connectingFrom.nodeId);
-      const dst = localNos.find((n) => n.id === targetNodeId);
+      const src = localNosRef.current.find((n) => n.id === connectingFrom.nodeId);
+      const dst = localNosRef.current.find((n) => n.id === targetNodeId);
       if (!src || !dst) {
         setConnectingFrom(null);
         return;
@@ -616,13 +790,15 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
         return;
       }
 
-      const dup = localArestas.some(
+      const dup = localArestasRef.current.some(
         (a) =>
           a.origem === src.id &&
           a.destino === dst.id &&
           (a.branch ?? null) === (connectingFrom.branch ?? null)
       );
       if (!dup) {
+        pushUndoSnapshot();
+        patchCoalesceRef.current = null;
         const edge: WorkflowAresta = {
           id: `edge_${Date.now().toString(36)}`,
           origem: src.id,
@@ -630,13 +806,14 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
           type: check.resolvedType,
           ...(connectingFrom.branch ? { branch: connectingFrom.branch } : {}),
         };
-        const nextEdges = [...localArestas, edge];
+        const nextEdges = [...localArestasRef.current, edge];
+        localArestasRef.current = nextEdges;
         setLocalArestas(nextEdges);
-        scheduleDebouncedSave(localNos, nextEdges);
+        scheduleDebouncedSave(localNosRef.current, nextEdges);
       }
       setConnectingFrom(null);
     },
-    [connectingFrom, isReadOnly, localNos, localArestas, scheduleDebouncedSave]
+    [connectingFrom, isReadOnly, pushUndoSnapshot, scheduleDebouncedSave]
   );
 
   const handleStagePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -653,6 +830,11 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
     const wy = (e.clientY - rect.top - panOffset.y) / zoom;
 
     if (activeTool === "draw" && !isReadOnly) {
+      preStrokeSnapshotRef.current = cloneCanvasSnapshot(
+        localNosRef.current,
+        localArestasRef.current,
+        localTracosRef.current
+      );
       drawingStrokeRef.current = {
         id: `tr_${Date.now().toString(36)}`,
         color: "#42A0FF",
@@ -683,11 +865,11 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
       const { nodeId, startClientX, startClientY, origX, origY } = draggingNodeRef.current;
       const dx = (e.clientX - startClientX) / zoom;
       const dy = (e.clientY - startClientY) / zoom;
-      setLocalNos((prev) =>
-        prev.map((n) =>
-          n.id === nodeId ? { ...n, x: Math.round(origX + dx), y: Math.round(origY + dy) } : n
-        )
+      const next = localNosRef.current.map((n) =>
+        n.id === nodeId ? { ...n, x: Math.round(origX + dx), y: Math.round(origY + dy) } : n
       );
+      localNosRef.current = next;
+      setLocalNos(next);
       return;
     }
 
@@ -696,10 +878,12 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
       const wy = (e.clientY - rect.top - panOffset.y) / zoom;
       drawingStrokeRef.current.points.push([wx, wy]);
       const liveStroke = { ...drawingStrokeRef.current };
-      setLocalTracos((prev) => [
-        ...prev.filter((t) => t.id !== liveStroke.id),
+      const nextTracos = [
+        ...localTracosRef.current.filter((t) => t.id !== liveStroke.id),
         liveStroke,
-      ]);
+      ];
+      localTracosRef.current = nextTracos;
+      setLocalTracos(nextTracos);
       return;
     }
 
@@ -714,15 +898,210 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
 
   const handleStagePointerUp = () => {
     if (draggingNodeRef.current) {
+      const { nodeId, origX, origY, startSnapshot } = draggingNodeRef.current;
       draggingNodeRef.current = null;
-      scheduleDebouncedSave(localNos, localArestas);
+      const movedNode = localNosRef.current.find((n) => n.id === nodeId);
+      if (movedNode && (movedNode.x !== origX || movedNode.y !== origY)) {
+        pushUndoSnapshot(startSnapshot);
+        patchCoalesceRef.current = null;
+        scheduleDebouncedSave(localNosRef.current, localArestasRef.current);
+      }
     }
     if (drawingStrokeRef.current) {
       drawingStrokeRef.current = null;
-      scheduleDebouncedSave(localNos, localArestas, localTracos);
+      if (preStrokeSnapshotRef.current) {
+        pushUndoSnapshot(preStrokeSnapshotRef.current);
+        preStrokeSnapshotRef.current = null;
+      }
+      scheduleDebouncedSave(
+        localNosRef.current,
+        localArestasRef.current,
+        localTracosRef.current
+      );
     }
     panningRef.current = null;
   };
+
+  const handleUndo = useCallback(() => {
+    if (isReadOnly) return;
+    const stack = undoStackRef.current;
+    if (stack.length === 0) return;
+    const prevSnap = stack[stack.length - 1];
+    const currentSnap = cloneCanvasSnapshot(
+      localNosRef.current,
+      localArestasRef.current,
+      localTracosRef.current
+    );
+    patchCoalesceRef.current = null;
+    const nextUndo = stack.slice(0, -1);
+    const nextRedo = [...redoStackRef.current.slice(-49), currentSnap];
+    undoStackRef.current = nextUndo;
+    redoStackRef.current = nextRedo;
+    localNosRef.current = prevSnap.nos;
+    localArestasRef.current = prevSnap.arestas;
+    localTracosRef.current = prevSnap.tracos;
+    setUndoStack(nextUndo);
+    setRedoStack(nextRedo);
+    setLocalNos(prevSnap.nos);
+    setLocalArestas(prevSnap.arestas);
+    setLocalTracos(prevSnap.tracos);
+    setSelectedEdgeId(null);
+    scheduleDebouncedSave(prevSnap.nos, prevSnap.arestas, prevSnap.tracos);
+  }, [isReadOnly, scheduleDebouncedSave]);
+
+  const handleRedo = useCallback(() => {
+    if (isReadOnly) return;
+    const stack = redoStackRef.current;
+    if (stack.length === 0) return;
+    const nextSnap = stack[stack.length - 1];
+    const currentSnap = cloneCanvasSnapshot(
+      localNosRef.current,
+      localArestasRef.current,
+      localTracosRef.current
+    );
+    patchCoalesceRef.current = null;
+    const nextRedo = stack.slice(0, -1);
+    const nextUndo = [...undoStackRef.current.slice(-49), currentSnap];
+    redoStackRef.current = nextRedo;
+    undoStackRef.current = nextUndo;
+    localNosRef.current = nextSnap.nos;
+    localArestasRef.current = nextSnap.arestas;
+    localTracosRef.current = nextSnap.tracos;
+    setRedoStack(nextRedo);
+    setUndoStack(nextUndo);
+    setLocalNos(nextSnap.nos);
+    setLocalArestas(nextSnap.arestas);
+    setLocalTracos(nextSnap.tracos);
+    setSelectedEdgeId(null);
+    scheduleDebouncedSave(nextSnap.nos, nextSnap.arestas, nextSnap.tracos);
+  }, [isReadOnly, scheduleDebouncedSave]);
+
+  const handleAutoLayout = useCallback(() => {
+    if (isReadOnly || localNosRef.current.length === 0) return;
+    pushUndoSnapshot();
+    patchCoalesceRef.current = null;
+    const arranged = computeWorkflowAutoLayout(
+      localNosRef.current,
+      localArestasRef.current
+    );
+    localNosRef.current = arranged;
+    setLocalNos(arranged);
+    scheduleDebouncedSave(arranged, localArestasRef.current);
+    setStatusFeedback("Nós organizados automaticamente.");
+  }, [isReadOnly, pushUndoSnapshot, scheduleDebouncedSave]);
+
+  const handleSaveNow = useCallback(async () => {
+    if (isReadOnly || !currentWf) return;
+    pendingSavePayloadRef.current = {
+      workflowId: currentWf.workflow_id,
+      nome: currentWf.nome,
+      descricao: currentWf.descricao ?? "",
+      nos: localNosRef.current,
+      arestas: localArestasRef.current,
+      tracos: localTracosRef.current,
+      ativo: currentWf.ativo,
+    };
+    await flushQueuedSave();
+    setStatusFeedback("Fluxo salvo no banco local.");
+  }, [currentWf, flushQueuedSave, isReadOnly]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setSearchOpen(true);
+        return;
+      }
+      if (e.key === "Escape") {
+        setConnectingFrom(null);
+        setAddNodeMenuOpen(false);
+        setRunsMenuOpen(false);
+        setTriggerMenuOpen(false);
+        setSelectedEdgeId(null);
+        return;
+      }
+
+      const targetEl = e.target as HTMLElement | null;
+      const activeEl =
+        typeof document !== "undefined" ? (document.activeElement as HTMLElement | null) : null;
+      const isEditableElement = (el: HTMLElement | null) =>
+        Boolean(
+          el &&
+            (el.tagName === "INPUT" ||
+              el.tagName === "TEXTAREA" ||
+              el.tagName === "SELECT" ||
+              el.isContentEditable)
+        );
+      if (isEditableElement(targetEl) || isEditableElement(activeEl)) {
+        return;
+      }
+
+      const mod = e.ctrlKey || e.metaKey;
+      const lower = e.key.toLowerCase();
+
+      if (mod && lower === "z" && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+        return;
+      }
+      if (mod && ((lower === "z" && e.shiftKey) || lower === "y")) {
+        e.preventDefault();
+        handleRedo();
+        return;
+      }
+      if (mod && lower === "d") {
+        if (selectedNodeId) {
+          const targetNode = localNosRef.current.find((n) => n.id === selectedNodeId);
+          if (targetNode) {
+            e.preventDefault();
+            handleDuplicateNode(targetNode);
+          }
+        }
+        return;
+      }
+      if (mod && lower === "s") {
+        e.preventDefault();
+        void handleSaveNow();
+        return;
+      }
+      if (mod && e.key === "0") {
+        e.preventDefault();
+        fitView();
+        return;
+      }
+      if (mod && (e.key === "=" || e.key === "+")) {
+        e.preventDefault();
+        setZoom((z) => Math.min(2, Number((z + 0.1).toFixed(2))));
+        return;
+      }
+      if (mod && e.key === "-") {
+        e.preventDefault();
+        setZoom((z) => Math.max(0.25, Number((z - 0.1).toFixed(2))));
+        return;
+      }
+      if (e.key === "Delete" || e.key === "Backspace") {
+        if (selectedEdgeId) {
+          e.preventDefault();
+          handleDeleteEdge(selectedEdgeId);
+        } else if (selectedNodeId) {
+          e.preventDefault();
+          handleDeleteNode(selectedNodeId);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    fitView,
+    handleDeleteEdge,
+    handleDeleteNode,
+    handleDuplicateNode,
+    handleRedo,
+    handleSaveNow,
+    handleUndo,
+    selectedEdgeId,
+    selectedNodeId,
+  ]);
 
   const handleRunWorkflow = async (fromNodeId?: string) => {
     if (!currentWf || executing) return;
@@ -864,8 +1243,10 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
                     fill="none"
                     stroke="transparent"
                     strokeWidth={14}
+                    style={{ pointerEvents: "stroke" }}
                     onClick={(e) => {
                       e.stopPropagation();
+                      setSelectedNodeId(null);
                       setSelectedEdgeId(edge.id);
                     }}
                   />
@@ -875,8 +1256,10 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
                     stroke={strokeColor}
                     strokeWidth={selectedEdgeId === edge.id ? 3 : 2}
                     strokeDasharray={isLoop ? "6 4" : undefined}
+                    style={{ pointerEvents: "stroke" }}
                     onClick={(e) => {
                       e.stopPropagation();
+                      setSelectedNodeId(null);
                       setSelectedEdgeId(edge.id);
                     }}
                   />
@@ -948,6 +1331,7 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
               connectingFrom={connectingFrom}
               onPointerDownNode={(e, n) => {
                 e.stopPropagation();
+                setSelectedEdgeId(null);
                 setSelectedNodeId(n.id);
                 if (activeTool === "select" && !n.locked && !isReadOnly) {
                   draggingNodeRef.current = {
@@ -956,6 +1340,11 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
                     startClientY: e.clientY,
                     origX: n.x,
                     origY: n.y,
+                    startSnapshot: cloneCanvasSnapshot(
+                      localNosRef.current,
+                      localArestasRef.current,
+                      localTracosRef.current
+                    ),
                   };
                 }
               }}
@@ -1148,15 +1537,47 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
 
         {/* Controles à direita do HUD */}
         <div className="pointer-events-auto flex items-center gap-2">
+          {!isReadOnly && currentWf && (
+            <div className="flex items-center gap-1 rounded-xl border border-white/[0.12] bg-[#212121] p-1 shadow-2xl">
+              <button
+                type="button"
+                disabled={undoStack.length === 0}
+                onClick={handleUndo}
+                title="Desfazer (Ctrl+Z)"
+                aria-label="Desfazer (Ctrl+Z)"
+                className="rounded-lg p-1.5 text-[#DCDCDC] hover:bg-[#2A2A2A] hover:text-white disabled:opacity-35 disabled:hover:bg-transparent"
+              >
+                <Undo2 className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                disabled={redoStack.length === 0}
+                onClick={handleRedo}
+                title="Refazer (Ctrl+Shift+Z / Ctrl+Y)"
+                aria-label="Refazer (Ctrl+Y)"
+                className="rounded-lg p-1.5 text-[#DCDCDC] hover:bg-[#2A2A2A] hover:text-white disabled:opacity-35 disabled:hover:bg-transparent"
+              >
+                <Redo2 className="h-4 w-4" />
+              </button>
+              <div className="mx-0.5 h-4 w-px bg-white/[0.08]" />
+              <button
+                type="button"
+                disabled={localNos.length === 0}
+                onClick={handleAutoLayout}
+                title="Organizar nós automaticamente"
+                aria-label="Organizar nós"
+                className="flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] font-medium text-[#DCDCDC] hover:bg-[#2A2A2A] hover:text-white disabled:opacity-35 disabled:hover:bg-transparent"
+              >
+                <LayoutGrid className="h-3.5 w-3.5 text-[#42A0FF]" />
+                <span className="hidden xl:inline">Organizar nós</span>
+              </button>
+            </div>
+          )}
+
           {selectedEdgeId && !isReadOnly && (
             <button
               type="button"
-              onClick={() => {
-                const nextEdges = localArestas.filter((a) => a.id !== selectedEdgeId);
-                setLocalArestas(nextEdges);
-                setSelectedEdgeId(null);
-                scheduleDebouncedSave(localNos, nextEdges);
-              }}
+              onClick={() => handleDeleteEdge(selectedEdgeId)}
               className="flex items-center gap-1 rounded-xl border border-[#FD2F3B]/40 bg-[#212121] px-3 py-2 text-[12px] font-semibold text-[#FD2F3B] shadow-2xl"
             >
               <Trash2 className="h-3.5 w-3.5" />
@@ -1208,19 +1629,7 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
           {!isReadOnly && currentWf && (
             <button
               type="button"
-              onClick={async () => {
-                pendingSavePayloadRef.current = {
-                  workflowId: currentWf.workflow_id,
-                  nome: currentWf.nome,
-                  descricao: currentWf.descricao ?? "",
-                  nos: localNos,
-                  arestas: localArestas,
-                  tracos: localTracos,
-                  ativo: currentWf.ativo,
-                };
-                await flushQueuedSave();
-                setStatusFeedback("Fluxo salvo no banco local.");
-              }}
+              onClick={() => void handleSaveNow()}
               className="flex items-center gap-1.5 rounded-xl border border-white/[0.12] bg-[#212121] px-3 py-2 text-[14px] font-semibold text-[#DCDCDC] shadow-2xl hover:bg-[#2A2A2A]"
             >
               <Save className="h-4 w-4 text-[#31CF76]" />

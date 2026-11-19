@@ -78,7 +78,7 @@ export const LiveVoiceBar: React.FC<LiveVoiceBarProps> = ({
       continuous: boolean;
       interimResults: boolean;
       onresult: ((ev: { results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal?: boolean }> }) => void) | null;
-      onerror: (() => void) | null;
+      onerror: ((ev?: { error?: string; message?: string }) => void) | null;
       start: () => void;
       stop: () => void;
     } | null = null;
@@ -165,7 +165,23 @@ export const LiveVoiceBar: React.FC<LiveVoiceBarProps> = ({
               void flushPendingTurn();
             }, vadSilenceMs);
           };
-          recognition.onerror = () => {
+          recognition.onerror = (ev) => {
+            const code = String(ev?.error ?? "");
+            if (code === "network" || code === "service-not-allowed") {
+              setMicError(
+                "Reconhecimento nativo do navegador bloqueado/offline neste ambiente. Configure GEMINI_API_KEY ou OPENAI_API_KEY no Cofre e use o botão do microfone no chat."
+              );
+              try {
+                recognition?.stop();
+              } catch {
+                // Ignora erro ao encerrar SpeechRecognition
+              }
+              return;
+            }
+            if (code === "not-allowed") {
+              setMicError("Permissão de microfone recusada para Live Voice.");
+              return;
+            }
             setMicError("Reconhecimento de fala pausado; aguarde ou reinicie a sessão.");
           };
           recognition.start();

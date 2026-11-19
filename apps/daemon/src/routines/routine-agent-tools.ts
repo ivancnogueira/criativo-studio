@@ -149,7 +149,10 @@ export const ROUTINE_AGENT_TOOLS_SCHEMA: ToolDefinition[] = [
             type: "object",
             properties: {
               pointer: { type: "string" },
-              value: {},
+              value: {
+                type: "string",
+                description: "Valor esperado para comparação com o ponteiro JSON.",
+              },
             },
             required: ["pointer", "value"],
           },
@@ -172,7 +175,20 @@ export const ROUTINE_AGENT_TOOLS_SCHEMA: ToolDefinition[] = [
         name: { type: "string" },
         instruction: { type: "string" },
         eventType: { type: "string" },
-        filters: { type: "array" },
+        filters: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              pointer: { type: "string" },
+              value: {
+                type: "string",
+                description: "Valor esperado para comparação.",
+              },
+            },
+            required: ["pointer", "value"],
+          },
+        },
         active: { type: "boolean" },
         limitPolicy: { type: "string", enum: ["wait", "skip"] },
         runIn: { type: "string", enum: ["chat", "side_thread"] },

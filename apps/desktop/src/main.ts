@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, shell, type Tray } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, session, shell, type Tray } from "electron";
 import {
   resolveDesktopProductRoot,
   resolveSafeUpdateArtifactPath,
@@ -255,7 +255,26 @@ function writeDesktopLog(message: string): void {
   }
 }
 
+function isAllowedLoopbackOrigin(originUrl: string): boolean {
+  if (!originUrl) return false;
+  try {
+    const parsed = new URL(originUrl);
+    return parsed.protocol === "http:" && (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost");
+  } catch {
+    return false;
+  }
+}
+
 async function bootstrapDesktop(): Promise<void> {
+  const userDataDir =
+    process.env.CRIATIVO_USER_DATA_DIR || join(app.getPath("appData"), "CriativoAIStudio");
+  try {
+    app.setName("Criativo AI Studio");
+    app.setPath("userData", userDataDir);
+  } catch {
+    // ignora caso já esteja bloqueado
+  }
+
   const gotLock = app.requestSingleInstanceLock();
   if (!gotLock) {
     app.quit();
@@ -268,14 +287,14 @@ async function bootstrapDesktop(): Promise<void> {
 
   await app.whenReady();
 
-  const userDataDir =
-    process.env.CRIATIVO_USER_DATA_DIR || join(app.getPath("appData"), "CriativoAIStudio");
-  try {
-    app.setName("Criativo AI Studio");
-    app.setPath("userData", userDataDir);
-  } catch {
-    // ignora caso já esteja bloqueado
-  }
+  const allowedPermissions = new Set(["media", "audioCapture", "microphone", "notifications", "clipboard-read"]);
+  session.defaultSession.setPermissionCheckHandler((_wc, permission, requestingOrigin) => {
+    return isAllowedLoopbackOrigin(requestingOrigin) && allowedPermissions.has(permission);
+  });
+  session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => {
+    const origin = wc?.getURL?.() || "";
+    callback(isAllowedLoopbackOrigin(origin) && allowedPermissions.has(permission));
+  });
 
   activeBootLogPath = join(userDataDir, "logs", "desktop-boot.log");
   writeDesktopLog(`Iniciando Criativo AI Studio v${app.getVersion()} (packaged=${app.isPackaged})`);
@@ -301,6 +320,12 @@ async function bootstrapDesktop(): Promise<void> {
     appVersion: app.getVersion(),
     onUpdateRestartRequested: (payload) => {
       void handleUpdateRestart(userDataDir, payload);
+    },
+    onDaemonCrashed: (code, signal) => {
+      writeDesktopLog(`[Watchdog] Daemon caiu inesperadamente (code=${code ?? "null"}, signal=${signal ?? "null"})`);
+    },
+    onDaemonRestarted: (port, attempt) => {
+      writeDesktopLog(`[Watchdog] Daemon reiniciado na porta ${port} (tentativa #${attempt})`);
     },
   });
   writeDesktopLog(`Daemon embutido pronto em ${daemonHandle.baseUrl}`);

@@ -214,6 +214,20 @@ export class AutoUpdateService {
         return this.emitStatus();
       }
 
+      if (res.status === 404) {
+        const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+        if (errBody?.error === "no_release_published") {
+          this.#state = "up_to_date";
+          this.#latestManifest = null;
+          this.#errorMessage = null;
+          return this.emitStatus();
+        }
+        this.#state = "error";
+        this.#errorMessage =
+          "Servidor de atualizações respondeu 404 em /api/releases/latest. Atualize/reimplante o Painel na VPS ou publique a primeira release.";
+        return this.emitStatus();
+      }
+
       if (!res.ok) {
         this.#state = "error";
         this.#errorMessage = `Falha ao consultar servidor de atualizações (HTTP ${res.status}).`;

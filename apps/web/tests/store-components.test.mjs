@@ -350,7 +350,7 @@ describe("Fase 10 — UI Carbon Dark da Loja Unificada, WhatsApp Multi-Número &
     assert.match(wppHtml, /QR Code/);
     assert.match(wppHtml, /Código no telefone/);
     assert.match(wppHtml, /Número dedicado/);
-    assert.match(wppHtml, /Número próprio/);
+    assert.match(wppHtml, /Meu número \(Conversa comigo mesmo\)/);
     assert.match(wppHtml, /AB12CD/);
     assert.match(wppHtml, /Aprovar pareamento/);
     assert.match(wppHtml, /Recusar pedido/);

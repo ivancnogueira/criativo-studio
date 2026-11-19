@@ -3,6 +3,11 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      mermaid: "mermaid/dist/mermaid.esm.min.mjs",
+    },
+  },
   build: {
     sourcemap: false,
     chunkSizeWarningLimit: 2000,

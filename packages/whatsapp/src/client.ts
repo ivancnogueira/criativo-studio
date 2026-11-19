@@ -751,22 +751,42 @@ export class WhatsAppStudioClient {
 
     this.dropCurrentSocket();
 
-    const [{ state, saveCreds, clearState }, version] = await Promise.all([
-      useSqliteAuthState(this.db, this.contaId),
-      this.resolveWaWebVersion(),
-    ]);
+    const { state, saveCreds, clearState } = await useSqliteAuthState(this.db, this.contaId);
+
+    if (this.manualDisconnect) {
+      return;
+    }
+
+    if (!state.creds?.registered) {
+      this.persistStatus("aguardando_qrcode", null, {
+        pairingCode: null,
+        ultimoErro: null,
+      });
+    }
+
+    const version = await this.resolveWaWebVersion();
 
     if (this.manualDisconnect) {
       return;
     }
 
     const browser = mode === "pairing_code" ? WA_PAIRING_CODE_BROWSER : WA_QR_BROWSER;
-    const socket = await this.socketFactory(state, {
-      contaId: this.contaId,
-      version,
-      browser,
-      mode,
-    });
+    let socket: BaileysSocketLike;
+    try {
+      socket = await this.socketFactory(state, {
+        contaId: this.contaId,
+        version,
+        browser,
+        mode,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.persistStatus("desconectado", null, {
+        pairingCode: null,
+        ultimoErro: msg,
+      });
+      throw err;
+    }
 
     if (this.manualDisconnect) {
       try {

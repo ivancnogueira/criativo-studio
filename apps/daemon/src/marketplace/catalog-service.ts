@@ -17,6 +17,7 @@ import type {
   McpServidorConfig,
   NativeAppAccountSummary,
 } from "@criativo/contracts";
+import type { WhatsAppSessionManager } from "@criativo/whatsapp";
 import type { CriativoDatabase } from "../database/client.ts";
 import type { FetchLike } from "../engine/providers/provider-interface.ts";
 import {
@@ -27,7 +28,13 @@ import type { McpGateway } from "../mcp/mcp-gateway.ts";
 import { McpOAuthProvider } from "../mcp/mcp-oauth-provider.ts";
 import { inspectMcpServer } from "../mcp/mcp-probe.ts";
 import { McpServerStore } from "../mcp/mcp-server-store.ts";
+import type { ProviderConnectionService } from "../providers/provider-connection-service.ts";
 import { computeNextCronExecution } from "../routines/cron-scheduler.ts";
+import {
+  getBrandIdentity,
+  hasConfiguredBrand,
+  interpolateBrandPlaceholders,
+} from "../server/brand-onboarding-service.ts";
 import type { VaultService } from "../vault/vault-service.ts";
 import { NativeAppConnectionsStore } from "./native-app-connections-store.ts";
 import {
@@ -54,6 +61,8 @@ export interface CatalogServiceOptions {
   nativeStore?: NativeAppConnectionsStore;
   oauthProvider?: McpOAuthProvider;
   skillsManager?: SkillsManager;
+  providerConnection?: ProviderConnectionService;
+  whatsappManager?: WhatsAppSessionManager;
   workspaceRoot?: string;
   bundlePath?: string;
   fetchImpl?: FetchLike;
@@ -270,6 +279,8 @@ export class CatalogService {
   public readonly nativeStore: NativeAppConnectionsStore;
   private readonly oauthProvider?: McpOAuthProvider;
   private readonly skillsManager: SkillsManager;
+  private readonly providerConnection?: ProviderConnectionService;
+  private whatsappManager?: WhatsAppSessionManager;
   private readonly workspaceRoot: string;
   private readonly bundlePath?: string;
   private readonly fetchImpl?: FetchLike;
@@ -286,6 +297,8 @@ export class CatalogService {
       options.nativeStore ??
       new NativeAppConnectionsStore({ db: options.db, vault: options.vault });
     this.oauthProvider = options.oauthProvider ?? options.mcpGateway?.oauthProvider;
+    this.providerConnection = options.providerConnection;
+    this.whatsappManager = options.whatsappManager;
     this.workspaceRoot = options.workspaceRoot ?? process.cwd();
     this.bundlePath = options.bundlePath;
     this.fetchImpl = options.fetchImpl;
@@ -296,6 +309,108 @@ export class CatalogService {
         workspaceRoot: this.workspaceRoot,
         bundlePath: this.bundlePath,
       });
+  }
+
+  public attachWhatsAppManager(manager: WhatsAppSessionManager): void {
+    this.whatsappManager = manager;
+  }
+
+  private resolveConfiguredBrand() {
+    if (!this.providerConnection) return null;
+    const brand = getBrandIdentity(this.providerConnection);
+    return hasConfiguredBrand(brand) ? brand : null;
+  }
+
+  private applyBrandToCatalogApp(
+    app: MarketplaceAppItem,
+    brand: ReturnType<CatalogService["resolveConfiguredBrand"]>
+  ): MarketplaceAppItem {
+    if (!brand) return app;
+    return {
+      ...app,
+      tagline: interpolateBrandPlaceholders(app.tagline, brand),
+      description: interpolateBrandPlaceholders(app.description, brand),
+      prompts: (app.prompts ?? []).map((p) => ({
+        ...p,
+        text: interpolateBrandPlaceholders(p.text, brand),
+      })),
+    };
+  }
+
+  private applyBrandToCatalogAgent(
+    agent: MarketplaceAgentPackage,
+    brand: ReturnType<CatalogService["resolveConfiguredBrand"]>
+  ): MarketplaceAgentPackage {
+    if (!brand) return agent;
+    return {
+      ...agent,
+      role: interpolateBrandPlaceholders(agent.role, brand),
+      tagline: interpolateBrandPlaceholders(agent.tagline, brand),
+      description: interpolateBrandPlaceholders(agent.description, brand),
+      promptBase: interpolateBrandPlaceholders(agent.promptBase, brand),
+      routines: (agent.routines ?? []).map((r) => ({
+        ...r,
+        name: interpolateBrandPlaceholders(r.name, brand),
+        instruction: interpolateBrandPlaceholders(r.instruction, brand),
+      })),
+    };
+  }
+
+  private listAllNativeAndWhatsAppAccounts(): NativeAppAccountSummary[] {
+    const stored = this.nativeStore.listAllAccounts([
+      "instagram",
+      "telegram",
+      "fish-audio",
+      "elevenlabs",
+    ]);
+    const seenIds = new Set(stored.map((a) => a.conta_id));
+    const combined: NativeAppAccountSummary[] = [...stored];
+
+    try {
+      const wppRows = this.whatsappManager
+        ? this.whatsappManager.listAccounts()
+        : (this.db.connection
+            .prepare(
+              `SELECT conta_id, rotulo, numero_telefone, jid_proprio, status, atualizado_em
+               FROM whatsapp_contas
+               WHERE status = 'conectado';`
+            )
+            .all() as Array<{
+            conta_id: string;
+            rotulo: string;
+            numero_telefone: string | null;
+            jid_proprio: string | null;
+            status: string;
+            atualizado_em: string;
+          }>);
+
+      for (const acc of wppRows) {
+        if (acc.status !== "conectado" || seenIds.has(acc.conta_id)) continue;
+        seenIds.add(acc.conta_id);
+        const numero = acc.numero_telefone || acc.jid_proprio || acc.rotulo;
+        combined.push({
+          conta_id: acc.conta_id,
+          app_slug: "whatsapp",
+          conta_rotulo: acc.rotulo,
+          campos_mascarados: numero ? { PHONE: numero } : {},
+          campos_visiveis: numero ? { PHONE: numero } : {},
+          configurado: true,
+          testado_ok: true,
+          ultimo_teste_em: acc.atualizado_em,
+          ultimo_erro: null,
+          perfil_conectado: {
+            username: numero,
+            account_id: acc.conta_id,
+          },
+          acesso: { mode: "everyone", agentIds: [] },
+          atualizado_em: acc.atualizado_em,
+        });
+      }
+    } catch {
+      // ignora se whatsapp_contas ainda não foi criada em testes unitários isolados
+    }
+
+    return combined;
   }
 
   public getBundle(): CatalogBundleData {
@@ -333,52 +448,57 @@ export class CatalogService {
    */
   public getCatalogSnapshot(params: CatalogSnapshotQuery = {}): LojaCatalogoSnapshot {
     const bundle = this.getBundle();
+    const configuredBrand = this.resolveConfiguredBrand();
     const queryLower = (params.query ?? params.q ?? "").trim().toLowerCase();
     const sourceFilter: MarketplaceSourceFilter =
       params.sourceFilter ?? params.fonte ?? "all";
     const categoryFilter = params.category?.trim().toLowerCase() ?? "";
 
-    const apps = bundle.apps.filter((app) => {
-      if (sourceFilter === "verified" && !app.verified) return false;
-      if (sourceFilter === "public" && app.verified) return false;
-      if (categoryFilter && app.category.toLowerCase() !== categoryFilter) return false;
-      if (queryLower) {
-        const hay = [
-          app.slug,
-          app.name,
-          app.tagline,
-          app.description,
-          app.category,
-          app.creatorName,
-        ]
-          .join("\n")
-          .toLowerCase();
-        if (!hay.includes(queryLower)) return false;
-      }
-      return true;
-    });
+    const apps = bundle.apps
+      .map((app) => this.applyBrandToCatalogApp(app, configuredBrand))
+      .filter((app) => {
+        if (sourceFilter === "verified" && !app.verified) return false;
+        if (sourceFilter === "public" && app.verified) return false;
+        if (categoryFilter && app.category.toLowerCase() !== categoryFilter) return false;
+        if (queryLower) {
+          const hay = [
+            app.slug,
+            app.name,
+            app.tagline,
+            app.description,
+            app.category,
+            app.creatorName,
+          ]
+            .join("\n")
+            .toLowerCase();
+          if (!hay.includes(queryLower)) return false;
+        }
+        return true;
+      });
 
-    const agents = bundle.agents.filter((agent) => {
-      const isVerified = agent.verified || agent.source === "verified";
-      if (sourceFilter === "verified" && !isVerified) return false;
-      if (sourceFilter === "public" && isVerified) return false;
-      if (categoryFilter && agent.category.toLowerCase() !== categoryFilter) return false;
-      if (queryLower) {
-        const hay = [
-          agent.slug,
-          agent.name,
-          agent.role,
-          agent.tagline,
-          agent.description,
-          agent.category,
-          ...(agent.skills ?? []),
-        ]
-          .join("\n")
-          .toLowerCase();
-        if (!hay.includes(queryLower)) return false;
-      }
-      return true;
-    });
+    const agents = bundle.agents
+      .map((agent) => this.applyBrandToCatalogAgent(agent, configuredBrand))
+      .filter((agent) => {
+        const isVerified = agent.verified || agent.source === "verified";
+        if (sourceFilter === "verified" && !isVerified) return false;
+        if (sourceFilter === "public" && isVerified) return false;
+        if (categoryFilter && agent.category.toLowerCase() !== categoryFilter) return false;
+        if (queryLower) {
+          const hay = [
+            agent.slug,
+            agent.name,
+            agent.role,
+            agent.tagline,
+            agent.description,
+            agent.category,
+            ...(agent.skills ?? []),
+          ]
+            .join("\n")
+            .toLowerCase();
+          if (!hay.includes(queryLower)) return false;
+        }
+        return true;
+      });
 
     const allSkills = this.skillsManager.listSkills();
     const skills = this.skillsManager.listSkills({
@@ -394,6 +514,10 @@ export class CatalogService {
     }));
 
     const installedSkills = allSkills.filter((s) => s.installed);
+    const nativeAccounts = this.listAllNativeAndWhatsAppAccounts();
+    const connectedNativeSlugs = Array.from(
+      new Set(nativeAccounts.filter((acc) => acc.configurado).map((acc) => acc.app_slug))
+    );
 
     return {
       apps,
@@ -401,6 +525,8 @@ export class CatalogService {
       skills,
       installedApps,
       installedSkills,
+      nativeAccounts,
+      connectedNativeSlugs,
       categories: {
         apps: uniqueSortedCategories(bundle.apps.map((a) => a.category)),
         agents: uniqueSortedCategories(bundle.agents.map((a) => a.category)),
@@ -414,8 +540,9 @@ export class CatalogService {
    * status de OAuth/teste e permissões por agente.
    */
   public getAppDetail(slug: string): CatalogAppDetail | null {
-    const app = this.findAppBySlug(slug);
-    if (!app) return null;
+    const rawApp = this.findAppBySlug(slug);
+    if (!rawApp) return null;
+    const app = this.applyBrandToCatalogApp(rawApp, this.resolveConfiguredBrand());
 
     const allServers = this.mcpStore.listServersForClient({ includeDisabled: true });
     const matchingServers = allServers.filter(
@@ -1195,9 +1322,24 @@ export class CatalogService {
       );
     }
 
+    const configuredBrand = this.resolveConfiguredBrand();
     const agenteId = this.allocateUniqueAgentId(overrides.customAgenteId || pkg.slug || pkg.name);
     const nome = overrides.name?.trim() || pkg.name;
-    const papel = pkg.role || pkg.tagline || "Especialista";
+    const rawPapel = pkg.role || pkg.tagline || "Especialista";
+    const papel = configuredBrand ? interpolateBrandPlaceholders(rawPapel, configuredBrand) : rawPapel;
+    const rawPromptBase = pkg.promptBase;
+    const resolvedPromptBase = configuredBrand
+      ? interpolateBrandPlaceholders(rawPromptBase, configuredBrand)
+      : rawPromptBase;
+    const resolvedTagline = configuredBrand
+      ? interpolateBrandPlaceholders(pkg.tagline, configuredBrand)
+      : pkg.tagline;
+    const welcomeMessage = configuredBrand
+      ? interpolateBrandPlaceholders(
+          `Olá! Sou **${nome}** (${papel}). ${resolvedTagline}\n\nEstou pronto para colaborar com [NOME_DA_MARCA].`,
+          configuredBrand
+        )
+      : `Olá! Sou **${nome}** (${papel}). ${pkg.tagline}\n\nEstou pronto para colaborar com [NOME_DA_MARCA].`;
     const modeloPadrao = overrides.model?.trim() || pkg.recommendedModel || "gemini-2.5-pro";
     const agora = new Date().toISOString();
 
@@ -1216,7 +1358,7 @@ export class CatalogService {
       avatar_color: pkg.avatarColor || "#007CF7",
       effort: "alto",
       ferramentas: ["handoff_agente"],
-      prompt_base: pkg.promptBase,
+      prompt_base: resolvedPromptBase,
       customizado: true,
       origem_loja_slug: pkg.slug,
       categoria_loja: pkg.category,
@@ -1258,7 +1400,7 @@ export class CatalogService {
           `agente:${agenteId}`,
           agenteId,
           nome,
-          `Olá! Sou **${nome}** (${papel}). ${pkg.tagline}\n\nEstou pronto para colaborar com [NOME_DA_MARCA].`,
+          welcomeMessage,
           agora
         );
 

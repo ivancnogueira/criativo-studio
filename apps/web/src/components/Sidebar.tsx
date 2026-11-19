@@ -56,6 +56,7 @@ export interface SidebarProps {
   onOpenWhatsAppModal?: () => void;
   viewMode?: "agents" | "routines";
   onChangeViewMode?: (mode: "agents" | "routines") => void;
+  showModeTabs?: boolean;
   routineCountsByAgent?: Record<string, number>;
   // Fase 15 — Seções aninhadas, Fixados, Ocultos, D&D e Duplicação
   sidebarLayout?: SidebarLayoutSnapshot | null;
@@ -124,6 +125,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenWhatsAppModal,
   viewMode,
   onChangeViewMode,
+  showModeTabs = true,
   routineCountsByAgent = {},
   sidebarLayout = null,
   sortMode = "custom",
@@ -158,7 +160,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     | null
   >(null);
   const [dropIndicatorKey, setDropIndicatorKey] = useState<string | null>(null);
-  const effectiveMode = viewMode ?? internalViewMode;
+  const effectiveMode = showModeTabs ? (viewMode ?? internalViewMode) : "agents";
   const setMode = (nextMode: "agents" | "routines") => {
     setInternalViewMode(nextMode);
     onChangeViewMode?.(nextMode);
@@ -888,42 +890,44 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Switch Agentes | Rotinas */}
-      <div className="px-2.5 pb-2">
-        <div
-          role="tablist"
-          aria-label="Alternar entre agentes e rotinas"
-          className="p-1 rounded-xl bg-[#141414] border border-white/[0.06] grid grid-cols-2 gap-1"
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={effectiveMode === "agents"}
-            onClick={() => setMode("agents")}
-            className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-[12px] font-semibold transition-colors border-b-2 ${
-              effectiveMode === "agents"
-                ? "bg-[#2A2A2A] text-[#F0F0F0] border-[#007CF7]"
-                : "text-[#979797] hover:text-white border-transparent"
-            }`}
+      {showModeTabs && (
+        <div className="px-2.5 pb-2">
+          <div
+            role="tablist"
+            aria-label="Alternar entre agentes e rotinas"
+            className="p-1 rounded-xl bg-[#141414] border border-white/[0.06] grid grid-cols-2 gap-1"
           >
-            <Bot className="h-3.5 w-3.5" />
-            <span>Agentes</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={effectiveMode === "routines"}
-            onClick={() => setMode("routines")}
-            className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-[12px] font-semibold transition-colors border-b-2 ${
-              effectiveMode === "routines"
-                ? "bg-[#2A2A2A] text-[#F0F0F0] border-[#007CF7]"
-                : "text-[#979797] hover:text-white border-transparent"
-            }`}
-          >
-            <Workflow className="h-3.5 w-3.5" />
-            <span>Rotinas</span>
-          </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={effectiveMode === "agents"}
+              onClick={() => setMode("agents")}
+              className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-[12px] font-semibold transition-colors border-b-2 ${
+                effectiveMode === "agents"
+                  ? "bg-[#2A2A2A] text-[#F0F0F0] border-[#007CF7]"
+                  : "text-[#979797] hover:text-white border-transparent"
+              }`}
+            >
+              <Bot className="h-3.5 w-3.5" />
+              <span>Agentes</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={effectiveMode === "routines"}
+              onClick={() => setMode("routines")}
+              className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-[12px] font-semibold transition-colors border-b-2 ${
+                effectiveMode === "routines"
+                  ? "bg-[#2A2A2A] text-[#F0F0F0] border-[#007CF7]"
+                  : "text-[#979797] hover:text-white border-transparent"
+              }`}
+            >
+              <Workflow className="h-3.5 w-3.5" />
+              <span>Rotinas</span>
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Lista rolável por seções e pastas */}
       <div className="flex-1 overflow-y-auto px-2 pb-3 space-y-3">

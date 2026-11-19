@@ -5,6 +5,7 @@ import type {
   AgenteThreadBranch,
   AgenteThreadRegistro,
   AnexoChat,
+  ArquivoStudio,
   AvatarShape,
   BackupModelChoice,
   BrowserSecretRequest,
@@ -65,7 +66,14 @@ import { ApiKeyRequestCard } from "./ApiKeyRequestCard";
 import { BranchDivider } from "./BranchDivider";
 import { ChatVisualReply } from "./ChatVisualReply";
 import { CodePreview } from "./CodePreview";
+import {
+  ComposerAutocomplete,
+  buildComposerAutocompleteItems,
+  detectComposerTrigger,
+  type ComposerAutocompleteItem,
+} from "./ComposerAutocomplete";
 import { ConversationQuestionPrompt } from "./ConversationQuestionPrompt";
+import { daemonApi } from "../../services/websocket-client";
 import { MathFormula, MermaidDiagram } from "./MarkdownMathMermaidPreview";
 import { OpenWaitsCard } from "./OpenWaitsCard";
 import { PinnedMessagesPopover } from "./PinnedMessagesPopover";
@@ -215,6 +223,7 @@ interface AgentConversationViewProps {
   agente?: AgenteRegistro | null;
   canal?: CanalEquipe | null;
   allAgentes?: AgenteRegistro[];
+  arquivos?: ArquivoStudio[];
   mensagens: MensagemChat[];
   provedores: ProvedorStatusInfo[];
   sending: boolean;
@@ -606,6 +615,7 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
   agente,
   canal,
   allAgentes = [],
+  arquivos = [],
   mensagens,
   provedores,
   sending,
@@ -716,8 +726,27 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
   const [listeningVoice, setListeningVoice] = useState(false);
+  const [cursorPos, setCursorPos] = useState(0);
+  const [autocompleteIndex, setAutocompleteIndex] = useState(0);
+  const [dismissedTriggerKey, setDismissedTriggerKey] = useState<string | null>(null);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [recordingLevel, setRecordingLevel] = useState(0);
+  const [transcribingVoice, setTranscribingVoice] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [pendingFailedAudio, setPendingFailedAudio] = useState<{
+    file: File;
+    message: string;
+  } | null>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const voiceRafRef = useRef<number | null>(null);
+  const recordTimerRef = useRef<number | null>(null);
+  const recordChunksRef = useRef<Blob[]>([]);
+  const cancelledRecordRef = useRef<boolean>(false);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const prevScrollHeightRef = useRef<number | null>(null);
@@ -850,40 +879,339 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
     await onSendMessage(textToSend, filesToSend, ctxToSend);
   };
 
-  const handleVoiceDictation = () => {
-    if (typeof window === "undefined") return;
-    const SpeechRec =
-      (window as unknown as { SpeechRecognition?: new () => unknown; webkitSpeechRecognition?: new () => unknown })
-        .SpeechRecognition ||
-      (window as unknown as { webkitSpeechRecognition?: new () => unknown }).webkitSpeechRecognition;
+  const rawTrigger = useMemo(() => detectComposerTrigger(draft, cursorPos), [draft, cursorPos]);
+  const triggerKey = rawTrigger
+    ? `${rawTrigger.kind}:${rawTrigger.startIndex}:${rawTrigger.query}`
+    : null;
+  const activeTrigger =
+    rawTrigger && triggerKey && triggerKey !== dismissedTriggerKey ? rawTrigger : null;
 
-    if (!SpeechRec) {
-      setDraft((prev) =>
-        prev ? `${prev} [Pedido por áudio: gerar roteiro e artes]` : "Gerar carrossel estratégico em 5 slides para [@SEU_PERFIL]"
-      );
+  const autocompleteItems = useMemo(
+    () =>
+      buildComposerAutocompleteItems({
+        trigger: activeTrigger,
+        agentes: allAgentes,
+        arquivos,
+        capabilities: {
+          allowNewChat: mode === "agent" && !activeThread && allowNewChat && Boolean(onStartNewChat),
+          hasSideQuestion: mode === "agent" && Boolean(onAskSideQuestion),
+          hasSharedTables: Boolean(onOpenSharedTables),
+        },
+      }),
+    [
+      activeThread,
+      activeTrigger,
+      allAgentes,
+      allowNewChat,
+      arquivos,
+      mode,
+      onAskSideQuestion,
+      onOpenSharedTables,
+      onStartNewChat,
+    ]
+  );
+
+  useEffect(() => {
+    setAutocompleteIndex(0);
+  }, [triggerKey]);
+
+  useEffect(() => {
+    if (!triggerKey && dismissedTriggerKey) {
+      setDismissedTriggerKey(null);
+    }
+  }, [dismissedTriggerKey, triggerKey]);
+
+  const applyComposerItem = (item: ComposerAutocompleteItem) => {
+    if (!activeTrigger) return;
+    const before = draft.slice(0, activeTrigger.startIndex);
+    const after = draft.slice(activeTrigger.endIndex);
+
+    if (item.kind === "slash") {
+      if (item.command.action) {
+        const cleaned = `${before}${after.replace(/^\s+/, "")}`;
+        setDraft(cleaned);
+        setCursorPos(before.length);
+        setDismissedTriggerKey(null);
+        if (item.command.action === "new_chat") {
+          void onStartNewChat?.();
+        } else if (item.command.action === "side_question") {
+          setSidePanelOpen(true);
+        } else if (item.command.action === "attach_file") {
+          fileInputRef.current?.click();
+        } else if (item.command.action === "open_tables") {
+          onOpenSharedTables?.();
+        }
+        return;
+      }
+
+      const insertText = item.command.template ?? `${item.command.command} `;
+      const nextText = `${before}${insertText}${after}`;
+      const nextCursor = before.length + insertText.length;
+      setDraft(nextText);
+      setCursorPos(nextCursor);
+      setDismissedTriggerKey(null);
+      window.requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(nextCursor, nextCursor);
+      });
       return;
     }
 
-    const recognition = new SpeechRec() as {
-      lang: string;
-      interimResults: boolean;
-      onresult: ((ev: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
-      onerror: (() => void) | null;
-      onend: (() => void) | null;
-      start: () => void;
-    };
-    recognition.lang = "pt-BR";
-    recognition.interimResults = false;
-    setListeningVoice(true);
-    recognition.onresult = (ev) => {
-      const spoken = ev.results?.[0]?.[0]?.transcript ?? "";
-      if (spoken) {
-        setDraft((prev) => (prev ? `${prev} ${spoken}` : spoken));
+    if (item.kind === "agent") {
+      const insertText = `@${item.agente.agente_id} `;
+      const nextText = `${before}${insertText}${after}`;
+      const nextCursor = before.length + insertText.length;
+      setDraft(nextText);
+      setCursorPos(nextCursor);
+      setDismissedTriggerKey(null);
+      window.requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(nextCursor, nextCursor);
+      });
+      return;
+    }
+
+    if (item.kind === "file") {
+      const insertText = `@${item.arquivo.nome_original} `;
+      const nextText = `${before}${insertText}${after}`;
+      const nextCursor = before.length + insertText.length;
+      setDraft(nextText);
+      setCursorPos(nextCursor);
+      setDismissedTriggerKey(null);
+      setPendingAttachments((prev) => {
+        if (prev.some((att) => att.caminho_relativo === item.arquivo.caminho_relativo)) {
+          return prev;
+        }
+        return [
+          ...prev,
+          {
+            arquivo_id: item.arquivo.arquivo_id,
+            nome: item.arquivo.nome_original,
+            caminho_relativo: item.arquivo.caminho_relativo,
+            url: `/api/arquivos/arquivo?path=${encodeURIComponent(item.arquivo.caminho_relativo)}`,
+            mime_type: item.arquivo.mime_type,
+            tamanho_bytes: item.arquivo.tamanho_bytes,
+            tipo_uso: item.arquivo.tipo_uso,
+          },
+        ];
+      });
+      window.requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(nextCursor, nextCursor);
+      });
+    }
+  };
+
+  const cleanupVoiceCapture = () => {
+    if (voiceRafRef.current !== null) {
+      window.cancelAnimationFrame(voiceRafRef.current);
+      voiceRafRef.current = null;
+    }
+    if (recordTimerRef.current !== null) {
+      window.clearInterval(recordTimerRef.current);
+      recordTimerRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {
+        // Ignora falha ao finalizar gravador no cleanup
       }
+    }
+    mediaRecorderRef.current = null;
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach((track) => track.stop());
+      micStreamRef.current = null;
+    }
+    if (audioCtxRef.current) {
+      void audioCtxRef.current.close().catch(() => undefined);
+      audioCtxRef.current = null;
+    }
+    setRecordingLevel(0);
+  };
+
+  useEffect(() => {
+    return () => {
+      cancelledRecordRef.current = true;
+      cleanupVoiceCapture();
     };
-    recognition.onerror = () => setListeningVoice(false);
-    recognition.onend = () => setListeningVoice(false);
-    recognition.start();
+  }, []);
+
+  const formatRecordingTimer = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  };
+
+  const blobToBase64 = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = typeof reader.result === "string" ? reader.result : "";
+        const commaIdx = result.indexOf(",");
+        resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+      };
+      reader.onerror = () => reject(new Error("Falha ao ler o áudio gravado."));
+      reader.readAsDataURL(blob);
+    });
+
+  const stopRecordingAndTranscribe = () => {
+    cancelledRecordRef.current = false;
+    const rec = mediaRecorderRef.current;
+    if (rec && rec.state !== "inactive") {
+      rec.stop();
+    } else {
+      cleanupVoiceCapture();
+      setListeningVoice(false);
+    }
+  };
+
+  const cancelVoiceRecording = () => {
+    cancelledRecordRef.current = true;
+    setListeningVoice(false);
+    setRecordingSeconds(0);
+    cleanupVoiceCapture();
+  };
+
+  const handleAttachFailedAudio = async () => {
+    if (!pendingFailedAudio) return;
+    setUploading(true);
+    try {
+      const uploaded = await onUploadFile(pendingFailedAudio.file);
+      setPendingAttachments((prev) => [...prev, uploaded]);
+      setVoiceError(null);
+      setPendingFailedAudio(null);
+    } catch (err) {
+      setVoiceError(
+        err instanceof Error ? err.message : "Não foi possível anexar o arquivo de áudio."
+      );
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleVoiceDictation = async () => {
+    if (transcribingVoice) return;
+    if (listeningVoice) {
+      stopRecordingAndTranscribe();
+      return;
+    }
+    if (typeof window === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setVoiceError("Captura de microfone indisponível neste ambiente.");
+      return;
+    }
+    if (typeof MediaRecorder === "undefined") {
+      setVoiceError("MediaRecorder indisponível para gravação de áudio.");
+      return;
+    }
+
+    setVoiceError(null);
+    setPendingFailedAudio(null);
+    cancelledRecordRef.current = false;
+    recordChunksRef.current = [];
+    setRecordingSeconds(0);
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micStreamRef.current = stream;
+
+      const mimeCandidates = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4",
+        "audio/ogg;codecs=opus",
+      ];
+      const chosenMime =
+        mimeCandidates.find(
+          (candidate) =>
+            typeof MediaRecorder.isTypeSupported === "function" &&
+            MediaRecorder.isTypeSupported(candidate)
+        ) ?? "";
+
+      const recorder = chosenMime
+        ? new MediaRecorder(stream, { mimeType: chosenMime })
+        : new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (AudioCtx) {
+        const ctx = new AudioCtx();
+        audioCtxRef.current = ctx;
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        const sampleLevel = () => {
+          if (!micStreamRef.current) return;
+          analyser.getByteFrequencyData(data);
+          let sum = 0;
+          for (let i = 0; i < data.length; i += 1) sum += data[i];
+          const avg = Math.min(100, Math.round((sum / Math.max(1, data.length)) * 1.6));
+          setRecordingLevel(avg);
+          voiceRafRef.current = window.requestAnimationFrame(sampleLevel);
+        };
+        voiceRafRef.current = window.requestAnimationFrame(sampleLevel);
+      }
+
+      recorder.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) {
+          recordChunksRef.current.push(ev.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const wasCancelled = cancelledRecordRef.current;
+        const chunks = [...recordChunksRef.current];
+        const mimeType = recorder.mimeType || chosenMime || "audio/webm";
+        cleanupVoiceCapture();
+        setListeningVoice(false);
+
+        if (wasCancelled || chunks.length === 0) {
+          setRecordingSeconds(0);
+          return;
+        }
+
+        const audioBlob = new Blob(chunks, { type: mimeType });
+        setTranscribingVoice(true);
+        try {
+          const base64 = await blobToBase64(audioBlob);
+          const res = await daemonApi.transcribeAudio(base64, mimeType);
+          const cleanText = res.texto?.trim();
+          if (cleanText) {
+            setDraft((prev) => (prev.trim() ? `${prev.trim()} ${cleanText}` : cleanText));
+            window.requestAnimationFrame(() => textareaRef.current?.focus());
+          } else {
+            setVoiceError("Nenhuma fala foi detectada na gravação.");
+          }
+        } catch (err) {
+          const msg =
+            err instanceof Error
+              ? err.message
+              : "Não foi possível transcrever o áudio. Verifique sua chave de transcrição em Conexões.";
+          const audioFile = new File([audioBlob], "audio-pedido.webm", { type: mimeType });
+          setVoiceError(msg);
+          setPendingFailedAudio({ file: audioFile, message: msg });
+        } finally {
+          setTranscribingVoice(false);
+          setRecordingSeconds(0);
+        }
+      };
+
+      recorder.start(250);
+      setListeningVoice(true);
+      recordTimerRef.current = window.setInterval(() => {
+        setRecordingSeconds((sec) => sec + 1);
+      }, 1000);
+    } catch {
+      cleanupVoiceCapture();
+      setListeningVoice(false);
+      setVoiceError(
+        "Permissão de microfone negada ou dispositivo indisponível. Libere o acesso no sistema e tente novamente."
+      );
+    }
   };
 
   return (
@@ -1812,7 +2140,115 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
           )}
         </div>
 
+        <div className="max-w-[820px] mx-auto">
+          <ComposerAutocomplete
+            trigger={activeTrigger}
+            items={autocompleteItems}
+            selectedIndex={autocompleteIndex}
+            onHoverIndex={setAutocompleteIndex}
+            onSelect={applyComposerItem}
+          />
+        </div>
+
         <div className="max-w-[820px] mx-auto rounded-[22px] bg-[#212121] border border-white/10 px-3 py-2 shadow-lg">
+          {listeningVoice && (
+            <div className="mb-2 flex items-center justify-between gap-3 rounded-xl border border-[#FD2F3B]/35 bg-[#FD2F3B]/10 px-3 py-2 text-[12px]">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span className="h-2.5 w-2.5 rounded-full bg-[#FD2F3B] animate-pulse shrink-0" />
+                <span className="font-semibold text-[#F8FAFC]">Gravando áudio</span>
+                <span className="font-mono text-[11.5px] text-[#FCA5A5] tabular-nums">
+                  {formatRecordingTimer(recordingSeconds)}
+                </span>
+                <div
+                  className="flex items-end gap-0.5 h-4 ml-1"
+                  aria-hidden="true"
+                >
+                  {[20, 40, 60, 80, 100].map((bar) => (
+                    <span
+                      key={bar}
+                      style={{
+                        height: `${Math.max(25, recordingLevel >= bar ? 100 : Math.max(25, Math.round(recordingLevel * 0.9)))}%`,
+                      }}
+                      className={`w-1 rounded-full transition-all ${
+                        recordingLevel >= bar - 15 ? "bg-[#FD2F3B]" : "bg-[#FD2F3B]/35"
+                      }`}
+                    />
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={cancelVoiceRecording}
+                  className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-[#1B1B1E] px-2.5 py-1 text-[11.5px] font-medium text-[#DCDCDC] hover:bg-[#2A2A2E]"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  <span>Cancelar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={stopRecordingAndTranscribe}
+                  className="inline-flex items-center gap-1 rounded-lg bg-[#F0F0F0] px-2.5 py-1 text-[11.5px] font-semibold text-[#141414] hover:bg-white"
+                >
+                  <Check className="h-3.5 w-3.5" />
+                  <span>Finalizar e transcrever</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {transcribingVoice && (
+            <div className="mb-2 flex items-center gap-2 rounded-xl border border-[#42A0FF]/35 bg-[#42A0FF]/10 px-3 py-2 text-[12px] text-[#E0F2FE]">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-[#42A0FF]" />
+              <span>Transcrevendo áudio...</span>
+            </div>
+          )}
+
+          {voiceError && (
+            <div className="mb-2 rounded-xl border border-[#FD2F3B]/35 bg-[#FD2F3B]/10 px-3 py-2 text-[12px] text-[#FECACA]">
+              <div className="flex items-start justify-between gap-2">
+                <span>{voiceError}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setVoiceError(null);
+                    setPendingFailedAudio(null);
+                  }}
+                  aria-label="Fechar aviso de microfone"
+                  className="text-[#FCA5A5] hover:text-white shrink-0"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              {(pendingFailedAudio || onOpenConnectors) && (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {pendingFailedAudio && (
+                    <button
+                      type="button"
+                      onClick={() => void handleAttachFailedAudio()}
+                      disabled={uploading}
+                      className="inline-flex items-center gap-1 rounded-lg border border-white/15 bg-[#1B1B1E] px-2.5 py-1 text-[11.5px] font-semibold text-[#F4F4F5] hover:bg-[#27272B]"
+                    >
+                      Anexar áudio gravado no chat
+                    </button>
+                  )}
+                  {onOpenConnectors && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setVoiceError(null);
+                        onOpenConnectors();
+                      }}
+                      className="inline-flex items-center gap-1 rounded-lg border border-[#42A0FF]/40 bg-[#42A0FF]/15 px-2.5 py-1 text-[11.5px] font-semibold text-[#93C5FD] hover:bg-[#42A0FF]/25"
+                    >
+                      Configurar chave em Conexões
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {pendingAttachments.length > 0 && (
             <div className="flex flex-wrap gap-2 px-2 pb-2 mb-2 border-b border-white/[0.06]">
               {pendingAttachments.map((att, idx) => (
@@ -1907,13 +2343,53 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
             </div>
 
             <textarea
+              ref={textareaRef}
               id="composer-message-input"
               name="composer_message"
               aria-label={`Mensagem para ${titleName}`}
               rows={1}
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                setCursorPos(e.target.selectionStart ?? e.target.value.length);
+              }}
+              onClick={(e) => {
+                setCursorPos(e.currentTarget.selectionStart ?? e.currentTarget.value.length);
+              }}
+              onKeyUp={(e) => {
+                setCursorPos(e.currentTarget.selectionStart ?? e.currentTarget.value.length);
+              }}
               onKeyDown={(e) => {
+                if (activeTrigger && autocompleteItems.length > 0) {
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setAutocompleteIndex((idx) => (idx + 1) % autocompleteItems.length);
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setAutocompleteIndex(
+                      (idx) => (idx - 1 + autocompleteItems.length) % autocompleteItems.length
+                    );
+                    return;
+                  }
+                  if (e.key === "Enter" || e.key === "Tab") {
+                    e.preventDefault();
+                    const picked = autocompleteItems[autocompleteIndex] ?? autocompleteItems[0];
+                    if (picked) {
+                      applyComposerItem(picked);
+                    }
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    if (triggerKey) {
+                      setDismissedTriggerKey(triggerKey);
+                    }
+                    return;
+                  }
+                }
+
                 if (sendShortcut === "mod_enter") {
                   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                     e.preventDefault();
@@ -1927,9 +2403,11 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
               placeholder={
                 uploading
                   ? "Enviando arquivo..."
-                  : sendShortcut === "mod_enter"
-                    ? `Mensagem para ${titleName} (Ctrl/⌘ + Enter para enviar)`
-                    : `Mensagem para ${titleName}`
+                  : transcribingVoice
+                    ? "Transcrevendo áudio..."
+                    : sendShortcut === "mod_enter"
+                      ? `Mensagem para ${titleName} (/ comandos · @ menções · Ctrl/⌘+Enter)`
+                      : `Mensagem para ${titleName} (/ comandos · @ menções)`
               }
               className="flex-1 bg-transparent py-2 text-[13.5px] text-white placeholder-[#6A6A6A] focus:outline-none resize-none max-h-32"
             />
@@ -1953,16 +2431,23 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
 
             <button
               type="button"
-              onClick={handleVoiceDictation}
-              title="Ditar pedido por voz"
-              aria-label="Gravar ou ditar pedido por voz"
-              className={`h-9 w-9 rounded-full flex items-center justify-center transition-colors shrink-0 ${
+              disabled={transcribingVoice}
+              onClick={() => void handleVoiceDictation()}
+              title={listeningVoice ? "Finalizar gravação e transcrever" : "Gravar pedido por voz"}
+              aria-label={
+                listeningVoice ? "Finalizar gravação de áudio" : "Gravar ou ditar pedido por voz"
+              }
+              className={`h-9 w-9 rounded-full flex items-center justify-center transition-colors shrink-0 disabled:opacity-40 ${
                 listeningVoice
-                  ? "bg-[#FD2F3B]/20 text-[#FD2F3B]"
+                  ? "bg-[#FD2F3B]/20 text-[#FD2F3B] ring-1 ring-[#FD2F3B]/50"
                   : "text-[#979797] hover:text-white hover:bg-[#2A2A2A]"
               }`}
             >
-              <Mic className="h-4 w-4" />
+              {transcribingVoice ? (
+                <Loader2 className="h-4 w-4 animate-spin text-[#42A0FF]" />
+              ) : (
+                <Mic className="h-4 w-4" />
+              )}
             </button>
 
             {isWorking && onInterruptTurn && mode === "agent" && (

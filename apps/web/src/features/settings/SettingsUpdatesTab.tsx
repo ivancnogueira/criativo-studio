@@ -42,6 +42,9 @@ export const SettingsUpdatesTab: React.FC<SettingsUpdatesTabProps> = ({
   const isLicenseBlocked = updateStatus?.state === "license_blocked";
   const isReadyToRestart = updateStatus?.state === "ready_to_restart";
   const hasUpdate = Boolean(updateStatus?.update_available) && !isLicenseBlocked;
+  const hasError =
+    Boolean(erro || updateStatus?.error_message || updateStatus?.state === "error") &&
+    !isLicenseBlocked;
 
   const handleCheck = async () => {
     if (!onCheckUpdates || checking) return;
@@ -193,18 +196,17 @@ export const SettingsUpdatesTab: React.FC<SettingsUpdatesTabProps> = ({
               </div>
             )}
           </div>
+        ) : hasError ? (
+          <div className="rounded-xl bg-red-500/10 border border-red-500/30 p-3.5 flex items-start gap-2.5 text-[12px] text-red-200">
+            <AlertTriangle className="h-4 w-4 text-red-400 shrink-0 mt-0.5" />
+            <span>{erro || updateStatus?.error_message || "Falha ao consultar servidor de atualizações."}</span>
+          </div>
         ) : (
           <div className="rounded-xl bg-[#141414] border border-white/[0.06] p-3 text-[12.5px] text-[#A8A8A8] flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4 text-[#31CF76] shrink-0" />
             <span>
               Você já está usando a versão mais recente (v{currentVersion}).
             </span>
-          </div>
-        )}
-
-        {(erro || updateStatus?.error_message) && !isLicenseBlocked && (
-          <div className="rounded-xl bg-red-500/10 border border-red-500/30 p-3 text-[12px] text-red-200">
-            {erro || updateStatus?.error_message}
           </div>
         )}
 
@@ -216,7 +218,7 @@ export const SettingsUpdatesTab: React.FC<SettingsUpdatesTabProps> = ({
         </div>
       </div>
 
-      <WhatsNewPanel whatsNew={whatsNew} onCheckUpdates={handleCheck} />
+      <WhatsNewPanel whatsNew={whatsNew} hideSummaryHeader onCheckUpdates={handleCheck} />
     </div>
   );
 };

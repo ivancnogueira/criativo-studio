@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type {
@@ -112,6 +112,149 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogMeta[] = [
   },
 ];
 
+function readDefaultRuntimeVersion(workspaceRoot?: string): string {
+  const candidates = [
+    process.env.CRIATIVO_PRODUCT_ROOT ? join(process.env.CRIATIVO_PRODUCT_ROOT, "produto.json") : null,
+    workspaceRoot ? join(workspaceRoot, "produto.json") : null,
+    workspaceRoot ? resolve(workspaceRoot, "..", "..", "produto.json") : null,
+    join(process.cwd(), "produto.json"),
+  ].filter((p): p is string => Boolean(p));
+
+  for (const p of candidates) {
+    if (!existsSync(p)) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(p, "utf8")) as { versao?: unknown };
+      if (typeof parsed.versao === "string" && parsed.versao.trim()) {
+        const clean = parsed.versao.trim();
+        return clean.startsWith("v") ? clean : `v${clean}`;
+      }
+    } catch {
+      // ignora arquivo inválido
+    }
+  }
+  return process.env.CRIATIVO_APP_VERSION?.trim()
+    ? `v${process.env.CRIATIVO_APP_VERSION.trim().replace(/^v/i, "")}`
+    : "v1.0.0";
+}
+
+const API_MODELS_CACHE_TTL_MS = 5 * 60_000;
+const apiKeyModelsCache = new Map<ProviderName, { expiresAt: number; models: ModeloProvedorInfo[] }>();
+
+async function fetchApiModelsForProvider(
+  provedor: ProviderName,
+  apiKey: string
+): Promise<ModeloProvedorInfo[]> {
+  if (!apiKey || process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1") {
+    return [];
+  }
+
+  try {
+    if (provedor === "openai") {
+      const res = await fetch("https://api.openai.com/v1/models", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(2500),
+      });
+      if (!res.ok) return [];
+      const payload = (await res.json()) as { data?: Array<{ id?: string }> };
+      const filtered = (payload.data ?? [])
+        .map((item) => (typeof item.id === "string" ? item.id.trim() : ""))
+        .filter(
+          (id) =>
+            Boolean(id) &&
+            /^(gpt-|o1|o3|o4|chatgpt-)/i.test(id) &&
+            !/(instruct|realtime|audio|transcribe|tts|whisper|embedding)/i.test(id)
+        );
+      filtered.sort((a, b) => a.localeCompare(b));
+      return filtered.map((id, idx) => ({
+        id,
+        rotulo: id,
+        padrao: id === "gpt-4o" || (!filtered.includes("gpt-4o") && idx === 0),
+        suporta_imagem: id.includes("image") || id.includes("4o"),
+        esforcos_suportados: ["baixo", "medio", "alto"],
+        descoberto_em_conta: true,
+      }));
+    }
+
+    if (provedor === "claude") {
+      const res = await fetch("https://api.anthropic.com/v1/models", {
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        signal: AbortSignal.timeout(2500),
+      });
+      if (!res.ok) return [];
+      const payload = (await res.json()) as {
+        data?: Array<{ id?: string; display_name?: string }>;
+      };
+      return (payload.data ?? [])
+        .filter((item) => typeof item.id === "string" && item.id.trim().length > 0)
+        .map((item, idx) => ({
+          id: item.id!.trim(),
+          rotulo: item.display_name?.trim() || item.id!.trim(),
+          padrao: idx === 0,
+          esforcos_suportados: ["baixo", "medio", "alto"],
+          descoberto_em_conta: true,
+        }));
+    }
+
+    if (provedor === "gemini") {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`,
+        { signal: AbortSignal.timeout(2500) }
+      );
+      if (!res.ok) return [];
+      const payload = (await res.json()) as {
+        models?: Array<{
+          name?: string;
+          displayName?: string;
+          supportedGenerationMethods?: string[];
+        }>;
+      };
+      return (payload.models ?? [])
+        .filter(
+          (m) =>
+            typeof m.name === "string" &&
+            Array.isArray(m.supportedGenerationMethods) &&
+            m.supportedGenerationMethods.includes("generateContent")
+        )
+        .map((m, idx) => {
+          const cleanId = m.name!.replace(/^models\//, "").trim();
+          return {
+            id: cleanId,
+            rotulo: m.displayName?.trim() || cleanId,
+            padrao: idx === 0,
+            suporta_imagem: cleanId.includes("image") || cleanId.includes("imagen"),
+            esforcos_suportados: ["baixo", "medio", "alto"],
+            descoberto_em_conta: true,
+          };
+        });
+    }
+
+    if (provedor === "grok") {
+      const res = await fetch("https://api.x.ai/v1/models", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(2500),
+      });
+      if (!res.ok) return [];
+      const payload = (await res.json()) as { data?: Array<{ id?: string }> };
+      return (payload.data ?? [])
+        .filter((item) => typeof item.id === "string" && item.id.trim().length > 0)
+        .map((item, idx) => ({
+          id: item.id!.trim(),
+          rotulo: item.id!.trim(),
+          padrao: idx === 0,
+          esforcos_suportados: ["baixo", "medio", "alto"],
+          descoberto_em_conta: true,
+        }));
+    }
+  } catch {
+    // falha silenciosa em ambiente offline ou timeout -> usa fallback somente quando conectado
+  }
+
+  return [];
+}
+
 const DEFAULT_ONBOARDING: OnboardingEstado = {
   onboarding_concluido: false,
   modo_provedor_inicial: null,
@@ -119,7 +262,7 @@ const DEFAULT_ONBOARDING: OnboardingEstado = {
   telemetria_anonima: false,
   marca_nome: "[NOME_DA_MARCA]",
   perfil_handle: "[@SEU_PERFIL]",
-  runtime_versao: "v2.3.0",
+  runtime_versao: readDefaultRuntimeVersion(),
   atualizado_em: new Date().toISOString(),
 };
 
@@ -606,88 +749,121 @@ export class ProviderConnectionService {
     const hiddenModelsMap = this.getStudioConfig<Record<string, string[]>>("modelos_ocultos_por_provedor", {});
     const agentsByProvider = this.getAgentsByProvider();
 
-    return PROVIDER_CATALOG.map((meta) => {
-      const cli = cliData[meta.provedor] ?? { found: false, version: null, executable: null };
-      const vaultConfigured = meta.vaultKeys.some((k) => secretSet.has(k));
-      const assinaturaManual = Boolean(connectedFlags[meta.provedor]);
+    return await Promise.all(
+      PROVIDER_CATALOG.map(async (meta) => {
+        const cli = cliData[meta.provedor] ?? { found: false, version: null, executable: null };
+        const vaultConfigured = meta.vaultKeys.some((k) => secretSet.has(k));
 
-      let contas: ContaProvedorInfo[] = [];
-      let pool: PoolContasConfig | null = null;
-      let modelos: ModeloProvedorInfo[] = meta.fallbackModelos;
+        let contas: ContaProvedorInfo[] = [];
+        let pool: PoolContasConfig | null = null;
+        let discoveredModels: ModeloProvedorInfo[] = [];
 
-      if (meta.provedor === "gemini") {
-        contas = agSnapshot.contas;
-        pool = agSnapshot.pool;
-        if (agSnapshot.modelos.length > 0) {
-          modelos = agSnapshot.modelos;
+        if (meta.provedor === "gemini") {
+          contas = agSnapshot.contas;
+          pool = agSnapshot.pool;
+          discoveredModels = agSnapshot.modelos;
+        } else if (meta.provedor === "claude") {
+          contas = claudeAccounts;
+          pool = this.cliOAuth.getPoolConfig("claude");
+          discoveredModels = claudeDynamicModels;
+        } else if (meta.provedor === "openai") {
+          contas = openaiAccounts;
+          pool = this.cliOAuth.getPoolConfig("openai");
+          discoveredModels = openaiDynamicModels;
+        } else if (meta.provedor === "opencode") {
+          discoveredModels = opencodeCatalog.modelos;
+        } else if (meta.provedor === "ollama") {
+          discoveredModels = ollamaCheck.models;
         }
-      } else if (meta.provedor === "claude") {
-        contas = claudeAccounts;
-        pool = this.cliOAuth.getPoolConfig("claude");
-        if (claudeDynamicModels.length > 0) {
-          modelos = claudeDynamicModels;
-        }
-      } else if (meta.provedor === "openai") {
-        contas = openaiAccounts;
-        pool = this.cliOAuth.getPoolConfig("openai");
-        if (openaiDynamicModels.length > 0) {
-          modelos = openaiDynamicModels;
-        }
-      } else if (meta.provedor === "opencode") {
-        if (opencodeCatalog.modelos.length > 0) {
-          modelos = opencodeCatalog.modelos;
-        }
-      } else if (meta.provedor === "ollama") {
-        if (ollamaCheck.models.length > 0) {
-          modelos = ollamaCheck.models;
-        }
-      }
 
-      const hiddenSet = new Set(hiddenModelsMap[meta.provedor] ?? []);
-      const decoratedModelos = modelos.map((m) => ({
-        ...m,
-        oculto: hiddenSet.has(m.id),
-      }));
-
-      const hasValidAccount = contas.some((c) => c.estado === "conectado" || c.token_valido);
-      if (pool && contas.length > 0 && pool.habilitado) {
-        const picked = selectPoolAccount(contas, pool, pool.conta_em_uso);
-        if (picked) {
-          pool = { ...pool, conta_em_uso: picked.id };
+        const hasValidAccount = contas.some((c) => c.estado === "conectado" || c.token_valido);
+        if (pool && contas.length > 0 && pool.habilitado) {
+          const picked = selectPoolAccount(contas, pool, pool.conta_em_uso);
+          if (picked) {
+            pool = { ...pool, conta_em_uso: picked.id };
+          }
         }
-      }
-      let modo: ProvedorStatusInfo["modo_conexao"] = "nenhum";
 
-      if (meta.provedor === "opencode") {
-        if (vaultConfigured) modo = "api_key";
-        else if (opencodeCatalog.detected && opencodeCatalog.modelos.length > 0) modo = "cli";
-      } else if (meta.provedor === "ollama") {
-        if (ollamaCheck.up) modo = "local";
-      } else {
-        if (hasValidAccount) modo = "assinatura";
-        else if (vaultConfigured) modo = "api_key";
-      }
+        let modo: ProvedorStatusInfo["modo_conexao"] = "nenhum";
+        if (meta.provedor === "opencode") {
+          if (vaultConfigured) modo = "api_key";
+          else if (opencodeCatalog.detected && opencodeCatalog.modelos.length > 0) modo = "cli";
+        } else if (meta.provedor === "ollama") {
+          if (ollamaCheck.up) modo = "local";
+        } else {
+          if (hasValidAccount) modo = "assinatura";
+          else if (vaultConfigured || Boolean(connectedFlags[meta.provedor])) {
+            modo = vaultConfigured ? "api_key" : "nenhum";
+          }
+        }
 
-      return {
-        provedor: meta.provedor,
-        rotulo: meta.rotulo,
-        subtitulo: meta.subtitulo,
-        conectado: modo !== "nenhum",
-        cli_detectado:
-          meta.provedor === "opencode" ? opencodeCatalog.detected : cli.found,
-        cli_versao:
-          meta.provedor === "opencode" ? opencodeCatalog.version : cli.version,
-        cli_executavel:
-          meta.provedor === "opencode" ? opencodeCatalog.executable : cli.executable,
-        vault_configurado: vaultConfigured,
-        modo_conexao: modo,
-        modelos: decoratedModelos,
-        contas,
-        pool,
-        usado_por_agentes: agentsByProvider[meta.provedor] ?? [],
-        reporta_cota: contas.some((c) => (c.grupos_cota?.length ?? 0) > 0),
-      };
-    });
+        let modelos: ModeloProvedorInfo[] = [];
+        if (modo !== "nenhum") {
+          if (modo === "api_key") {
+            const cached = !forceProbe ? apiKeyModelsCache.get(meta.provedor) : undefined;
+            if (cached && cached.expiresAt > Date.now()) {
+              modelos = cached.models;
+            } else {
+              const apiKey =
+                meta.vaultKeys
+                  .map((k) => this.vault.getSecret(k) ?? this.vault.getSecret(k.toUpperCase()))
+                  .find((val): val is string => typeof val === "string" && val.trim().length > 0)
+                  ?.trim() ?? "";
+              const liveApiModels = apiKey
+                ? await fetchApiModelsForProvider(meta.provedor, apiKey)
+                : [];
+              if (liveApiModels.length > 0) {
+                apiKeyModelsCache.set(meta.provedor, {
+                  expiresAt: Date.now() + API_MODELS_CACHE_TTL_MS,
+                  models: liveApiModels,
+                });
+                modelos = liveApiModels;
+              } else if (discoveredModels.length > 0) {
+                modelos = discoveredModels;
+              } else {
+                modelos = meta.fallbackModelos.map((m) => ({
+                  ...m,
+                  descoberto_em_conta: false,
+                }));
+              }
+            }
+          } else if (discoveredModels.length > 0) {
+            modelos = discoveredModels;
+          } else if (modo === "assinatura") {
+            modelos = meta.fallbackModelos.map((m) => ({
+              ...m,
+              descoberto_em_conta: false,
+            }));
+          }
+        }
+
+        const hiddenSet = new Set(hiddenModelsMap[meta.provedor] ?? []);
+        const decoratedModelos = modelos.map((m) => ({
+          ...m,
+          oculto: hiddenSet.has(m.id),
+        }));
+
+        return {
+          provedor: meta.provedor,
+          rotulo: meta.rotulo,
+          subtitulo: meta.subtitulo,
+          conectado: modo !== "nenhum",
+          cli_detectado:
+            meta.provedor === "opencode" ? opencodeCatalog.detected : cli.found,
+          cli_versao:
+            meta.provedor === "opencode" ? opencodeCatalog.version : cli.version,
+          cli_executavel:
+            meta.provedor === "opencode" ? opencodeCatalog.executable : cli.executable,
+          vault_configurado: vaultConfigured,
+          modo_conexao: modo,
+          modelos: decoratedModelos,
+          contas,
+          pool,
+          usado_por_agentes: agentsByProvider[meta.provedor] ?? [],
+          reporta_cota: contas.some((c) => (c.grupos_cota?.length ?? 0) > 0),
+        };
+      })
+    );
   }
 
   public async connectProvider(
@@ -716,6 +892,7 @@ export class ProviderConnectionService {
       connectedFlags[provedor] = true;
       this.setStudioConfig("provedores_conectados", connectedFlags);
     }
+    apiKeyModelsCache.delete(provedor);
 
     const list = await this.getProvidersStatus(false);
     return list.find((item) => item.provedor === provedor)!;
@@ -780,6 +957,7 @@ export class ProviderConnectionService {
     if (!meta) {
       throw new Error(`Provedor desconhecido: ${provedor}`);
     }
+    apiKeyModelsCache.delete(provedor);
 
     for (const keyName of meta.vaultKeys) {
       this.db.connection.prepare(`DELETE FROM cofre_segredos WHERE chave_nome = ?;`).run(keyName);

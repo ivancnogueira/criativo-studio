@@ -339,7 +339,7 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
               Criativo Runtime atualizado
             </p>
             <p className="text-[11px] text-[#979797] mt-0.5">
-              {initialState.runtime_versao || "v2.3.0"} · Node + SQLite
+              {initialState.runtime_versao || "v1.0.0"} · Node + SQLite
             </p>
           </div>
         </div>

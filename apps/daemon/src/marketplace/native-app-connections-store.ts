@@ -215,6 +215,26 @@ export class NativeAppConnectionsStore {
     return rows.map((r) => this.rowToSummary(r));
   }
 
+  public listAllAccounts(
+    knownSlugs: readonly string[] = ["instagram", "telegram", "fish-audio", "elevenlabs"]
+  ): NativeAppAccountSummary[] {
+    for (const rawSlug of knownSlugs) {
+      const slug = rawSlug.trim().toLowerCase();
+      if (slug) {
+        this.ensureLegacyMigrated(slug);
+      }
+    }
+
+    const rows = this.db.connection
+      .prepare(
+        `SELECT * FROM projecao_apps_nativos_contas
+         ORDER BY padrao DESC, atualizado_em DESC;`
+      )
+      .all() as unknown as NativeAppRow[];
+
+    return rows.map((r) => this.rowToSummary(r));
+  }
+
   public getAccount(contaId: string): NativeAppAccountSummary | null {
     const row = this.db.connection
       .prepare(`SELECT * FROM projecao_apps_nativos_contas WHERE conta_id = ?;`)

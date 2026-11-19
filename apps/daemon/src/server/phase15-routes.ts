@@ -27,7 +27,7 @@ import type { ScreenCaptureBridge } from "../engine/tools/screen-capture-bridge.
 import { readVideoTool } from "../engine/tools/video-reader.ts";
 import type { ProviderRegistry } from "../engine/providers/provider-registry.ts";
 import type { ProviderConnectionService } from "../providers/provider-connection-service.ts";
-import type { TranscriptionService } from "../voice/transcription-service.ts";
+import { TranscriptionService } from "../voice/transcription-service.ts";
 import type { ConnectorsWebhookService } from "./connectors-webhook-service.ts";
 import {
   clearStorageCategory,
@@ -154,6 +154,24 @@ export async function tryHandlePhase15Route(
     return true;
   }
 
+  const perfilOpenMatch = path.match(/^\/api\/navegador\/perfis\/([^/]+)\/abrir$/);
+  if (method === "POST" && perfilOpenMatch) {
+    try {
+      const perfilId = decodeURIComponent(perfilOpenMatch[1]!);
+      const body = await readJsonBody(req).catch(() => ({}) as Record<string, unknown>);
+      const targetUrl =
+        typeof body.url === "string" && body.url.trim() ? body.url.trim() : "https://www.google.com";
+      const result = await browserService.openProfileWindow(perfilId, targetUrl);
+      sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      sendJson(res, mapHttpErrorStatus(err), {
+        ok: false,
+        erro: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return true;
+  }
+
   const perfilIdMatch = path.match(/^\/api\/navegador\/perfis\/([^/]+)$/);
   if (perfilIdMatch && (method === "PUT" || method === "DELETE")) {
     const perfilId = decodeURIComponent(perfilIdMatch[1]!);
@@ -163,6 +181,12 @@ export async function tryHandlePhase15Route(
         const result = await browserService.updateProfile(perfilId, {
           nome: typeof body.nome === "string" ? body.nome : undefined,
           cor_hex: typeof body.cor_hex === "string" ? body.cor_hex : undefined,
+          cdp_porta:
+            body.cdp_porta === null
+              ? null
+              : typeof body.cdp_porta === "number" || typeof body.cdp_porta === "string"
+                ? Number(body.cdp_porta)
+                : undefined,
           proxy_json:
             body.proxy_json === null
               ? null
@@ -666,7 +690,91 @@ export async function tryHandlePhase15Route(
   }
 
   if (method === "GET" && path === "/api/configuracoes/atualizacoes") {
-    sendJson(res, 200, getWhatsNewInfo(workspaceRoot));
+    sendJson(
+      res,
+      200,
+      getWhatsNewInfo(
+        workspaceRoot,
+        ctx.studioRoutesDeps.productRoot ?? process.env.CRIATIVO_PRODUCT_ROOT
+      )
+    );
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/voz/transcrever") {
+    try {
+      const body = await readJsonBody(req);
+      const rawAudio =
+        typeof body.audio_base64 === "string" ? body.audio_base64.trim() : "";
+      if (!rawAudio) {
+        sendJson(res, 400, { erro: "Campo obrigatório: 'audio_base64'." });
+        return true;
+      }
+
+      const rawMime =
+        typeof body.mime_type === "string" && body.mime_type.trim()
+          ? body.mime_type.trim().toLowerCase()
+          : "audio/webm";
+      const baseMime = rawMime.split(";")[0]?.trim() || "audio/webm";
+      if (!baseMime.startsWith("audio/") && baseMime !== "video/webm") {
+        sendJson(res, 400, { erro: `Formato de áudio não suportado: '${baseMime}'.` });
+        return true;
+      }
+
+      const cleanBase64 = rawAudio.replace(/^data:[^;]+;base64,/i, "");
+      if (cleanBase64.length > 20_000_000) {
+        sendJson(res, 413, {
+          ok: false,
+          codigo: "PAYLOAD_TOO_LARGE",
+          erro: "Áudio excede o limite de 15 MB.",
+        });
+        return true;
+      }
+
+      const audioBuffer = Buffer.from(cleanBase64, "base64");
+      if (audioBuffer.length === 0) {
+        sendJson(res, 400, { erro: "Áudio vazio ou base64 inválido." });
+        return true;
+      }
+      if (audioBuffer.length > 15 * 1024 * 1024) {
+        sendJson(res, 413, {
+          ok: false,
+          codigo: "PAYLOAD_TOO_LARGE",
+          erro: "Áudio excede o limite de 15 MB.",
+        });
+        return true;
+      }
+
+      const transcriber =
+        ctx.transcription ??
+        (ctx.studioRoutesDeps.vault
+          ? new TranscriptionService({ vault: ctx.studioRoutesDeps.vault })
+          : null);
+      if (!transcriber) {
+        sendJson(res, 422, {
+          ok: false,
+          code: "MISSING_TRANSCRIPTION_KEY",
+          codigo: "MISSING_TRANSCRIPTION_KEY",
+          erro: "Cofre de transcrição indisponível neste servidor.",
+        });
+        return true;
+      }
+
+      const texto = await transcriber.transcribeAudio(audioBuffer, rawMime);
+      sendJson(res, 200, { ok: true, texto });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("MISSING_TRANSCRIPTION_KEY")) {
+        sendJson(res, 422, {
+          ok: false,
+          code: "MISSING_TRANSCRIPTION_KEY",
+          codigo: "MISSING_TRANSCRIPTION_KEY",
+          erro: msg,
+        });
+        return true;
+      }
+      sendJson(res, mapHttpErrorStatus(err), { ok: false, erro: msg });
+    }
     return true;
   }
 

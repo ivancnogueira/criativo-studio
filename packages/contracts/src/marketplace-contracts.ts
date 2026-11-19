@@ -3,7 +3,7 @@
  * importação GitHub e controle de acesso/instalação.
  */
 
-import type { AvatarShape } from "./index.ts";
+import type { AvatarShape, NativeAppAccountSummary } from "./index.ts";
 import type { McpServidorConfig, McpTransporte } from "./mcp-contracts.ts";
 
 export type MarketplaceTab = "apps" | "agents" | "skills";
@@ -148,6 +148,8 @@ export interface LojaCatalogoSnapshot {
   skills: MarketplaceSkillItem[];
   installedApps: McpServidorConfig[];
   installedSkills: MarketplaceSkillItem[];
+  nativeAccounts?: NativeAppAccountSummary[];
+  connectedNativeSlugs?: string[];
   categories: {
     apps: string[];
     agents: string[];

@@ -66,8 +66,9 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   onNavigateForward,
   headerRightContent,
 }) => {
-  const islandText =
-    runningCount > 0
+  const islandText = !wsConnected
+    ? "Reconectando..."
+    : runningCount > 0
       ? `Produzindo agora · ${runningCount} ativo(s)`
       : awaitingApprovalCount > 0
         ? `${awaitingApprovalCount} aguardando aprovação`
@@ -192,9 +193,9 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         />
         <span
           className={`h-1.5 w-1.5 rounded-full ${
-            wsConnected ? "bg-[#31CF76]" : "bg-[#FF9412]"
+            wsConnected ? "bg-[#31CF76]" : "bg-[#FF9412] animate-pulse"
           }`}
-          aria-label={wsConnected ? "Daemon Live" : "Offline"}
+          aria-label={wsConnected ? "Daemon Live" : "Reconectando"}
         />
         <span className="text-[11.5px] font-medium text-[#DCDCDC] whitespace-nowrap">
           {islandText}

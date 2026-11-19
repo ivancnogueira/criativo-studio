@@ -12,6 +12,7 @@ import {
   Smartphone,
   Store,
   WalletCards,
+  Workflow,
 } from "lucide-react";
 import type {
   ContaProvedorInfo,
@@ -28,13 +29,15 @@ import { ServerSwitcherPopover } from "../features/servers/ServerSwitcherPopover
 
 export type StudioNavSection =
   | "agentes"
+  | "rotinas"
   | "fluxos"
   | "tarefas"
   | "agenda"
   | "uso"
   | "arquivos"
   | "loja"
-  | "conexoes";
+  | "conexoes"
+  | "configuracoes";
 
 interface WorkspaceRailProps {
   activeSection: StudioNavSection;
@@ -64,6 +67,7 @@ const RAIL_ITEMS: Array<{
   Icon: React.FC<{ className?: string }>;
 }> = [
   { id: "agentes", label: "Agentes e Chats", Icon: Bot },
+  { id: "rotinas", label: "Rotinas", Icon: Workflow },
   { id: "fluxos", label: "Fluxos de Trabalho", Icon: GitBranch },
   { id: "tarefas", label: "Fila e Tarefas", Icon: WalletCards },
   { id: "agenda", label: "Agenda", Icon: CalendarClock },
@@ -548,7 +552,12 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
           onClick={onOpenSettings}
           title="Configurações do Studio e Onboarding"
           aria-label="Configurações"
-          className="h-9 w-9 rounded-xl flex items-center justify-center text-[#979797] hover:text-white hover:bg-[#1A1A1A] transition-colors"
+          aria-current={activeSection === "configuracoes" ? "page" : undefined}
+          className={`h-9 w-9 rounded-xl flex items-center justify-center transition-colors ${
+            activeSection === "configuracoes"
+              ? "bg-[#242424] text-white shadow-inner ring-1 ring-white/10"
+              : "text-[#979797] hover:text-white hover:bg-[#1A1A1A]"
+          }`}
         >
           <Settings className="h-[17px] w-[17px]" />
         </button>

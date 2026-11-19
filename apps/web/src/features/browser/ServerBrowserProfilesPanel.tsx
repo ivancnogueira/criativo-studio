@@ -7,14 +7,17 @@ import type {
 } from "@criativo/contracts";
 import {
   Check,
+  ExternalLink,
   Globe,
   MoreHorizontal,
   Pencil,
+  Plug,
   Plus,
   Shield,
   Trash2,
   X,
 } from "lucide-react";
+import { daemonApi } from "../../services/websocket-client";
 
 export const BROWSER_PROFILE_PALETTE = [
   "#42A0FF",
@@ -273,8 +276,14 @@ export interface ServerBrowserProfilesPanelProps {
   onCreateProfile: (input: { nome: string; cor_hex?: string }) => Promise<void>;
   onUpdateProfile: (
     perfilId: string,
-    patch: { nome?: string; cor_hex?: string; proxy_json?: BrowserProfileProxyPayload | null }
+    patch: {
+      nome?: string;
+      cor_hex?: string;
+      cdp_porta?: number | null;
+      proxy_json?: BrowserProfileProxyPayload | null;
+    }
   ) => Promise<void>;
+  onOpenProfileBrowser?: (perfilId: string) => Promise<void>;
   onClearProfile: (perfilId: string) => Promise<void>;
   onDeleteProfile: (perfilId: string) => Promise<void>;
   onSaveProxy: (input: {
@@ -291,6 +300,7 @@ export function ServerBrowserProfilesPanel({
   proxies,
   onCreateProfile,
   onUpdateProfile,
+  onOpenProfileBrowser,
   onClearProfile,
   onDeleteProfile,
   onSaveProxy,
@@ -302,8 +312,54 @@ export function ServerBrowserProfilesPanel({
   const [actionMenuProfileId, setActionMenuProfileId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [cdpEditingId, setCdpEditingId] = useState<string | null>(null);
+  const [cdpPortDraft, setCdpPortDraft] = useState("");
+  const [openingProfileId, setOpeningProfileId] = useState<string | null>(null);
   const [proxyDialogProfile, setProxyDialogProfile] = useState<BrowserProfileInfo | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [errorFeedback, setErrorFeedback] = useState<string | null>(null);
+
+  const handleOpenBrowser = async (profile: BrowserProfileInfo) => {
+    setOpeningProfileId(profile.perfil_id);
+    setErrorFeedback(null);
+    try {
+      if (onOpenProfileBrowser) {
+        await onOpenProfileBrowser(profile.perfil_id);
+      } else {
+        await daemonApi.openBrowserProfileWindow(profile.perfil_id);
+      }
+      setFeedback(
+        profile.cdp_porta
+          ? `Conectado ao Chrome existente (CDP :${profile.cdp_porta}) no perfil "${profile.nome}".`
+          : `Janela do navegador aberta para o perfil "${profile.nome}".`
+      );
+    } catch (err) {
+      setErrorFeedback(
+        err instanceof Error ? err.message : "Não foi possível abrir o navegador do perfil."
+      );
+    } finally {
+      setOpeningProfileId(null);
+    }
+  };
+
+  const handleSaveCdpPort = async (perfilId: string) => {
+    const clean = cdpPortDraft.trim();
+    setErrorFeedback(null);
+    if (!clean) {
+      await onUpdateProfile(perfilId, { cdp_porta: null });
+      setCdpEditingId(null);
+      setFeedback("Porta CDP removida (perfil voltará a abrir janela própria).");
+      return;
+    }
+    const parsed = Number.parseInt(clean, 10);
+    if (!Number.isInteger(parsed) || parsed < 1024 || parsed > 65535) {
+      setErrorFeedback("Informe uma porta CDP loopback válida entre 1024 e 65535 (ex.: 9222).");
+      return;
+    }
+    await onUpdateProfile(perfilId, { cdp_porta: parsed });
+    setCdpEditingId(null);
+    setFeedback(`Porta CDP 127.0.0.1:${parsed} salva para este perfil.`);
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -345,6 +401,12 @@ export function ServerBrowserProfilesPanel({
       {feedback && (
         <div className="rounded-lg border border-[#31CF76]/30 bg-[#31CF76]/10 px-3 py-2 text-[12px] text-[#31CF76]">
           {feedback}
+        </div>
+      )}
+
+      {errorFeedback && (
+        <div className="rounded-lg border border-[#FD2F3B]/30 bg-[#FD2F3B]/10 px-3 py-2 text-[12px] text-[#FF7675]">
+          {errorFeedback}
         </div>
       )}
 
@@ -430,11 +492,57 @@ export function ServerBrowserProfilesPanel({
                         Proxy ativo
                       </span>
                     )}
+                    {profile.cdp_porta && (
+                      <span className="rounded-full bg-[#31CF76]/15 px-2 py-0.5 font-mono text-[11px] text-[#31CF76]">
+                        Chrome CDP :{profile.cdp_porta}
+                      </span>
+                    )}
                   </div>
+
+                  {cdpEditingId === profile.perfil_id && (
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded-lg border border-white/[0.08] bg-[#141414] p-2">
+                      <input
+                        type="number"
+                        min={1024}
+                        max={65535}
+                        value={cdpPortDraft}
+                        onChange={(e) => setCdpPortDraft(e.target.value)}
+                        placeholder="9222"
+                        aria-label="Porta CDP loopback"
+                        className="w-28 rounded border border-white/15 bg-[#1A1A1A] px-2 py-1 font-mono text-[12px] text-[#F0F0F0] outline-none focus:border-[#007CF7]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveCdpPort(profile.perfil_id)}
+                        className="rounded bg-[#007CF7] px-2.5 py-1 text-[11.5px] font-semibold text-white hover:bg-[#198BFF]"
+                      >
+                        Salvar porta
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCdpEditingId(null)}
+                        className="rounded bg-[#2A2A2A] px-2 py-1 text-[11.5px] text-[#DCDCDC]"
+                      >
+                        Cancelar
+                      </button>
+                      <span className="text-[11px] text-[#8E8E8E]">
+                        Inicie seu Chrome com <code className="text-[#DCDCDC]">--remote-debugging-port={cdpPortDraft || "9222"}</code>
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
 
-              <div className="relative shrink-0">
+              <div className="relative flex shrink-0 items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={openingProfileId === profile.perfil_id}
+                  onClick={() => void handleOpenBrowser(profile)}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.1] bg-[#1A1A1A] px-2.5 text-[12px] font-medium text-[#F0F0F0] transition hover:bg-[#2A2A2A] disabled:opacity-50"
+                >
+                  <ExternalLink size={13} className="text-[#42A0FF]" />
+                  <span>{openingProfileId === profile.perfil_id ? "Abrindo..." : "Abrir navegador"}</span>
+                </button>
                 <button
                   type="button"
                   aria-label={`Ações de ${profile.nome}`}
@@ -447,7 +555,7 @@ export function ServerBrowserProfilesPanel({
                 </button>
 
                 {isActionOpen && (
-                  <div className="absolute right-0 top-9 z-40 w-48 space-y-1 rounded-xl border border-white/[0.08] bg-[#1A1A1A] p-1.5 shadow-2xl">
+                  <div className="absolute right-0 top-9 z-40 w-56 space-y-1 rounded-xl border border-white/[0.08] bg-[#1A1A1A] p-1.5 shadow-2xl">
                     {!isShared && (
                       <button
                         type="button"
@@ -462,6 +570,18 @@ export function ServerBrowserProfilesPanel({
                         <span>Renomear perfil</span>
                       </button>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActionMenuProfileId(null);
+                        setCdpEditingId(profile.perfil_id);
+                        setCdpPortDraft(profile.cdp_porta ? String(profile.cdp_porta) : "9222");
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] font-semibold text-[#F0F0F0] hover:bg-[#2A2A2A]"
+                    >
+                      <Plug size={13} />
+                      <span>Conectar Chrome existente (CDP)</span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => {

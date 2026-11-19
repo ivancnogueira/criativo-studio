@@ -261,8 +261,11 @@ export class WebSocketClient {
   private reconnectAttempt = 0;
   private reconnectTimer: number | null = null;
   private closedManually = false;
+  private hasConnectedOnce = false;
   private readonly listeners = new Map<EventName, Set<EventListener<any>>>();
-  private readonly connectionListeners = new Set<(connected: boolean) => void>();
+  private readonly connectionListeners = new Set<
+    (connected: boolean, reconnected: boolean) => void
+  >();
 
   constructor(url?: string) {
     if (url) {
@@ -275,7 +278,9 @@ export class WebSocketClient {
     }
   }
 
-  public onConnectionChange(listener: (connected: boolean) => void): () => void {
+  public onConnectionChange(
+    listener: (connected: boolean, reconnected: boolean) => void
+  ): () => void {
     this.connectionListeners.add(listener);
     return () => {
       this.connectionListeners.delete(listener);
@@ -314,7 +319,9 @@ export class WebSocketClient {
 
     ws.addEventListener("open", () => {
       this.reconnectAttempt = 0;
-      for (const cb of this.connectionListeners) cb(true);
+      const reconnected = this.hasConnectedOnce;
+      this.hasConnectedOnce = true;
+      for (const cb of this.connectionListeners) cb(true, reconnected);
     });
 
     ws.addEventListener("message", (evt) => {
@@ -335,7 +342,7 @@ export class WebSocketClient {
       if (this.socket === ws) {
         this.socket = null;
       }
-      for (const cb of this.connectionListeners) cb(false);
+      for (const cb of this.connectionListeners) cb(false, false);
       if (!this.closedManually) {
         this.scheduleReconnect();
       }
@@ -2972,6 +2979,7 @@ export const daemonApi = {
     patch: {
       nome?: string;
       cor_hex?: string;
+      cdp_porta?: number | null;
       proxy_json?: BrowserProfileProxyPayload | null;
     }
   ): Promise<{ perfil: BrowserProfileInfo; closedTabs: number }> {
@@ -2981,6 +2989,20 @@ export const daemonApi = {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
+      }
+    );
+  },
+
+  async openBrowserProfileWindow(
+    perfilId: string,
+    url?: string
+  ): Promise<{ ok: boolean; tab: unknown; cdpPort?: number | null }> {
+    return await requestJson<{ ok: boolean; tab: unknown; cdpPort?: number | null }>(
+      `/api/navegador/perfis/${encodeURIComponent(perfilId)}/abrir`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(url ? { url } : {}),
       }
     );
   },
@@ -3567,6 +3589,20 @@ export const daemonApi = {
   }> {
     return await requestJson("/api/studio/updates/restart", {
       method: "POST",
+    });
+  },
+
+  async transcribeAudio(
+    audioBase64: string,
+    mimeType = "audio/webm"
+  ): Promise<{ ok: boolean; texto: string }> {
+    return await requestJson("/api/voz/transcrever", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        audio_base64: audioBase64,
+        mime_type: mimeType,
+      }),
     });
   },
 };

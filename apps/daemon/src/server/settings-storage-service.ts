@@ -260,22 +260,37 @@ export function updateUserSettings(
   return next;
 }
 
-export function getWhatsNewInfo(workspaceRoot: string): WhatsNewReleaseInfo {
-  let versaoAtual = "2.15.0";
-  const candidatePkgPaths = [
-    join(workspaceRoot, "package.json"),
-    resolve(workspaceRoot, "..", "..", "package.json"),
-  ];
-  for (const pkgPath of candidatePkgPaths) {
-    if (existsSync(pkgPath)) {
+export function getWhatsNewInfo(
+  workspaceRoot: string,
+  productRoot?: string,
+): WhatsNewReleaseInfo {
+  const resolvedProductRoot =
+    productRoot?.trim() ||
+    process.env.CRIATIVO_PRODUCT_ROOT?.trim() ||
+    resolve(workspaceRoot, "..", "..");
+
+  let versaoAtual = "1.0.0";
+  const envVersion = process.env.CRIATIVO_APP_VERSION?.trim();
+  if (envVersion) {
+    versaoAtual = envVersion;
+  } else {
+    const versionCandidates: Array<{ path: string; field: "versao" | "version" }> = [
+      { path: join(resolvedProductRoot, "produto.json"), field: "versao" },
+      { path: join(workspaceRoot, "produto.json"), field: "versao" },
+      { path: join(resolvedProductRoot, "package.json"), field: "version" },
+      { path: join(workspaceRoot, "package.json"), field: "version" },
+    ];
+    for (const candidate of versionCandidates) {
+      if (!existsSync(candidate.path)) continue;
       try {
-        const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string };
-        if (pkg.version && typeof pkg.version === "string") {
-          versaoAtual = pkg.version;
+        const parsed = JSON.parse(readFileSync(candidate.path, "utf8")) as Record<string, unknown>;
+        const rawVer = parsed[candidate.field];
+        if (typeof rawVer === "string" && rawVer.trim().length > 0) {
+          versaoAtual = rawVer.trim();
           break;
         }
       } catch {
-        // ignore
+        // ignora arquivo inválido e tenta o próximo candidato
       }
     }
   }
@@ -283,20 +298,19 @@ export function getWhatsNewInfo(workspaceRoot: string): WhatsNewReleaseInfo {
   const notas: WhatsNewReleaseInfo["notas"] = [
     {
       versao: versaoAtual,
-      data: "2026-11-18",
+      data: "2026-11-19",
       added: [
-        "Automação de navegador Chromium CDP multi-perfil com Takeover remoto e modo Ensinar ao Agente.",
-        "Ferramentas nativas read_video, read_image e capture_screen com consentimento Web.",
-        "Modelos Reserva (Backup Models) com failover em cascata e pool inteligente de contas.",
-        "Seções aninhadas em até 3 níveis na Sidebar, Modal de Configurações completo e Showcase Local.",
-        "Conectores diretos opcionais para Slack, Discord e GitHub com validação criptográfica.",
+        "Criativo AI Studio v1.0.0: equipe multiagente com Copilot no Chat (`/` comandos e `@` menções), Cofre AES-256-GCM e Memórias FTS5.",
+        "Motor de automação Chromium CDP nativo com perfis isolados, Takeover remoto e modo Ensinar ao Agente.",
+        "Pareamento WhatsApp Baileys multi-número com suporte explícito ao modo Conversa Interna (meu número).",
+        "Workflows visuais com Undo/Redo, Auto-layout e gatilhos por Cron, Webhook HMAC e WhatsApp.",
       ],
       changed: [
-        "Barra de uso real de armazenamento por categoria com limpeza segura de cache e prévias.",
-        "Conversa por voz contínua (LiveVoiceBar) e gaveta rápida de agentes (Ctrl/Cmd+Shift+A).",
+        "Modelos reais filtrados apenas por provedores conectados e sanitização estrita de schemas para Gemini.",
+        "Configurações em página In-Focus e Rotinas promovidas como seção dedicada na barra lateral.",
       ],
       fixed: [
-        "Proteção anti-SSRF em navegações automatizadas e mascaramento de credenciais em snapshots.",
+        "Estabilidade do daemon local com logs persistentes e watchdog automático, gravação real de voz via Microfone e badges da Loja.",
       ],
     },
   ];

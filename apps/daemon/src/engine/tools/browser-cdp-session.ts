@@ -7,6 +7,10 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { BrowserContext, CDPSession, Dialog, Page } from "playwright-core";
 import type { BrowserTabSummary } from "@criativo/contracts";
+import {
+  assertLoopbackCdpEndpoint,
+  NativeCdpBrowserSession,
+} from "./browser-native-cdp.ts";
 import type { SnapshotRefMeta } from "./browser-snapshot.ts";
 
 export const CONTEXT_IDLE_TTL_MS = 15 * 60_000;
@@ -21,6 +25,8 @@ export interface ChromiumDetectionResult {
 export interface LaunchProfileContextOptions {
   perfilId: string;
   userDataDir: string;
+  cdpUrl?: string | null;
+  headless?: boolean;
   proxy?: {
     server: string;
     username?: string;
@@ -202,7 +208,15 @@ export class BrowserCdpSessionManager {
   }
 
   public async ensurePersistentContext(opts: LaunchProfileContextOptions): Promise<BrowserContext> {
-    const proxySig = opts.proxy ? `${opts.proxy.server}|${opts.proxy.username ?? ""}` : "direct";
+    const wantsHeadless =
+      opts.headless ??
+      (process.env.CRIATIVO_BROWSER_HEADLESS === "1" ||
+        (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY));
+    const cdpSig = opts.cdpUrl ? `cdp:${opts.cdpUrl}` : "spawn";
+    const proxySig = `${cdpSig}|${wantsHeadless ? "headless" : "headed"}|${
+      opts.proxy ? `${opts.proxy.server}|${opts.proxy.username ?? ""}` : "direct"
+    }`;
+
     const existing = this.contexts.get(opts.perfilId);
     if (existing && existing.proxySignature === proxySig) {
       existing.lastUsedAt = Date.now();
@@ -213,6 +227,18 @@ export class BrowserCdpSessionManager {
       await this.closeProfileContext(opts.perfilId);
     }
 
+    if (opts.cdpUrl && opts.cdpUrl.trim()) {
+      const safeEndpoint = assertLoopbackCdpEndpoint(opts.cdpUrl);
+      const nativeExisting = await NativeCdpBrowserSession.connectExisting(safeEndpoint);
+      const context = nativeExisting as unknown as BrowserContext;
+      this.contexts.set(opts.perfilId, {
+        context,
+        proxySignature: proxySig,
+        lastUsedAt: Date.now(),
+      });
+      return context;
+    }
+
     const detected = this.detectBinary();
     if (!detected.available || !detected.executablePath) {
       throw new Error(
@@ -221,22 +247,38 @@ export class BrowserCdpSessionManager {
     }
 
     mkdirSync(opts.userDataDir, { recursive: true });
-    const pw = await import("playwright-core");
-    const context = await pw.chromium.launchPersistentContext(opts.userDataDir, {
-      executablePath: detected.executablePath,
-      headless: true,
-      args: this.buildSafeLaunchArgs(),
-      viewport: { width: 1280, height: 800 },
-      ...(opts.proxy?.server
-        ? {
-            proxy: {
-              server: opts.proxy.server,
-              ...(opts.proxy.username ? { username: opts.proxy.username } : {}),
-              ...(opts.proxy.password ? { password: opts.proxy.password } : {}),
-            },
-          }
-        : {}),
-    });
+
+    const preferNative =
+      !wantsHeadless || process.env.CRIATIVO_BROWSER_DRIVER === "native";
+    const pw = preferNative ? null : await import("playwright-core").catch(() => null);
+
+    let context: BrowserContext;
+    if (pw) {
+      context = await pw.chromium.launchPersistentContext(opts.userDataDir, {
+        executablePath: detected.executablePath,
+        headless: wantsHeadless,
+        args: this.buildSafeLaunchArgs(),
+        viewport: { width: 1280, height: 800 },
+        ...(opts.proxy?.server
+          ? {
+              proxy: {
+                server: opts.proxy.server,
+                ...(opts.proxy.username ? { username: opts.proxy.username } : {}),
+                ...(opts.proxy.password ? { password: opts.proxy.password } : {}),
+              },
+            }
+          : {}),
+      });
+    } else {
+      const nativeSession = await NativeCdpBrowserSession.launch({
+        executablePath: detected.executablePath,
+        userDataDir: opts.userDataDir,
+        headless: wantsHeadless,
+        args: this.buildSafeLaunchArgs(),
+        proxy: opts.proxy ?? null,
+      });
+      context = nativeSession as unknown as BrowserContext;
+    }
 
     this.contexts.set(opts.perfilId, {
       context,
@@ -251,12 +293,16 @@ export class BrowserCdpSessionManager {
     userDataDir: string;
     agenteId: string | null;
     url: string;
+    cdpUrl?: string | null;
+    headless?: boolean;
     proxy?: LaunchProfileContextOptions["proxy"];
     onPageNavigated?: (tab: ManagedTabEntry, url: string, title: string) => void;
   }): Promise<ManagedTabEntry> {
     const context = await this.ensurePersistentContext({
       perfilId: params.perfilId,
       userDataDir: params.userDataDir,
+      cdpUrl: params.cdpUrl,
+      headless: params.headless,
       proxy: params.proxy,
     });
 

@@ -19,13 +19,27 @@ export class TranscriptionService {
     this.fetchFn = options.fetchImpl ?? fetch;
   }
 
+  private getSecretAnyCase(candidates: string[]): string | null {
+    for (const candidate of candidates) {
+      const found = this.vault.getSecret(candidate);
+      if (typeof found === "string" && found.trim().length > 0) {
+        return found.trim();
+      }
+    }
+    return null;
+  }
+
   public async transcribeAudio(
     audioBuffer: Buffer,
     mimeType = "audio/ogg"
   ): Promise<string> {
-    const openaiKey = this.vault.getSecret("OPENAI_API_KEY");
-    const geminiKey =
-      this.vault.getSecret("GEMINI_API_KEY") ?? this.vault.getSecret("GOOGLE_API_KEY");
+    const openaiKey = this.getSecretAnyCase(["OPENAI_API_KEY", "openai_api_key"]);
+    const geminiKey = this.getSecretAnyCase([
+      "GEMINI_API_KEY",
+      "gemini_api_key",
+      "GOOGLE_API_KEY",
+      "google_api_key",
+    ]);
 
     if (geminiKey) {
       return await this.transcribeWithGemini(audioBuffer, mimeType, geminiKey);
@@ -36,7 +50,7 @@ export class TranscriptionService {
     }
 
     throw new Error(
-      "Nenhuma chave de transcrição (GEMINI_API_KEY ou OPENAI_API_KEY) encontrada no Cofre."
+      "MISSING_TRANSCRIPTION_KEY: Nenhuma chave de transcrição (GEMINI_API_KEY ou OPENAI_API_KEY) configurada no Cofre."
     );
   }
 
@@ -97,8 +111,16 @@ export class TranscriptionService {
   ): Promise<string> {
     try {
       const formData = new FormData();
-      const cleanMime = mimeType.split(";")[0].trim() || "audio/ogg";
-      const ext = cleanMime.includes("mp3") || cleanMime.includes("mpeg") ? "mp3" : "ogg";
+      const cleanMime = (mimeType.split(";")[0]?.trim() || "audio/ogg").toLowerCase();
+      const ext = cleanMime.includes("webm")
+        ? "webm"
+        : cleanMime.includes("mp4") || cleanMime.includes("m4a")
+          ? "m4a"
+          : cleanMime.includes("wav")
+            ? "wav"
+            : cleanMime.includes("mp3") || cleanMime.includes("mpeg")
+              ? "mp3"
+              : "ogg";
       const blob = new Blob([new Uint8Array(audioBuffer)], { type: cleanMime });
       formData.append("file", blob, `audio.${ext}`);
       formData.append("model", "whisper-1");

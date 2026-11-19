@@ -63,11 +63,14 @@ import {
   computeUnlockedAgentsSummary,
   evaluateAndSyncSetupCompletion,
   getBrandIdentity,
+  hasConfiguredBrand,
   importBrandPdfFromBuffer,
+  interpolateBrandPlaceholders,
   isSetupAssistantVisible,
   listUpgradePackages,
   saveBrandIdentity,
   setSetupAssistantState,
+  syncBrandPlaceholdersInDatabase,
 } from "./brand-onboarding-service.ts";
 import { tryHandleWhatsAppMcpStoreRoute } from "./routes-whatsapp-mcp-store.ts";
 import {
@@ -139,6 +142,7 @@ export interface StudioRoutesDeps {
   readJsonBody: (req: IncomingMessage) => Promise<Record<string, unknown>>;
   readRawBody?: (req: IncomingMessage) => Promise<Buffer>;
   workspaceRoot?: string;
+  productRoot?: string;
   mcpGateway?: McpGateway;
   catalogService?: CatalogService;
   githubImporter?: GithubImporter;
@@ -239,6 +243,23 @@ function inferTipoUso(mime: string, requested?: string): ArquivoStudio["tipo_uso
   return "documento";
 }
 
+type BrandSummary = { marca_nome: string; perfil_handle: string };
+
+function applyBrandToMessage(msg: MensagemChat, brand?: BrandSummary | null): MensagemChat {
+  if (!brand || !hasConfiguredBrand(brand) || msg.autor !== "agente") {
+    return msg;
+  }
+  return {
+    ...msg,
+    conteudo_markdown: interpolateBrandPlaceholders(msg.conteudo_markdown, brand),
+    steps: msg.steps.map((s) =>
+      typeof s.detalhes === "string"
+        ? { ...s, detalhes: interpolateBrandPlaceholders(s.detalhes, brand) }
+        : s
+    ),
+  };
+}
+
 function mapChatRow(
   row: {
     mensagem_id: string;
@@ -264,6 +285,7 @@ function mapChatRow(
     reacao_emoji?: string | null;
   },
   db?: CriativoDatabase | number,
+  brand?: BrandSummary | null,
 ): MensagemChat {
   const metadados = row.metadados_json
     ? safeJsonParse<Record<string, unknown>>(row.metadados_json, {})
@@ -312,7 +334,7 @@ function mapChatRow(
     ? (metadados.memory_changes as MemoryReviewAlteracao[])
     : null;
 
-  return {
+  const rawMsg: MensagemChat = {
     mensagem_id: row.mensagem_id,
     canal_id: row.canal_id,
     agente_id: row.agente_id,
@@ -342,6 +364,8 @@ function mapChatRow(
     lida: row.lida !== 0,
     criado_em: row.criado_em,
   };
+
+  return applyBrandToMessage(rawMsg, brand);
 }
 
 async function readRawBodyFallback(req: IncomingMessage): Promise<Buffer> {
@@ -687,7 +711,8 @@ function enrichAgentRow(
     atualizado_em: string;
   },
   workspaceRoot = process.cwd(),
-  licenseService?: LicenseClientService
+  licenseService?: LicenseClientService,
+  brand?: BrandSummary | null,
 ) {
   const canalId = `agente:${row.agente_id}`;
   const unreadRow = db.connection
@@ -711,10 +736,17 @@ function enrichAgentRow(
       : def?.pacote ?? "base"
   ) as "base" | "bonus" | "video";
   const upgradeDesbloqueado = isUpgradeUnlocked(db, workspaceRoot, pacote, licenseService);
-  const promptBase =
+  const rawPromptBase =
     typeof parsedConfig.prompt_base === "string" && parsedConfig.prompt_base.trim().length > 0
       ? parsedConfig.prompt_base
       : def?.prompt_base ?? "";
+  const activeBrand = brand && hasConfiguredBrand(brand) ? brand : null;
+  const promptBase = activeBrand
+    ? interpolateBrandPlaceholders(rawPromptBase, activeBrand)
+    : rawPromptBase;
+  const resolvedPapel = activeBrand
+    ? interpolateBrandPlaceholders(row.papel, activeBrand)
+    : row.papel;
 
   const backupModels = parseBackupModelsJson(row.backup_models_json);
   const permissionLevel: PermissionLevel =
@@ -753,8 +785,17 @@ function enrichAgentRow(
     section_id: sectionId,
   };
 
+  const rawLastMessage = lastRow
+    ? lastRow.conteudo_markdown.replace(/\s+/g, " ").slice(0, 96)
+    : null;
+  const resolvedLastMessage =
+    rawLastMessage && activeBrand
+      ? interpolateBrandPlaceholders(rawLastMessage, activeBrand)
+      : rawLastMessage;
+
   return {
     ...row,
+    papel: resolvedPapel,
     config,
     backup_models: backupModels,
     permission_level: permissionLevel,
@@ -766,7 +807,7 @@ function enrichAgentRow(
     hidden,
     section_id: sectionId,
     nao_lidas: Number(unreadRow?.total ?? 0),
-    ultima_mensagem: lastRow ? lastRow.conteudo_markdown.replace(/\s+/g, " ").slice(0, 96) : null,
+    ultima_mensagem: resolvedLastMessage,
     ultima_mensagem_em: lastRow?.criado_em ?? row.atualizado_em,
   };
 }
@@ -2108,7 +2149,7 @@ export async function executeAgentConversationTurn(params: {
         )
         .all(effectiveThreadId, canalId, cutoffAt, cutoffAt)) as Array<Parameters<typeof mapChatRow>[0]>;
 
-  const history = historyRows.reverse().map(mapChatRow);
+  const history = historyRows.reverse().map((r) => mapChatRow(r, deps.db));
   const progressEmitter = (prog: ChatProgressReport): void => {
     params.onProgress?.(prog);
     if (isSubThread) {
@@ -2591,10 +2632,11 @@ export async function tryHandleStudioRoute(
     return true;
   }
 
-  if (method === "PUT" && path === "/api/onboarding") {
+  if ((method === "PUT" || method === "PATCH") && path === "/api/onboarding") {
     const body = await readJsonBody(req);
     providerConnection.updateOnboardingState(body as Partial<OnboardingEstado>);
     const synced = evaluateAndSyncSetupCompletion(db, providerConnection, workspaceRoot);
+    syncBrandPlaceholdersInDatabase(db, getBrandIdentity(providerConnection));
     wsHub.broadcast("onboarding:updated", {
       onboarding: synced.onboarding,
       setup_assistant_visible: synced.setup_assistant_visible,
@@ -2707,7 +2749,7 @@ export async function tryHandleStudioRoute(
 
   if (method === "PUT" && path === "/api/marca/identidade") {
     const body = await readJsonBody(req);
-    const updated = await saveBrandIdentity(providerConnection, workspaceRoot, body);
+    const updated = await saveBrandIdentity(providerConnection, workspaceRoot, body, db);
     sendJson(res, 200, { identidade: updated, onboarding: providerConnection.getOnboardingState() });
     return true;
   }
@@ -2962,9 +3004,10 @@ export async function tryHandleStudioRoute(
     const rows = db.connection
       .prepare(`SELECT * FROM projecao_agentes ORDER BY ordem_exibicao ASC;`)
       .all() as Array<Parameters<typeof enrichAgentRow>[1]>;
+    const currentBrand = getBrandIdentity(providerConnection);
     const enriched = rows
       .filter((row) => row.agente_id !== SETUP_ASSISTANT_AGENT_DEF.agente_id || setupVisible)
-      .map((row) => enrichAgentRow(db, row, workspaceRoot, deps.licenseService));
+      .map((row) => enrichAgentRow(db, row, workspaceRoot, deps.licenseService, currentBrand));
     const filtered = apenasDesbloqueados
       ? enriched.filter((a) => a.config.upgrade_desbloqueado !== false)
       : enriched;
@@ -2996,6 +3039,16 @@ export async function tryHandleStudioRoute(
       .get() as { max_ordem: number };
     const agora = new Date().toISOString();
 
+    const currentBrand = getBrandIdentity(providerConnection);
+    const hasBrand = hasConfiguredBrand(currentBrand);
+    const rawPromptBase =
+      typeof body.prompt_base === "string" && body.prompt_base.trim().length > 0
+        ? body.prompt_base.trim()
+        : `Você é ${nome}, agente customizado do Criativo AI Studio para [NOME_DA_MARCA].`;
+    const resolvedPromptBase = hasBrand
+      ? interpolateBrandPlaceholders(rawPromptBase, currentBrand)
+      : rawPromptBase;
+
     const config = {
       frente: "custom",
       pasta: typeof body.pasta === "string" ? body.pasta : "Agentes Customizados",
@@ -3003,17 +3056,15 @@ export async function tryHandleStudioRoute(
       avatar_shape: typeof body.avatar_shape === "string" ? body.avatar_shape : "rounded_square",
       avatar_color: typeof body.avatar_color === "string" ? body.avatar_color : "#38bdf8",
       effort: typeof body.effort === "string" ? body.effort : "alto",
-      prompt_base:
-        typeof body.prompt_base === "string" && body.prompt_base.trim().length > 0
-          ? body.prompt_base.trim()
-          : `Você é ${nome}, agente customizado do Criativo AI Studio para [NOME_DA_MARCA].`,
+      prompt_base: resolvedPromptBase,
       customizado: true,
     };
 
-    const papel =
+    const rawPapel =
       typeof body.papel === "string" && body.papel.trim().length > 0
         ? body.papel.trim()
-        : config.prompt_base.slice(0, 120);
+        : resolvedPromptBase.slice(0, 120);
+    const papel = hasBrand ? interpolateBrandPlaceholders(rawPapel, currentBrand) : rawPapel;
     const modeloPadrao =
       typeof body.modelo_padrao === "string" && body.modelo_padrao.trim().length > 0
         ? body.modelo_padrao.trim()
@@ -3055,7 +3106,9 @@ export async function tryHandleStudioRoute(
       .prepare(`SELECT * FROM projecao_agentes WHERE agente_id = ?;`)
       .get(agenteId) as Parameters<typeof enrichAgentRow>[1];
 
-    sendJson(res, 201, { agente: enrichAgentRow(db, createdRow, workspaceRoot, deps.licenseService) });
+    sendJson(res, 201, {
+      agente: enrichAgentRow(db, createdRow, workspaceRoot, deps.licenseService, currentBrand),
+    });
     return true;
   }
 
@@ -3445,12 +3498,13 @@ export async function tryHandleStudioRoute(
   if (agentRoutineMsgMatch && method === "GET") {
     const rotinaId = decodeURIComponent(agentRoutineMsgMatch[2]);
     const canalId = `rotina:${rotinaId}`;
+    const currentBrand = getBrandIdentity(providerConnection);
     const rows = db.connection
       .prepare(
         `SELECT * FROM projecao_conversas_chat WHERE canal_id = ? ORDER BY criado_em ASC LIMIT 120;`
       )
       .all(canalId) as Array<Parameters<typeof mapChatRow>[0]>;
-    sendJson(res, 200, { mensagens: rows.map(mapChatRow) });
+    sendJson(res, 200, { mensagens: rows.map((r) => mapChatRow(r, db, currentBrand)) });
     return true;
   }
 
@@ -3464,6 +3518,7 @@ export async function tryHandleStudioRoute(
         : `agente:${agenteId}`;
 
     if (method === "GET") {
+      const currentBrand = getBrandIdentity(providerConnection);
       const beforeCursor = url.searchParams.get("beforeCursor");
       const aroundMessageId = url.searchParams.get("aroundMessageId");
       const limitParam = url.searchParams.get("limit");
@@ -3488,7 +3543,13 @@ export async function tryHandleStudioRoute(
                 beforeCursor,
                 limit: Number.isFinite(limitNum) ? limitNum : 50,
               });
-          sendJson(res, 200, { mensagens: pagina.mensagens, pagina });
+          sendJson(res, 200, {
+            mensagens: pagina.mensagens.map((m) => applyBrandToMessage(m, currentBrand)),
+            pagina: {
+              ...pagina,
+              mensagens: pagina.mensagens.map((m) => applyBrandToMessage(m, currentBrand)),
+            },
+          });
         } catch (err) {
           sendJson(res, 400, { erro: err instanceof Error ? err.message : String(err) });
         }
@@ -3500,7 +3561,7 @@ export async function tryHandleStudioRoute(
           `SELECT * FROM projecao_conversas_chat WHERE canal_id = ? ORDER BY criado_em ASC, COALESCE(ordinal, 0) ASC, mensagem_id ASC LIMIT 120;`
         )
         .all(canalId) as Array<Parameters<typeof mapChatRow>[0]>;
-      sendJson(res, 200, { mensagens: rows.map((r) => mapChatRow(r, db)) });
+      sendJson(res, 200, { mensagens: rows.map((r) => mapChatRow(r, db, currentBrand)) });
       return true;
     }
 
@@ -3681,7 +3742,7 @@ export async function tryHandleStudioRoute(
         `SELECT * FROM projecao_conversas_chat WHERE canal_id = ? ORDER BY criado_em ASC, COALESCE(ordinal, 0) ASC LIMIT 20;`
       )
       .all(canalId) as Array<Parameters<typeof mapChatRow>[0]>;
-    const history = historyRows.map(mapChatRow);
+    const history = historyRows.map((r) => mapChatRow(r, db));
 
     // Handoff 1:1 somente quando não for saudação/dúvida:
     // - do usuário: aceita @agente_id ou [HANDOFF:agente_id]
@@ -3893,12 +3954,13 @@ export async function tryHandleStudioRoute(
   if (canalMsgMatch && (method === "GET" || method === "POST")) {
     const canalId = decodeURIComponent(canalMsgMatch[1]);
     if (method === "GET") {
+      const currentBrand = getBrandIdentity(providerConnection);
       const rows = db.connection
         .prepare(
           `SELECT * FROM projecao_conversas_chat WHERE canal_id = ? ORDER BY criado_em ASC LIMIT 150;`
         )
         .all(canalId) as Array<Parameters<typeof mapChatRow>[0]>;
-      sendJson(res, 200, { mensagens: rows.map(mapChatRow) });
+      sendJson(res, 200, { mensagens: rows.map((r) => mapChatRow(r, db, currentBrand)) });
       return true;
     }
 
@@ -3971,7 +4033,7 @@ export async function tryHandleStudioRoute(
       )
       .all(canalId, userMsg.mensagem_id) as Array<Parameters<typeof mapChatRow>[0]>;
     const runningHistory: MensagemChat[] = [
-      ...prevRowsDesc.reverse().map(mapChatRow),
+      ...prevRowsDesc.reverse().map((r) => mapChatRow(r, db)),
       userMsg,
     ];
 
@@ -4685,9 +4747,12 @@ export async function tryHandleStudioRoute(
 
     let brandExtraction: Awaited<ReturnType<typeof importBrandPdfFromBuffer>> | undefined;
     if (categoria === "ficha_pdf" || (mimeType === "application/pdf" && relFolder === "conteudos/ficha")) {
-      brandExtraction = await importBrandPdfFromBuffer(providerConnection, workspaceRoot, buffer).catch(
-        () => undefined
-      );
+      brandExtraction = await importBrandPdfFromBuffer(
+        providerConnection,
+        workspaceRoot,
+        buffer,
+        db
+      ).catch(() => undefined);
     }
 
     const syncedSetup = evaluateAndSyncSetupCompletion(db, providerConnection, workspaceRoot);

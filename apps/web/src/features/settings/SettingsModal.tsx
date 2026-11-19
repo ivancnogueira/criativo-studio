@@ -14,6 +14,7 @@ import type {
   WhatsNewReleaseInfo,
 } from "@criativo/contracts";
 import {
+  ArrowLeft,
   Bell,
   Globe,
   HardDrive,
@@ -182,6 +183,7 @@ const NAV_GROUPS: Array<{
 
 export interface SettingsModalProps {
   open: boolean;
+  variant?: "modal" | "page";
   initialTab?: SettingsModalTabId;
   settings: StudioUserSettings;
   storageUsage: StorageUsageSnapshot | null;
@@ -213,8 +215,14 @@ export interface SettingsModalProps {
   onCreateBrowserProfile: (input: { nome: string; cor_hex?: string }) => Promise<void>;
   onUpdateBrowserProfile: (
     perfilId: string,
-    patch: { nome?: string; cor_hex?: string; proxy_json?: BrowserProfileProxyPayload | null }
+    patch: {
+      nome?: string;
+      cor_hex?: string;
+      cdp_porta?: number | null;
+      proxy_json?: BrowserProfileProxyPayload | null;
+    }
   ) => Promise<void>;
+  onOpenBrowserProfile?: (perfilId: string) => Promise<void>;
   onClearBrowserProfile: (perfilId: string) => Promise<void>;
   onDeleteBrowserProfile: (perfilId: string) => Promise<void>;
   onSaveBrowserProxy: (input: {
@@ -228,6 +236,7 @@ export interface SettingsModalProps {
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   open,
+  variant = "modal",
   initialTab = "geral",
   settings,
   storageUsage,
@@ -254,6 +263,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onDeactivateLicenseDevice,
   onCreateBrowserProfile,
   onUpdateBrowserProfile,
+  onOpenBrowserProfile,
   onClearBrowserProfile,
   onDeleteBrowserProfile,
   onSaveBrowserProxy,
@@ -273,6 +283,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setActiveTab(initialTab);
     }
   }, [initialTab, open]);
+
+  useEffect(() => {
+    if (!open || variant !== "page" || typeof window === "undefined") return;
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, variant, onClose]);
 
   if (!open) return null;
 
@@ -309,6 +330,218 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const isPageVariant = variant === "page";
+
+  const sidebarNavContent = (
+    <aside
+      className={
+        isPageVariant
+          ? "w-[252px] shrink-0 bg-[#1A1A1A] border-r border-white/[0.06] flex flex-col overflow-hidden"
+          : "w-[220px] shrink-0 bg-[#1A1A1A] border-r border-white/[0.06] p-[16px] flex flex-col gap-4 overflow-y-auto"
+      }
+    >
+      {isPageVariant && (
+        <div className="px-4 pt-4 pb-3 border-b border-white/[0.06] space-y-2.5 shrink-0">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#212121] px-2.5 py-1.5 text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#2A2A2A] hover:text-white transition-colors"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            <span>Voltar</span>
+          </button>
+          <div>
+            <h1 className="text-[16px] font-semibold text-white">Configurações</h1>
+            <p className="text-[11px] text-[#8E8E8E]">Preferências e sistema do estúdio</p>
+          </div>
+        </div>
+      )}
+      <div className={isPageVariant ? "p-4 space-y-4 flex-1 overflow-y-auto" : "space-y-4"}>
+        {NAV_GROUPS.map((group) => (
+          <div key={group.grupo} className="space-y-1">
+            <div className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-[#6A6A6A]">
+              {group.grupo}
+            </div>
+            {group.items.map(({ id, label, Icon }) => {
+              const active = activeTab === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setActiveTab(id)}
+                  className={`w-full flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12.5px] font-semibold border-l-2 transition-colors ${
+                    active
+                      ? "bg-[#2A2A2A] border-[#007CF7] text-white"
+                      : "border-transparent text-[#979797] hover:bg-[#212121] hover:text-white"
+                  }`}
+                >
+                  <Icon className={`h-4 w-4 shrink-0 ${active ? "text-[#42A0FF]" : ""}`} />
+                  <span className="truncate">{label}</span>
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </aside>
+  );
+
+  const mainColumnContent = (
+    <div className={isPageVariant ? "flex-1 min-w-0 bg-[#141414] flex flex-col" : "flex-1 min-w-0 bg-[#1A1A1A] flex flex-col"}>
+      <header className="h-[52px] shrink-0 px-[24px] border-b border-white/[0.06] flex items-center justify-between gap-3 bg-[#141414]/60">
+        <h2 className="text-[20px] font-semibold text-white truncate">
+          {activeMeta?.label ?? "Configurações"}
+        </h2>
+        {!isPageVariant && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#212121] px-2.5 py-1.5 text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#2A2A2A] hover:text-white"
+          >
+            <X className="h-3.5 w-3.5" />
+            <span>Fechar painel</span>
+          </button>
+        )}
+      </header>
+
+      <div className="flex-1 overflow-y-auto p-[24px]">
+        <div className={isPageVariant ? "max-w-[880px] mx-auto w-full" : "w-full"}>
+          {activeTab === "geral" && (
+            <SettingsGeneralTab
+              geral={draft.geral}
+              onChange={(geral) => setDraft((prev) => ({ ...prev, geral }))}
+              onReopenSetupAssistant={onReopenSetupAssistant}
+              onResetLayoutWidths={onResetLayoutWidths}
+            />
+          )}
+
+          {activeTab === "aparencia" && (
+            <SettingsAppearanceTab
+              aparencia={draft.aparencia}
+              onChange={(aparencia) => setDraft((prev) => ({ ...prev, aparencia }))}
+            />
+          )}
+
+          {activeTab === "comportamento" && (
+            <SettingsBehaviorTab
+              comportamento={draft.comportamento}
+              onChange={(comportamento) => setDraft((prev) => ({ ...prev, comportamento }))}
+            />
+          )}
+
+          {activeTab === "navegador" && (
+            <div className="space-y-4">
+              {browserStatus && (
+                <div className="rounded-xl border border-white/[0.06] bg-[#212121] px-4 py-3 flex items-center justify-between gap-3 text-[12px]">
+                  <span className="text-[#DCDCDC]">
+                    Chromium CDP:{" "}
+                    <strong className={browserStatus.available ? "text-[#31CF76]" : "text-[#FF9412]"}>
+                      {browserStatus.available ? "Disponível" : "Aguardando navegador"}
+                    </strong>
+                  </span>
+                  <span className="font-mono text-[11px] text-[#979797]">
+                    {browserStatus.activeContexts} contexto(s) · {browserStatus.activeTabs} aba(s)
+                  </span>
+                </div>
+              )}
+              <ServerBrowserProfilesPanel
+                profiles={browserProfiles}
+                proxies={browserProxies}
+                onCreateProfile={onCreateBrowserProfile}
+                onUpdateProfile={onUpdateBrowserProfile}
+                onOpenProfileBrowser={onOpenBrowserProfile}
+                onClearProfile={onClearBrowserProfile}
+                onDeleteProfile={onDeleteBrowserProfile}
+                onSaveProxy={onSaveBrowserProxy}
+                onDeleteProxy={onDeleteBrowserProxy}
+              />
+            </div>
+          )}
+
+          {activeTab === "notificacoes" && (
+            <SettingsNotificationsTab
+              notificacoes={draft.notificacoes}
+              agentes={agentes}
+              canais={canais}
+              onChange={(notificacoes) => setDraft((prev) => ({ ...prev, notificacoes }))}
+            />
+          )}
+
+          {activeTab === "voz" && (
+            <SettingsVoiceTab
+              voz={draft.voz}
+              onChange={(voz) => setDraft((prev) => ({ ...prev, voz }))}
+            />
+          )}
+
+          {activeTab === "armazenamento" && (
+            <SettingsStorageTab
+              snapshot={storageUsage}
+              onRefresh={onRefreshStorage}
+              onClearCategory={onClearStorage}
+              onDeleteFile={onDeleteStorageFile}
+            />
+          )}
+
+          {activeTab === "licenca" && (
+            <SettingsLicenseTab
+              status={licenseStatus}
+              onRefreshLicense={onRefreshLicense}
+              onDeactivateDevice={onDeactivateLicenseDevice}
+            />
+          )}
+
+          {activeTab === "atualizacoes" && (
+            <SettingsUpdatesTab
+              updateStatus={updateStatus}
+              whatsNew={whatsNew}
+              activeServerName={activeServerName}
+              onCheckUpdates={onCheckUpdates}
+              onApplyUpdate={onApplyUpdate}
+              onRestartForUpdate={onRestartForUpdate}
+            />
+          )}
+        </div>
+      </div>
+
+      <footer className="shrink-0 border-t border-white/[0.06] bg-[#141414] px-[24px] py-3 flex flex-wrap items-center justify-between gap-3">
+        <span className="text-[11.5px] text-[#979797]">{syncMessage}</span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void handleReset()}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#212121] px-3 py-1.5 text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#2A2A2A] disabled:opacity-40"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            <span>Restaurar padrão</span>
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void handleApply()}
+            className="rounded-lg bg-[#F0F0F0] px-4 py-1.5 text-[12px] font-semibold text-[#141414] hover:bg-white disabled:opacity-50"
+          >
+            {saving ? "Aplicando..." : "Aplicar preferências"}
+          </button>
+        </div>
+      </footer>
+    </div>
+  );
+
+  if (isPageVariant) {
+    return (
+      <div
+        role="region"
+        aria-label="Configurações do Estúdio"
+        className="flex-1 min-h-0 flex bg-[#141414] overflow-hidden"
+      >
+        {sidebarNavContent}
+        {mainColumnContent}
+      </div>
+    );
+  }
+
   return (
     <div
       role="dialog"
@@ -317,171 +550,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4"
     >
       <div className="w-full max-w-[920px] h-[640px] max-h-[90vh] rounded-2xl bg-[#212121] border border-white/10 shadow-2xl flex overflow-hidden">
-        {/* Navegação lateral em 3 grupos */}
-        <aside className="w-[220px] shrink-0 bg-[#1A1A1A] border-r border-white/[0.06] p-[16px] flex flex-col gap-4 overflow-y-auto">
-          {NAV_GROUPS.map((group) => (
-            <div key={group.grupo} className="space-y-1">
-              <div className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-[#6A6A6A]">
-                {group.grupo}
-              </div>
-              {group.items.map(({ id, label, Icon }) => {
-                const active = activeTab === id;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setActiveTab(id)}
-                    className={`w-full flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12.5px] font-semibold border-l-2 transition-colors ${
-                      active
-                        ? "bg-[#2A2A2A] border-[#007CF7] text-white"
-                        : "border-transparent text-[#979797] hover:bg-[#212121] hover:text-white"
-                    }`}
-                  >
-                    <Icon className={`h-4 w-4 shrink-0 ${active ? "text-[#42A0FF]" : ""}`} />
-                    <span className="truncate">{label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          ))}
-        </aside>
-
-        {/* Coluna direita de conteúdo */}
-        <div className="flex-1 min-w-0 bg-[#1A1A1A] flex flex-col">
-          <header className="h-[48px] shrink-0 px-[24px] border-b border-white/[0.06] flex items-center justify-between gap-3">
-            <h2 className="text-[20px] font-semibold text-white truncate">
-              {activeMeta?.label ?? "Configurações"}
-            </h2>
-            <button
-              type="button"
-              onClick={onClose}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#212121] px-2.5 py-1.5 text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#2A2A2A] hover:text-white"
-            >
-              <X className="h-3.5 w-3.5" />
-              <span>Fechar painel</span>
-            </button>
-          </header>
-
-          <div className="flex-1 overflow-y-auto p-[24px]">
-            {activeTab === "geral" && (
-              <SettingsGeneralTab
-                geral={draft.geral}
-                onChange={(geral) => setDraft((prev) => ({ ...prev, geral }))}
-                onReopenSetupAssistant={onReopenSetupAssistant}
-                onResetLayoutWidths={onResetLayoutWidths}
-              />
-            )}
-
-            {activeTab === "aparencia" && (
-              <SettingsAppearanceTab
-                aparencia={draft.aparencia}
-                onChange={(aparencia) => setDraft((prev) => ({ ...prev, aparencia }))}
-              />
-            )}
-
-            {activeTab === "comportamento" && (
-              <SettingsBehaviorTab
-                comportamento={draft.comportamento}
-                onChange={(comportamento) => setDraft((prev) => ({ ...prev, comportamento }))}
-              />
-            )}
-
-            {activeTab === "navegador" && (
-              <div className="space-y-4">
-                {browserStatus && (
-                  <div className="rounded-xl border border-white/[0.06] bg-[#212121] px-4 py-3 flex items-center justify-between gap-3 text-[12px]">
-                    <span className="text-[#DCDCDC]">
-                      Chromium CDP:{" "}
-                      <strong className={browserStatus.available ? "text-[#31CF76]" : "text-[#FF9412]"}>
-                        {browserStatus.available ? "Disponível" : "Aguardando navegador"}
-                      </strong>
-                    </span>
-                    <span className="font-mono text-[11px] text-[#979797]">
-                      {browserStatus.activeContexts} contexto(s) · {browserStatus.activeTabs} aba(s)
-                    </span>
-                  </div>
-                )}
-                <ServerBrowserProfilesPanel
-                  profiles={browserProfiles}
-                  proxies={browserProxies}
-                  onCreateProfile={onCreateBrowserProfile}
-                  onUpdateProfile={onUpdateBrowserProfile}
-                  onClearProfile={onClearBrowserProfile}
-                  onDeleteProfile={onDeleteBrowserProfile}
-                  onSaveProxy={onSaveBrowserProxy}
-                  onDeleteProxy={onDeleteBrowserProxy}
-                />
-              </div>
-            )}
-
-            {activeTab === "notificacoes" && (
-              <SettingsNotificationsTab
-                notificacoes={draft.notificacoes}
-                agentes={agentes}
-                canais={canais}
-                onChange={(notificacoes) => setDraft((prev) => ({ ...prev, notificacoes }))}
-              />
-            )}
-
-            {activeTab === "voz" && (
-              <SettingsVoiceTab
-                voz={draft.voz}
-                onChange={(voz) => setDraft((prev) => ({ ...prev, voz }))}
-              />
-            )}
-
-            {activeTab === "armazenamento" && (
-              <SettingsStorageTab
-                snapshot={storageUsage}
-                onRefresh={onRefreshStorage}
-                onClearCategory={onClearStorage}
-                onDeleteFile={onDeleteStorageFile}
-              />
-            )}
-
-            {activeTab === "licenca" && (
-              <SettingsLicenseTab
-                status={licenseStatus}
-                onRefreshLicense={onRefreshLicense}
-                onDeactivateDevice={onDeactivateLicenseDevice}
-              />
-            )}
-
-            {activeTab === "atualizacoes" && (
-              <SettingsUpdatesTab
-                updateStatus={updateStatus}
-                whatsNew={whatsNew}
-                activeServerName={activeServerName}
-                onCheckUpdates={onCheckUpdates}
-                onApplyUpdate={onApplyUpdate}
-                onRestartForUpdate={onRestartForUpdate}
-              />
-            )}
-          </div>
-
-          <footer className="shrink-0 border-t border-white/[0.06] bg-[#141414] px-[24px] py-3 flex flex-wrap items-center justify-between gap-3">
-            <span className="text-[11.5px] text-[#979797]">{syncMessage}</span>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() => void handleReset()}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#212121] px-3 py-1.5 text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#2A2A2A] disabled:opacity-40"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                <span>Restaurar padrão</span>
-              </button>
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() => void handleApply()}
-                className="rounded-lg bg-[#F0F0F0] px-4 py-1.5 text-[12px] font-semibold text-[#141414] hover:bg-white disabled:opacity-50"
-              >
-                {saving ? "Aplicando..." : "Aplicar preferências"}
-              </button>
-            </div>
-          </footer>
-        </div>
+        {sidebarNavContent}
+        {mainColumnContent}
       </div>
     </div>
   );

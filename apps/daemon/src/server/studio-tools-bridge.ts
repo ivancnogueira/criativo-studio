@@ -509,7 +509,7 @@ export function buildStudioLiveContext(deps: {
   lines.push(
     "",
     "### Navegador CDP, Mídia, Sidebar & Showcase (Fase 15)",
-    "- Use `openbot_browser` (ou `browser_open`, `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_fill_fields`, `browser_request_takeover`, `browser_submit_secret`) para navegar em sites dinâmicos JS com perfis persistentes.",
+    "- Use `criativo_browser` (ou `browser_open`, `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_fill_fields`, `browser_request_takeover`, `browser_submit_secret`) para navegar em sites dinâmicos JS com perfis persistentes.",
     "- Use `read_video(url, frames?)` para resumir Reels/TikTok/YouTube públicos, `read_image(path)` para inspecionar imagens do workspace e `capture_screen(purpose)` para solicitar captura pontual da tela ao usuário.",
     "- Use `list_sections`/`create_section`/`rename_section`/`delete_section`/`assign_agent_section` para organizar a Sidebar e `list_sites`/`publish_site`/`replace_site`/`delete_site` para Showcase local.",
   );
@@ -2155,7 +2155,10 @@ export const PHASE14_TOOLS_SCHEMA: ToolDefinition[] = [
         sql: { type: "string", description: "Instrução SQL SELECT/VALUES única." },
         params: {
           type: "array",
-          items: { type: ["string", "number", "boolean", "null"] as unknown as "string" },
+          items: {
+            type: "string",
+            description: "Parâmetro posicional (?): texto, número ou booleano.",
+          },
           description: "Parâmetros posicionais opcionais (?).",
         },
       },
@@ -2172,7 +2175,10 @@ export const PHASE14_TOOLS_SCHEMA: ToolDefinition[] = [
         sql: { type: "string", description: "Instrução SQL DML/DDL única." },
         params: {
           type: "array",
-          items: { type: ["string", "number", "boolean", "null"] as unknown as "string" },
+          items: {
+            type: "string",
+            description: "Parâmetro posicional (?): texto, número ou booleano.",
+          },
           description: "Parâmetros posicionais opcionais (?).",
         },
       },
@@ -2277,7 +2283,14 @@ export const PHASE14_TOOLS_SCHEMA: ToolDefinition[] = [
             preview: { type: "string" },
             markdownPreview: { type: "string" },
             danger: { type: "boolean" },
-            confirmHold: { type: ["number", "boolean", "object"] as unknown as "object" },
+            confirmHold: {
+              type: "object",
+              properties: {
+                label: { type: "string" },
+                durationMs: { type: "number" },
+              },
+              description: "Configuração opcional de segurar para confirmar (ou ativação).",
+            },
             fields: { type: "array", items: { type: "object" } },
             actions: { type: "array", items: { type: "object" } },
           },
@@ -3390,7 +3403,7 @@ export const BROWSER_DIRECT_ALIASES = [
 
 export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
   {
-    name: "openbot_browser",
+    name: "criativo_browser",
     description:
       "Controla o navegador real Chromium via Chrome DevTools Protocol (open, list_tabs, status, navigate, snapshot, click, type, fill_fields, press, hover, scroll, select_option, set_checked, drag, upload_files, wait_for, evaluate, screenshot, set_environment, handle_dialog, request_takeover, submit_secret, close_tab).",
     parameters: {
@@ -3468,7 +3481,7 @@ export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
   },
   ...BROWSER_DIRECT_ALIASES.map((aliasName): ToolDefinition => ({
     name: aliasName,
-    description: `Atalho direto para openbot_browser(action="${aliasName.slice("browser_".length)}").`,
+    description: `Atalho direto para criativo_browser(action="${aliasName.slice("browser_".length)}").`,
     parameters: {
       type: "object",
       properties: {
@@ -3656,7 +3669,7 @@ export const PHASE15_TOOL_NAMES: ReadonlySet<string> = new Set(
 );
 
 export function isPhase15ToolName(name: string): boolean {
-  return PHASE15_TOOL_NAMES.has(name);
+  return PHASE15_TOOL_NAMES.has(name) || name === "openbot_browser";
 }
 
 export interface Phase15ToolServices {
@@ -3689,16 +3702,16 @@ export async function executePhase15ToolCall(
   const permissionLevel = ctx.permissionLevel ?? governance.permissionLevel;
   const browserProfileId = ctx.browserProfileId ?? governance.browserProfileId;
 
-  if (toolName === "openbot_browser" || toolName.startsWith("browser_")) {
+  if (toolName === "criativo_browser" || toolName === "openbot_browser" || toolName.startsWith("browser_")) {
     if (!services.browserService) {
       throw new Error("BrowserAutomationService não inicializado neste daemon.");
     }
     const rawAction =
-      toolName === "openbot_browser"
+      toolName === "criativo_browser" || toolName === "openbot_browser"
         ? readStringArg(args, "action", "acao")
         : toolName.slice("browser_".length);
     if (!rawAction) {
-      throw new Error("Informe 'action' para openbot_browser.");
+      throw new Error("Informe 'action' para criativo_browser.");
     }
     const action = rawAction as BrowserCdpActionName;
 

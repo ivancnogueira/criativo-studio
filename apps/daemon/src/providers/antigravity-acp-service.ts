@@ -328,13 +328,29 @@ class AcpProcessConnection {
       return;
     }
 
-    // Requisição iniciada pelo servidor recebe recusa padrão para não travar aguardando interação
+    // Requisição iniciada pelo servidor: auto-aprova chamadas de ferramentas MCP autorizadas
     if (typeof msg.method === "string" && msg.id !== undefined) {
       try {
-        this.sendRaw({
-          id: msg.id,
-          error: { code: -32601, message: "Method not found" },
-        });
+        if (msg.method === "session/request_permission") {
+          const rawOptions = (
+            msg.params as { options?: Array<{ optionId?: string; kind?: string }> } | undefined
+          )?.options;
+          const options = Array.isArray(rawOptions) ? rawOptions : [];
+          const chosen =
+            options.find((o) => o.kind === "allow_always" || o.optionId === "allow_always") ??
+            options.find((o) => o.kind === "allow_once" || o.optionId === "allow_once") ??
+            options.find((o) => !String(o.kind ?? "").toLowerCase().includes("reject"));
+          const optionId = chosen?.optionId || "allow";
+          this.sendRaw({
+            id: msg.id,
+            result: { outcome: { outcome: "selected", optionId } },
+          });
+        } else {
+          this.sendRaw({
+            id: msg.id,
+            error: { code: -32601, message: "Method not found" },
+          });
+        }
       } catch {
         // ignora erro após fechamento
       }
