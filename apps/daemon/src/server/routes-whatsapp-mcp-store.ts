@@ -139,7 +139,8 @@ function mapDomainErrorStatus(err: unknown): { statusCode: number; message: stri
     const statusCode =
       err.code === "APP_NOT_FOUND" ||
       err.code === "AGENT_NOT_FOUND" ||
-      err.code === "AGENT_PACKAGE_NOT_FOUND"
+      err.code === "AGENT_PACKAGE_NOT_FOUND" ||
+      err.code === "ACCOUNT_NOT_FOUND"
         ? 404
         : 400;
     return { statusCode, message: err.message, code: err.code };
@@ -938,8 +939,79 @@ export async function tryHandleWhatsAppMcpStoreRoute(
             qtd_ferramentas: result.probe?.toolCount ?? srv?.qtdFerramentas ?? 0,
             ultimo_erro: srv?.ultimoErro ?? null,
           });
+        } else if (result.native) {
+          wsHub.broadcast("loja.app_atualizado", {
+            app_slug: slug,
+            acao: "conectado",
+            ok: result.nativeAccount?.testado_ok ?? true,
+          });
         }
 
+        sendJson(res, 200, redactMcpPayload(result, []));
+      } catch (err) {
+        sendError(res, sendJson, err);
+      }
+      return true;
+    }
+
+    const appAccessMatch = path.match(/^\/api\/loja\/apps\/([^/]+)\/acesso$/);
+    if (method === "PATCH" && appAccessMatch) {
+      const slug = decodeURIComponent(appAccessMatch[1]);
+      try {
+        const body = await readJsonBody(req);
+        const rawAcesso =
+          body.acesso && typeof body.acesso === "object"
+            ? (body.acesso as Partial<McpAcessoAgentes>)
+            : body.access && typeof body.access === "object"
+              ? (body.access as Partial<McpAcessoAgentes>)
+              : ({
+                  mode: body.mode === "agents" ? "agents" : "everyone",
+                  agentIds: Array.isArray(body.agentIds)
+                    ? body.agentIds.filter((id): id is string => typeof id === "string")
+                    : [],
+                } satisfies Partial<McpAcessoAgentes>);
+        const contaId = typeof body.contaId === "string" ? body.contaId : undefined;
+        const result = deps.catalogService.updateNativeAppAccess(slug, rawAcesso, contaId);
+        wsHub.broadcast("loja.app_atualizado", {
+          app_slug: slug,
+          acao: "acesso",
+        });
+        sendJson(res, 200, redactMcpPayload(result, []));
+      } catch (err) {
+        sendError(res, sendJson, err);
+      }
+      return true;
+    }
+
+    const appTestMatch = path.match(/^\/api\/loja\/apps\/([^/]+)\/testar$/);
+    if (method === "POST" && appTestMatch) {
+      const slug = decodeURIComponent(appTestMatch[1]);
+      try {
+        const body = await readJsonBody(req);
+        const contaId = typeof body.contaId === "string" ? body.contaId : undefined;
+        const result = await deps.catalogService.testNativeApp(slug, contaId);
+        wsHub.broadcast("loja.app_atualizado", {
+          app_slug: slug,
+          acao: "testado",
+          ok: result.ok,
+        });
+        sendJson(res, 200, redactMcpPayload(result, []));
+      } catch (err) {
+        sendError(res, sendJson, err);
+      }
+      return true;
+    }
+
+    const appDeleteAccountMatch = path.match(/^\/api\/loja\/apps\/([^/]+)\/contas\/([^/]+)$/);
+    if (method === "DELETE" && appDeleteAccountMatch) {
+      const slug = decodeURIComponent(appDeleteAccountMatch[1]);
+      const contaId = decodeURIComponent(appDeleteAccountMatch[2]);
+      try {
+        const result = deps.catalogService.deleteNativeAppAccount(slug, contaId);
+        wsHub.broadcast("loja.app_atualizado", {
+          app_slug: slug,
+          acao: "conta_removida",
+        });
         sendJson(res, 200, redactMcpPayload(result, []));
       } catch (err) {
         sendError(res, sendJson, err);

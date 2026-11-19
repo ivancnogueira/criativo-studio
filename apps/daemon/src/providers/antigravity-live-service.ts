@@ -313,6 +313,7 @@ export class AntigravityLiveService {
   private readonly acpService: AntigravityAcpService;
   private readonly allowAutoAcpDiscovery: boolean;
   private mcpGateway?: McpGateway;
+  private extraMcpServersResolver?: (agentId?: string | null) => unknown[];
   private snapshotCache: { expiresAt: number; data: AntigravityLiveSnapshot } | null = null;
   private acpModelsCache: {
     accountId: string;
@@ -342,19 +343,32 @@ export class AntigravityLiveService {
       options?.acpService ??
       new AntigravityAcpService({
         appDataDir: options?.appDataDir,
-        mcpServersResolver: (agentId) => this.mcpGateway?.getAcpMcpServers(agentId) ?? [],
+        mcpServersResolver: (agentId) => this.resolveCombinedMcpServers(agentId),
       });
     if (options?.mcpGateway && options?.acpService) {
       this.acpService.setMcpServersResolver(
-        (agentId) => this.mcpGateway?.getAcpMcpServers(agentId) ?? []
+        (agentId) => this.resolveCombinedMcpServers(agentId)
       );
     }
+  }
+
+  private resolveCombinedMcpServers(agentId?: string | null): unknown[] {
+    const extra = this.extraMcpServersResolver?.(agentId) ?? [];
+    const ext = this.mcpGateway?.getAcpMcpServers(agentId) ?? [];
+    return [...extra, ...ext];
   }
 
   public setMcpGateway(gateway: McpGateway): void {
     this.mcpGateway = gateway;
     this.acpService.setMcpServersResolver(
-      (agentId) => this.mcpGateway?.getAcpMcpServers(agentId) ?? []
+      (agentId) => this.resolveCombinedMcpServers(agentId)
+    );
+  }
+
+  public setExtraMcpServersResolver(resolver: (agentId?: string | null) => unknown[]): void {
+    this.extraMcpServersResolver = resolver;
+    this.acpService.setMcpServersResolver(
+      (agentId) => this.resolveCombinedMcpServers(agentId)
     );
   }
 

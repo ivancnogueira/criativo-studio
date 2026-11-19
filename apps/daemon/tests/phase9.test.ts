@@ -78,7 +78,7 @@ describe("Fase 9 — Empacotamento Base/Upgrades, Cofre Meta, Backfill de Agente
     assert.ok(restoredJson.agente.config.prompt_base.includes("Copywriter"));
   });
 
-  it("unifica chaves Meta no Cofre e valida via Graph API v21.0 sem expor segredos", async () => {
+  it("unifica chaves Meta no Cofre e valida via Graph API v27.0 sem expor segredos", async () => {
     const segredoToken = "TOKEN_SECRETO_TESTE_NAO_EXPOR";
     const configRes = await fetch(`${baseUrl}/api/conectores/instagram/configurar`, {
       method: "POST",

@@ -71,11 +71,15 @@ function ToggleRow({
 export interface SettingsGeneralTabProps {
   geral: StudioUserSettings["geral"];
   onChange: (next: StudioUserSettings["geral"]) => void;
+  onReopenSetupAssistant?: () => Promise<void> | void;
+  onResetLayoutWidths?: () => void;
 }
 
 export const SettingsGeneralTab: React.FC<SettingsGeneralTabProps> = ({
   geral,
   onChange,
+  onReopenSetupAssistant,
+  onResetLayoutWidths,
 }) => {
   return (
     <div className="space-y-4">
@@ -142,6 +146,35 @@ export const SettingsGeneralTab: React.FC<SettingsGeneralTabProps> = ({
         checked={geral.acoes_compactas}
         onChange={(next) => onChange({ ...geral, acoes_compactas: next })}
       />
+
+      {(onReopenSetupAssistant || onResetLayoutWidths) && (
+        <div className="rounded-xl border border-white/[0.06] bg-[#212121] p-4 space-y-2.5">
+          <div className="text-[13px] font-semibold text-white">Setup Inicial &amp; Colunas do Estúdio</div>
+          <p className="text-[11.5px] text-[#979797]">
+            Reabra o assistente guiado caso precise ajustar marca/arquivos/Instagram depois ou restaure a largura padrão das 3 colunas.
+          </p>
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {onReopenSetupAssistant && (
+              <button
+                type="button"
+                onClick={() => void onReopenSetupAssistant()}
+                className="rounded-lg border border-[#007CF7]/40 bg-[#007CF7]/15 px-3 py-1.5 text-[12px] font-semibold text-[#74B9FF] hover:bg-[#007CF7]/25"
+              >
+                Reabrir Assistente de Configuração
+              </button>
+            )}
+            {onResetLayoutWidths && (
+              <button
+                type="button"
+                onClick={() => onResetLayoutWidths()}
+                className="rounded-lg border border-white/10 bg-[#141414] px-3 py-1.5 text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#2A2A2A]"
+              >
+                Restaurar larguras padrão das colunas
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

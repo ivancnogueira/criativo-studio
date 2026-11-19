@@ -13,6 +13,7 @@ import type {
   McpProbeResultado,
   McpServidorConfig,
   McpTransporte,
+  NativeAppAccountSummary,
 } from "@criativo/contracts";
 import {
   AlertTriangle,
@@ -615,7 +616,13 @@ export function CustomMcpModal({
             />
             {accessMode === "agents" && (
               <div className="grid max-h-36 grid-cols-1 gap-1.5 overflow-y-auto rounded-[10px] border border-[#2A2A2A] bg-[#1A1A1A] p-3 md:grid-cols-2">
-                {agentes.map((ag) => {
+                {agentes
+                  .filter(
+                    (ag) =>
+                      ag.agente_id !== "assistente_setup" &&
+                      (ag.config as Record<string, unknown>)?.upgrade_desbloqueado !== false
+                  )
+                  .map((ag) => {
                   const checked = selectedAgents.includes(ag.agente_id);
                   return (
                     <label
@@ -1193,6 +1200,7 @@ export interface MarketplacePageProps {
   initialTab?: MarketplaceTab;
   initialAppSlug?: string | null;
   initialYourApps?: MarketplaceYourAppEntry[];
+  initialNativeAccounts?: NativeAppAccountSummary[];
   onRefreshStudio?: () => Promise<void>;
   onTryPromptInChat?: (agentId: string, prompt: string) => void;
   onCreateSkillWithAgent?: (agentId: string, prompt: string) => void;
@@ -1205,6 +1213,7 @@ export function MarketplacePage({
   initialTab = "apps",
   initialAppSlug = null,
   initialYourApps = [],
+  initialNativeAccounts = [],
   onRefreshStudio,
   onTryPromptInChat,
   onCreateSkillWithAgent,
@@ -1235,18 +1244,35 @@ export function MarketplacePage({
       oauthStatus: McpOAuthStatus;
     }>
   >([]);
+  const [nativeAccounts, setNativeAccounts] = useState<NativeAppAccountSummary[]>(initialNativeAccounts);
+  const [selectedNativeContaId, setSelectedNativeContaId] = useState<string | null>(
+    initialNativeAccounts[0]?.conta_id ?? null
+  );
+  const [nativeCreatingNew, setNativeCreatingNew] = useState(false);
+  const [testingContaId, setTestingContaId] = useState<string | null>(null);
   const [activeFlowIndex, setActiveFlowIndex] = useState(0);
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [contaRotuloInput, setContaRotuloInput] = useState("");
   const [connectBusy, setConnectBusy] = useState(false);
-  const [connectFeedback, setConnectFeedback] = useState<string | null>(null);
+  const [connectFeedback, setConnectFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+  const [accessFeedback, setAccessFeedback] = useState<string | null>(null);
   const [localInstructions, setLocalInstructions] = useState<string[]>([]);
+
+  const unlockedAgents = useMemo(
+    () =>
+      agentes.filter(
+        (ag) =>
+          ag.agente_id !== "assistente_setup" &&
+          (ag.config as Record<string, unknown>)?.upgrade_desbloqueado !== false
+      ),
+    [agentes]
+  );
 
   const [accessServerId, setAccessServerId] = useState<string | null>(null);
   const [accessMode, setAccessMode] = useState<"everyone" | "agents">("everyone");
   const [accessAgents, setAccessAgents] = useState<string[]>([]);
   const [tryTargetAgentId, setTryTargetAgentId] = useState(
-    agentes[0]?.agente_id ?? "estrategista"
+    unlockedAgents[0]?.agente_id ?? agentes[0]?.agente_id ?? "estrategista"
   );
 
   const [customMcpModalOpen, setCustomMcpModalOpen] = useState(false);
@@ -1296,9 +1322,68 @@ export function MarketplacePage({
     }
   }, [initialAppSlug]);
 
+  const applyAppDetailResponse = (
+    res: Awaited<ReturnType<typeof daemonApi.getLojaAppDetail>>,
+    preferredContaId?: string | null,
+    preserveBlankForm = false
+  ) => {
+    setAppDetail(res.app);
+    setAppAccounts(res.accounts);
+    const nextNative = res.nativeAccounts ?? [];
+    setNativeAccounts(nextNative);
+
+    if (res.app.isNative) {
+      setAccessServerId(null);
+      if (preserveBlankForm) {
+        return;
+      }
+      const chosen =
+        (preferredContaId
+          ? nextNative.find((acc) => acc.conta_id === preferredContaId)
+          : undefined) ?? nextNative[0];
+      if (chosen) {
+        setSelectedNativeContaId(chosen.conta_id);
+        setNativeCreatingNew(false);
+        setContaRotuloInput(chosen.conta_rotulo || "");
+        setFieldValues({ ...(chosen.campos_visiveis ?? {}) });
+        setAccessMode(chosen.acesso?.mode ?? "everyone");
+        setAccessAgents(chosen.acesso?.agentIds ?? []);
+      } else {
+        setSelectedNativeContaId(null);
+        setNativeCreatingNew(false);
+        setContaRotuloInput("");
+        setFieldValues({});
+        setAccessMode("everyone");
+        setAccessAgents([]);
+      }
+      return;
+    }
+
+    setNativeAccounts([]);
+    setSelectedNativeContaId(null);
+    setNativeCreatingNew(false);
+    const firstAcc = res.accounts[0]?.server;
+    if (firstAcc) {
+      setAccessServerId(firstAcc.mcp_id);
+      setAccessMode(firstAcc.acesso.mode);
+      setAccessAgents(firstAcc.acesso.agentIds);
+    } else {
+      setAccessServerId(null);
+      setAccessMode("everyone");
+      setAccessAgents([]);
+    }
+  };
+
   useEffect(() => {
+    setConnectFeedback(null);
+    setAccessFeedback(null);
+    setLocalInstructions([]);
+    setNativeCreatingNew(false);
+    setSelectedNativeContaId(null);
     if (!selectedAppSlug) {
       setAppDetail(null);
+      setAppAccounts([]);
+      setNativeAccounts([]);
       return;
     }
     const localFound = apps.find((a) => a.slug === selectedAppSlug) ?? null;
@@ -1306,20 +1391,7 @@ export function MarketplacePage({
 
     void daemonApi
       .getLojaAppDetail(selectedAppSlug)
-      .then((res) => {
-        setAppDetail(res.app);
-        setAppAccounts(res.accounts);
-        const firstAcc = res.accounts[0]?.server;
-        if (firstAcc) {
-          setAccessServerId(firstAcc.mcp_id);
-          setAccessMode(firstAcc.acesso.mode);
-          setAccessAgents(firstAcc.acesso.agentIds);
-        } else {
-          setAccessServerId(null);
-          setAccessMode("everyone");
-          setAccessAgents([]);
-        }
-      })
+      .then((res) => applyAppDetailResponse(res))
       .catch(() => {
         // Usa versão em memória caso esteja em teste isolado
       });
@@ -1398,7 +1470,29 @@ export function MarketplacePage({
     [filteredSkills]
   );
 
-  const totalAgentsCount = Math.max(1, agentes.length);
+  const totalAgentsCount = Math.max(1, unlockedAgents.length);
+
+  const selectNativeAccount = (acc: NativeAppAccountSummary) => {
+    setNativeCreatingNew(false);
+    setSelectedNativeContaId(acc.conta_id);
+    setContaRotuloInput(acc.conta_rotulo || "");
+    setFieldValues({ ...(acc.campos_visiveis ?? {}) });
+    setAccessMode(acc.acesso?.mode ?? "everyone");
+    setAccessAgents(acc.acesso?.agentIds ?? []);
+    setConnectFeedback(null);
+    setAccessFeedback(null);
+  };
+
+  const handleStartNewNativeAccount = () => {
+    setNativeCreatingNew(true);
+    setSelectedNativeContaId(null);
+    setContaRotuloInput("");
+    setFieldValues({});
+    setConnectFeedback({
+      ok: true,
+      text: "Preencha as credenciais da nova conta abaixo e clique em Testar conexão.",
+    });
+  };
 
   const handleConnectAppFlow = async (flow: MarketplaceAuthFlow) => {
     if (!appDetail) return;
@@ -1409,53 +1503,156 @@ export function MarketplacePage({
 
     setConnectBusy(true);
     setConnectFeedback(null);
+    setAccessFeedback(null);
     setLocalInstructions([]);
     try {
+      const targetContaId =
+        appDetail.isNative && !nativeCreatingNew && selectedNativeContaId
+          ? selectedNativeContaId
+          : undefined;
       const res = await daemonApi.connectLojaApp(appDetail.slug, {
         flowId: flow.id,
         kind: flow.kind,
+        contaId: targetContaId,
         contaRotulo: contaRotuloInput.trim() || undefined,
         fields: fieldValues,
+        acesso: {
+          mode: accessMode,
+          agentIds: accessMode === "agents" ? accessAgents : [],
+        },
       });
 
       if (res.authorizeUrl && typeof window !== "undefined") {
         window.open(res.authorizeUrl, "_blank", "noopener,noreferrer");
-        setConnectFeedback("Aguardando autenticação no navegador...");
+        setConnectFeedback({ ok: true, text: "Aguardando autenticação no navegador..." });
       } else if (res.instructions && res.instructions.length > 0) {
         setLocalInstructions(res.instructions);
-        setConnectFeedback(
-          res.probe?.status === "passed"
-            ? `App local validado (${res.probe.toolCount} ferramentas).`
-            : "Siga os passos abaixo no aplicativo local e execute Testar conexão."
-        );
+        setConnectFeedback({
+          ok: res.probe?.status === "passed",
+          text:
+            res.probe?.status === "passed"
+              ? `App local validado (${res.probe.toolCount} ferramentas).`
+              : "Siga os passos abaixo no aplicativo local e execute Testar conexão.",
+        });
+      } else if (res.nativeAccount) {
+        const acc = res.nativeAccount;
+        const ok = Boolean(res.validationReport?.ok ?? acc.testado_ok);
+        const username = acc.perfil_conectado?.username ? ` (@${acc.perfil_conectado.username})` : "";
+        const text = res.validationReport?.resumo
+          ? `${res.validationReport.resumo}${username}`
+          : ok
+            ? `Conta "${acc.conta_rotulo}" conectada no Cofre${username}.`
+            : acc.ultimo_erro || "Credenciais salvas no Cofre AES-256-GCM. Verifique os dados na Meta.";
+        setConnectFeedback({ ok, text });
       } else {
-        setConnectFeedback(
-          res.probe?.status === "passed"
-            ? `Conectado com ${res.probe.toolCount} ferramentas disponíveis.`
-            : "Configuração salva no Cofre AES-256-GCM."
-        );
+        setConnectFeedback({
+          ok: true,
+          text:
+            res.probe?.status === "passed"
+              ? `Conectado com ${res.probe.toolCount} ferramentas disponíveis.`
+              : "Configuração salva no Cofre AES-256-GCM.",
+        });
       }
       await loadCatalogAndApps();
       if (selectedAppSlug) {
         const refreshed = await daemonApi.getLojaAppDetail(selectedAppSlug);
-        setAppAccounts(refreshed.accounts);
+        applyAppDetailResponse(refreshed, res.nativeAccount?.conta_id ?? targetContaId ?? null);
       }
     } catch (err) {
-      setConnectFeedback(err instanceof Error ? err.message : "Falha ao conectar aplicativo.");
+      setConnectFeedback({
+        ok: false,
+        text: err instanceof Error ? err.message : "Falha ao conectar aplicativo.",
+      });
+    } finally {
+      setConnectBusy(false);
+    }
+  };
+
+  const handleTestNativeAccount = async (contaId: string) => {
+    if (!appDetail) return;
+    setTestingContaId(contaId);
+    setConnectFeedback(null);
+    try {
+      const res = await daemonApi.testNativeAppConnection(appDetail.slug, { contaId });
+      setConnectFeedback({ ok: res.ok, text: res.resumo });
+      await loadCatalogAndApps();
+      if (selectedAppSlug) {
+        const refreshed = await daemonApi.getLojaAppDetail(selectedAppSlug);
+        applyAppDetailResponse(refreshed, contaId);
+      }
+    } catch (err) {
+      setConnectFeedback({
+        ok: false,
+        text: err instanceof Error ? err.message : "Falha ao testar conta conectada.",
+      });
+    } finally {
+      setTestingContaId(null);
+    }
+  };
+
+  const handleDeleteNativeAccount = async (contaId: string) => {
+    if (!appDetail) return;
+    setConnectBusy(true);
+    setConnectFeedback(null);
+    try {
+      await daemonApi.deleteNativeAppAccount(appDetail.slug, contaId);
+      setConnectFeedback({ ok: true, text: "Conta removida do Cofre com segurança." });
+      await loadCatalogAndApps();
+      if (selectedAppSlug) {
+        const refreshed = await daemonApi.getLojaAppDetail(selectedAppSlug);
+        applyAppDetailResponse(refreshed, null);
+      }
+    } catch (err) {
+      setConnectFeedback({
+        ok: false,
+        text: err instanceof Error ? err.message : "Falha ao desconectar conta.",
+      });
     } finally {
       setConnectBusy(false);
     }
   };
 
   const handleApplyAgentAccess = async () => {
+    if (!appDetail) return;
+    const acessoPayload: McpAcessoAgentes = {
+      mode: accessMode,
+      agentIds: accessMode === "agents" ? accessAgents : [],
+    };
+    setAccessFeedback(null);
+    if (appDetail.isNative) {
+      try {
+        const res = await daemonApi.updateNativeAppAccess(appDetail.slug, {
+          contaId: selectedNativeContaId,
+          acesso: acessoPayload,
+        });
+        setNativeAccounts(res.nativeAccounts);
+        const targetAcc =
+          (selectedNativeContaId
+            ? res.nativeAccounts.find((a) => a.conta_id === selectedNativeContaId)
+            : res.nativeAccounts[0]) ?? null;
+        if (targetAcc) {
+          setAccessMode(targetAcc.acesso.mode);
+          setAccessAgents(targetAcc.acesso.agentIds);
+        }
+        setAccessFeedback(
+          accessMode === "everyone"
+            ? "Acesso liberado para todos os agentes do estúdio."
+            : `Acesso atualizado para ${acessoPayload.agentIds.length} agente(s) selecionado(s).`
+        );
+        await onRefreshStudio?.();
+      } catch (err) {
+        setAccessFeedback(
+          err instanceof Error ? err.message : "Falha ao atualizar permissões deste conector."
+        );
+      }
+      return;
+    }
+
     if (!accessServerId) return;
     await daemonApi.setMcpServerStatus(accessServerId, {
-      acesso: {
-        mode: accessMode,
-        agentIds: accessMode === "agents" ? accessAgents : [],
-      },
+      acesso: acessoPayload,
     });
-    setConnectFeedback("Permissões de agentes atualizadas com sucesso.");
+    setAccessFeedback("Permissões de agentes atualizadas com sucesso.");
     await loadCatalogAndApps();
   };
 
@@ -1512,14 +1709,14 @@ export function MarketplacePage({
 
   const agentSelectOptions: CarbonSelectOption[] = useMemo(
     () =>
-      (agentes.length > 0
-        ? agentes
+      (unlockedAgents.length > 0
+        ? unlockedAgents
         : [{ agente_id: "estrategista", nome: "Estrategista Editorial" } as AgenteRegistro]
       ).map((ag) => ({
         value: ag.agente_id,
         label: ag.nome,
       })),
-    [agentes]
+    [unlockedAgents]
   );
 
   // ------------------------------------------------------------------
@@ -1529,7 +1726,11 @@ export function MarketplacePage({
     if (!appDetail) return null;
     const flows = appDetail.authFlows ?? [];
     const activeFlow = flows[activeFlowIndex] ?? flows[0];
-    const hasConnected = appAccounts.length > 0;
+    const hasConnected = appAccounts.length > 0 || nativeAccounts.length > 0;
+    const selectedNativeAcc =
+      (!nativeCreatingNew
+        ? nativeAccounts.find((a) => a.conta_id === selectedNativeContaId)
+        : undefined) ?? null;
 
     return (
       <div className="space-y-6">
@@ -1579,14 +1780,30 @@ export function MarketplacePage({
             </div>
 
             {activeFlow && (
-              <button
-                type="button"
-                disabled={connectBusy}
-                onClick={() => void handleConnectAppFlow(activeFlow)}
-                className="rounded-full bg-[#F0F0F0] px-5 py-2 text-[14px] font-semibold text-[#141414] hover:bg-white disabled:opacity-50"
-              >
-                {hasConnected ? "Adicionar outra conta" : "Conectar aplicativo"}
-              </button>
+              <div className="flex items-center gap-2">
+                {appDetail.isNative && hasConnected && !nativeCreatingNew && (
+                  <button
+                    type="button"
+                    disabled={connectBusy}
+                    onClick={handleStartNewNativeAccount}
+                    className="rounded-full border border-[#2A2A2A] bg-[#242424] px-4 py-2 text-[13px] font-semibold text-[#F0F0F0] hover:bg-[#2A2A2A]"
+                  >
+                    + Adicionar outra conta
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={connectBusy}
+                  onClick={() => void handleConnectAppFlow(activeFlow)}
+                  className="rounded-full bg-[#F0F0F0] px-5 py-2 text-[14px] font-semibold text-[#141414] hover:bg-white disabled:opacity-50"
+                >
+                  {appDetail.isNative && selectedNativeAcc
+                    ? "Atualizar e validar"
+                    : hasConnected
+                      ? "Adicionar outra conta"
+                      : "Conectar aplicativo"}
+                </button>
+              </div>
             )}
           </div>
 
@@ -1629,26 +1846,40 @@ export function MarketplacePage({
                     type="text"
                     value={contaRotuloInput}
                     onChange={(e) => setContaRotuloInput(e.target.value)}
-                    placeholder={`Conta ${appAccounts.length + 1}`}
+                    placeholder={`Conta ${Math.max(appAccounts.length, nativeAccounts.length) + 1}`}
                     className="w-full rounded-[8px] border border-[#2A2A2A] bg-[#242424] px-3 py-2 text-[14px] text-[#F0F0F0]"
                   />
                 </div>
-                {(activeFlow.fields ?? []).map((fld) => (
-                  <div key={fld.key} className="space-y-1">
-                    <label className="block text-[12px] font-semibold text-[#979797]">
-                      {fld.label}
-                    </label>
-                    <input
-                      type={fld.secret ? "password" : "text"}
-                      value={fieldValues[fld.key] ?? ""}
-                      onChange={(e) =>
-                        setFieldValues((prev) => ({ ...prev, [fld.key]: e.target.value }))
-                      }
-                      placeholder={fld.placeholder ?? ""}
-                      className="w-full rounded-[8px] border border-[#2A2A2A] bg-[#242424] px-3 py-2 font-mono text-[12px] text-[#F0F0F0]"
-                    />
-                  </div>
-                ))}
+                {(activeFlow.fields ?? []).map((fld) => {
+                  const maskedStored = selectedNativeAcc?.campos_mascarados?.[fld.key];
+                  return (
+                    <div key={fld.key} className="space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="block text-[12px] font-semibold text-[#979797]">
+                          {fld.label}
+                        </label>
+                        {maskedStored && (
+                          <span className="rounded-full bg-[#31CF76]/15 px-2 py-0.5 text-[10px] font-semibold text-[#31CF76]">
+                            Salvo no Cofre ({maskedStored})
+                          </span>
+                        )}
+                      </div>
+                      <input
+                        type={fld.secret ? "password" : "text"}
+                        value={fieldValues[fld.key] ?? ""}
+                        onChange={(e) =>
+                          setFieldValues((prev) => ({ ...prev, [fld.key]: e.target.value }))
+                        }
+                        placeholder={
+                          maskedStored
+                            ? `Salvo (${maskedStored}) — deixe vazio para manter`
+                            : fld.placeholder ?? ""
+                        }
+                        className="w-full rounded-[8px] border border-[#2A2A2A] bg-[#242424] px-3 py-2 font-mono text-[12px] text-[#F0F0F0]"
+                      />
+                    </div>
+                  );
+                })}
               </div>
 
               {activeFlow.kind !== "oauth" && (
@@ -1669,7 +1900,7 @@ export function MarketplacePage({
                     onClick={() => void handleConnectAppFlow(activeFlow)}
                     className="rounded-full border border-[#2A2A2A] bg-[#242424] px-4 py-1.5 text-[14px] font-semibold text-[#F0F0F0] hover:bg-[#2A2A2A]"
                   >
-                    Testar conexão
+                    {connectBusy ? "Testando..." : "Testar conexão"}
                   </button>
                 </div>
               )}
@@ -1683,11 +1914,103 @@ export function MarketplacePage({
               )}
 
               {connectFeedback && (
-                <p className="text-[12px] font-semibold text-[#31CF76]">{connectFeedback}</p>
+                <p
+                  className={`text-[12px] font-semibold ${
+                    connectFeedback.ok ? "text-[#31CF76]" : "text-[#FD2F3B]"
+                  }`}
+                >
+                  {connectFeedback.text}
+                </p>
               )}
             </div>
           )}
         </section>
+
+        {nativeAccounts.length > 0 && (
+          <section className="rounded-[14px] border border-[#2A2A2A] bg-[#212121] p-6 space-y-3">
+            <h2 className="text-[20px] font-semibold text-[#F0F0F0]">Contas conectadas</h2>
+            {nativeAccounts.map((acc) => {
+              const isSelected = !nativeCreatingNew && selectedNativeContaId === acc.conta_id;
+              const isTesting = testingContaId === acc.conta_id;
+              const handleLabel = acc.perfil_conectado?.username
+                ? `@${acc.perfil_conectado.username}`
+                : acc.campos_visiveis?.IG_USER_ID || acc.campos_visiveis?.META_WABA_ID || "";
+              return (
+                <div
+                  key={acc.conta_id}
+                  className={`flex flex-wrap items-center justify-between gap-3 rounded-[10px] border p-4 ${
+                    isSelected
+                      ? "border-[#007CF7]/60 bg-[#142030]"
+                      : "border-[#2A2A2A] bg-[#1A1A1A]"
+                  }`}
+                >
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-[14px] font-semibold text-[#F0F0F0]">
+                        {acc.conta_rotulo || "Conta"}
+                      </p>
+                      {handleLabel && (
+                        <span className="font-mono text-[12px] text-[#42A0FF]">{handleLabel}</span>
+                      )}
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                          acc.testado_ok
+                            ? "bg-[#31CF76]/15 text-[#31CF76]"
+                            : acc.ultimo_erro
+                              ? "bg-[#FD2F3B]/15 text-[#FD2F3B]"
+                              : "bg-[#FF9412]/15 text-[#FF9412]"
+                        }`}
+                      >
+                        {acc.testado_ok
+                          ? "Conectada"
+                          : acc.ultimo_erro
+                            ? "Falha na validação"
+                            : "Salva no Cofre"}
+                      </span>
+                    </div>
+                    <p className="text-[12px] text-[#979797]">
+                      {acc.perfil_conectado?.followers_count != null
+                        ? `${acc.perfil_conectado.followers_count} seguidores · ${acc.perfil_conectado.media_count ?? 0} mídias · `
+                        : ""}
+                      Acesso:{" "}
+                      {acc.acesso?.mode === "agents"
+                        ? `${acc.acesso.agentIds.length} agente(s) liberado(s)`
+                        : "Todos os agentes"}
+                    </p>
+                    {acc.ultimo_erro && (
+                      <p className="text-[11px] text-[#FD2F3B]">{acc.ultimo_erro}</p>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => selectNativeAccount(acc)}
+                      className="rounded-full border border-[#2A2A2A] bg-[#242424] px-3 py-1.5 text-[12px] font-semibold text-[#F0F0F0] hover:bg-[#2A2A2A]"
+                    >
+                      {isSelected ? "Editando" : "Selecionar"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isTesting}
+                      onClick={() => void handleTestNativeAccount(acc.conta_id)}
+                      className="rounded-full border border-[#2A2A2A] bg-[#242424] px-3 py-1.5 text-[12px] font-semibold text-[#F0F0F0] hover:bg-[#2A2A2A] disabled:opacity-50"
+                    >
+                      {isTesting ? "Testando..." : "Testar conexão"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={connectBusy}
+                      onClick={() => void handleDeleteNativeAccount(acc.conta_id)}
+                      className="rounded-full border border-[#FD2F3B]/40 bg-[#FD2F3B]/10 px-3 py-1.5 text-[12px] font-semibold text-[#FD2F3B] hover:bg-[#FD2F3B]/20"
+                    >
+                      Desconectar conta
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </section>
+        )}
 
         {appAccounts.length > 0 && (
           <section className="rounded-[14px] border border-[#2A2A2A] bg-[#212121] p-6 space-y-3">
@@ -1734,7 +2057,12 @@ export function MarketplacePage({
 
         <section className="rounded-[14px] border border-[#2A2A2A] bg-[#212121] p-6 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-[20px] font-semibold text-[#F0F0F0]">Acesso de agentes</h2>
+            <div>
+              <h2 className="text-[20px] font-semibold text-[#F0F0F0]">Acesso de agentes</h2>
+              <p className="text-[12px] text-[#979797]">
+                Defina quais agentes da sua licença podem usar as ferramentas deste conector no chat e em fluxos.
+              </p>
+            </div>
             <SlidingTabs<"everyone" | "agents">
               ariaLabel="Controle de acesso por agente"
               value={accessMode}
@@ -1746,43 +2074,48 @@ export function MarketplacePage({
             />
           </div>
           {accessMode === "agents" && (
-            <div className="space-y-3">
-              <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-                {agentes.map((ag) => {
-                  const checked = accessAgents.includes(ag.agente_id);
-                  return (
-                    <label
-                      key={ag.agente_id}
-                      className="flex cursor-pointer items-center gap-2 rounded-[8px] border border-[#2A2A2A] bg-[#1A1A1A] px-3 py-2 text-[14px] text-[#F0F0F0]"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() =>
-                          setAccessAgents((prev) =>
-                            checked
-                              ? prev.filter((id) => id !== ag.agente_id)
-                              : [...prev, ag.agente_id]
-                          )
-                        }
-                        className="accent-[#007CF7]"
-                      />
-                      <span className="truncate">{ag.nome}</span>
-                    </label>
-                  );
-                })}
-              </div>
-              {accessServerId && (
-                <button
-                  type="button"
-                  onClick={() => void handleApplyAgentAccess()}
-                  className="rounded-full bg-[#F0F0F0] px-4 py-1.5 text-[14px] font-semibold text-[#141414]"
-                >
-                  Aplicar acesso
-                </button>
-              )}
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+              {unlockedAgents.map((ag) => {
+                const checked = accessAgents.includes(ag.agente_id);
+                return (
+                  <label
+                    key={ag.agente_id}
+                    className="flex cursor-pointer items-center gap-2 rounded-[8px] border border-[#2A2A2A] bg-[#1A1A1A] px-3 py-2 text-[14px] text-[#F0F0F0]"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() =>
+                        setAccessAgents((prev) =>
+                          checked
+                            ? prev.filter((id) => id !== ag.agente_id)
+                            : [...prev, ag.agente_id]
+                        )
+                      }
+                      className="accent-[#007CF7]"
+                    />
+                    <span className="truncate">{ag.nome}</span>
+                  </label>
+                );
+              })}
             </div>
           )}
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+            <div className="min-h-[18px]">
+              {accessFeedback && (
+                <p className="text-[12px] font-semibold text-[#31CF76]">{accessFeedback}</p>
+              )}
+            </div>
+            {(accessServerId || appDetail.isNative) && (
+              <button
+                type="button"
+                onClick={() => void handleApplyAgentAccess()}
+                className="rounded-full bg-[#F0F0F0] px-4 py-1.5 text-[14px] font-semibold text-[#141414] hover:bg-white"
+              >
+                Aplicar acesso
+              </button>
+            )}
+          </div>
         </section>
 
         {appDetail.prompts && appDetail.prompts.length > 0 && (
@@ -2437,7 +2770,7 @@ export function MarketplacePage({
       <CustomMcpModal
         open={customMcpModalOpen}
         editingServer={editingServer}
-        agentes={agentes}
+        agentes={unlockedAgents}
         onClose={() => {
           setCustomMcpModalOpen(false);
           setEditingServer(null);
@@ -2448,8 +2781,8 @@ export function MarketplacePage({
 
       <CreateSkillModal
         open={createSkillModalOpen}
-        agentes={agentes}
-        defaultAgentId={agentes[0]?.agente_id ?? "estrategista"}
+        agentes={unlockedAgents}
+        defaultAgentId={unlockedAgents[0]?.agente_id ?? agentes[0]?.agente_id ?? "estrategista"}
         onClose={() => setCreateSkillModalOpen(false)}
         onCreated={() => void loadCatalogAndApps()}
         onCreateWithAgent={onCreateSkillWithAgent}
@@ -2457,7 +2790,7 @@ export function MarketplacePage({
 
       <AddToAgentsDialog
         skill={batchSkillTarget}
-        agentes={agentes}
+        agentes={unlockedAgents}
         onClose={() => setBatchSkillTarget(null)}
         onConfirmBatch={handleConfirmSkillBatch}
       />

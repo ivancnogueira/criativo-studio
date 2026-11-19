@@ -18,6 +18,7 @@ import {
   executePhase14ToolCall,
   executePhase15ToolCall,
   executeStudioExtensionTool,
+  isAgentAuthorizedForStudioTool,
   isPhase10ExtensionTool,
   isPhase13ToolName,
   isPhase14ToolName,
@@ -624,8 +625,22 @@ export class AgentRunner {
     }
 
     if (call.name === "meta_publicar") {
+      if (
+        !isAgentAuthorizedForStudioTool("meta_publicar", context.agenteId, {
+          db: this.db,
+          vault: this.vault,
+          catalogService: this.catalogService,
+        })
+      ) {
+        throw new Error(
+          `Acesso bloqueado: o agente '${context.agenteId}' não tem permissão ao aplicativo nativo 'Instagram / Meta' na Loja.`
+        );
+      }
       const args = call.arguments as unknown as MetaPublishParams;
-      return await metaPublishTool(args, { vault: this.vault });
+      return await metaPublishTool(args, {
+        vault: this.vault,
+        nativeStore: this.catalogService?.nativeStore,
+      });
     }
 
     if (isPhase10ExtensionTool(call.name)) {
@@ -638,6 +653,8 @@ export class AgentRunner {
         canalId: null,
         mcpGateway: this.mcpGateway,
         catalogService: this.catalogService,
+        nativeStore: this.catalogService?.nativeStore,
+        providerConnection: this.providerConnection,
         skillsManager: this.skillsManager,
         whatsappManager: this.whatsappManager,
         whatsappOrchestrator: this.whatsappOrchestrator,
@@ -796,6 +813,15 @@ export class AgentRunner {
         ...legacyMcpTools,
         ...gatewayTools,
       ]) {
+        if (
+          !isAgentAuthorizedForStudioTool(tool.name, agenteId, {
+            db: this.db,
+            vault: this.vault,
+            catalogService: this.catalogService,
+          })
+        ) {
+          continue;
+        }
         if (!availableToolsMap.has(tool.name)) {
           availableToolsMap.set(tool.name, tool);
         }
@@ -884,6 +910,7 @@ export class AgentRunner {
               modelId: targetModel,
               systemPrompt,
               messages: promptMessages,
+              agentId: effectiveAgentId,
               preferredAccountId: effectiveAccId,
             });
             return { mode: "cli", text: cliRes.text };

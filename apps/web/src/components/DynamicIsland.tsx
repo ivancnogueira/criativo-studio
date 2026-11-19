@@ -4,6 +4,8 @@ import {
   ChevronLeft,
   ChevronRight,
   KeyRound,
+  Maximize2,
+  Minimize2,
   PanelLeft,
   Plus,
   Smartphone,
@@ -34,6 +36,8 @@ interface DynamicIslandProps {
   onNewTab?: () => void;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
+  focusMode?: boolean;
+  onToggleFocusMode?: () => void;
   onNavigateBack?: () => void;
   onNavigateForward?: () => void;
   headerRightContent?: React.ReactNode;
@@ -56,6 +60,8 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   onCloseTab,
   onNewTab,
   onToggleSidebar,
+  focusMode = false,
+  onToggleFocusMode,
   onNavigateBack,
   onNavigateForward,
   headerRightContent,
@@ -99,6 +105,21 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
               className="h-7 w-7 rounded-md flex items-center justify-center hover:bg-[#212121] hover:text-white transition-colors"
             >
               <PanelLeft className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {onToggleFocusMode && (
+            <button
+              type="button"
+              onClick={onToggleFocusMode}
+              title={focusMode ? "Sair do Modo Foco (Ctrl+\\)" : "Modo Foco (Ctrl+\\)"}
+              aria-label="Alternar modo foco"
+              className={`h-7 w-7 rounded-md flex items-center justify-center transition-colors ${
+                focusMode
+                  ? "bg-[#007CF7]/20 text-[#42A0FF]"
+                  : "hover:bg-[#212121] hover:text-white"
+              }`}
+            >
+              {focusMode ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
             </button>
           )}
         </div>

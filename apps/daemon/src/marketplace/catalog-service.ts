@@ -15,14 +15,21 @@ import type {
   McpOAuthStatus,
   McpProbeResultado,
   McpServidorConfig,
+  NativeAppAccountSummary,
 } from "@criativo/contracts";
 import type { CriativoDatabase } from "../database/client.ts";
+import type { FetchLike } from "../engine/providers/provider-interface.ts";
+import {
+  type MetaValidationReport,
+  validateMetaIntegration,
+} from "../engine/tools/meta-insights.ts";
 import type { McpGateway } from "../mcp/mcp-gateway.ts";
 import { McpOAuthProvider } from "../mcp/mcp-oauth-provider.ts";
 import { inspectMcpServer } from "../mcp/mcp-probe.ts";
 import { McpServerStore } from "../mcp/mcp-server-store.ts";
 import { computeNextCronExecution } from "../routines/cron-scheduler.ts";
 import type { VaultService } from "../vault/vault-service.ts";
+import { NativeAppConnectionsStore } from "./native-app-connections-store.ts";
 import {
   type CatalogBundleData,
   loadCatalogBundle,
@@ -44,10 +51,12 @@ export interface CatalogServiceOptions {
   vault: VaultService;
   mcpGateway?: McpGateway;
   mcpStore?: McpServerStore;
+  nativeStore?: NativeAppConnectionsStore;
   oauthProvider?: McpOAuthProvider;
   skillsManager?: SkillsManager;
   workspaceRoot?: string;
   bundlePath?: string;
+  fetchImpl?: FetchLike;
 }
 
 export interface CatalogSnapshotQuery {
@@ -69,6 +78,7 @@ export interface CatalogAppAccountInfo {
 export interface CatalogAppDetail {
   app: MarketplaceAppItem;
   accounts: CatalogAppAccountInfo[];
+  nativeAccounts?: NativeAppAccountSummary[];
   agents: Array<{ agente_id: string; nome: string; papel: string; modelo_padrao: string }>;
   nativeStatus?: {
     configuredKeys: string[];
@@ -82,6 +92,7 @@ export interface ConnectCatalogAppInput {
   flowId?: string;
   kind?: MarketplaceAuthKind;
   mcpId?: string;
+  contaId?: string;
   contaRotulo?: string;
   fields?: Record<string, string>;
   url?: string;
@@ -111,6 +122,8 @@ export interface ConnectCatalogAppResult {
   instructions?: string[];
   server?: McpServidorConfig;
   probe?: McpProbeResultado;
+  nativeAccount?: NativeAppAccountSummary;
+  validationReport?: MetaValidationReport;
 }
 
 export interface InstallAgentOverrides {
@@ -254,10 +267,12 @@ export class CatalogService {
   private readonly vault: VaultService;
   private readonly mcpGateway?: McpGateway;
   private readonly mcpStore: McpServerStore;
+  public readonly nativeStore: NativeAppConnectionsStore;
   private readonly oauthProvider?: McpOAuthProvider;
   private readonly skillsManager: SkillsManager;
   private readonly workspaceRoot: string;
   private readonly bundlePath?: string;
+  private readonly fetchImpl?: FetchLike;
 
   constructor(options: CatalogServiceOptions) {
     this.db = options.db;
@@ -267,9 +282,13 @@ export class CatalogService {
       options.mcpStore ??
       options.mcpGateway?.store ??
       new McpServerStore({ db: options.db, vault: options.vault });
+    this.nativeStore =
+      options.nativeStore ??
+      new NativeAppConnectionsStore({ db: options.db, vault: options.vault });
     this.oauthProvider = options.oauthProvider ?? options.mcpGateway?.oauthProvider;
     this.workspaceRoot = options.workspaceRoot ?? process.cwd();
     this.bundlePath = options.bundlePath;
+    this.fetchImpl = options.fetchImpl;
     this.skillsManager =
       options.skillsManager ??
       new SkillsManager({
@@ -424,7 +443,9 @@ export class CatalogService {
       .all() as Array<{ agente_id: string; nome: string; papel: string; modelo_padrao: string }>;
 
     let nativeStatus: CatalogAppDetail["nativeStatus"];
+    let nativeAccounts: NativeAppAccountSummary[] = [];
     if (app.isNative) {
+      nativeAccounts = this.nativeStore.listAccounts(app.slug);
       const secretNames = new Set(this.vault.listSecretsMetadata().map((s) => s.chave_nome));
       const configuredKeys: string[] = [];
       const missingKeys: string[] = [];
@@ -432,7 +453,10 @@ export class CatalogService {
       const aliasMap = NATIVE_VAULT_ALIAS_MAP[app.slug];
       if (aliasMap) {
         for (const [fieldKey, aliases] of Object.entries(aliasMap)) {
-          if (aliases.some((alias) => secretNames.has(alias))) {
+          const configuredInAccount = nativeAccounts.some((acc) =>
+            Boolean(acc.campos_mascarados?.[fieldKey] || acc.campos_visiveis?.[fieldKey])
+          );
+          if (configuredInAccount || aliases.some((alias) => secretNames.has(alias))) {
             configuredKeys.push(fieldKey);
           } else {
             missingKeys.push(fieldKey);
@@ -463,6 +487,7 @@ export class CatalogService {
     return {
       app,
       accounts,
+      nativeAccounts,
       agents,
       nativeStatus,
     };
@@ -560,6 +585,97 @@ export class CatalogService {
     if (kind === "key") {
       const providedFields = payload.fields ?? {};
       const requiredFields = (authFlow?.fields ?? []).filter((f) => f.required !== false);
+
+      // Conectores nativos sem serverTemplate persistem em projecao_apps_nativos_contas + VaultService
+      if (!app.serverTemplate) {
+        const existingNativeAccounts = this.nativeStore.listAccounts(app.slug);
+        const cleanRotulo = payload.contaRotulo?.trim().toLowerCase() ?? "";
+        const targetExisting = payload.contaId?.trim()
+          ? existingNativeAccounts.find((a) => a.conta_id === payload.contaId!.trim())
+          : cleanRotulo
+            ? existingNativeAccounts.find((a) => a.conta_rotulo.trim().toLowerCase() === cleanRotulo)
+            : existingNativeAccounts.length === 1
+              ? existingNativeAccounts[0]
+              : undefined;
+
+        for (const field of requiredFields) {
+          const val = providedFields[field.key];
+          const hasStored = Boolean(
+            targetExisting &&
+              (targetExisting.campos_mascarados?.[field.key] ||
+                targetExisting.campos_visiveis?.[field.key])
+          );
+          if ((typeof val !== "string" || val.trim().length === 0) && !hasStored) {
+            throw new CatalogServiceError(
+              `Preencha o campo obrigatório '${field.label || field.key}'.`,
+              "MISSING_REQUIRED_FIELD"
+            );
+          }
+        }
+
+        const aliasMap = NATIVE_VAULT_ALIAS_MAP[app.slug] ?? {};
+        let savedAcc = this.nativeStore.upsertAccount({
+          appSlug: app.slug,
+          contaId: payload.contaId ?? targetExisting?.conta_id,
+          contaRotulo: payload.contaRotulo,
+          fields: providedFields,
+          flowFields: (authFlow?.fields ?? []).map((f) => ({
+            key: f.key,
+            label: f.label,
+            secret: f.secret !== false,
+            required: f.required !== false,
+            prefix: f.prefix,
+          })),
+          aliasMap,
+          acesso: payload.acesso,
+        });
+
+        const savedKeys: string[] = [];
+        for (const field of authFlow?.fields ?? []) {
+          if (providedFields[field.key]?.trim()) {
+            const targets = aliasMap[field.key] ?? [field.key];
+            savedKeys.push(...targets);
+          }
+        }
+
+        let validationReport: MetaValidationReport | undefined;
+        if (app.slug === "instagram" && !payload.skipProbe) {
+          validationReport = await validateMetaIntegration(this.vault, this.fetchImpl, {
+            nativeStore: this.nativeStore,
+            contaId: savedAcc.conta_id,
+          });
+          savedAcc =
+            this.nativeStore.recordTestResult(savedAcc.conta_id, {
+              ok: validationReport.ok,
+              error: validationReport.detalhes.erro,
+              perfilConectado: validationReport.detalhes.username
+                ? {
+                    username: validationReport.detalhes.username,
+                    followers_count: validationReport.detalhes.followersCount,
+                    media_count: validationReport.detalhes.mediaCount,
+                  }
+                : null,
+            }) ?? savedAcc;
+        } else if (!payload.skipProbe && savedAcc.configurado && app.slug !== "instagram") {
+          savedAcc =
+            this.nativeStore.recordTestResult(savedAcc.conta_id, {
+              ok: true,
+              error: null,
+            }) ?? savedAcc;
+        }
+
+        return {
+          ok: true,
+          kind: "key",
+          appSlug: app.slug,
+          native: true,
+          contaRotulo: savedAcc.conta_rotulo,
+          nativeAccount: savedAcc,
+          validationReport,
+          savedKeys: Array.from(new Set(savedKeys)),
+        };
+      }
+
       for (const field of requiredFields) {
         const val = providedFields[field.key];
         if (typeof val !== "string" || val.trim().length === 0) {
@@ -568,29 +684,6 @@ export class CatalogService {
             "MISSING_REQUIRED_FIELD"
           );
         }
-      }
-
-      // Conectores nativos sem serverTemplate gravam diretamente no VaultService
-      if (!app.serverTemplate) {
-        const savedKeys: string[] = [];
-        const aliasMap = NATIVE_VAULT_ALIAS_MAP[app.slug] ?? {};
-        for (const field of authFlow?.fields ?? []) {
-          const rawVal = providedFields[field.key]?.trim();
-          if (!rawVal) continue;
-          const formatted = `${field.prefix ?? ""}${rawVal}`;
-          const targets = aliasMap[field.key] ?? [field.key];
-          for (const vaultKey of targets) {
-            this.vault.setSecret(vaultKey, formatted);
-            savedKeys.push(vaultKey);
-          }
-        }
-        return {
-          ok: true,
-          kind: "key",
-          appSlug: app.slug,
-          native: true,
-          savedKeys: Array.from(new Set(savedKeys)),
-        };
       }
 
       const { mcpId, serverName, contaRotulo } = this.allocateServerIdentity(app, payload);
@@ -809,6 +902,231 @@ export class CatalogService {
       state: authFlowResult.state,
       redirectUri: authFlowResult.redirectUri,
       server: saved,
+    };
+  }
+
+  /**
+   * Testa a conexão real de um aplicativo nativo da Loja (ex.: Meta Graph API v27.0 para Instagram,
+   * Bot API para Telegram, ou status pareado para WhatsApp) e registra o resultado no SQLite.
+   */
+  public async testNativeApp(
+    slug: string,
+    contaId?: string
+  ): Promise<{
+    ok: boolean;
+    appSlug: string;
+    contaId: string | null;
+    resumo: string;
+    account?: NativeAppAccountSummary | null;
+    validationReport?: MetaValidationReport;
+    nativeAccounts: NativeAppAccountSummary[];
+  }> {
+    const app = this.findAppBySlug(slug);
+    if (!app) {
+      throw new CatalogServiceError(`Aplicativo '${slug}' não encontrado no catálogo.`, "APP_NOT_FOUND");
+    }
+
+    const accounts = this.nativeStore.listAccounts(app.slug);
+    const targetContaId = contaId?.trim() || accounts[0]?.conta_id || null;
+
+    if (app.slug === "instagram") {
+      const validationReport = await validateMetaIntegration(this.vault, this.fetchImpl, {
+        nativeStore: this.nativeStore,
+        contaId: targetContaId,
+      });
+
+      let updatedAcc: NativeAppAccountSummary | null = null;
+      if (targetContaId) {
+        updatedAcc = this.nativeStore.recordTestResult(targetContaId, {
+          ok: validationReport.ok,
+          error: validationReport.detalhes.erro,
+          perfilConectado: validationReport.detalhes.username
+            ? {
+                username: validationReport.detalhes.username,
+                followers_count: validationReport.detalhes.followersCount,
+                media_count: validationReport.detalhes.mediaCount,
+              }
+            : null,
+        });
+      }
+
+      return {
+        ok: validationReport.ok,
+        appSlug: app.slug,
+        contaId: targetContaId,
+        resumo: validationReport.resumo,
+        account: updatedAcc,
+        validationReport,
+        nativeAccounts: this.nativeStore.listAccounts(app.slug),
+      };
+    }
+
+    if (app.slug === "telegram") {
+      const creds = this.nativeStore.getResolvedCredentials("telegram", targetContaId);
+      const token = creds.values.TELEGRAM_BOT_TOKEN?.trim() || "";
+      if (!token) {
+        if (targetContaId) {
+          this.nativeStore.recordTestResult(targetContaId, {
+            ok: false,
+            error: "Token do bot Telegram não configurado no Cofre.",
+          });
+        }
+        const refreshed = this.nativeStore.listAccounts(app.slug);
+        return {
+          ok: false,
+          appSlug: app.slug,
+          contaId: targetContaId,
+          resumo: "Token do bot Telegram não configurado no Cofre.",
+          account: targetContaId ? this.nativeStore.getAccount(targetContaId) : null,
+          nativeAccounts: refreshed,
+        };
+      }
+
+      let ok = false;
+      let errMsg: string | null = null;
+      let botUsername: string | null = null;
+      try {
+        const res = await fetch(`https://api.telegram.org/bot${token}/getMe`, {
+          method: "GET",
+          signal: AbortSignal.timeout(10_000),
+        });
+        const data = (await res.json()) as { ok?: boolean; description?: string; result?: { username?: string } };
+        if (res.ok && data.ok) {
+          ok = true;
+          botUsername = data.result?.username ?? null;
+        } else {
+          errMsg = data.description || `HTTP ${res.status} na Telegram Bot API.`;
+        }
+      } catch (err) {
+        errMsg = err instanceof Error ? err.message : String(err);
+      }
+
+      const updatedAcc = targetContaId
+        ? this.nativeStore.recordTestResult(targetContaId, {
+            ok,
+            error: errMsg,
+            perfilConectado: botUsername ? { username: botUsername } : null,
+          })
+        : null;
+
+      return {
+        ok,
+        appSlug: app.slug,
+        contaId: targetContaId,
+        resumo: ok
+          ? `Bot Telegram conectado${botUsername ? ` (@${botUsername})` : ""}.`
+          : errMsg || "Falha ao validar token do Telegram.",
+        account: updatedAcc,
+        nativeAccounts: this.nativeStore.listAccounts(app.slug),
+      };
+    }
+
+    if (app.slug === "whatsapp") {
+      let total = 0;
+      let conectadas = 0;
+      try {
+        const row = this.db.connection
+          .prepare(
+            `SELECT COUNT(*) AS total,
+                    COALESCE(SUM(CASE WHEN status = 'conectado' THEN 1 ELSE 0 END), 0) AS conectadas
+             FROM whatsapp_contas;`
+          )
+          .get() as { total?: number; conectadas?: number } | undefined;
+        total = Number(row?.total ?? 0);
+        conectadas = Number(row?.conectadas ?? 0);
+      } catch {
+        // Ignora caso a tabela ainda esteja vazia
+      }
+      const ok = conectadas > 0;
+      const resumo = ok
+        ? `${conectadas} conta(s) WhatsApp conectada(s) (total: ${total}).`
+        : "Nenhuma conta WhatsApp conectada no momento.";
+      const updatedAcc = targetContaId
+        ? this.nativeStore.recordTestResult(targetContaId, { ok, error: ok ? null : resumo })
+        : null;
+      return {
+        ok,
+        appSlug: app.slug,
+        contaId: targetContaId,
+        resumo,
+        account: updatedAcc,
+        nativeAccounts: this.nativeStore.listAccounts(app.slug),
+      };
+    }
+
+    const creds = this.nativeStore.getResolvedCredentials(app.slug, targetContaId);
+    const hasValues = Object.values(creds.values).some((v) => v.trim().length > 0);
+    const updatedAcc = targetContaId
+      ? this.nativeStore.recordTestResult(targetContaId, {
+          ok: hasValues,
+          error: hasValues ? null : "Credenciais não configuradas no Cofre.",
+        })
+      : null;
+
+    return {
+      ok: hasValues,
+      appSlug: app.slug,
+      contaId: targetContaId,
+      resumo: hasValues
+        ? "Credenciais localizadas no Cofre AES-256-GCM."
+        : "Credenciais não configuradas no Cofre.",
+      account: updatedAcc,
+      nativeAccounts: this.nativeStore.listAccounts(app.slug),
+    };
+  }
+
+  /**
+   * Persiste as regras de acesso de agentes (`everyone` ou `agents`) para um App Nativo da Loja.
+   */
+  public updateNativeAppAccess(
+    slug: string,
+    acesso: Partial<McpAcessoAgentes>,
+    contaId?: string | null
+  ): {
+    ok: boolean;
+    appSlug: string;
+    nativeAccounts: NativeAppAccountSummary[];
+  } {
+    const app = this.findAppBySlug(slug);
+    if (!app) {
+      throw new CatalogServiceError(`Aplicativo '${slug}' não encontrado no catálogo.`, "APP_NOT_FOUND");
+    }
+    const nativeAccounts = this.nativeStore.updateAccess(app.slug, acesso, contaId);
+    return {
+      ok: true,
+      appSlug: app.slug,
+      nativeAccounts,
+    };
+  }
+
+  /**
+   * Remove uma conta nativa salva do SQLite e apaga suas chaves correspondentes no Cofre.
+   */
+  public deleteNativeAppAccount(
+    slug: string,
+    contaId: string
+  ): {
+    ok: boolean;
+    appSlug: string;
+    contaId: string;
+    nativeAccounts: NativeAppAccountSummary[];
+  } {
+    const app = this.findAppBySlug(slug);
+    if (!app) {
+      throw new CatalogServiceError(`Aplicativo '${slug}' não encontrado no catálogo.`, "APP_NOT_FOUND");
+    }
+    const removed = this.nativeStore.deleteAccount(app.slug, contaId);
+    if (!removed) {
+      throw new CatalogServiceError(
+        `Conta nativa '${contaId}' não encontrada para '${app.slug}'.`,
+        "ACCOUNT_NOT_FOUND"
+      );
+    }
+    return {
+      ok: true,
+      appSlug: app.slug,
+      contaId,
+      nativeAccounts: this.nativeStore.listAccounts(app.slug),
     };
   }
 

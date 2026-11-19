@@ -5,6 +5,7 @@ import type {
   ReleaseArtifactInfo,
   ReleaseManifest,
   ServerConnectionKind,
+  UpdateBundlePayloadV2,
   UpdatePhaseState,
   UpdateStatusSnapshot,
 } from "@criativo/contracts";
@@ -12,6 +13,12 @@ import { DADOS_DA_INSTANCIA_ITEMS, type StudioResolvedPaths } from "../config/ap
 import type { FetchLike } from "../engine/providers/provider-interface.ts";
 import type { LicenseClientService } from "../license/license-service.ts";
 import type { WebSocketHub } from "../server/websocket-hub.ts";
+
+export interface UpdateRestartContext {
+  mode: "hot_bundle" | "native_installer";
+  stagedArtifactPath: string | null;
+  version: string;
+}
 
 export interface AutoUpdateServiceOptions {
   licenseService: LicenseClientService;
@@ -21,13 +28,34 @@ export interface AutoUpdateServiceOptions {
   currentVersion?: string;
   serverId?: string;
   serverKind?: ServerConnectionKind;
-  onRestartRequested?: () => Promise<void> | void;
+  onRestartRequested?: (ctx?: UpdateRestartContext) => Promise<void> | void;
 }
 
-interface UpdateBundlePayload {
+interface UpdateBundlePayloadV1 {
   format: "criativo-update-bundle-v1";
   version: string;
   files: Record<string, string>;
+}
+
+function writeSafeProductEntry(
+  targetRoot: string,
+  relPath: string,
+  content: string | Buffer
+): boolean {
+  if (!relPath || isAbsolute(relPath) || isProtectedInstancePath(relPath)) {
+    return false;
+  }
+  const dest = resolve(targetRoot, relPath);
+  const relCheck = relative(targetRoot, dest);
+  if (relCheck.startsWith("..") || isAbsolute(relCheck) || dest === targetRoot) {
+    return false;
+  }
+  if (!dest.startsWith(targetRoot + sep)) {
+    return false;
+  }
+  mkdirSync(dirname(dest), { recursive: true });
+  writeFileSync(dest, content);
+  return true;
 }
 
 function parseSemver(ver: string): [number, number, number] {
@@ -71,7 +99,7 @@ export class AutoUpdateService {
   readonly #fetchImpl: FetchLike;
   readonly #serverId: string;
   readonly #serverKind: ServerConnectionKind;
-  readonly #onRestartRequested?: () => Promise<void> | void;
+  readonly #onRestartRequested?: (ctx?: UpdateRestartContext) => Promise<void> | void;
 
   #currentVersion: string;
   #latestManifest: ReleaseManifest | null = null;
@@ -79,6 +107,9 @@ export class AutoUpdateService {
   #progressPercent = 0;
   #lastCheckedAt: string | null = null;
   #errorMessage: string | null = null;
+  #installMode: "hot_bundle" | "native_installer" | null = null;
+  #stagedArtifactPath: string | null = null;
+  #stagedArtifactName: string | null = null;
 
   constructor(options: AutoUpdateServiceOptions) {
     this.#licenseService = options.licenseService;
@@ -89,6 +120,10 @@ export class AutoUpdateService {
     this.#serverKind = options.serverKind ?? "primary";
     this.#onRestartRequested = options.onRestartRequested;
     this.#currentVersion = options.currentVersion ?? readProductVersion(options.paths.productRoot);
+  }
+
+  getStagedArtifactPath(): string | null {
+    return this.#stagedArtifactPath;
   }
 
   getStatus(): UpdateStatusSnapshot {
@@ -108,11 +143,33 @@ export class AutoUpdateService {
       requires_active_license: true,
       can_apply_in_app: true,
       is_desktop_packaged: this.#paths.isPackaged,
+      install_mode: this.#installMode,
+      staged_artifact_name: this.#stagedArtifactName,
       server_id: this.#serverId,
       server_kind: this.#serverKind,
       last_checked_at: this.#lastCheckedAt,
       error_message: this.#errorMessage,
     };
+  }
+
+  async triggerRestart(): Promise<{
+    ok: boolean;
+    triggered: boolean;
+    mode: "hot_bundle" | "native_installer";
+    stagedArtifactPath: string | null;
+    version: string;
+  }> {
+    const mode = this.#installMode ?? (this.#stagedArtifactPath && !this.#stagedArtifactPath.endsWith(".json") ? "native_installer" : "hot_bundle");
+    const ctx: UpdateRestartContext = {
+      mode,
+      stagedArtifactPath: this.#stagedArtifactPath,
+      version: this.#currentVersion,
+    };
+    if (this.#onRestartRequested) {
+      await this.#onRestartRequested(ctx);
+      return { ok: true, triggered: true, ...ctx };
+    }
+    return { ok: true, triggered: false, ...ctx };
   }
 
   private emitStatus(): UpdateStatusSnapshot {
@@ -301,34 +358,49 @@ export class AutoUpdateService {
     this.emitStatus();
 
     const targetRoot = resolve(options?.targetProductDir ?? this.#paths.productRoot);
+    let appliedHotBundle = false;
     try {
       const maybeText = rawBytes.toString("utf8");
       if (maybeText.trimStart().startsWith("{")) {
-        const parsed = JSON.parse(maybeText) as Partial<UpdateBundlePayload>;
-        if (parsed.format === "criativo-update-bundle-v1" && parsed.files && typeof parsed.files === "object") {
+        const parsed = JSON.parse(maybeText) as Partial<UpdateBundlePayloadV1 | UpdateBundlePayloadV2>;
+        if (
+          parsed.format === "criativo-update-bundle-v1" &&
+          parsed.files &&
+          typeof parsed.files === "object" &&
+          !Array.isArray(parsed.files)
+        ) {
           for (const [relPath, fileContent] of Object.entries(parsed.files)) {
-            if (isAbsolute(relPath) || isProtectedInstancePath(relPath)) {
-              // Nunca sobrescreve dados da instância do usuário (.env, dados/, conteudos/, recursos/, saidas/, etc.)
-              continue;
-            }
-            const dest = resolve(targetRoot, relPath);
-            const relCheck = relative(targetRoot, dest);
-            if (relCheck.startsWith("..") || isAbsolute(relCheck) || dest === targetRoot) {
-              continue;
-            }
-            if (dest.startsWith(targetRoot + sep)) {
-              mkdirSync(dirname(dest), { recursive: true });
-              writeFileSync(dest, String(fileContent), "utf8");
-            }
+            writeSafeProductEntry(targetRoot, relPath, String(fileContent));
           }
+          appliedHotBundle = true;
+        } else if (
+          parsed.format === "criativo-update-bundle-v2" &&
+          Array.isArray(parsed.files)
+        ) {
+          for (const entry of parsed.files) {
+            if (!entry || typeof entry.path !== "string" || typeof entry.content !== "string") continue;
+            const data =
+              entry.encoding === "base64"
+                ? Buffer.from(entry.content, "base64")
+                : entry.content;
+            writeSafeProductEntry(targetRoot, entry.path, data);
+          }
+          appliedHotBundle = true;
         }
       }
     } catch {
-      // Artefatos binários (.exe/.dmg/.AppImage/.tar.gz) permanecem em staging aguardando reinicialização/extrator nativo
+      // Artefatos binários (.exe/.dmg/.AppImage/.tar.gz) permanecem em staging aguardando instalador/reinício nativo
       if (!existsSync(stagedPath)) {
         rmSync(stagedPath, { force: true });
       }
     }
+
+    this.#stagedArtifactPath = stagedPath;
+    this.#stagedArtifactName = safeFileName;
+    this.#installMode =
+      appliedHotBundle || safeFileName.toLowerCase().endsWith(".json")
+        ? "hot_bundle"
+        : "native_installer";
 
     this.#currentVersion = manifest.version;
     this.#state = "ready_to_restart";
@@ -336,8 +408,8 @@ export class AutoUpdateService {
     this.#errorMessage = null;
     const finalSnapshot = this.emitStatus();
 
-    if (options?.restartAfterApply && this.#onRestartRequested) {
-      await this.#onRestartRequested();
+    if (options?.restartAfterApply) {
+      await this.triggerRestart();
     }
 
     return finalSnapshot;

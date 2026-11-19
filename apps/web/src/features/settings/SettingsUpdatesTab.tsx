@@ -18,6 +18,7 @@ export interface SettingsUpdatesTabProps {
   activeServerName?: string;
   onCheckUpdates?: () => Promise<void>;
   onApplyUpdate?: () => Promise<void>;
+  onRestartForUpdate?: () => Promise<void>;
 }
 
 export const SettingsUpdatesTab: React.FC<SettingsUpdatesTabProps> = ({
@@ -26,6 +27,7 @@ export const SettingsUpdatesTab: React.FC<SettingsUpdatesTabProps> = ({
   activeServerName = "Servidor Principal",
   onCheckUpdates,
   onApplyUpdate,
+  onRestartForUpdate,
 }) => {
   const [checking, setChecking] = useState(false);
   const [applying, setApplying] = useState(false);
@@ -55,6 +57,19 @@ export const SettingsUpdatesTab: React.FC<SettingsUpdatesTabProps> = ({
   };
 
   const handleApply = async () => {
+    if (isReadyToRestart && onRestartForUpdate) {
+      if (applying) return;
+      setApplying(true);
+      setErro(null);
+      try {
+        await onRestartForUpdate();
+      } catch (err) {
+        setErro(err instanceof Error ? err.message : "Erro ao reiniciar aplicativo.");
+      } finally {
+        setApplying(false);
+      }
+      return;
+    }
     if (!onApplyUpdate || applying) return;
     setApplying(true);
     setErro(null);

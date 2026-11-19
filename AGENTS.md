@@ -36,7 +36,7 @@ Esta pasta pode representar o **produto** (template genérico distribuído para 
 | `npm run instalar-skills -- --plataforma <...>` | Sincroniza apenas as skills nas pastas globais (`~/.claude/skills`, `~/.codex/skills`, `~/.gemini/config/skills`) |
 | `npm run desinstalar-skills` | Remove apenas as skills marcadas por este produto nas pastas globais |
 | `npm run diagnosticar` | Verifica Node, `.env`, builds, 9 skills base, upgrades instalados, SQLite e estado do Cofre Meta |
-| `npm run validar:integracoes` | Valida as credenciais Meta API do Cofre/`.env` via Graph API v21.0 sem expor segredos |
+| `npm run validar:integracoes` | Valida as credenciais Meta API do Cofre/`.env` via Graph API v27.0 sem expor segredos |
 | `npm run instalar-upgrade -- --pacote <bonus\|video> --fonte <caminho_ou_git>` | Instala módulos opcionais de upgrade em etapas (`bonus` ou `video`) |
 | `npm run atualizar` | Atualiza o produto preservando os dados da instância e resincroniza builds e skills |
 | `npm start` | Inicia o Daemon + Cockpit Web integrado em `http://127.0.0.1:3000` |

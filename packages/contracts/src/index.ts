@@ -278,6 +278,15 @@ export type WebSocketEventMap = {
     agente_id: string;
     slug: string;
   };
+  "loja.app_atualizado": {
+    app_slug: string;
+    acao: "conectado" | "acesso" | "testado" | "conta_removida";
+    ok?: boolean;
+  };
+  "onboarding:updated": {
+    onboarding: OnboardingEstado;
+    setup_assistant_visible: boolean;
+  };
   "routine:updated": {
     owner_kind: RoutineOwnerKind;
     owner_id: string;
@@ -531,6 +540,8 @@ export interface OnboardingEstado {
   marca_nome: string;
   perfil_handle: string;
   marcos?: MarcosOnboardingStudio;
+  setup_assistant_dismissed?: boolean;
+  pendencias_setup?: string[];
   runtime_versao: string;
   atualizado_em: string;
 }
@@ -1477,12 +1488,17 @@ export interface StudioUserSettings {
     fonte_interface: string;
     fonte_codigo: string;
     idioma: "pt-BR" | "en" | "es";
+    sidebar_width?: number;
+    inspector_width?: number;
   };
   comportamento: {
     restaurar_ultima_aba: boolean;
     exibir_dynamic_island: boolean;
     detalhe_dynamic_island: "compacto" | "detalhado";
     habilitar_drawer_rapido: boolean;
+    sidebar_open?: boolean;
+    inspector_open?: boolean;
+    focus_mode?: boolean;
   };
   notificacoes: {
     web_habilitadas: boolean;
@@ -1640,6 +1656,7 @@ export interface LicenseActivationStatus {
   max_machines: number;
   machines_used: number;
   upgrades: LicenseUpgradeSlug[];
+  unlocked_agents_count?: number;
   last_verified_at?: string;
   grace_until?: string;
   offline_days_remaining?: number;
@@ -1711,6 +1728,40 @@ export type UpdatePhaseState =
   | "error"
   | "license_blocked";
 
+export const META_GRAPH_API_VERSION = "v27.0" as const;
+
+export function resolveMetaGraphApiVersion(overrideVersion?: string | null): string {
+  const candidate =
+    overrideVersion?.trim() ||
+    (typeof process !== "undefined" ? process.env?.META_API_VERSION?.trim() : "") ||
+    META_GRAPH_API_VERSION;
+  return /^v\d+\.\d+$/i.test(candidate) ? candidate : META_GRAPH_API_VERSION;
+}
+
+export function resolveMetaGraphApiBase(overrideVersion?: string | null): string {
+  return `https://graph.facebook.com/${resolveMetaGraphApiVersion(overrideVersion)}`;
+}
+
+export interface NativeAppAccountSummary {
+  conta_id: string;
+  app_slug: string;
+  conta_rotulo: string;
+  campos_mascarados: Record<string, string>;
+  campos_visiveis: Record<string, string>;
+  configurado: boolean;
+  testado_ok: boolean;
+  ultimo_teste_em: string | null;
+  ultimo_erro: string | null;
+  perfil_conectado?: {
+    username?: string | null;
+    account_id?: string | null;
+    followers_count?: number | null;
+    media_count?: number | null;
+  } | null;
+  acesso: import("./mcp-contracts.ts").McpAcessoAgentes;
+  atualizado_em: string;
+}
+
 export interface ReleaseArtifactInfo {
   platform: "win32" | "darwin" | "linux" | "vps-tarball";
   arch: "x64" | "arm64" | "universal";
@@ -1718,6 +1769,18 @@ export interface ReleaseArtifactInfo {
   sha256: string;
   size_bytes: number;
   download_path: string;
+  external_url?: string;
+  install_mode?: "hot_bundle" | "native_installer";
+}
+
+export interface UpdateBundlePayloadV2 {
+  format: "criativo-update-bundle-v2";
+  version: string;
+  files: Array<{
+    path: string;
+    encoding: "utf8" | "base64";
+    content: string;
+  }>;
 }
 
 export interface ReleaseManifest {
@@ -1739,6 +1802,8 @@ export interface UpdateStatusSnapshot {
   requires_active_license: boolean;
   can_apply_in_app: boolean;
   is_desktop_packaged: boolean;
+  install_mode?: "hot_bundle" | "native_installer" | null;
+  staged_artifact_name?: string | null;
   server_id: string;
   server_kind: ServerConnectionKind;
   last_checked_at: string | null;

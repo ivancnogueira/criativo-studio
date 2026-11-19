@@ -336,12 +336,20 @@ describe("Fase 3 — Multi-Provedor BYOK, MCP, Geração Multimodal & 15 Agentes
     seedDefaultAgents(db);
     assert.equal(ROSTER_15_AGENTES.length, 15);
 
-    const dbAgentsCount = (
-      db.connection.prepare(`SELECT COUNT(*) as total FROM projecao_agentes;`).get() as {
+    const permanentDbAgentsCount = (
+      db.connection
+        .prepare(`SELECT COUNT(*) as total FROM projecao_agentes WHERE agente_id != 'assistente_setup';`)
+        .get() as {
         total: number;
       }
     ).total;
-    assert.equal(dbAgentsCount, 15);
+    assert.equal(permanentDbAgentsCount, 15);
+    const hasSetupAssistant = Boolean(
+      db.connection
+        .prepare(`SELECT agente_id FROM projecao_agentes WHERE agente_id = 'assistente_setup';`)
+        .get()
+    );
+    assert.equal(hasSetupAssistant, true);
 
     const loader = new SkillLoader();
     for (const def of ROSTER_15_AGENTES) {

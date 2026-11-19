@@ -53,6 +53,7 @@ import type {
   MemoryReviewAlteracao,
   MensagemChat,
   MensagemFixada,
+  NativeAppAccountSummary,
   NivelEsforco,
   OnboardingEstado,
   PacoteUpgradeInfo,
@@ -423,16 +424,20 @@ export const daemonApi = {
     return json.tarefa;
   },
 
-  async listAgents(): Promise<AgenteRegistro[]> {
-    const res = await fetch("/api/agentes");
-    const json = (await res.json()) as {
+  async listAgents(options?: { onlyUnlocked?: boolean; includeSetup?: boolean }): Promise<AgenteRegistro[]> {
+    const qs = new URLSearchParams();
+    if (options?.onlyUnlocked) qs.set("apenas_desbloqueados", "1");
+    if (options?.includeSetup) qs.set("incluir_setup", "1");
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    const json = await requestJson<{
       agentes: Array<
         AgenteRegistro & {
           skills_paths_json?: string;
           config_json?: string;
         }
       >;
-    };
+      unlocked_agents_count?: number;
+    }>(`/api/agentes${suffix}`);
     return (json.agentes ?? []).map((raw) => {
       const cfg = raw.config_json
         ? (JSON.parse(raw.config_json) as { frente?: AgenteRegistro["frente"] })
@@ -492,19 +497,27 @@ export const daemonApi = {
 
   // --- Rotas Fase 7 (OpenBot Parity) ---
   async getOnboarding(): Promise<OnboardingEstado> {
-    const res = await fetch("/api/onboarding");
-    const json = (await res.json()) as { onboarding: OnboardingEstado };
+    const json = await requestJson<{ onboarding: OnboardingEstado }>("/api/onboarding");
     return json.onboarding;
   },
 
   async updateOnboarding(patch: Partial<OnboardingEstado>): Promise<OnboardingEstado> {
-    const res = await fetch("/api/onboarding", {
+    const json = await requestJson<{ onboarding: OnboardingEstado }>("/api/onboarding", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     });
-    const json = (await res.json()) as { onboarding: OnboardingEstado };
     return json.onboarding;
+  },
+
+  async setSetupAssistantState(
+    action: "dismiss" | "reopen"
+  ): Promise<{ ok: boolean; onboarding: OnboardingEstado; setup_assistant_visible: boolean }> {
+    return await requestJson("/api/onboarding/setup-assistant", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
   },
 
   async listProvidersStatus(refresh = false): Promise<ProvedorStatusInfo[]> {
@@ -1149,13 +1162,39 @@ export const daemonApi = {
   },
 
   async uploadFile(file: File, agenteId?: string | null): Promise<AnexoChat> {
+    return (await this.uploadFileCategorized(file, undefined, agenteId)).anexo;
+  },
+
+  async uploadFileCategorized(
+    file: File,
+    categoria?: "logo" | "foto" | "referencia" | "personagem" | "ficha_pdf" | "upload",
+    agenteId?: string | null
+  ): Promise<{
+    anexo: AnexoChat;
+    arquivo: ArquivoStudio;
+    onboarding?: OnboardingEstado;
+    brandExtraction?: {
+      ok: boolean;
+      extracted_chars: number;
+      patch: Record<string, unknown>;
+    };
+  }> {
     const dataUrl = await new Promise<string>((resolveRead, rejectRead) => {
       const reader = new FileReader();
       reader.onload = () => resolveRead(String(reader.result ?? ""));
       reader.onerror = () => rejectRead(new Error("Falha ao ler arquivo local."));
       reader.readAsDataURL(file);
     });
-    const res = await fetch("/api/arquivos/upload", {
+    const suffix = categoria ? `?categoria=${encodeURIComponent(categoria)}` : "";
+    const json = await requestJson<{
+      arquivo: ArquivoStudio;
+      onboarding?: OnboardingEstado;
+      brandExtraction?: {
+        ok: boolean;
+        extracted_chars: number;
+        patch: Record<string, unknown>;
+      };
+    }>(`/api/arquivos/upload${suffix}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1163,17 +1202,22 @@ export const daemonApi = {
         mime_type: file.type || "application/octet-stream",
         conteudo_base64: dataUrl,
         agente_id: agenteId ?? null,
+        ...(categoria ? { categoria } : {}),
       }),
     });
-    const json = (await res.json()) as { arquivo: ArquivoStudio };
     return {
-      arquivo_id: json.arquivo.arquivo_id,
-      nome: json.arquivo.nome_original,
-      caminho_relativo: json.arquivo.caminho_relativo,
-      url: json.arquivo.url,
-      mime_type: json.arquivo.mime_type,
-      tamanho_bytes: json.arquivo.tamanho_bytes,
-      tipo_uso: json.arquivo.tipo_uso,
+      anexo: {
+        arquivo_id: json.arquivo.arquivo_id,
+        nome: json.arquivo.nome_original,
+        caminho_relativo: json.arquivo.caminho_relativo,
+        url: json.arquivo.url,
+        mime_type: json.arquivo.mime_type,
+        tamanho_bytes: json.arquivo.tamanho_bytes,
+        tipo_uso: json.arquivo.tipo_uso,
+      },
+      arquivo: json.arquivo,
+      onboarding: json.onboarding,
+      brandExtraction: json.brandExtraction,
     };
   },
 
@@ -1587,6 +1631,7 @@ export const daemonApi = {
       oauthStatus: McpOAuthStatus;
       oauthAccounts: McpOAuthAccountView[];
     }>;
+    nativeAccounts?: NativeAppAccountSummary[];
     agents: Array<{ agente_id: string; nome: string; papel: string; modelo_padrao: string }>;
     nativeStatus?: {
       configuredKeys: string[];
@@ -1595,8 +1640,7 @@ export const daemonApi = {
       whatsappConnectedCount?: number;
     };
   }> {
-    const res = await fetch(`/api/loja/apps/${encodeURIComponent(slug)}`);
-    const json = (await res.json()) as {
+    const json = await requestJson<{
       app?: MarketplaceAppItem;
       accounts?: Array<{
         server: McpServidorConfig;
@@ -1604,6 +1648,7 @@ export const daemonApi = {
         oauthStatus: McpOAuthStatus;
         oauthAccounts: McpOAuthAccountView[];
       }>;
+      nativeAccounts?: NativeAppAccountSummary[];
       agents?: Array<{ agente_id: string; nome: string; papel: string; modelo_padrao: string }>;
       nativeStatus?: {
         configuredKeys: string[];
@@ -1612,13 +1657,14 @@ export const daemonApi = {
         whatsappConnectedCount?: number;
       };
       erro?: string;
-    };
-    if (!res.ok || !json.app) {
+    }>(`/api/loja/apps/${encodeURIComponent(slug)}`);
+    if (!json.app) {
       throw new Error(json.erro ?? "Falha ao carregar detalhes do aplicativo.");
     }
     return {
       app: json.app,
       accounts: json.accounts ?? [],
+      nativeAccounts: json.nativeAccounts ?? [],
       agents: json.agents ?? [],
       nativeStatus: json.nativeStatus,
     };
@@ -1630,6 +1676,7 @@ export const daemonApi = {
       flowId?: string;
       kind?: MarketplaceAuthKind;
       mcpId?: string;
+      contaId?: string;
       contaRotulo?: string;
       fields?: Record<string, string>;
       url?: string;
@@ -1637,6 +1684,7 @@ export const daemonApi = {
       args?: string[];
       workingDirectory?: string | null;
       acesso?: McpAcessoAgentes;
+      skipProbe?: boolean;
     }
   ): Promise<{
     ok: boolean;
@@ -1649,13 +1697,10 @@ export const daemonApi = {
     server?: McpServidorConfig;
     probe?: McpProbeResultado;
     instructions?: string[];
+    nativeAccount?: NativeAppAccountSummary;
+    validationReport?: { ok: boolean; estagio: number; resumo: string; detalhes?: Record<string, unknown> };
   }> {
-    const res = await fetch(`/api/loja/apps/${encodeURIComponent(slug)}/conectar`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const json = (await res.json()) as {
+    const json = await requestJson<{
       ok?: boolean;
       kind?: MarketplaceAuthKind;
       appSlug?: string;
@@ -1666,11 +1711,13 @@ export const daemonApi = {
       server?: McpServidorConfig;
       probe?: McpProbeResultado;
       instructions?: string[];
-      erro?: string;
-    };
-    if (!res.ok) {
-      throw new Error(json.erro ?? "Falha ao conectar aplicativo da Loja.");
-    }
+      nativeAccount?: NativeAppAccountSummary;
+      validationReport?: { ok: boolean; estagio: number; resumo: string; detalhes?: Record<string, unknown> };
+    }>(`/api/loja/apps/${encodeURIComponent(slug)}/conectar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
     return {
       ok: Boolean(json.ok),
       kind: json.kind ?? "oauth",
@@ -1682,7 +1729,49 @@ export const daemonApi = {
       server: json.server,
       probe: json.probe,
       instructions: json.instructions,
+      nativeAccount: json.nativeAccount,
+      validationReport: json.validationReport,
     };
+  },
+
+  async updateNativeAppAccess(
+    slug: string,
+    payload: { acesso: McpAcessoAgentes; contaId?: string | null }
+  ): Promise<{ ok: boolean; appSlug: string; nativeAccounts: NativeAppAccountSummary[] }> {
+    return await requestJson(`/api/loja/apps/${encodeURIComponent(slug)}/acesso`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async testNativeAppConnection(
+    slug: string,
+    payload?: { contaId?: string }
+  ): Promise<{
+    ok: boolean;
+    appSlug: string;
+    contaId: string | null;
+    resumo: string;
+    account?: NativeAppAccountSummary | null;
+    validationReport?: { ok: boolean; estagio: number; resumo: string; detalhes?: Record<string, unknown> };
+    nativeAccounts: NativeAppAccountSummary[];
+  }> {
+    return await requestJson(`/api/loja/apps/${encodeURIComponent(slug)}/testar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload ?? {}),
+    });
+  },
+
+  async deleteNativeAppAccount(
+    slug: string,
+    contaId: string
+  ): Promise<{ ok: boolean; appSlug: string; contaId: string; nativeAccounts: NativeAppAccountSummary[] }> {
+    return await requestJson(
+      `/api/loja/apps/${encodeURIComponent(slug)}/contas/${encodeURIComponent(contaId)}`,
+      { method: "DELETE" }
+    );
   },
 
   async installLojaAgent(
@@ -3467,5 +3556,17 @@ export const daemonApi = {
       }
     );
     return data.status;
+  },
+
+  async triggerUpdateRestart(): Promise<{
+    ok: boolean;
+    triggered: boolean;
+    mode: "hot_bundle" | "native_installer";
+    stagedArtifactPath: string | null;
+    version: string;
+  }> {
+    return await requestJson("/api/studio/updates/restart", {
+      method: "POST",
+    });
   },
 };

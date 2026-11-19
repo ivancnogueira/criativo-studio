@@ -117,6 +117,20 @@ export function prepareDesktopBundle(options = {}) {
     }
   }
 
+  // Garante versão sincronizada do desktop no produto.json embutido no bundle
+  try {
+    const desktopPkgRaw = readFileSync(join(desktopRoot, "package.json"), "utf8");
+    const produtoRaw = readFileSync(join(repoRoot, "produto.json"), "utf8");
+    const desktopPkg = JSON.parse(desktopPkgRaw);
+    const produtoObj = JSON.parse(produtoRaw);
+    if (desktopPkg.version && produtoObj.versao !== desktopPkg.version) {
+      produtoObj.versao = desktopPkg.version;
+    }
+    writeFileSync(join(outDir, "produto.json"), JSON.stringify(produtoObj, null, 2) + "\n", "utf8");
+  } catch {
+    // segue com produto.json padrão caso leitura falhe
+  }
+
   for (const forbidden of FORBIDDEN_TOP_PATHS) {
     if (existsSync(join(outDir, forbidden))) {
       rmSync(join(outDir, forbidden), { recursive: true, force: true });

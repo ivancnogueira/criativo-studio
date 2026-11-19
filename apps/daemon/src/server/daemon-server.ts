@@ -41,6 +41,10 @@ import { CatalogService } from "../marketplace/catalog-service.ts";
 import { GithubImporter } from "../marketplace/github-importer.ts";
 import { SkillsManager } from "../marketplace/skills-manager.ts";
 import { McpGateway } from "../mcp/mcp-gateway.ts";
+import {
+  CriativoStudioMcpBridge,
+  INTERNAL_MCP_ROUTE_PATH,
+} from "../mcp/studio-mcp-bridge.ts";
 import { ProviderConnectionService } from "../providers/provider-connection-service.ts";
 import { TranscriptionService } from "../voice/transcription-service.ts";
 import { ControlSocketServer } from "./control-socket.ts";
@@ -117,6 +121,11 @@ export interface DaemonServerOptions {
   accessToken?: string | null;
   isChildServer?: boolean;
   sharedAuthDir?: string | null;
+  onRestartRequested?: (ctx?: {
+    mode: "hot_bundle" | "native_installer";
+    stagedArtifactPath: string | null;
+    version: string;
+  }) => Promise<void> | void;
 }
 
 export interface DaemonRuntime {
@@ -146,6 +155,7 @@ export interface DaemonRuntime {
   providers: ProviderRegistry;
   runner: AgentRunner;
   mcpGateway: McpGateway;
+  studioMcpBridge: CriativoStudioMcpBridge;
   catalogService: CatalogService;
   githubImporter: GithubImporter;
   skillsManager: SkillsManager;
@@ -330,6 +340,20 @@ export async function createDaemonServer(
     fetchImpl: options.fetchImpl,
     serverId: options.isChildServer ? (process.env.CRIATIVO_CHILD_SERVER_ID ?? "local_child") : "primary",
     serverKind: options.isChildServer ? "local_child" : "primary",
+    onRestartRequested: async (ctx) => {
+      if (options.onRestartRequested) {
+        await options.onRestartRequested(ctx);
+        return;
+      }
+      if (typeof process.send === "function") {
+        process.send({
+          type: "criativo:request-update-restart",
+          mode: ctx?.mode ?? "hot_bundle",
+          stagedArtifactPath: ctx?.stagedArtifactPath ?? null,
+          version: ctx?.version ?? null,
+        });
+      }
+    },
   });
 
   const configuredAccessToken =
@@ -402,6 +426,7 @@ export async function createDaemonServer(
     oauthProvider: mcpGateway.oauthProvider,
     skillsManager,
     workspaceRoot: resolvedWorkspaceRoot,
+    fetchImpl: options.fetchImpl,
   });
   const githubImporter = new GithubImporter({
     skillsManager,
@@ -1009,6 +1034,32 @@ export async function createDaemonServer(
   tasksService.setOnLaneWake(scheduleLaneDrain);
   queueControls.setOnLaneWake(scheduleLaneDrain);
 
+  const studioMcpBridge = new CriativoStudioMcpBridge({
+    db,
+    vault,
+    wsHub,
+    workspaceRoot: resolvedWorkspaceRoot,
+    mcpGateway,
+    catalogService,
+    nativeStore: catalogService.nativeStore,
+    providerConnection,
+    skillsManager,
+    whatsappManager,
+    whatsappOrchestrator,
+    routineToolsDeps,
+    workflowStore,
+    workflowEngine,
+    phase13: phase13Bundle,
+    phase14: phase14Services,
+    browserService,
+    screenCapture,
+    showcaseService,
+    transcription,
+    remoteClaimService,
+    fetchImpl: options.fetchImpl,
+  });
+  providerConnection.attachStudioMcpBridge(studioMcpBridge);
+
   /**
    * LaneDrainScheduler: drena entregas de chat/sub-thread por lane `(agente_id, thread_id)`
    * respeitando o limite de concorrência do agente, lock `editando = 1` e `AbortController` isolado.
@@ -1332,7 +1383,7 @@ export async function createDaemonServer(
         res.writeHead(204, {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Criativo-Server-Id",
+          "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Criativo-Server-Id,X-Criativo-Mcp-Token",
         });
         res.end();
         return;
@@ -1341,6 +1392,11 @@ export async function createDaemonServer(
       const url = new URL(req.url ?? "/", "http://localhost");
       const path = url.pathname;
       const method = req.method ?? "GET";
+
+      if (path === INTERNAL_MCP_ROUTE_PATH) {
+        await studioMcpBridge.handleHttpRequest(req, res, path, method, url, readJsonBody);
+        return;
+      }
 
       if (
         configuredAccessToken &&
@@ -1876,6 +1932,7 @@ function tryServeWebStatic(
   const address = httpServer.address();
   const resolvedPort = typeof address === "object" && address ? address.port : listenPort;
   activeServerPort = resolvedPort;
+  studioMcpBridge.setPort(resolvedPort);
   routineStore.setPublicBaseUrl(`http://${listenHost}:${resolvedPort}`);
 
   const resolvedControlSocketPath =
@@ -1945,6 +2002,7 @@ function tryServeWebStatic(
     providers,
     runner,
     mcpGateway,
+    studioMcpBridge,
     catalogService,
     githubImporter,
     skillsManager,

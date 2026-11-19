@@ -2,38 +2,39 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, extname, relative, resolve, sep } from "node:path";
-import type {
-  AgentNotificationLevel,
-  AnexoChat,
-  AprendizadoConfig,
-  ArquivoStudio,
-  BackupModelChoice,
-  BackupModelsConfig,
-  CanalEquipe,
-  ChatVisualMeta,
-  ConversationMessage,
-  ConversationUiBlock,
-  MemoriaInclusao,
-  MemoryReviewAlteracao,
-  MensagemChat,
-  OnboardingEstado,
-  PassoChat,
-  PermissionLevel,
-  ProviderName,
-  SkillSugestaoItem,
-  ToolDefinition,
-  UiBlockSubmitPayload,
-  UsageLimitAskPayload,
-  WorkflowAresta,
-  WorkflowNo,
-  WorkflowTraco,
-  WorkflowVisual,
+import {
+  resolveMetaGraphApiVersion,
+  type AgentNotificationLevel,
+  type AnexoChat,
+  type AprendizadoConfig,
+  type ArquivoStudio,
+  type BackupModelChoice,
+  type BackupModelsConfig,
+  type CanalEquipe,
+  type ChatVisualMeta,
+  type ConversationMessage,
+  type ConversationUiBlock,
+  type MemoriaInclusao,
+  type MemoryReviewAlteracao,
+  type MensagemChat,
+  type OnboardingEstado,
+  type PassoChat,
+  type PermissionLevel,
+  type ProviderName,
+  type SkillSugestaoItem,
+  type ToolDefinition,
+  type UiBlockSubmitPayload,
+  type UsageLimitAskPayload,
+  type WorkflowAresta,
+  type WorkflowNo,
+  type WorkflowTraco,
+  type WorkflowVisual,
 } from "@criativo/contracts";
 import type { WhatsAppOrchestrator, WhatsAppSessionManager } from "@criativo/whatsapp";
 import type { CriativoDatabase } from "../database/client.ts";
 import type { ProviderRegistry } from "../engine/providers/provider-registry.ts";
 import { HandoffBus } from "../engine/runner/handoff-bus.ts";
-import { ROSTER_15_AGENTES } from "../engine/runner/roster-defaults.ts";
+import { ROSTER_15_AGENTES, SETUP_ASSISTANT_AGENT_DEF } from "../engine/runner/roster-defaults.ts";
 import { SkillLoader } from "../engine/runner/skill-loader.ts";
 import type { CatalogService } from "../marketplace/catalog-service.ts";
 import type { GithubImporter } from "../marketplace/github-importer.ts";
@@ -59,9 +60,14 @@ import {
 } from "./analytics-skills-service.ts";
 import {
   activateUpgradePackage,
+  computeUnlockedAgentsSummary,
+  evaluateAndSyncSetupCompletion,
   getBrandIdentity,
+  importBrandPdfFromBuffer,
+  isSetupAssistantVisible,
   listUpgradePackages,
   saveBrandIdentity,
+  setSetupAssistantState,
 } from "./brand-onboarding-service.ts";
 import { tryHandleWhatsAppMcpStoreRoute } from "./routes-whatsapp-mcp-store.ts";
 import {
@@ -74,6 +80,7 @@ import {
   executeStudioExtensionTool,
   executeStudioRoutineTool,
   getChatWorkflowToolCatalog,
+  isAgentAuthorizedForStudioTool,
   isPhase10ExtensionTool,
   isPhase13ToolName,
   isPhase14ToolName,
@@ -417,17 +424,7 @@ async function runTextModelWorkflowToolLoop(params: {
 }): Promise<string> {
   let currentText = params.initialText;
   const hasWorkflow = Boolean(params.deps.workflowStore && params.deps.workflowEngine);
-  const hasPhase13 = Boolean(params.deps.phase13);
-  const hasPhase14 = Boolean(params.deps.phase14);
-  const hasPhase15 = Boolean(
-    params.deps.browserService ||
-      params.deps.screenCapture ||
-      params.deps.showcaseService ||
-      params.deps.db,
-  );
-  if (!hasWorkflow && !hasPhase13 && !hasPhase14 && !hasPhase15) {
-    return currentText;
-  }
+  const workspaceRoot = params.deps.workspaceRoot ?? process.cwd();
 
   for (let round = 0; round < 4; round += 1) {
     if (params.signal?.aborted) {
@@ -441,23 +438,37 @@ async function runTextModelWorkflowToolLoop(params: {
     const toolResults: Array<{ name: string; output: unknown }> = [];
     for (const call of calls) {
       const t0 = Date.now();
+      const toolName = call.name.replace(/^mcp__criativo_studio__/, "").trim();
       let out: unknown;
       let failed = false;
       try {
-        if (isPhase15ToolName(call.name)) {
-          const canalId =
-            params.threadId && !params.threadId.startsWith("main:")
-              ? `thread:${params.threadId}`
-              : `agente:${params.agenteId}`;
+        const effectiveCanalId =
+          params.threadId && !params.threadId.startsWith("main:")
+            ? `thread:${params.threadId}`
+            : `agente:${params.agenteId}`;
+
+        if (
+          !isAgentAuthorizedForStudioTool(toolName, params.agenteId, {
+            db: params.deps.db,
+            vault: params.deps.vault,
+            catalogService: params.deps.catalogService,
+          })
+        ) {
+          throw new Error(
+            `Acesso negado: o agente '${params.agenteId}' não possui autorização na Loja para usar '${toolName}'.`
+          );
+        }
+
+        if (isPhase15ToolName(toolName)) {
           out = await executePhase15ChatTool({
-            toolName: call.name,
+            toolName,
             args: call.arguments,
             agenteId: params.agenteId,
-            canalId,
+            canalId: effectiveCanalId,
             deps: {
               db: params.deps.db,
               wsHub: params.deps.wsHub,
-              workspaceRoot: params.deps.workspaceRoot ?? process.cwd(),
+              workspaceRoot,
               browserService: params.deps.browserService,
               screenCapture: params.deps.screenCapture,
               showcaseService: params.deps.showcaseService,
@@ -465,38 +476,61 @@ async function runTextModelWorkflowToolLoop(params: {
               remoteClaimService: params.deps.remoteClaimService ?? undefined,
             },
           });
-        } else if (isPhase14ToolName(call.name) && params.deps.phase14) {
-          const canalId =
-            params.threadId && !params.threadId.startsWith("main:")
-              ? `thread:${params.threadId}`
-              : `agente:${params.agenteId}`;
+        } else if (isPhase10ExtensionTool(toolName)) {
+          out = await executeStudioExtensionTool(toolName, call.arguments, {
+            db: params.deps.db,
+            vault: params.deps.vault,
+            wsHub: params.deps.wsHub,
+            workspaceRoot,
+            agenteId: params.agenteId,
+            canalId: effectiveCanalId,
+            mcpGateway: params.deps.mcpGateway,
+            catalogService: params.deps.catalogService,
+            nativeStore: params.deps.catalogService?.nativeStore,
+            providerConnection: params.deps.providerConnection,
+            skillsManager: params.deps.skillsManager,
+            whatsappManager: params.deps.whatsappManager,
+            whatsappOrchestrator: params.deps.whatsappOrchestrator,
+          });
+        } else if (isRoutineToolName(toolName)) {
+          out = await executeStudioRoutineTool(toolName, call.arguments, {
+            agenteId: params.agenteId,
+            turnOrigin: "human",
+            routineToolsDeps: params.deps.routineToolsDeps,
+          });
+        } else if (isWorkflowToolName(toolName) && hasWorkflow) {
+          out = await executeChatWorkflowTool(toolName, call.arguments, {
+            store: params.deps.workflowStore,
+            engine: params.deps.workflowEngine,
+            wsHub: params.deps.wsHub,
+            agenteId: params.agenteId,
+            requestSeed: params.turnId,
+          });
+        } else if (isPhase14ToolName(toolName) && params.deps.phase14) {
           out = await executePhase14ToolCall(
-            call.name,
+            toolName,
             call.arguments,
             {
               agenteId: params.agenteId,
-              canalId,
+              canalId: effectiveCanalId,
               threadId: params.threadId ?? `main:${params.agenteId}`,
               turnId: params.turnId,
               origemTurno: params.isRoutine ? "rotina" : "usuario_local",
-              isOneToOneUserChat: !params.isRoutine && canalId === `agente:${params.agenteId}`,
+              isOneToOneUserChat: !params.isRoutine && effectiveCanalId === `agente:${params.agenteId}`,
               lastUserMessageId: params.entregaOrigemId ?? null,
             },
             params.deps.phase14,
           );
-        } else if (isPhase13ToolName(call.name) && params.deps.phase13) {
+        } else if (isPhase13ToolName(toolName) && params.deps.phase13) {
           const p13 = await executePhase13Tool(
-            call.name,
+            toolName,
             call.arguments,
             {
               agenteId: params.agenteId,
               turnoId: params.turnId,
-              callId: `${params.turnId}:${round}:${call.name}`,
+              callId: `${params.turnId}:${round}:${toolName}`,
               threadId: params.threadId ?? `main:${params.agenteId}`,
-              canalId:
-                params.threadId && !params.threadId.startsWith("main:")
-                  ? `thread:${params.threadId}`
-                  : `agente:${params.agenteId}`,
+              canalId: effectiveCanalId,
               entregaOrigemId: params.entregaOrigemId ?? params.turnId,
               pedidoTexto: params.pedidoTexto ?? "",
               isRoutine: params.isRoutine,
@@ -505,17 +539,13 @@ async function runTextModelWorkflowToolLoop(params: {
             params.deps.phase13,
           );
           out = p13.result;
-        } else if (hasWorkflow) {
-          out = await executeChatWorkflowTool(call.name, call.arguments, {
-            store: params.deps.workflowStore,
-            engine: params.deps.workflowEngine,
-            wsHub: params.deps.wsHub,
-            agenteId: params.agenteId,
-            requestSeed: params.turnId,
+        } else if (params.deps.mcpGateway && toolName.startsWith("mcp_")) {
+          out = await params.deps.mcpGateway.callMcpTool(toolName, call.arguments, {
+            agentId: params.agenteId,
           });
         } else {
           failed = true;
-          out = { erro: `Serviço indisponível para ferramenta '${call.name}'.` };
+          out = { erro: `Serviço indisponível para ferramenta '${toolName}'.` };
         }
       } catch (err) {
         failed = true;
@@ -671,7 +701,9 @@ function enrichAgentRow(
     )
     .get(canalId) as { conteudo_markdown: string; criado_em: string } | undefined;
 
-  const def = ROSTER_15_AGENTES.find((a) => a.agente_id === row.agente_id);
+  const def =
+    ROSTER_15_AGENTES.find((a) => a.agente_id === row.agente_id) ??
+    (row.agente_id === SETUP_ASSISTANT_AGENT_DEF.agente_id ? SETUP_ASSISTANT_AGENT_DEF : undefined);
   const parsedConfig = safeJsonParse<Record<string, unknown>>(row.config_json, {});
   const pacote = (
     parsedConfig.pacote === "bonus" || parsedConfig.pacote === "video"
@@ -837,15 +869,23 @@ export async function generateAgentChatReply(
       lowerCheck
     );
 
+  const graphVersion = resolveMetaGraphApiVersion();
+  const canUseMetaTools = isAgentAuthorizedForStudioTool("validar_integracao_meta", agente.agente_id, {
+    db: deps.db,
+    vault: deps.vault,
+    catalogService: deps.catalogService,
+  });
   let metaValidationSummary: Awaited<ReturnType<typeof validateMetaIntegration>> | null = null;
-  if (asksMetaValidation && deps.vault) {
+  if (asksMetaValidation && deps.vault && canUseMetaTools) {
     const tMeta0 = Date.now();
-    metaValidationSummary = await validateMetaIntegration(deps.vault);
+    metaValidationSummary = await validateMetaIntegration(deps.vault, undefined, {
+      nativeStore: deps.catalogService?.nativeStore,
+    });
     const metaStep: PassoChat = {
       id: `step-${randomUUID().slice(0, 8)}`,
       ferramenta: "validar_integracao_meta",
       titulo: metaValidationSummary.ok
-        ? `Meta Graph API v21.0 validada (HTTP ${metaValidationSummary.detalhes.httpStatus} · Estágio ${metaValidationSummary.estagio})`
+        ? `Meta Graph API ${graphVersion} validada (HTTP ${metaValidationSummary.detalhes.httpStatus} · Estágio ${metaValidationSummary.estagio})`
         : `Diagnóstico Meta (Estágio ${metaValidationSummary.estagio}): ${metaValidationSummary.resumo.slice(0, 80)}`,
       detalhes: JSON.stringify({
         tokenConfigurado: metaValidationSummary.detalhes.tokenConfigurado,
@@ -864,7 +904,7 @@ export async function generateAgentChatReply(
       step: metaStep,
     });
     promptBaseParts.push(
-      `## Resultado Real Executado Agora por validar_integracao_meta (Cofre SQLite + Graph API v21.0)\n${JSON.stringify(
+      `## Resultado Real Executado Agora por validar_integracao_meta (Cofre SQLite + Graph API ${graphVersion})\n${JSON.stringify(
         metaValidationSummary,
         null,
         2
@@ -910,11 +950,22 @@ export async function generateAgentChatReply(
     ...studioPhase15Tools,
     ...mcpTools,
   ]) {
+    if (
+      !isAgentAuthorizedForStudioTool(t.name, agente.agente_id, {
+        db: deps.db,
+        vault: deps.vault,
+        catalogService: deps.catalogService,
+      })
+    ) {
+      continue;
+    }
     if (!availableChatToolsMap.has(t.name)) {
       availableChatToolsMap.set(t.name, t);
     }
   }
   const availableChatTools = Array.from(availableChatToolsMap.values());
+  const toolFallbackNames = availableChatTools.map((t) => t.name);
+  const studioToolsPromptGuidance = `\n\n## Ferramentas Nativas & MCP do Criativo Studio Disponíveis Neste Turno\nVocê tem acesso autorizado nesta sessão às seguintes ferramentas: ${toolFallbackNames.join(", ")}.\nSe estiver operando via servidor MCP \`criativo_studio\` (ou ferramentas \`mcp__criativo_studio__*\`), chame a ferramenta diretamente.\nCaso o runtime textual atual não exponha tools nativas, emita uma chamada explícita no formato:\n<tool_call>{"name":"nome_da_ferramenta","arguments":{...}}</tool_call>\n(Ex.: \`consultar_metricas_meta\` para métricas do Instagram na Graph API ${graphVersion}, \`validar_integracao_meta\` para checar credenciais do Cofre, \`list_memories\`/\`save_memory\`, etc.). Jamais invente métricas ou diga que não tem acesso se a ferramenta constar na lista acima.`;
 
   const governance = readAgentGovernance(deps.db, agente.agente_id);
   const initialModel = options?.overrideModel?.trim() || agente.modelo_padrao;
@@ -947,7 +998,7 @@ export async function generateAgentChatReply(
       id: `step-${randomUUID().slice(0, 8)}`,
       ferramenta: "validar_integracao_meta",
       titulo: metaValidationSummary.ok
-        ? `Meta Graph API v21.0 validada (HTTP ${metaValidationSummary.detalhes.httpStatus} · @${metaValidationSummary.detalhes.username ?? "conectado"})`
+        ? `Meta Graph API ${graphVersion} validada (HTTP ${metaValidationSummary.detalhes.httpStatus} · @${metaValidationSummary.detalhes.username ?? "conectado"})`
         : `Diagnóstico Meta (Estágio ${metaValidationSummary.estagio}): ${metaValidationSummary.resumo.slice(0, 90)}`,
       detalhes: metaValidationSummary.resumo,
       status: metaValidationSummary.ok ? "concluido" : "erro",
@@ -1245,11 +1296,7 @@ export async function generateAgentChatReply(
               : userPrompt,
         });
 
-        const cliSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e objetiva. Nunca invente handles ou marcas reais.${
-          deps.workflowStore && deps.workflowEngine
-            ? "\nQuando precisar consultar/editar/executar workflows em grafo, responda contendo <tool_call>{\"name\":\"...\",\"arguments\":{...}}</tool_call>."
-            : ""
-        }`;
+        const cliSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e objetiva. Nunca invente handles ou marcas reais.${studioToolsPromptGuidance}`;
         const poolAccount = await deps.providerConnection
           .pickPoolAccount(targetProvider, preferredAccId)
           .catch(() => null);
@@ -1260,6 +1307,7 @@ export async function generateAgentChatReply(
           modelId: targetModel,
           systemPrompt: cliSystemPrompt,
           messages: cliMsgs,
+          agentId: agente.agente_id,
           preferredAccountId: effAccountId,
         });
 
@@ -1275,6 +1323,7 @@ export async function generateAgentChatReply(
                 { role: "assistant", text: cliResult.text },
                 { role: "user", text: followUpPrompt },
               ],
+              agentId: agente.agente_id,
               preferredAccountId: effAccountId,
             });
             return next.text;
@@ -1354,11 +1403,7 @@ export async function generateAgentChatReply(
               : userPrompt,
         });
 
-        const ocSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e especializada.${
-          deps.workflowStore && deps.workflowEngine
-            ? "\nQuando precisar consultar/editar/executar workflows em grafo, responda contendo <tool_call>{\"name\":\"...\",\"arguments\":{...}}</tool_call>."
-            : ""
-        }`;
+        const ocSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e especializada.${studioToolsPromptGuidance}`;
         const ocResult = await deps.providerConnection.getOpenCodeService().executePrompt({
           modelId: targetModel,
           systemPrompt: ocSystemPrompt,
@@ -1538,6 +1583,8 @@ export async function generateAgentChatReply(
                   canalId: `agente:${agente.agente_id}`,
                   mcpGateway: deps.mcpGateway,
                   catalogService: deps.catalogService,
+                  nativeStore: deps.catalogService?.nativeStore,
+                  providerConnection: deps.providerConnection,
                   skillsManager: deps.skillsManager,
                   whatsappManager: deps.whatsappManager,
                   whatsappOrchestrator: deps.whatsappOrchestrator,
@@ -1781,11 +1828,7 @@ export async function generateAgentChatReply(
               : userPrompt,
         });
 
-        const agSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e especializada como ${agente.nome}. Use tabelas Markdown quando ajudar na organização. Nunca invente handles ou marcas reais: utilize apenas os informados pelo usuário.${
-          deps.workflowStore && deps.workflowEngine
-            ? "\nQuando precisar consultar/editar/executar workflows em grafo, responda contendo <tool_call>{\"name\":\"...\",\"arguments\":{...}}</tool_call>."
-            : ""
-        }`;
+        const agSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e especializada como ${agente.nome}. Use tabelas Markdown quando ajudar na organização. Nunca invente handles ou marcas reais: utilize apenas os informados pelo usuário.${studioToolsPromptGuidance}`;
         const liveResult = await agService.executeCodeAssistGenerate({
           model: targetModel,
           systemPrompt: agSystemPrompt,
@@ -1969,13 +2012,13 @@ export async function generateAgentChatReply(
   if (metaValidationSummary) {
     const det = metaValidationSummary.detalhes;
     const metaReportMarkdown = [
-      `### Diagnóstico Oficial da Integração Meta (Cofre AES-256-GCM + Graph API v21.0)`,
+      `### Diagnóstico Oficial da Integração Meta (Cofre AES-256-GCM + Graph API ${graphVersion})`,
       "",
       `| Componente | Status | Detalhe |`,
       `|---|---|---|`,
       `| Token Meta no Cofre SQLite | ${det.tokenConfigurado ? "✅ Configurado" : "❌ Ausente"} | Criptografado localmente (nunca exposto) |`,
       `| Instagram Business Account ID | ${det.accountIdConfigurado ? "✅ Configurado" : "❌ Ausente"} | ID validado no Cofre |`,
-      `| Meta Graph API v21.0 | ${det.graphApiOk ? `✅ HTTP ${det.httpStatus} OK` : `❌ Falha${det.httpStatus ? ` HTTP ${det.httpStatus}` : ""}`} | ${det.graphApiOk ? `Perfil @${det.username ?? "ativo"}` : det.erro ?? "Erro na consulta"} |`,
+      `| Meta Graph API ${graphVersion} | ${det.graphApiOk ? `✅ HTTP ${det.httpStatus} OK` : `❌ Falha${det.httpStatus ? ` HTTP ${det.httpStatus}` : ""}`} | ${det.graphApiOk ? `Perfil @${det.username ?? "ativo"}` : det.erro ?? "Erro na consulta"} |`,
       "",
       `**Estágio atual:** ${metaValidationSummary.estagio} — ${metaValidationSummary.resumo}`,
     ].join("\n");
@@ -2247,7 +2290,13 @@ export async function tryHandleStudioRoute(
       sendJson(res, 503, { erro: "Serviço de licenciamento não inicializado." });
       return true;
     }
-    sendJson(res, 200, { license: deps.licenseService.getStatus() });
+    const unlockedSummary = computeUnlockedAgentsSummary(db, workspaceRoot, deps.licenseService);
+    sendJson(res, 200, {
+      license: {
+        ...deps.licenseService.getStatus(),
+        unlocked_agents_count: unlockedSummary.unlocked_agents_count,
+      },
+    });
     return true;
   }
 
@@ -2522,16 +2571,47 @@ export async function tryHandleStudioRoute(
     return true;
   }
 
+  if (method === "POST" && path === "/api/studio/updates/restart") {
+    if (!deps.autoUpdateService) {
+      sendJson(res, 503, { erro: "AutoUpdateService indisponível." });
+      return true;
+    }
+    const restartInfo = await deps.autoUpdateService.triggerRestart();
+    sendJson(res, 200, restartInfo);
+    return true;
+  }
+
   // 1. Onboarding
   if (method === "GET" && path === "/api/onboarding") {
-    sendJson(res, 200, { onboarding: providerConnection.getOnboardingState() });
+    const synced = evaluateAndSyncSetupCompletion(db, providerConnection, workspaceRoot);
+    sendJson(res, 200, {
+      onboarding: synced.onboarding,
+      setup_assistant_visible: synced.setup_assistant_visible,
+    });
     return true;
   }
 
   if (method === "PUT" && path === "/api/onboarding") {
     const body = await readJsonBody(req);
-    const updated = providerConnection.updateOnboardingState(body as Partial<OnboardingEstado>);
-    sendJson(res, 200, { onboarding: updated });
+    providerConnection.updateOnboardingState(body as Partial<OnboardingEstado>);
+    const synced = evaluateAndSyncSetupCompletion(db, providerConnection, workspaceRoot);
+    wsHub.broadcast("onboarding:updated", {
+      onboarding: synced.onboarding,
+      setup_assistant_visible: synced.setup_assistant_visible,
+    });
+    sendJson(res, 200, {
+      onboarding: synced.onboarding,
+      setup_assistant_visible: synced.setup_assistant_visible,
+    });
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/onboarding/setup-assistant") {
+    const body = await readJsonBody(req);
+    const action = body.action === "reopen" ? "reopen" : "dismiss";
+    const result = setSetupAssistantState(db, providerConnection, workspaceRoot, action);
+    wsHub.broadcast("onboarding:updated", result);
+    sendJson(res, 200, { ok: true, ...result });
     return true;
   }
 
@@ -2874,15 +2954,26 @@ export async function tryHandleStudioRoute(
 
   // 3. Agentes enriquecidos + criação de customizado + edição completa
   if (method === "GET" && path === "/api/agentes") {
-    const apenasDesbloqueados = url.searchParams.get("apenas_desbloqueados") === "1";
+    const apenasDesbloqueados =
+      url.searchParams.get("apenas_desbloqueados") === "1" ||
+      url.searchParams.get("onlyUnlocked") === "1";
+    const includeSetupExplicit = url.searchParams.get("incluir_setup") === "1";
+    const setupVisible = includeSetupExplicit || isSetupAssistantVisible(db, providerConnection);
     const rows = db.connection
       .prepare(`SELECT * FROM projecao_agentes ORDER BY ordem_exibicao ASC;`)
       .all() as Array<Parameters<typeof enrichAgentRow>[1]>;
-    const enriched = rows.map((row) => enrichAgentRow(db, row, workspaceRoot, deps.licenseService));
+    const enriched = rows
+      .filter((row) => row.agente_id !== SETUP_ASSISTANT_AGENT_DEF.agente_id || setupVisible)
+      .map((row) => enrichAgentRow(db, row, workspaceRoot, deps.licenseService));
     const filtered = apenasDesbloqueados
       ? enriched.filter((a) => a.config.upgrade_desbloqueado !== false)
       : enriched;
-    sendJson(res, 200, { agentes: filtered });
+    const unlockedSummary = computeUnlockedAgentsSummary(db, workspaceRoot, deps.licenseService);
+    sendJson(res, 200, {
+      agentes: filtered,
+      unlocked_agents_count: unlockedSummary.unlocked_agents_count,
+      setup_assistant_visible: isSetupAssistantVisible(db, providerConnection),
+    });
     return true;
   }
 
@@ -4531,16 +4622,39 @@ export async function tryHandleStudioRoute(
       typeof body.mime_type === "string" && body.mime_type.length > 0
         ? body.mime_type
         : RAW_MIME_MAP[extname(cleanName).toLowerCase()] ?? "application/octet-stream";
-    const tipoUso = inferTipoUso(mimeType, typeof body.tipo_uso === "string" ? body.tipo_uso : undefined);
+    const rawCategoria =
+      (typeof body.categoria === "string" ? body.categoria : null) ??
+      url.searchParams.get("categoria") ??
+      (typeof body.tipo_uso === "string" ? body.tipo_uso : "");
+    const categoria = rawCategoria.trim().toLowerCase();
+    const mappedRequestedTipoUso =
+      categoria === "foto"
+        ? "personagem"
+        : categoria === "ficha_pdf"
+          ? "documento"
+          : typeof body.tipo_uso === "string"
+            ? body.tipo_uso
+            : undefined;
+    const tipoUso = inferTipoUso(mimeType, mappedRequestedTipoUso);
 
     const relFolder =
-      tipoUso === "referencia"
-        ? "recursos/referencias"
-        : tipoUso === "logo"
-          ? "recursos/logos"
-          : tipoUso === "personagem"
-            ? "recursos/personagens"
-            : "recursos/uploads";
+      categoria === "ficha_pdf" || categoria === "ficha"
+        ? "conteudos/ficha"
+        : categoria === "foto" || categoria === "fotos"
+          ? "recursos/fotos"
+          : categoria === "logo" || categoria === "logos"
+            ? "recursos/logos"
+            : categoria === "personagem" || categoria === "personagens"
+              ? "recursos/personagens"
+              : categoria === "referencia" || categoria === "referencias"
+                ? "recursos/referencias"
+                : tipoUso === "logo"
+                  ? "recursos/logos"
+                  : tipoUso === "personagem"
+                    ? "recursos/personagens"
+                    : tipoUso === "referencia"
+                      ? "recursos/referencias"
+                      : "recursos/uploads";
     const targetDir = resolve(workspaceRoot, relFolder);
     mkdirSync(targetDir, { recursive: true });
 
@@ -4569,6 +4683,15 @@ export async function tryHandleStudioRoute(
         agora
       );
 
+    let brandExtraction: Awaited<ReturnType<typeof importBrandPdfFromBuffer>> | undefined;
+    if (categoria === "ficha_pdf" || (mimeType === "application/pdf" && relFolder === "conteudos/ficha")) {
+      brandExtraction = await importBrandPdfFromBuffer(providerConnection, workspaceRoot, buffer).catch(
+        () => undefined
+      );
+    }
+
+    const syncedSetup = evaluateAndSyncSetupCompletion(db, providerConnection, workspaceRoot);
+
     const arquivo: ArquivoStudio = {
       arquivo_id: arquivoId,
       nome_original: body.nome.slice(0, 140),
@@ -4582,7 +4705,11 @@ export async function tryHandleStudioRoute(
       criado_em: agora,
     };
 
-    sendJson(res, 201, { arquivo });
+    sendJson(res, 201, {
+      arquivo,
+      ...(brandExtraction ? { brandExtraction } : {}),
+      onboarding: syncedSetup.onboarding,
+    });
     return true;
   }
 

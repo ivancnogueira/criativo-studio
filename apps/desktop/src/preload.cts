@@ -6,6 +6,7 @@ export interface CriativoDesktopBridge {
   getDesktopInfo: () => Promise<{ version: string; daemonUrl: string; userDataDir: string }>;
   checkForUpdates: () => Promise<unknown>;
   triggerUpdateInstall: (targetServerId?: string) => Promise<unknown>;
+  restartForUpdate: () => Promise<unknown>;
   openExternalSafe: (url: string) => Promise<boolean>;
   openUserDataFolder: () => Promise<void>;
 }
@@ -17,6 +18,7 @@ const bridge: CriativoDesktopBridge = {
   checkForUpdates: () => ipcRenderer.invoke("criativo:check-updates"),
   triggerUpdateInstall: (targetServerId?: string) =>
     ipcRenderer.invoke("criativo:trigger-update", targetServerId),
+  restartForUpdate: () => ipcRenderer.invoke("criativo:restart-for-update"),
   openExternalSafe: (url: string) => ipcRenderer.invoke("criativo:open-external", url),
   openUserDataFolder: () => ipcRenderer.invoke("criativo:open-data-dir"),
 };

@@ -20,6 +20,13 @@ export interface AgenteDefinicao {
 }
 
 const DEFAULT_AGENT_TOOLS: Record<string, string[]> = {
+  assistente_setup: [
+    "salvar_identidade_marca",
+    "validar_integracao_meta",
+    "concluir_setup_inicial",
+    "ask_user",
+    "request_api_key",
+  ],
   estrategista: ["salvar_identidade_marca", "inspecionar_ativos_marca", "handoff_agente"],
   copywriter: ["inspecionar_ativos_marca", "handoff_agente"],
   designer_individual: ["generate_image", "crop_margem_segura", "inspecionar_ativos_marca", "handoff_agente"],
@@ -41,6 +48,7 @@ const DEFAULT_AVATAR_THEMES: Record<
   string,
   { shape: AvatarShape; color: string; effort: NivelEsforco; pasta: string }
 > = {
+  assistente_setup: { shape: "pill", color: "#42a0ff", effort: "baixo", pasta: "Setup Inicial" },
   estrategista: { shape: "hex", color: "#31cf76", effort: "alto", pasta: "Conteúdo Base" },
   copywriter: { shape: "blob", color: "#38bdf8", effort: "alto", pasta: "Conteúdo Base" },
   designer_individual: { shape: "diamond", color: "#f27ba5", effort: "medio", pasta: "Conteúdo Base" },
@@ -305,12 +313,39 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
   ferramentas: DEFAULT_AGENT_TOOLS[ag.agente_id] ?? ["handoff_agente"],
 }));
 
+export const SETUP_ASSISTANT_AGENT_DEF: AgenteDefinicao = {
+  agente_id: "assistente_setup",
+  nome: "Assistente de Configuração",
+  papel: "Setup inicial guiado de marca, arquivos visuais e integrações (auto-ocultável)",
+  frente: "conteudo",
+  pacote: "base",
+  pasta: "Setup Inicial",
+  skill_slug: "criar-identidade-visual",
+  modelo_padrao: "gemini-2.5-flash",
+  avatar_shape: "pill",
+  avatar_color: "#42a0ff",
+  effort: "baixo",
+  ordem_exibicao: 0,
+  skills_paths: [
+    ".agents/skills/criar-identidade-visual/SKILL.md",
+    ".agents/skills/configurar-instagram/SKILL.md",
+  ],
+  ferramentas: DEFAULT_AGENT_TOOLS.assistente_setup,
+  prompt_base:
+    "Você é o Assistente de Configuração inicial do Criativo AI Studio Online. Conduza o usuário em blocos curtos para concluir apenas o que estiver pendente: identidade/perfil da marca (`salvar_identidade_marca`), envio de logo/fotos/referências ou ficha PDF no chat, e teste de credenciais Instagram/Meta (`validar_integracao_meta`). Assim que as pendências estiverem resolvidas ou quando o usuário solicitar encerrar/dispensar, chame `concluir_setup_inicial` para ocultar este assistente da Sidebar.",
+};
+
+export function getSetupCompatibleRoster(): readonly AgenteDefinicao[] {
+  return [SETUP_ASSISTANT_AGENT_DEF, ...ROSTER_15_AGENTES];
+}
+
 /**
- * Garante que todos os 15 agentes especialistas existam na tabela `projecao_agentes`.
+ * Garante que os agentes padrão (e o assistente temporário de setup) existam na tabela `projecao_agentes`.
  */
 export function seedDefaultAgents(db: CriativoDatabase): number {
   const agora = new Date().toISOString();
   let inseridos = 0;
+  const allDefs = getSetupCompatibleRoster();
 
   db.runInTransaction(() => {
     const insertStmt = db.connection.prepare(`
@@ -321,7 +356,7 @@ export function seedDefaultAgents(db: CriativoDatabase): number {
       ON CONFLICT(agente_id) DO NOTHING;
     `);
 
-    for (const ag of ROSTER_15_AGENTES) {
+    for (const ag of allDefs) {
       const config = {
         frente: ag.frente,
         pacote: ag.pacote,
@@ -357,7 +392,7 @@ export function seedDefaultAgents(db: CriativoDatabase): number {
     );
 
     for (const row of existingRows) {
-      const def = ROSTER_15_AGENTES.find((a) => a.agente_id === row.agente_id);
+      const def = allDefs.find((a) => a.agente_id === row.agente_id);
       const theme = DEFAULT_AVATAR_THEMES[row.agente_id];
       if (!def && !theme) continue;
       let parsed: Record<string, unknown> = {};
@@ -461,7 +496,7 @@ export function seedDefaultStudioExperience(db: CriativoDatabase): void {
             id: "step-init-1",
             ferramenta: "planejar_conteudo",
             titulo: "Carregou matriz inicial de pilares [NOME_DA_MARCA]",
-            detalhes: "Base de 15 agentes conectada com saída segura para aprovação",
+            detalhes: "Equipe de agentes conectada com saída segura para aprovação",
             status: "concluido",
             duracao_ms: 340,
           },

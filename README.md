@@ -93,7 +93,7 @@ As chaves podem ser cadastradas via **Cockpit Web → Cofre de Segredos** ou via
 | `GROK_API_KEY` | Modelos xAI Grok | Opcional |
 | `FAL_API_KEY` ou `FLUX_API_KEY` | Geração de imagens via Flux Pro (Fal.ai) | Opcional |
 | `ELEVENLABS_API_KEY` | Narração MP3 ultra-realista para Reels (fallback gratuito: `edge-tts`) | Opcional |
-| `META_ACCESS_TOKEN` e `META_IG_USER_ID` | Publicação oficial no Instagram via Meta Graph API v21.0 | Para publicar |
+| `META_ACCESS_TOKEN` e `META_IG_USER_ID` | Publicação oficial no Instagram via Meta Graph API v27.0 | Para publicar |
 | `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID` | Alertas e botões inline no Telegram | Opcional |
 
 Exemplo via `curl` local:

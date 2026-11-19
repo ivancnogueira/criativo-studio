@@ -22,7 +22,7 @@ const STATUS_BANNER: Record<
     title: "Ative sua licença do Criativo AI Studio",
     tone: "neutral",
     description:
-      "Informe o e-mail usado na compra e a chave de licença enviada para liberar os 15 agentes e a operação 24/7.",
+      "Informe o e-mail usado na compra e a chave de licença enviada para liberar sua equipe de agentes de IA e a operação 24/7.",
   },
   revoked: {
     title: "Licença revogada ou suspensa",

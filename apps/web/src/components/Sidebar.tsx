@@ -66,6 +66,8 @@ export interface SidebarProps {
   updateStatus?: UpdateStatusSnapshot | null;
   onApplyUpdate?: () => void;
   onOpenUpdateSettings?: () => void;
+  widthPx?: number;
+  onDismissSetupAssistant?: () => Promise<void> | void;
 }
 
 function getAgentVisual(ag: AgenteRegistro): { shape: AvatarShape; color: string } {
@@ -131,6 +133,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   updateStatus = null,
   onApplyUpdate,
   onOpenUpdateSettings,
+  widthPx,
+  onDismissSetupAssistant,
 }) => {
   const [search, setSearch] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -256,8 +260,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
     [visibleAgents]
   );
 
+  const setupAssistantAgent = useMemo(
+    () => visibleAgents.find((a) => a.agente_id === "assistente_setup") ?? null,
+    [visibleAgents]
+  );
+
   const folders = useMemo(() => {
     const unassigned = visibleAgents.filter((a) => {
+      if (a.agente_id === "assistente_setup") return false;
       const secId = agentAssignments[a.agente_id];
       const inCustomSection = Boolean(secId && sectionIdsSet.has(secId));
       return !inCustomSection && !pinSet.has(a.agente_id);
@@ -792,10 +802,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
     );
   };
 
+  const permanentAgentsCount = agentes.filter((a) => a.agente_id !== "assistente_setup").length;
+
   return (
     <aside
-      aria-label={`Roster (${agentes.length} Agentes)`}
-      className="w-[276px] shrink-0 bg-[#1A1A1A] border-r border-white/[0.06] flex flex-col h-full overflow-hidden select-none"
+      aria-label={`Roster (${permanentAgentsCount} Agentes)`}
+      style={widthPx ? { width: `${widthPx}px` } : { width: "276px" }}
+      className="shrink-0 bg-[#1A1A1A] border-r border-white/[0.06] flex flex-col h-full overflow-hidden select-none"
     >
       {/* Cabeçalho: Busca + botão '+' */}
       <div className="p-2.5 flex items-center gap-2 relative">
@@ -914,6 +927,56 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Lista rolável por seções e pastas */}
       <div className="flex-1 overflow-y-auto px-2 pb-3 space-y-3">
+        {setupAssistantAgent && (
+          <div
+            data-setup-assistant-card="true"
+            className={`rounded-xl border p-2 transition-colors ${
+              selectedAgentId === setupAssistantAgent.agente_id
+                ? "border-[#42A0FF]/60 bg-[#007CF7]/15"
+                : "border-[#42A0FF]/30 bg-[#1F242D] hover:border-[#42A0FF]/50"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2 px-1 pb-1.5">
+              <span className="inline-flex items-center gap-1 rounded-full bg-[#42A0FF]/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#74B9FF]">
+                <Sparkles className="h-2.5 w-2.5" />
+                Setup
+              </span>
+              {onDismissSetupAssistant && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void onDismissSetupAssistant();
+                  }}
+                  className="text-[10.5px] text-[#979797] hover:text-white underline underline-offset-2"
+                >
+                  Concluir e ocultar
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => onSelectAgent(setupAssistantAgent.agente_id)}
+              className="w-full flex items-center gap-2.5 px-1.5 py-1 rounded-lg text-left"
+            >
+              <MascoteAvatar
+                shape={getAgentVisual(setupAssistantAgent).shape}
+                color={getAgentVisual(setupAssistantAgent).color}
+                size={32}
+                animated={setupAssistantAgent.status === "trabalhando"}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] font-semibold text-white truncate">
+                  {setupAssistantAgent.nome}
+                </div>
+                <p className="text-[11px] text-[#B8D4F5] truncate">
+                  Finalize perfil, fotos e Instagram por aqui
+                </p>
+              </div>
+            </button>
+          </div>
+        )}
+
         {creatingSectionParentId !== undefined && onMutateSidebar && (
           <form
             onSubmit={(e) => void handleCreateSectionSubmit(e)}
@@ -1043,7 +1106,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           .filter((sec) => !sec.parent_id || !sectionIdsSet.has(sec.parent_id))
           .map((sec) => renderSectionTree(sec, 0))}
 
-        {/* Pastas de Especialistas (15 agentes + customizados) */}
+        {/* Pastas de Especialistas (equipe modular + customizados) */}
         {folders.map((folder) => {
           const isCollapsed = Boolean(collapsedFolders[folder.key]);
           return (

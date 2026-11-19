@@ -13,6 +13,7 @@ import type {
 } from "@criativo/contracts";
 import type { CriativoDatabase } from "../database/client.ts";
 import type { McpGateway } from "../mcp/mcp-gateway.ts";
+import type { CriativoStudioMcpBridge } from "../mcp/studio-mcp-bridge.ts";
 import type { VaultService } from "../vault/vault-service.ts";
 import { AntigravityLiveService } from "./antigravity-live-service.ts";
 import { CliOAuthAccountsService, resolveCliBinaryForProvider } from "./cli-oauth-accounts-service.ts";
@@ -376,6 +377,7 @@ export class ProviderConnectionService {
   private readonly cliOAuth: CliOAuthAccountsService;
   private readonly opencodeLive: OpenCodeLiveService;
   private mcpGateway?: McpGateway;
+  private studioMcpBridge?: CriativoStudioMcpBridge;
   private cliCache: {
     expiresAt: number;
     data: Record<ProviderName, { found: boolean; version: string | null; executable: string | null }>;
@@ -427,7 +429,7 @@ export class ProviderConnectionService {
       new OpenCodeLiveService({
         vault: this.vault,
         workspaceCwd: baseWorkspace,
-        mcpServersResolver: (agentId) => this.mcpGateway?.getAcpMcpServers(agentId) ?? [],
+        mcpServersResolver: (agentId) => this.buildCombinedAcpMcpServers(agentId),
       });
 
     if (options.mcpGateway) {
@@ -435,10 +437,28 @@ export class ProviderConnectionService {
     }
   }
 
+  private buildCombinedAcpMcpServers(agentId?: string | null): unknown[] {
+    const internalBridge = this.studioMcpBridge?.getAcpBridgeServerSpec(agentId);
+    const external = this.mcpGateway?.getAcpMcpServers(agentId) ?? [];
+    return internalBridge ? [internalBridge, ...external] : external;
+  }
+
   public attachMcpGateway(gateway: McpGateway): void {
     this.mcpGateway = gateway;
     this.antigravityLive.setMcpGateway(gateway);
-    this.opencodeLive.setMcpServersResolver((agentId) => this.mcpGateway?.getAcpMcpServers(agentId) ?? []);
+    this.opencodeLive.setMcpServersResolver((agentId) => this.buildCombinedAcpMcpServers(agentId));
+  }
+
+  public attachStudioMcpBridge(bridge: CriativoStudioMcpBridge): void {
+    this.studioMcpBridge = bridge;
+    this.antigravityLive.setExtraMcpServersResolver((agentId) => {
+      const spec = this.studioMcpBridge?.getAcpBridgeServerSpec(agentId);
+      return spec ? [spec] : [];
+    });
+    this.opencodeLive.setMcpServersResolver((agentId) => this.buildCombinedAcpMcpServers(agentId));
+    this.cliOAuth.setMcpConfigResolver((agentId) =>
+      this.studioMcpBridge?.getClaudeMcpConfigObject(agentId) ?? null
+    );
   }
 
   public getAntigravityService(): AntigravityLiveService {

@@ -58,6 +58,7 @@ import { PanelLeft, Settings, Users, X } from "lucide-react";
 import { DynamicIsland, type StudioTabItem } from "./components/DynamicIsland";
 import { getDefaultMascotForAgent } from "./components/MascoteAvatar";
 import { Sidebar } from "./components/Sidebar";
+import { SplitResizeHandle } from "./components/ui/SplitResizeHandle";
 import { WorkspaceRail, type StudioNavSection } from "./components/WorkspaceRail";
 import { NewAgentScreen, type NewAgentPayload } from "./features/agents/NewAgentScreen";
 import {
@@ -113,6 +114,35 @@ import {
 
 const USER_SETTINGS_STORAGE_KEY = "criativo_user_settings";
 const LAST_TAB_STORAGE_KEY = "criativo_last_tab_id";
+const SIDEBAR_WIDTH_KEY = "criativo_sidebar_width";
+const INSPECTOR_WIDTH_KEY = "criativo_inspector_width";
+const DEFAULT_SIDEBAR_WIDTH = 276;
+const DEFAULT_INSPECTOR_WIDTH = 330;
+
+function clampWidth(val: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(val)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(val)));
+}
+
+function readStoredWidth(key: string, min: number, max: number, fallback: number): number {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    return clampWidth(Number(raw), min, max, fallback);
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredWidth(key: string, width: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, String(Math.round(width)));
+  } catch {
+    // ignora quota de localStorage
+  }
+}
 
 function readCachedUserSettings(): StudioUserSettings {
   if (typeof window === "undefined") return DEFAULT_FRONTEND_USER_SETTINGS;
@@ -188,6 +218,14 @@ export function App() {
   });
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() =>
+    readStoredWidth(SIDEBAR_WIDTH_KEY, 220, 460, DEFAULT_SIDEBAR_WIDTH)
+  );
+  const [inspectorWidth, setInspectorWidth] = useState<number>(() =>
+    readStoredWidth(INSPECTOR_WIDTH_KEY, 280, 560, DEFAULT_INSPECTOR_WIDTH)
+  );
+  const [focusMode, setFocusMode] = useState(false);
+  const layoutPersistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [agentes, setAgentes] = useState<AgenteEnriquecido[]>([]);
   const [canais, setCanais] = useState<CanalEquipe[]>([]);
@@ -531,6 +569,21 @@ export function App() {
       if (remoteUserSettings) {
         setUserSettings(remoteUserSettings);
         applyUserSettingsToDocument(remoteUserSettings);
+        const ap = remoteUserSettings.aparencia;
+        if (typeof ap.sidebar_width === "number") {
+          const sw = clampWidth(ap.sidebar_width, 220, 460, DEFAULT_SIDEBAR_WIDTH);
+          setSidebarWidth(sw);
+          writeStoredWidth(SIDEBAR_WIDTH_KEY, sw);
+        }
+        if (typeof ap.inspector_width === "number") {
+          const iw = clampWidth(ap.inspector_width, 280, 560, DEFAULT_INSPECTOR_WIDTH);
+          setInspectorWidth(iw);
+          writeStoredWidth(INSPECTOR_WIDTH_KEY, iw);
+        }
+        const cp = remoteUserSettings.comportamento;
+        if (typeof cp.sidebar_open === "boolean") setSidebarOpen(cp.sidebar_open);
+        if (typeof cp.inspector_open === "boolean") setInspectorOpen(cp.inspector_open);
+        if (typeof cp.focus_mode === "boolean") setFocusMode(cp.focus_mode);
       }
       if (remoteSidebarLayout) setSidebarLayout(remoteSidebarLayout);
       setBrowserProfiles(remoteBrowserProfiles);
@@ -1167,6 +1220,11 @@ export function App() {
       setUpdateStatus(nextStatus);
     });
 
+    const unsubOnboardingUpdated = ws.on("onboarding:updated", (evt) => {
+      setOnboarding(evt.onboarding);
+      void daemonApi.listAgents().then(setAgentes).catch(() => {});
+    });
+
     setOnLicenseRequiredHandler((status) => {
       if (status) {
         setLicenseStatus(status);
@@ -1229,6 +1287,7 @@ export function App() {
       unsubLicenseUpdated();
       unsubServersUpdated();
       unsubUpdateStatus();
+      unsubOnboardingUpdated();
       wsRef.current = null;
       ws.disconnect();
     };
@@ -1244,6 +1303,11 @@ export function App() {
         })
       : null;
 
+    if (updateStatus?.state === "ready_to_restart") {
+      await daemonApi.triggerUpdateRestart().catch(() => {});
+      return;
+    }
+
     if (win?.criativoDesktop?.isPackagedDesktop && win.criativoDesktop.triggerUpdateInstall) {
       await win.criativoDesktop.triggerUpdateInstall();
       const refreshed = await daemonApi.obterStatusAtualizacao().catch(() => null);
@@ -1253,10 +1317,91 @@ export function App() {
 
     const next = await daemonApi.aplicarAtualizacao({ restart: true });
     setUpdateStatus(next);
-  }, []);
+  }, [updateStatus?.state]);
+
+  const persistLayoutWidths = useCallback(
+    (patch: {
+      sidebar_width?: number;
+      inspector_width?: number;
+      sidebar_open?: boolean;
+      inspector_open?: boolean;
+      focus_mode?: boolean;
+    }) => {
+      if (layoutPersistTimerRef.current) {
+        clearTimeout(layoutPersistTimerRef.current);
+      }
+      layoutPersistTimerRef.current = setTimeout(() => {
+        setUserSettings((prev) => {
+          const nextSettings: StudioUserSettings = {
+            ...prev,
+            aparencia: {
+              ...prev.aparencia,
+              ...(typeof patch.sidebar_width === "number" ? { sidebar_width: patch.sidebar_width } : {}),
+              ...(typeof patch.inspector_width === "number" ? { inspector_width: patch.inspector_width } : {}),
+            },
+            comportamento: {
+              ...prev.comportamento,
+              ...(typeof patch.sidebar_open === "boolean" ? { sidebar_open: patch.sidebar_open } : {}),
+              ...(typeof patch.inspector_open === "boolean" ? { inspector_open: patch.inspector_open } : {}),
+              ...(typeof patch.focus_mode === "boolean" ? { focus_mode: patch.focus_mode } : {}),
+            },
+          };
+          void daemonApi.updateUserSettings(nextSettings).catch(() => {});
+          return nextSettings;
+        });
+      }, 280);
+    },
+    []
+  );
+
+  const handleToggleFocusMode = useCallback(() => {
+    setFocusMode((prev) => {
+      const nextFocus = !prev;
+      const nextSidebar = !nextFocus;
+      const nextInspector = !nextFocus;
+      setSidebarOpen(nextSidebar);
+      setInspectorOpen(nextInspector);
+      persistLayoutWidths({
+        focus_mode: nextFocus,
+        sidebar_open: nextSidebar,
+        inspector_open: nextInspector,
+      });
+      return nextFocus;
+    });
+  }, [persistLayoutWidths]);
+
+  const handleResetLayoutWidths = useCallback(() => {
+    setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+    setInspectorWidth(DEFAULT_INSPECTOR_WIDTH);
+    setSidebarOpen(true);
+    setInspectorOpen(true);
+    setFocusMode(false);
+    writeStoredWidth(SIDEBAR_WIDTH_KEY, DEFAULT_SIDEBAR_WIDTH);
+    writeStoredWidth(INSPECTOR_WIDTH_KEY, DEFAULT_INSPECTOR_WIDTH);
+    persistLayoutWidths({
+      sidebar_width: DEFAULT_SIDEBAR_WIDTH,
+      inspector_width: DEFAULT_INSPECTOR_WIDTH,
+      sidebar_open: true,
+      inspector_open: true,
+      focus_mode: false,
+    });
+  }, [persistLayoutWidths]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleKeyDown = (evt: KeyboardEvent) => {
+      if ((evt.ctrlKey || evt.metaKey) && evt.key === "\\") {
+        evt.preventDefault();
+        handleToggleFocusMode();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handleToggleFocusMode]);
 
   const handleSwitchServer = useCallback(
     async (serverId: string) => {
+      setBootLoading(true);
       try {
         const res = await daemonApi.selecionarServidor(serverId);
         setServers(res.servers);
@@ -1277,6 +1422,8 @@ export function App() {
         await hydrateAll();
       } catch {
         // toast/error silencioso; status permanece no servidor atual
+      } finally {
+        setBootLoading(false);
       }
     },
     [hydrateAll]
@@ -2164,7 +2311,7 @@ export function App() {
     []
   );
 
-  if (bootLoading) {
+  if (bootLoading || (licenseStatus?.valid && !onboarding)) {
     return (
       <div className="min-h-screen w-full bg-[#141414] flex items-center justify-center text-[#979797] text-[13px]">
         Iniciando Criativo AI Studio...
@@ -2179,9 +2326,16 @@ export function App() {
         status={licenseStatus}
         onActivate={async (payload) => {
           const next = await daemonApi.ativarLicenca(payload);
-          setLicenseStatus(next);
           if (next.valid) {
-            await hydrateAll();
+            setBootLoading(true);
+            setLicenseStatus(next);
+            try {
+              await hydrateAll();
+            } finally {
+              setBootLoading(false);
+            }
+          } else {
+            setLicenseStatus(next);
           }
           return next;
         }}
@@ -2192,21 +2346,36 @@ export function App() {
         }}
         onRefreshStatus={async () => {
           const next = await daemonApi.sincronizarLicenca();
-          setLicenseStatus(next);
           if (next.valid) {
-            await hydrateAll();
+            setBootLoading(true);
+            setLicenseStatus(next);
+            try {
+              await hydrateAll();
+            } finally {
+              setBootLoading(false);
+            }
+          } else {
+            setLicenseStatus(next);
           }
         }}
       />
     );
   }
 
-  // Etapa de Onboarding fiel às Screenshots 1 & 2 quando ainda não concluído
+  // Etapa de Onboarding híbrido 4 etapas (com opções puláveis em marca/canais)
   if (onboarding && !onboarding.onboarding_concluido) {
     return (
       <OnboardingFlow
         initialState={onboarding}
         provedores={provedores}
+        unlockedAgentsCount={
+          licenseStatus?.unlocked_agents_count ??
+          agentes.filter(
+            (a) =>
+              a.agente_id !== "assistente_setup" &&
+              (a.config as Record<string, unknown>)?.upgrade_desbloqueado !== false
+          ).length
+        }
         onConnectProvider={async (prov, key) => {
           await daemonApi.connectProvider(prov, key);
           setProvedores(await daemonApi.listProvidersStatus(false));
@@ -2214,17 +2383,52 @@ export function App() {
         onConnectProviderViaBrowser={handleConnectViaBrowser}
         onCancelProviderBrowserSignIn={handleCancelBrowserSignIn}
         pendingAuthUrl={pendingAuthLink}
+        onUploadCategorizedFile={async (file, categoria) => {
+          const res = await daemonApi.uploadFileCategorized(file, categoria);
+          setArquivos(await daemonApi.listFiles());
+          if (res.onboarding) setOnboarding(res.onboarding);
+          return res;
+        }}
+        onSaveBrandIdentity={async (patch) => {
+          await daemonApi.saveBrandIdentity(patch);
+        }}
+        onTestInstagram={async (payload) => {
+          const saved = await daemonApi.connectLojaApp("instagram", {
+            flowId: "instagram-vault-keys",
+            kind: "key",
+            contaRotulo: payload.contaRotulo?.trim() || "Principal",
+            fields: {
+              IG_USER_ID: payload.igUserId.trim(),
+              IG_ACCESS_TOKEN: payload.accessToken.trim(),
+            },
+          });
+          return {
+            ok: Boolean(saved.validationReport?.ok ?? saved.nativeAccount?.testado_ok),
+            resumo:
+              saved.validationReport?.resumo ??
+              (saved.nativeAccount?.ultimo_erro || "Credenciais Meta salvas no Cofre."),
+            username: saved.nativeAccount?.perfil_conectado?.username ?? null,
+          };
+        }}
         onComplete={async (patch) => {
-          const updated = await daemonApi.updateOnboarding(patch);
           if (patch.marca_nome || patch.perfil_handle) {
             await daemonApi.saveBrandIdentity({
               marca_nome: patch.marca_nome,
               perfil_handle: patch.perfil_handle,
             });
           }
+          const updated = await daemonApi.updateOnboarding(patch);
           setOnboarding(updated);
-          setProvedores(await daemonApi.listProvidersStatus(false));
-          setUso(await daemonApi.getProvidersUsage());
+          const [provList, usageSnap, agList, filesList] = await Promise.all([
+            daemonApi.listProvidersStatus(false),
+            daemonApi.getProvidersUsage(),
+            daemonApi.listAgents(),
+            daemonApi.listFiles(),
+          ]);
+          setProvedores(provList);
+          setUso(usageSnap);
+          setAgentes(agList);
+          setArquivos(filesList);
         }}
       />
     );
@@ -2279,7 +2483,16 @@ export function App() {
             onCloseTab={handleCloseTab}
             onNewTab={handleOpenNewAgentTab}
             sidebarCollapsed={!sidebarOpen}
-            onToggleSidebar={() => setSidebarOpen((s) => !s)}
+            onToggleSidebar={() => {
+              setSidebarOpen((s) => {
+                const next = !s;
+                persistLayoutWidths({ sidebar_open: next, focus_mode: false });
+                if (next) setFocusMode(false);
+                return next;
+              });
+            }}
+            focusMode={focusMode}
+            onToggleFocusMode={handleToggleFocusMode}
             onNavigateBack={() => stepHistoryTab(-1)}
             onNavigateForward={() => stepHistoryTab(1)}
           />
@@ -2311,9 +2524,11 @@ export function App() {
           {activeSection === "agentes" && (
             <>
               {sidebarOpen && (
-                <Sidebar
-                  agentes={agentes}
-                  canais={canais}
+                <>
+                  <Sidebar
+                    widthPx={sidebarWidth}
+                    agentes={agentes}
+                    canais={canais}
                   selectedAgentId={
                     centerMode.type === "agent" || centerMode.type === "thread"
                       ? activeAgent?.agente_id ?? null
@@ -2351,13 +2566,44 @@ export function App() {
                     setAgentes(await daemonApi.listAgents());
                     handleSelectAgent(res.agente.agente_id);
                   }}
-                  updateStatus={updateStatus}
-                  onApplyUpdate={() => void handleApplyUpdate()}
-                  onOpenUpdateSettings={() => {
-                    setSettingsInitialTab("atualizacoes");
-                    setSettingsModalOpen(true);
-                  }}
-                />
+                    updateStatus={updateStatus}
+                    onApplyUpdate={() => void handleApplyUpdate()}
+                    onOpenUpdateSettings={() => {
+                      setSettingsInitialTab("atualizacoes");
+                      setSettingsModalOpen(true);
+                    }}
+                    onDismissSetupAssistant={async () => {
+                      const res = await daemonApi.setSetupAssistantState("dismiss");
+                      setOnboarding(res.onboarding);
+                      const nextAgents = await daemonApi.listAgents();
+                      setAgentes(nextAgents);
+                      if (centerMode.type === "agent" && centerMode.agenteId === "assistente_setup") {
+                        const fallbackId = nextAgents[0]?.agente_id ?? "estrategista";
+                        handleSelectAgent(fallbackId);
+                      }
+                    }}
+                  />
+                  <SplitResizeHandle
+                    ariaLabel="Redimensionar painel lateral esquerdo"
+                    currentWidth={sidebarWidth}
+                    minWidth={220}
+                    maxWidth={460}
+                    onResize={(nextW) => {
+                      setSidebarWidth(nextW);
+                      writeStoredWidth(SIDEBAR_WIDTH_KEY, nextW);
+                    }}
+                    onCollapse={() => {
+                      setSidebarOpen(false);
+                      persistLayoutWidths({ sidebar_open: false });
+                    }}
+                    onReset={() => {
+                      setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+                      writeStoredWidth(SIDEBAR_WIDTH_KEY, DEFAULT_SIDEBAR_WIDTH);
+                      persistLayoutWidths({ sidebar_width: DEFAULT_SIDEBAR_WIDTH });
+                    }}
+                    onResizeEnd={(finalW) => persistLayoutWidths({ sidebar_width: finalW })}
+                  />
+                </>
               )}
 
               {centerMode.type === "new_agent" ? (
@@ -2387,7 +2633,7 @@ export function App() {
                       }}
                     />
                   ) : (
-                    <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+                    <div className="flex-1 min-w-[360px] flex flex-col overflow-hidden">
                       {activeSideThreadId && (
                         <div className="shrink-0 px-4 py-2 bg-[#212121] border-b border-white/[0.06] flex items-center justify-between gap-2 text-[12px]">
                           <span className="text-[#42A0FF] font-semibold">
@@ -2672,10 +2918,33 @@ export function App() {
                     </div>
                   )}
 
-                  <div className="hidden xl:flex">
-                    <RightInspectorPanel
-                      open={inspectorOpen}
-                      agente={activeAgent}
+                  {inspectorOpen && (
+                    <SplitResizeHandle
+                      ariaLabel="Redimensionar inspetor direito"
+                      currentWidth={inspectorWidth}
+                      minWidth={280}
+                      maxWidth={560}
+                      invertDirection
+                      onResize={(nextW) => {
+                        setInspectorWidth(nextW);
+                        writeStoredWidth(INSPECTOR_WIDTH_KEY, nextW);
+                      }}
+                      onCollapse={() => {
+                        setInspectorOpen(false);
+                        persistLayoutWidths({ inspector_open: false });
+                      }}
+                      onReset={() => {
+                        setInspectorWidth(DEFAULT_INSPECTOR_WIDTH);
+                        writeStoredWidth(INSPECTOR_WIDTH_KEY, DEFAULT_INSPECTOR_WIDTH);
+                        persistLayoutWidths({ inspector_width: DEFAULT_INSPECTOR_WIDTH });
+                      }}
+                      onResizeEnd={(finalW) => persistLayoutWidths({ inspector_width: finalW })}
+                    />
+                  )}
+                  <RightInspectorPanel
+                    open={inspectorOpen}
+                    widthPx={inspectorWidth}
+                    agente={activeAgent}
                       arquivos={arquivos}
                       canais={canais}
                       provedores={provedores}
@@ -2802,7 +3071,6 @@ export function App() {
                         setTarefas(await daemonApi.listTasks());
                       }}
                     />
-                  </div>
                 </>
               )}
             </>
@@ -3542,6 +3810,19 @@ export function App() {
           servers.find((s) => s.server_id === activeServerId)?.nome ?? "Servidor Principal"
         }
         onApplyUpdate={handleApplyUpdate}
+        onRestartForUpdate={async () => {
+          await daemonApi.triggerUpdateRestart();
+        }}
+        onResetLayoutWidths={handleResetLayoutWidths}
+        onReopenSetupAssistant={async () => {
+          const res = await daemonApi.setSetupAssistantState("reopen");
+          setOnboarding(res.onboarding);
+          const nextAgents = await daemonApi.listAgents({ includeSetup: true });
+          setAgentes(nextAgents);
+          setActiveSection("agentes");
+          setSettingsModalOpen(false);
+          handleSelectAgent("assistente_setup");
+        }}
         licenseStatus={licenseStatus}
         onRefreshLicense={async () => {
           const next = await daemonApi.sincronizarLicenca();

@@ -1,11 +1,15 @@
+import { resolveMetaGraphApiBase } from "@criativo/contracts";
+import type { NativeAppConnectionsStore } from "../../marketplace/native-app-connections-store.ts";
 import type { FetchLike } from "../providers/provider-interface.ts";
 import type { VaultService } from "../../vault/vault-service.ts";
+import { resolveMetaCredentials } from "./meta-insights.ts";
 
 export interface MetaPublishParams {
   media_type: "IMAGE" | "CAROUSEL" | "REELS" | "STORIES";
   media_urls: string[];
   caption: string;
   approved_by_human: boolean;
+  conta_id?: string;
 }
 
 export interface MetaPublishResult {
@@ -15,13 +19,13 @@ export interface MetaPublishResult {
 }
 
 /**
- * Publicador seguro da Meta Graph API.
+ * Publicador seguro da Meta Graph API (v27.0).
  * Invariante crítica de segurança (AI-SPEC.md):
  * JAMAIS publica na conta do usuário sem `approved_by_human === true`.
  */
 export async function metaPublishTool(
   params: MetaPublishParams,
-  deps: { vault: VaultService; fetchImpl?: FetchLike }
+  deps: { vault: VaultService; nativeStore?: NativeAppConnectionsStore; fetchImpl?: FetchLike }
 ): Promise<MetaPublishResult> {
   if (params.approved_by_human !== true) {
     throw new Error(
@@ -29,12 +33,9 @@ export async function metaPublishTool(
     );
   }
 
-  const accessToken =
-    deps.vault.getSecret("instagram_access_token") ||
-    deps.vault.getSecret("META_ACCESS_TOKEN");
-  const igUserId =
-    deps.vault.getSecret("instagram_business_account_id") ||
-    deps.vault.getSecret("META_IG_USER_ID");
+  const creds = resolveMetaCredentials(deps.vault, deps.nativeStore, params.conta_id);
+  const accessToken = creds.accessToken;
+  const igUserId = creds.accountId;
   if (!accessToken || !igUserId) {
     throw new Error(
       "Credenciais Meta (instagram_access_token/META_ACCESS_TOKEN ou instagram_business_account_id/META_IG_USER_ID) ausentes no Cofre de Segredos."
@@ -42,7 +43,7 @@ export async function metaPublishTool(
   }
 
   const fetchFn = deps.fetchImpl ?? fetch;
-  const graphBase = "https://graph.facebook.com/v21.0";
+  const graphBase = resolveMetaGraphApiBase();
 
   // 1. Criação do container de mídia
   const containerRes = await fetchFn(

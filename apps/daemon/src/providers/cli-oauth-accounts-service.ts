@@ -41,6 +41,7 @@ export interface CliExecutionInput {
   modelId: string;
   systemPrompt?: string;
   messages: Array<{ role: "user" | "assistant"; text: string }>;
+  agentId?: string | null;
   preferredAccountId?: string | null;
   timeoutMs?: number;
 }
@@ -341,6 +342,7 @@ export class CliOAuthAccountsService {
   private readonly appDataDir?: string;
   private readonly fetchImpl: typeof fetch;
   private readonly pendingSignInAbort = new Map<"claude" | "openai", () => void>();
+  private mcpConfigResolver?: (agentId?: string | null) => Record<string, unknown> | null;
   private readonly dynamicModelsCache = new Map<
     "claude" | "openai",
     { expiresAt: number; modelos: ModeloProvedorInfo[] }
@@ -1327,6 +1329,12 @@ export class CliOAuthAccountsService {
     });
   }
 
+  public setMcpConfigResolver(
+    resolver: (agentId?: string | null) => Record<string, unknown> | null
+  ): void {
+    this.mcpConfigResolver = resolver;
+  }
+
   public removeAccount(provedor: "claude" | "openai", contaId: string): boolean {
     const records = this.getStoredRecords();
     const target = records.find((r) => r.provedor === provedor && r.id === contaId);
@@ -1392,23 +1400,51 @@ export class CliOAuthAccountsService {
       const targetModel = input.modelId.toLowerCase().includes("claude")
         ? input.modelId
         : "claude-sonnet-4-6";
-      const res = await spawnCommandWithStdin({
-        executable,
-        args: [
-          "-p",
-          "--output-format",
-          "json",
-          "--no-session-persistence",
-          "--tools",
-          "",
-          "--model",
-          targetModel,
-        ],
-        env,
-        cwd: this.workspaceCwd,
-        stdinText: fullPrompt,
-        timeoutMs: input.timeoutMs ?? EXEC_TIMEOUT_MS,
-      });
+
+      const mcpConfigObj = this.mcpConfigResolver?.(input.agentId ?? null) ?? null;
+      let tempMcpDir: string | null = null;
+      const claudeArgs = [
+        "-p",
+        "--output-format",
+        "json",
+        "--no-session-persistence",
+        "--tools",
+        "",
+      ];
+
+      if (mcpConfigObj && Object.keys(mcpConfigObj).length > 0) {
+        tempMcpDir = mkdtempSync(join(tmpdir(), "criativo-claude-mcp-"));
+        const mcpConfigFile = join(tempMcpDir, "mcp-config.json");
+        writeFileSync(mcpConfigFile, JSON.stringify(mcpConfigObj, null, 2), "utf8");
+        claudeArgs.push(
+          "--mcp-config",
+          mcpConfigFile,
+          "--allowedTools",
+          "mcp__criativo_studio__*"
+        );
+      }
+
+      claudeArgs.push("--model", targetModel);
+
+      let res: { code: number | null; stdout: string; stderr: string };
+      try {
+        res = await spawnCommandWithStdin({
+          executable,
+          args: claudeArgs,
+          env,
+          cwd: this.workspaceCwd,
+          stdinText: fullPrompt,
+          timeoutMs: input.timeoutMs ?? EXEC_TIMEOUT_MS,
+        });
+      } finally {
+        if (tempMcpDir) {
+          try {
+            rmSync(tempMcpDir, { recursive: true, force: true });
+          } catch {
+            // ignora falha de limpeza temporária
+          }
+        }
+      }
 
       if (res.code !== 0) {
         throw new Error(res.stderr.trim() || res.stdout.trim() || "Claude CLI retornou erro.");

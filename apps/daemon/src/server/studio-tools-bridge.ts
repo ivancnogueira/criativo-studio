@@ -24,9 +24,25 @@ import {
   type WhatsAppSessionManager,
 } from "@criativo/whatsapp";
 import type { CriativoDatabase } from "../database/client.ts";
+import type { FetchLike } from "../engine/providers/provider-interface.ts";
 import { ROSTER_15_AGENTES } from "../engine/runner/roster-defaults.ts";
 import type { CatalogService } from "../marketplace/catalog-service.ts";
+import { NativeAppConnectionsStore } from "../marketplace/native-app-connections-store.ts";
 import type { SkillsManager } from "../marketplace/skills-manager.ts";
+import {
+  fetchMetaAccountAndMediaInsights,
+  resolveMetaCredentials,
+  validateMetaIntegration,
+  type MetaCredentialsResolved,
+  type MetaInsightsQueryInput,
+  type MetaInsightsReport,
+  type MetaValidationReport,
+} from "../engine/tools/meta-insights.ts";
+import { metaPublishTool, type MetaPublishParams } from "../engine/tools/meta-publish.ts";
+import {
+  saveBrandIdentity,
+  setSetupAssistantState,
+} from "./brand-onboarding-service.ts";
 import type { McpGateway } from "../mcp/mcp-gateway.ts";
 import {
   maskMcpServerForClient,
@@ -98,29 +114,63 @@ export {
   WORKFLOW_TOOL_NAMES,
 };
 
-export interface MetaCredentialsResolved {
-  accessToken: string | null;
-  accountId: string | null;
-  tokenKeyFound: string | null;
-  accountIdKeyFound: string | null;
-  configured: boolean;
+export {
+  fetchMetaAccountAndMediaInsights,
+  resolveMetaCredentials,
+  validateMetaIntegration,
+  type MetaCredentialsResolved,
+  type MetaInsightsQueryInput,
+  type MetaInsightsReport,
+  type MetaValidationReport,
+};
+
+export const INSTAGRAM_TOOL_NAMES = new Set([
+  "validar_integracao_meta",
+  "consultar_metricas_meta",
+  "meta_publicar",
+]);
+
+export const WHATSAPP_TOOL_NAMES = new Set([
+  "messaging_list_places",
+  "messaging_history",
+  "messaging_post",
+  "messaging_remember",
+  "messaging_forget_memory",
+]);
+
+export function resolveNativeAppConnectionsStore(deps: {
+  db: CriativoDatabase;
+  vault?: VaultService;
+  nativeStore?: NativeAppConnectionsStore;
+  catalogService?: CatalogService;
+}): NativeAppConnectionsStore | null {
+  if (deps.nativeStore) return deps.nativeStore;
+  if (deps.catalogService?.nativeStore) return deps.catalogService.nativeStore;
+  if (deps.vault) {
+    return new NativeAppConnectionsStore({ db: deps.db, vault: deps.vault });
+  }
+  return null;
 }
 
-export interface MetaValidationReport {
-  ok: boolean;
-  estagio: 3 | 4 | 5 | 7;
-  resumo: string;
-  detalhes: {
-    tokenConfigurado: boolean;
-    accountIdConfigurado: boolean;
-    httpStatus: number | null;
-    graphApiOk: boolean;
-    idConfere: boolean;
-    username: string | null;
-    followersCount: number | null;
-    mediaCount: number | null;
-    erro: string | null;
-  };
+export function isAgentAuthorizedForStudioTool(
+  toolName: string,
+  agenteId: string | null | undefined,
+  deps: {
+    db: CriativoDatabase;
+    vault?: VaultService;
+    nativeStore?: NativeAppConnectionsStore;
+    catalogService?: CatalogService;
+  }
+): boolean {
+  const store = resolveNativeAppConnectionsStore(deps);
+  if (!store) return true;
+  if (INSTAGRAM_TOOL_NAMES.has(toolName)) {
+    return store.isAgentAuthorizedForNativeApp("instagram", agenteId);
+  }
+  if (WHATSAPP_TOOL_NAMES.has(toolName)) {
+    return store.isAgentAuthorizedForNativeApp("whatsapp", agenteId);
+  }
+  return true;
 }
 
 export const UPGRADE_PACKAGE_SLUGS = {
@@ -135,156 +185,6 @@ export const UPGRADE_PACKAGE_SLUGS = {
     "roteirista-talking-head",
   ],
 } as const;
-
-export function resolveMetaCredentials(vault?: VaultService): MetaCredentialsResolved {
-  if (!vault) {
-    return {
-      accessToken: null,
-      accountId: null,
-      tokenKeyFound: null,
-      accountIdKeyFound: null,
-      configured: false,
-    };
-  }
-
-  let accessToken: string | null = null;
-  let tokenKeyFound: string | null = null;
-  for (const k of ["instagram_access_token", "META_ACCESS_TOKEN"]) {
-    const val = vault.getSecret(k);
-    if (val && val.trim().length > 0) {
-      accessToken = val.trim();
-      tokenKeyFound = k;
-      break;
-    }
-  }
-
-  let accountId: string | null = null;
-  let accountIdKeyFound: string | null = null;
-  for (const k of ["instagram_business_account_id", "META_IG_USER_ID"]) {
-    const val = vault.getSecret(k);
-    if (val && val.trim().length > 0) {
-      accountId = val.trim();
-      accountIdKeyFound = k;
-      break;
-    }
-  }
-
-  return {
-    accessToken,
-    accountId,
-    tokenKeyFound,
-    accountIdKeyFound,
-    configured: Boolean(accessToken && accountId),
-  };
-}
-
-/**
- * Executa validação segura da integração Meta Graph API v21.0 lendo do Cofre SQLite
- * sem jamais expor o token em logs, retornos ou mensagens ao usuário.
- */
-export async function validateMetaIntegration(
-  vault?: VaultService,
-  fetchImpl: typeof fetch = fetch
-): Promise<MetaValidationReport> {
-  const creds = resolveMetaCredentials(vault);
-  if (!creds.configured || !creds.accessToken || !creds.accountId) {
-    return {
-      ok: false,
-      estagio: 3,
-      resumo:
-        "Credenciais Meta ausentes no Cofre AES-256-GCM. Salve Access Token e Business Account ID em Conexões → Apps & Canais → Instagram.",
-      detalhes: {
-        tokenConfigurado: Boolean(creds.accessToken),
-        accountIdConfigurado: Boolean(creds.accountId),
-        httpStatus: null,
-        graphApiOk: false,
-        idConfere: false,
-        username: null,
-        followersCount: null,
-        mediaCount: null,
-        erro: "Credenciais não cadastradas no Cofre.",
-      },
-    };
-  }
-
-  try {
-    const url = `https://graph.facebook.com/v21.0/${encodeURIComponent(
-      creds.accountId
-    )}?fields=id,username,followers_count,media_count&access_token=${encodeURIComponent(
-      creds.accessToken
-    )}`;
-    const res = await fetchImpl(url, { signal: AbortSignal.timeout(12_000) });
-    const data = (await res.json().catch(() => ({}))) as {
-      id?: string;
-      username?: string;
-      followers_count?: number;
-      media_count?: number;
-      error?: { message?: string; code?: number };
-    };
-
-    if (!res.ok) {
-      const msgErro = data.error?.message ?? `Meta Graph API respondeu HTTP ${res.status}`;
-      return {
-        ok: false,
-        estagio: 7,
-        resumo: `Falha na validação Meta Graph API (HTTP ${res.status}): ${msgErro}`,
-        detalhes: {
-          tokenConfigurado: true,
-          accountIdConfigurado: true,
-          httpStatus: res.status,
-          graphApiOk: false,
-          idConfere: false,
-          username: null,
-          followersCount: null,
-          mediaCount: null,
-          erro: msgErro,
-        },
-      };
-    }
-
-    const idConfere = String(data.id ?? "") === String(creds.accountId);
-    const username = typeof data.username === "string" ? data.username : null;
-    const followersCount = typeof data.followers_count === "number" ? data.followers_count : null;
-    const mediaCount = typeof data.media_count === "number" ? data.media_count : null;
-
-    return {
-      ok: true,
-      estagio: 5,
-      resumo: `Integração Meta validada com sucesso (HTTP ${res.status} · Perfil conectado${
-        username ? `: @${username}` : ""
-      }).`,
-      detalhes: {
-        tokenConfigurado: true,
-        accountIdConfigurado: true,
-        httpStatus: res.status,
-        graphApiOk: true,
-        idConfere,
-        username,
-        followersCount,
-        mediaCount,
-        erro: null,
-      },
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "Falha de rede ao consultar Meta Graph API.";
-    return {
-      ok: false,
-      estagio: 7,
-      resumo: `Erro ao consultar Meta Graph API: ${msg}`,
-      detalhes: {
-        tokenConfigurado: true,
-        accountIdConfigurado: true,
-        httpStatus: null,
-        graphApiOk: false,
-        idConfere: false,
-        username: null,
-        followersCount: null,
-        mediaCount: null,
-        erro: msg,
-      },
-    };
-  }
-}
 
 /**
  * Verifica se um pacote modular (`base`, `bonus` ou `video`) está desbloqueado na instalação.
@@ -626,9 +526,12 @@ export interface StudioExtensionToolDeps {
   canalId?: string | null;
   mcpGateway?: McpGateway;
   catalogService?: CatalogService;
+  nativeStore?: NativeAppConnectionsStore;
+  providerConnection?: ProviderConnectionService;
   skillsManager?: SkillsManager;
   whatsappManager?: WhatsAppSessionManager;
   whatsappOrchestrator?: WhatsAppOrchestrator;
+  fetchImpl?: FetchLike;
 }
 
 export const PHASE10_TOOL_DEFINITIONS: ToolDefinition[] = [
@@ -884,6 +787,104 @@ export const PHASE10_TOOL_DEFINITIONS: ToolDefinition[] = [
       required: ["slugOrId"],
     },
   },
+  {
+    name: "validar_integracao_meta",
+    description:
+      "Valida as credenciais Meta/Instagram armazenadas no Cofre AES-256-GCM contra a Meta Graph API v27.0 oficial sem expor tokens.",
+    parameters: {
+      type: "object",
+      properties: {
+        contaId: { type: "string", description: "Opcional: ID da conta Instagram nativa salva na Loja." },
+      },
+    },
+  },
+  {
+    name: "consultar_metricas_meta",
+    description:
+      "Consulta métricas reais da conta Instagram Business/Creator e dos posts/Reels recentes via Meta Graph API v27.0 (views, reach, saved, shares, total_interactions, taxa de salvamento e ig_reels_avg_watch_time).",
+    parameters: {
+      type: "object",
+      properties: {
+        periodo: {
+          type: "string",
+          enum: ["7d", "28d", "30d", "90d"],
+          description: "Janela de análise desejada (padrão 30d).",
+        },
+        limite_posts: {
+          type: "number",
+          description: "Quantidade máxima de publicações recentes a inspecionar (1 a 25, padrão 15).",
+        },
+        incluir_reels: {
+          type: "boolean",
+          description: "Incluir métricas de retenção de Reels (padrão true).",
+        },
+        conta_id: {
+          type: "string",
+          description: "Opcional: ID da conta Instagram salva na Loja.",
+        },
+      },
+    },
+  },
+  {
+    name: "meta_publicar",
+    description:
+      "Publica criativo aprovado no Instagram via Meta Graph API v27.0 (bloqueado se approved_by_human != true ou se o agente não tiver permissão ao app Instagram).",
+    parameters: {
+      type: "object",
+      properties: {
+        media_type: { type: "string", enum: ["IMAGE", "CAROUSEL", "REELS", "STORIES"] },
+        media_urls: { type: "array", items: { type: "string" } },
+        caption: { type: "string" },
+        approved_by_human: { type: "boolean" },
+        conta_id: { type: "string" },
+      },
+      required: ["media_type", "media_urls", "caption", "approved_by_human"],
+    },
+  },
+  {
+    name: "salvar_identidade_marca",
+    description:
+      "Salva ou atualiza os dados estruturados da marca (nome comercial, @handle, nicho, público-alvo, oferta principal, tom de voz, cores e fontes) em conteudos/perfil-da-marca.md e SQLite.",
+    parameters: {
+      type: "object",
+      properties: {
+        marca_nome: { type: "string" },
+        perfil_handle: { type: "string" },
+        nicho: { type: "string" },
+        publico_alvo: { type: "string" },
+        oferta_principal: { type: "string" },
+        tom_voz: { type: "string" },
+        cores: {
+          type: "object",
+          properties: {
+            fundo: { type: "string" },
+            texto: { type: "string" },
+            primaria: { type: "string" },
+            secundaria: { type: "string" },
+            acento: { type: "string" },
+          },
+        },
+        fontes: {
+          type: "object",
+          properties: {
+            titulo: { type: "string" },
+            texto: { type: "string" },
+          },
+        },
+      },
+    },
+  },
+  {
+    name: "concluir_setup_inicial",
+    description:
+      "Marca o setup inicial assistido como concluído (setup_assistant_dismissed = true) e oculta automaticamente o agente Assistente de Configuração da Sidebar.",
+    parameters: {
+      type: "object",
+      properties: {
+        motivo: { type: "string", description: "Resumo curto do que foi concluído ou dispensado." },
+      },
+    },
+  },
 ];
 
 export const PHASE10_TOOL_NAMES: ReadonlySet<string> = new Set(
@@ -1031,6 +1032,15 @@ export async function executeStudioExtensionTool(
   deps: StudioExtensionToolDeps
 ): Promise<unknown> {
   const workspaceRoot = deps.workspaceRoot ?? process.cwd();
+  const nativeStore = resolveNativeAppConnectionsStore(deps);
+
+  if (!isAgentAuthorizedForStudioTool(toolName, deps.agenteId, { ...deps, nativeStore: nativeStore ?? undefined })) {
+    const appLabel = INSTAGRAM_TOOL_NAMES.has(toolName) ? "Instagram / Meta" : "WhatsApp Studio";
+    throw new Error(
+      `Acesso bloqueado: o agente '${deps.agenteId ?? "atual"}' não tem permissão ao aplicativo nativo '${appLabel}' na Loja.`
+    );
+  }
+
   const getArchive = () =>
     new WhatsAppArchiveService({
       db: deps.db.connection,
@@ -1496,6 +1506,116 @@ export async function executeStudioExtensionTool(
         });
       }
       return { ok: res.removed, ...res };
+    }
+
+    case "validar_integracao_meta": {
+      const contaId = readStringArg(args, "contaId", "conta_id");
+      return await validateMetaIntegration(deps.vault, deps.fetchImpl, {
+        nativeStore: nativeStore ?? undefined,
+        contaId: contaId ?? null,
+      });
+    }
+
+    case "consultar_metricas_meta": {
+      const rawPeriodo = readStringArg(args, "periodo");
+      const periodo: "7d" | "28d" | "30d" | "90d" =
+        rawPeriodo === "7d" || rawPeriodo === "28d" || rawPeriodo === "30d" || rawPeriodo === "90d"
+          ? rawPeriodo
+          : "30d";
+      const rawLimit =
+        typeof args.limite_posts === "number" ? args.limite_posts : Number(args.limite_posts ?? 15);
+      const incluirReels = typeof args.incluir_reels === "boolean" ? args.incluir_reels : true;
+      const contaId = readStringArg(args, "conta_id", "contaId");
+      return await fetchMetaAccountAndMediaInsights(
+        {
+          periodo,
+          limite_posts: Number.isFinite(rawLimit) ? rawLimit : 15,
+          incluir_reels: incluirReels,
+          conta_id: contaId,
+        },
+        {
+          vault: deps.vault,
+          nativeStore: nativeStore ?? undefined,
+          fetchImpl: deps.fetchImpl,
+        }
+      );
+    }
+
+    case "meta_publicar": {
+      if (!deps.vault) {
+        throw new Error("Cofre AES-256-GCM indisponível neste contexto.");
+      }
+      return await metaPublishTool(
+        {
+          media_type: (readStringArg(args, "media_type") ?? "IMAGE") as MetaPublishParams["media_type"],
+          media_urls: readStringArrayArg(args, "media_urls"),
+          caption: readStringArg(args, "caption") ?? "",
+          approved_by_human: args.approved_by_human === true,
+          conta_id: readStringArg(args, "conta_id", "contaId"),
+        },
+        {
+          vault: deps.vault,
+          nativeStore: nativeStore ?? undefined,
+          fetchImpl: deps.fetchImpl,
+        }
+      );
+    }
+
+    case "salvar_identidade_marca": {
+      if (!deps.providerConnection) {
+        throw new Error("Serviço de configurações/onboarding indisponível para salvar identidade da marca.");
+      }
+      const patch: Record<string, unknown> = {};
+      for (const k of [
+        "marca_nome",
+        "perfil_handle",
+        "nicho",
+        "publico_alvo",
+        "oferta_principal",
+        "tom_voz",
+      ]) {
+        const val = readStringArg(args, k);
+        if (val !== undefined) patch[k] = val;
+      }
+      if (args.cores && typeof args.cores === "object" && !Array.isArray(args.cores)) {
+        patch.cores = args.cores;
+      }
+      if (args.fontes && typeof args.fontes === "object" && !Array.isArray(args.fontes)) {
+        patch.fontes = args.fontes;
+      }
+      const identidade = await saveBrandIdentity(
+        deps.providerConnection,
+        workspaceRoot,
+        patch as Parameters<typeof saveBrandIdentity>[2]
+      );
+      const updatedOnboarding = deps.providerConnection.getOnboardingState();
+      deps.wsHub?.broadcast("onboarding:updated", {
+        onboarding: updatedOnboarding,
+        setup_assistant_visible: updatedOnboarding.setup_assistant_dismissed !== true,
+      });
+      return { ok: true, identidade, onboarding: updatedOnboarding };
+    }
+
+    case "concluir_setup_inicial": {
+      if (!deps.providerConnection) {
+        throw new Error("Serviço de onboarding indisponível para concluir setup.");
+      }
+      const state = setSetupAssistantState(
+        deps.db,
+        deps.providerConnection,
+        workspaceRoot,
+        "dismiss"
+      );
+      deps.wsHub?.broadcast("onboarding:updated", {
+        onboarding: state.onboarding,
+        setup_assistant_visible: state.setup_assistant_visible,
+      });
+      return {
+        ok: true,
+        motivo: readStringArg(args, "motivo") ?? "Setup inicial concluído.",
+        setup_assistant_visible: false,
+        onboarding: state.onboarding,
+      };
     }
 
     default:

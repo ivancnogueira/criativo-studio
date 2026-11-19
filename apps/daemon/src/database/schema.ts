@@ -1106,6 +1106,27 @@ export const SCHEMA_TABLES: readonly { nome: string; sql: string }[] = [
         ON projecao_servidores_conectados(kind, is_active);
     `,
   },
+  {
+    nome: "projecao_apps_nativos_contas",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_apps_nativos_contas (
+        conta_id TEXT PRIMARY KEY,
+        app_slug TEXT NOT NULL,
+        conta_rotulo TEXT NOT NULL,
+        campos_visiveis_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(campos_visiveis_json)),
+        vault_keys_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(vault_keys_json)),
+        acesso_json TEXT NOT NULL DEFAULT '{"mode":"everyone","agentIds":[]}' CHECK(json_valid(acesso_json)),
+        testado_ok INTEGER NOT NULL DEFAULT 0 CHECK(testado_ok IN (0, 1)),
+        ultimo_teste_em TEXT,
+        ultimo_erro TEXT,
+        perfil_conectado_json TEXT,
+        padrao INTEGER NOT NULL DEFAULT 0 CHECK(padrao IN (0, 1)),
+        atualizado_em TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_apps_nativos_slug
+        ON projecao_apps_nativos_contas(app_slug, padrao DESC, atualizado_em DESC);
+    `,
+  },
 ];
 
 export const SCHEMA_TABLE_NAMES = [
@@ -1163,4 +1184,5 @@ export const SCHEMA_TABLE_NAMES = [
   "projecao_sidebar_secoes",
   "projecao_showcase_sites",
   "projecao_servidores_conectados",
+  "projecao_apps_nativos_contas",
 ] as const;

@@ -200,6 +200,9 @@ export interface SettingsModalProps {
   updateStatus?: UpdateStatusSnapshot | null;
   activeServerName?: string;
   onApplyUpdate?: () => Promise<void>;
+  onRestartForUpdate?: () => Promise<void>;
+  onResetLayoutWidths?: () => void;
+  onReopenSetupAssistant?: () => Promise<void>;
   licenseStatus?: LicenseActivationStatus | null;
   onRefreshLicense?: () => Promise<void>;
   onDeactivateLicenseDevice?: (payload: {
@@ -243,6 +246,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   updateStatus = null,
   activeServerName = "Servidor Principal",
   onApplyUpdate,
+  onRestartForUpdate,
+  onResetLayoutWidths,
+  onReopenSetupAssistant,
   licenseStatus = null,
   onRefreshLicense,
   onDeactivateLicenseDevice,
@@ -361,6 +367,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <SettingsGeneralTab
                 geral={draft.geral}
                 onChange={(geral) => setDraft((prev) => ({ ...prev, geral }))}
+                onReopenSetupAssistant={onReopenSetupAssistant}
+                onResetLayoutWidths={onResetLayoutWidths}
               />
             )}
 
@@ -446,6 +454,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 activeServerName={activeServerName}
                 onCheckUpdates={onCheckUpdates}
                 onApplyUpdate={onApplyUpdate}
+                onRestartForUpdate={onRestartForUpdate}
               />
             )}
           </div>

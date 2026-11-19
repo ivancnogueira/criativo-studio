@@ -51,6 +51,7 @@ export type InspectorSubView =
 
 export interface RightInspectorPanelProps {
   open: boolean;
+  widthPx?: number;
   initialSubView?: InspectorSubView;
   agente: AgenteRegistro | null;
   arquivos: ArquivoStudio[];
@@ -140,6 +141,7 @@ const PERMISSION_OPTIONS: readonly CarbonSelectOption<PermissionLevel>[] = [
 
 export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   open,
+  widthPx,
   initialSubView = "hub",
   agente,
   arquivos,
@@ -356,7 +358,8 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   return (
     <aside
       aria-label="Inspetor contextual do agente"
-      className="relative w-[300px] xl:w-[330px] shrink-0 bg-[#1A1A1A] border-l border-white/[0.06] flex flex-col h-full overflow-hidden"
+      style={widthPx ? { width: `${widthPx}px` } : { width: "330px" }}
+      className="relative shrink-0 bg-[#1A1A1A] border-l border-white/[0.06] flex flex-col h-full overflow-hidden"
     >
       <div className="h-[48px] shrink-0 px-3.5 flex items-center justify-between gap-2 border-b border-white/[0.06]">
         {subView === "hub" ? (

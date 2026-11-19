@@ -91,7 +91,7 @@ export async function validarIntegracoes({ diretorioRaiz = raiz, fetchFn = fetch
     };
   }
 
-  const versao = env.META_API_VERSION || process.env.META_API_VERSION || "v21.0";
+  const versao = env.META_API_VERSION || process.env.META_API_VERSION || "v27.0";
   const res = await fetchFn(
     `https://graph.facebook.com/${encodeURIComponent(versao)}/${encodeURIComponent(igUserId)}?fields=id,username,followers_count,media_count`,
     {
@@ -131,7 +131,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       console.log("\n=== Validação de Integrações (Criativo AI Studio Online) ===");
       console.log(`Token Meta no Cofre/.env:  ${res.tokenConfigurado ? "✅ Configurado" : "❌ Ausente"}`);
       console.log(`IG Business Account ID:    ${res.accountIdConfigurado ? "✅ Configurado" : "❌ Ausente"}`);
-      console.log(`Meta Graph API v21.0:      ${res.ok ? "✅ HTTP " + res.httpStatus + " OK" : "❌ " + res.mensagem}`);
+      console.log(`Meta Graph API (${res.ok ? "✅ HTTP " + res.httpStatus + " OK" : "❌ " + res.mensagem})`);
       if (!res.ok) process.exitCode = 1;
     })
     .catch((err) => {

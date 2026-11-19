@@ -1,11 +1,14 @@
+import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, shell, type Tray } from "electron";
 import {
   resolveDesktopProductRoot,
+  resolveSafeUpdateArtifactPath,
   startEmbeddedDaemon,
   type EmbeddedDaemonHandle,
+  type UpdateRestartPayload,
 } from "./daemon-launcher.ts";
 import { createStudioTray } from "./tray-manager.ts";
 
@@ -15,6 +18,7 @@ let mainWindow: BrowserWindow | null = null;
 let daemonHandle: EmbeddedDaemonHandle | null = null;
 let trayHandle: Tray | null = null;
 let isQuitting = false;
+let updateRestartInProgress = false;
 
 function resolveWindowIconPath(productRoot: string): string | undefined {
   const candidates = [
@@ -54,7 +58,7 @@ function buildSplashDataUrl(iconPath?: string): string {
       <div class="card">
         ${logoMarkup}
         <div class="title">Criativo AI Studio Online</div>
-        <div class="sub">Iniciando seus 15 Agentes Especialistas...</div>
+        <div class="sub">Iniciando sua equipe de Agentes Especialistas...</div>
       </div>
     </body>
   </html>`;
@@ -176,6 +180,66 @@ function registerIpcHandlers(userDataDir: string): void {
     });
     return await res.json();
   });
+
+  ipcMain.handle("criativo:restart-for-update", async () => {
+    if (!daemonHandle) return null;
+    const res = await fetch(`${daemonHandle.baseUrl}/api/studio/updates/restart`, {
+      method: "POST",
+    });
+    return await res.json();
+  });
+}
+
+async function handleUpdateRestart(userDataDir: string, payload: UpdateRestartPayload): Promise<void> {
+  if (updateRestartInProgress) return;
+  let safeArtifactPath: string | null = null;
+
+  if (payload.mode === "native_installer") {
+    safeArtifactPath = resolveSafeUpdateArtifactPath(userDataDir, payload.stagedArtifactPath);
+    if (!safeArtifactPath || !existsSync(safeArtifactPath)) {
+      writeDesktopLog(
+        `[AutoUpdate] Reinício com instalador abortado por caminho inválido/ausente: '${String(payload.stagedArtifactPath)}'`,
+      );
+      return;
+    }
+  }
+
+  updateRestartInProgress = true;
+  writeDesktopLog(
+    `[AutoUpdate] Iniciando reinício de atualização (mode=${payload.mode}, version=${payload.version ?? "n/d"}, artifact=${safeArtifactPath ?? "hot_bundle"})`,
+  );
+
+  const handle = daemonHandle;
+  daemonHandle = null;
+  try {
+    if (handle) {
+      await handle.stop();
+    }
+  } catch {
+    // prossegue mesmo que o daemon já tenha fechado
+  }
+
+  trayHandle?.destroy();
+  trayHandle = null;
+  isQuitting = true;
+
+  if (payload.mode === "native_installer" && safeArtifactPath) {
+    if (process.platform === "win32" && safeArtifactPath.toLowerCase().endsWith(".exe")) {
+      const installer = spawn(safeArtifactPath, ["/S"], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      installer.unref();
+    } else {
+      void shell.openPath(safeArtifactPath);
+    }
+    app.quit();
+    return;
+  }
+
+  app.relaunch();
+  app.exit(0);
 }
 
 let activeBootLogPath: string | null = null;
@@ -235,6 +299,9 @@ async function bootstrapDesktop(): Promise<void> {
     preferredPort: 3000,
     isPackaged: app.isPackaged,
     appVersion: app.getVersion(),
+    onUpdateRestartRequested: (payload) => {
+      void handleUpdateRestart(userDataDir, payload);
+    },
   });
   writeDesktopLog(`Daemon embutido pronto em ${daemonHandle.baseUrl}`);
 

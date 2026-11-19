@@ -1,8 +1,14 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+
+export interface UpdateRestartPayload {
+  mode: "hot_bundle" | "native_installer";
+  stagedArtifactPath: string | null;
+  version: string | null;
+}
 
 export interface EmbeddedDaemonOptions {
   productRoot: string;
@@ -10,6 +16,29 @@ export interface EmbeddedDaemonOptions {
   preferredPort?: number;
   isPackaged?: boolean;
   appVersion?: string;
+  onUpdateRestartRequested?: (payload: UpdateRestartPayload) => void;
+}
+
+export function resolveSafeUpdateArtifactPath(
+  userDataDir: string,
+  candidatePath: string | null | undefined,
+): string | null {
+  if (typeof candidatePath !== "string" || candidatePath.trim().length === 0) {
+    return null;
+  }
+  const updatesDir = resolve(join(userDataDir, "updates"));
+  const resolvedCandidate = resolve(candidatePath.trim());
+  const rel = relative(updatesDir, resolvedCandidate);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) {
+    return null;
+  }
+  const normalizedBase = process.platform === "win32" ? updatesDir.toLowerCase() : updatesDir;
+  const normalizedTarget =
+    process.platform === "win32" ? resolvedCandidate.toLowerCase() : resolvedCandidate;
+  if (!normalizedTarget.startsWith(normalizedBase + sep)) {
+    return null;
+  }
+  return resolvedCandidate;
 }
 
 export interface EmbeddedDaemonHandle {
@@ -113,7 +142,7 @@ export async function startEmbeddedDaemon(options: EmbeddedDaemonOptions): Promi
 
   const proc = spawn(process.execPath, [entryFile], {
     cwd: userDataDir,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
     windowsHide: true,
     env: {
       ...process.env,
@@ -127,6 +156,18 @@ export async function startEmbeddedDaemon(options: EmbeddedDaemonOptions): Promi
       CRIATIVO_USER_DATA_DIR: userDataDir,
       ...(options.appVersion ? { CRIATIVO_APP_VERSION: options.appVersion } : {}),
     },
+  });
+
+  proc.on("message", (raw: unknown) => {
+    if (!raw || typeof raw !== "object") return;
+    const msg = raw as Record<string, unknown>;
+    if (msg.type === "criativo:request-update-restart") {
+      const mode = msg.mode === "native_installer" ? "native_installer" : "hot_bundle";
+      const stagedArtifactPath =
+        typeof msg.stagedArtifactPath === "string" ? msg.stagedArtifactPath : null;
+      const version = typeof msg.version === "string" ? msg.version : null;
+      options.onUpdateRestartRequested?.({ mode, stagedArtifactPath, version });
+    }
   });
 
   proc.stdout?.on("data", (buf: Buffer) => {
