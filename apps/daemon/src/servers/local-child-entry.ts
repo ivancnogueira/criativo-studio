@@ -15,6 +15,7 @@ function ensureChildWorkspaceScaffold(childRootDir: string): void {
     "recursos/logos",
     "recursos/referencias",
     "recursos/uploads",
+    "recursos/avatares",
     "saidas/artes",
     "saidas/carrosseis",
     "saidas/posts-individuais",

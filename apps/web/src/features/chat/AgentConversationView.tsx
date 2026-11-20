@@ -53,8 +53,9 @@ import {
 } from "lucide-react";
 import {
   ChannelMascoteCluster,
-  getDefaultMascotForAgent,
+  inferTaskContextFromActivity,
   MascoteAvatar,
+  resolveAgentAvatarConfig,
 } from "../../components/MascoteAvatar";
 import {
   inferProviderFromModelId,
@@ -790,16 +791,24 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
   }, [highlightedMessageId, mensagens.length]);
 
   const agentConfig = (agente?.config ?? {}) as Record<string, unknown>;
-  const fallbackVisual = getDefaultMascotForAgent(agente?.agente_id ?? "estrategista");
-  const avatarShape = (
-    typeof agentConfig.avatar_shape === "string"
-      ? agentConfig.avatar_shape
-      : fallbackVisual.shape
-  ) as AvatarShape;
-  const avatarColor =
-    typeof agentConfig.avatar_color === "string"
-      ? agentConfig.avatar_color
-      : fallbackVisual.color;
+  const agentAvatar = resolveAgentAvatarConfig(agente, agente?.agente_id ?? "estrategista");
+
+  const lastLiveStep = liveRun?.steps?.[liveRun.steps.length - 1];
+  const liveMood = isWorking
+    ? "working"
+    : takeoverSession || secretRequest || captureRequest || usageLimitAsk
+      ? "waiting"
+      : "idle";
+  const liveActivity = inferTaskContextFromActivity({
+    mood: liveMood,
+    toolName: lastLiveStep?.ferramenta ?? null,
+    statusText: liveRun?.statusText ?? lastLiveStep?.titulo ?? null,
+    isStreaming: Boolean(liveRun?.streamingText),
+    awaitingApproval: Boolean(
+      takeoverSession || secretRequest || captureRequest || usageLimitAsk
+    ),
+    agentStatus: agente?.status ?? null,
+  });
 
   const currentModel = agente?.modelo_padrao ?? "gemini-2.5-pro";
   const currentEffort = (
@@ -813,12 +822,10 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
     if (mode !== "channel" || !canal) return [];
     return canal.membros_agentes.map((id) => {
       const match = allAgentes.find((a) => a.agente_id === id);
-      const cfg = (match?.config ?? {}) as Record<string, unknown>;
-      const fb = getDefaultMascotForAgent(id);
+      const vis = resolveAgentAvatarConfig(match, id);
       return {
         agente_id: id,
-        shape: (typeof cfg.avatar_shape === "string" ? cfg.avatar_shape : fb.shape) as AvatarShape,
-        color: typeof cfg.avatar_color === "string" ? cfg.avatar_color : fb.color,
+        ...vis,
       };
     });
   }, [mode, canal, allAgentes]);
@@ -1240,10 +1247,11 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
               <ChannelMascoteCluster members={channelMembers} size={34} />
             ) : (
               <MascoteAvatar
-                shape={avatarShape}
-                color={avatarColor}
+                avatar={agentAvatar}
+                agentKey={agente?.agente_id}
                 size={36}
-                mood={isWorking ? "working" : "idle"}
+                mood={liveMood}
+                activity={liveActivity}
                 animated={isWorking}
               />
             )}
@@ -1386,7 +1394,15 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
             {mode === "channel" ? (
               <ChannelMascoteCluster members={channelMembers} size={64} />
             ) : (
-              <MascoteAvatar shape={avatarShape} color={avatarColor} size={68} animated trackCursor />
+              <MascoteAvatar
+                avatar={agentAvatar}
+                agentKey={agente?.agente_id}
+                size={68}
+                animated
+                trackCursor
+                mood={liveMood}
+                activity={liveActivity}
+              />
             )}
             <h3 className="text-[17px] font-semibold text-white mt-4">{titleName}</h3>
             <p className="text-[12.5px] text-[#979797] mt-1">
@@ -1512,11 +1528,24 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                     isUser ? "ml-auto justify-end" : "mr-auto"
                   } ${isHighlighted ? "ring-2 ring-[#007CF7] bg-[#007CF7]/10" : ""}`}
                 >
-                {!isUser && (
-                  <div className="pt-1 shrink-0">
-                    <MascoteAvatar shape={avatarShape} color={avatarColor} size={38} />
-                  </div>
-                )}
+                {!isUser && (() => {
+                  const senderAgent =
+                    mode === "channel" && msg.agente_id
+                      ? allAgentes.find((a) => a.agente_id === msg.agente_id)
+                      : undefined;
+                  const msgAvatar = senderAgent
+                    ? resolveAgentAvatarConfig(senderAgent, msg.agente_id ?? undefined)
+                    : agentAvatar;
+                  return (
+                    <div className="pt-1 shrink-0">
+                      <MascoteAvatar
+                        avatar={msgAvatar}
+                        agentKey={msg.agente_id ?? agente?.agente_id}
+                        size={38}
+                      />
+                    </div>
+                  );
+                })()}
 
                 <div
                   className={`min-w-0 ${
@@ -1923,7 +1952,14 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                 <span className="h-1 w-1 rounded-full bg-[#A855F7] animate-bounce [animation-delay:-0.12s]" />
                 <span className="h-1 w-1 rounded-full bg-[#A855F7] animate-bounce" />
               </div>
-              <MascoteAvatar shape={avatarShape} color={avatarColor} size={44} animated mood="working" />
+              <MascoteAvatar
+                avatar={agentAvatar}
+                agentKey={agente?.agente_id}
+                size={44}
+                animated
+                mood="working"
+                activity={liveActivity}
+              />
             </div>
 
             <div className="flex-1 min-w-0 space-y-2.5">
@@ -2543,7 +2579,7 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
         <SideQuestionPanel
           open={sidePanelOpen}
           agenteNome={titleName}
-          agenteAvatar={{ shape: avatarShape, color: avatarColor }}
+          agenteAvatar={agentAvatar}
           threadId={activeThread?.thread_id ?? null}
           onAsk={onAskSideQuestion}
           onClose={() => setSidePanelOpen(false)}

@@ -19,7 +19,10 @@ import {
   Plus,
   XCircle,
 } from "lucide-react";
-import { getDefaultMascotForAgent, MascoteAvatar } from "../../components/MascoteAvatar";
+import {
+  MascoteAvatar,
+  resolveAgentAvatarConfig,
+} from "../../components/MascoteAvatar";
 import { SlidingTabs } from "../../components/ui/CarbonControls";
 import { daemonApi } from "../../services/websocket-client";
 import {
@@ -96,16 +99,8 @@ function statusBadgeMeta(status: RoutineRunStatus | "scheduled"): {
   }
 }
 
-function getAgentAvatarProps(ag: AgenteRegistro | undefined, fallbackId: string): {
-  shape: AvatarShape;
-  color: string;
-} {
-  const cfg = (ag?.config ?? {}) as Record<string, unknown>;
-  const def = getDefaultMascotForAgent(fallbackId);
-  return {
-    shape: (typeof cfg.avatar_shape === "string" ? cfg.avatar_shape : def.shape) as AvatarShape,
-    color: typeof cfg.avatar_color === "string" ? cfg.avatar_color : def.color,
-  };
+function getAgentAvatarProps(ag: AgenteRegistro | undefined, fallbackId: string) {
+  return resolveAgentAvatarConfig(ag, fallbackId);
 }
 
 export const SchedulePage: React.FC<SchedulePageProps> = ({
@@ -278,7 +273,7 @@ export const SchedulePage: React.FC<SchedulePageProps> = ({
             {renderStatusIcon(item.status)}
             {formatHourMinute(item.at)}
           </span>
-          <MascoteAvatar shape={vis.shape} color={vis.color} size={18} />
+          <MascoteAvatar avatar={vis} agentKey={routine.owner_id} size={18} />
         </div>
         <p className="mt-1 truncate text-[14px] font-semibold text-[#F0F0F0]">{routine.nome}</p>
       </button>

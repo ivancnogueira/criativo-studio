@@ -9,7 +9,10 @@ import {
   Smartphone,
   X,
 } from "lucide-react";
-import { getDefaultMascotForAgent, MascoteAvatar } from "../../components/MascoteAvatar";
+import {
+  MascoteAvatar,
+  resolveAgentAvatarConfig,
+} from "../../components/MascoteAvatar";
 import { daemonApi, WebSocketClient } from "../../services/websocket-client";
 import { getCriativoDesktopBridge } from "../../types/desktop-bridge";
 
@@ -380,13 +383,7 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
   };
 
   const selectedVis = useMemo(() => {
-    if (!selectedAgent) return { shape: "blob" as AvatarShape, color: "#38bdf8" };
-    const cfg = (selectedAgent.config ?? {}) as Record<string, unknown>;
-    const fb = getDefaultMascotForAgent(selectedAgent.agente_id);
-    return {
-      shape: (typeof cfg.avatar_shape === "string" ? cfg.avatar_shape : fb.shape) as AvatarShape,
-      color: typeof cfg.avatar_color === "string" ? cfg.avatar_color : fb.color,
-    };
+    return resolveAgentAvatarConfig(selectedAgent, selectedAgent?.agente_id ?? "estrategista");
   }, [selectedAgent]);
 
   const showExpandedPill = dockPinned || dockPeeked || selectedAgent !== null;
@@ -417,8 +414,8 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
           >
             <div className="flex items-center gap-2 min-w-0">
               <MascoteAvatar
-                shape={selectedVis.shape}
-                color={selectedVis.color}
+                avatar={selectedVis}
+                agentKey={selectedAgent.agente_id}
                 size={26}
                 animated={
                   workingAgentIds.has(selectedAgent.agente_id) ||
@@ -430,6 +427,7 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
                     ? "working"
                     : "idle"
                 }
+                activity={progressByAgent[selectedAgent.agente_id] ?? null}
               />
               <span className="text-[13px] font-semibold truncate">{selectedAgent.nome}</span>
             </div>
@@ -468,8 +466,8 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
             {selectedMessages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center px-4">
                 <MascoteAvatar
-                  shape={selectedVis.shape}
-                  color={selectedVis.color}
+                  avatar={selectedVis}
+                  agentKey={selectedAgent.agente_id}
                   size={44}
                   mood="idle"
                 />
@@ -577,12 +575,7 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
         >
           <div className="flex flex-col items-center gap-1.5">
             {dockAgents.map((ag) => {
-              const cfg = (ag.config ?? {}) as Record<string, unknown>;
-              const fb = getDefaultMascotForAgent(ag.agente_id);
-              const shape = (typeof cfg.avatar_shape === "string"
-                ? cfg.avatar_shape
-                : fb.shape) as AvatarShape;
-              const color = typeof cfg.avatar_color === "string" ? cfg.avatar_color : fb.color;
+              const vis = resolveAgentAvatarConfig(ag);
               const working = workingAgentIds.has(ag.agente_id) || ag.status === "trabalhando";
               const isSelected = selectedAgentId === ag.agente_id;
 
@@ -604,11 +597,12 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
                   }`}
                 >
                   <MascoteAvatar
-                    shape={shape}
-                    color={color}
+                    avatar={vis}
+                    agentKey={ag.agente_id}
                     size={34}
                     animated={working}
                     mood={working ? "working" : "idle"}
+                    activity={progressByAgent[ag.agente_id] ?? null}
                   />
                 </button>
               );

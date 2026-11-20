@@ -1,7 +1,10 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { AgenteRegistro, AvatarShape } from "@criativo/contracts";
 import { Check, ChevronDown, Search } from "lucide-react";
-import { getDefaultMascotForAgent, MascoteAvatar } from "../../components/MascoteAvatar";
+import {
+  MascoteAvatar,
+  resolveAgentAvatarConfig,
+} from "../../components/MascoteAvatar";
 
 export interface TaskAgentSelectProps {
   agentes: AgenteRegistro[];
@@ -75,16 +78,7 @@ export const TaskAgentSelect: React.FC<TaskAgentSelectProps> = ({
     };
   }, [open]);
 
-  const resolveVisual = (ag: AgenteRegistro | null): { shape: AvatarShape; color: string } => {
-    const cfg = (ag?.config ?? {}) as Record<string, unknown>;
-    const fb = getDefaultMascotForAgent(ag?.agente_id ?? "estrategista");
-    return {
-      shape: (typeof cfg.avatar_shape === "string" ? cfg.avatar_shape : fb.shape) as AvatarShape,
-      color: typeof cfg.avatar_color === "string" ? cfg.avatar_color : fb.color,
-    };
-  };
-
-  const currentVisual = resolveVisual(currentAgent);
+  const currentVisual = resolveAgentAvatarConfig(currentAgent, currentAgent?.agente_id ?? "estrategista");
 
   const handleKeyDown = (ev: React.KeyboardEvent) => {
     if (!open || filteredAgents.length === 0) return;
@@ -120,8 +114,8 @@ export const TaskAgentSelect: React.FC<TaskAgentSelectProps> = ({
         } text-left text-white transition hover:bg-[#2A2A2A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7] disabled:opacity-50`}
       >
         <MascoteAvatar
-          shape={currentVisual.shape}
-          color={currentVisual.color}
+          avatar={currentVisual}
+          agentKey={currentAgent?.agente_id}
           size={compact ? 18 : 22}
           mood="idle"
         />
@@ -163,7 +157,7 @@ export const TaskAgentSelect: React.FC<TaskAgentSelectProps> = ({
               </li>
             ) : (
               filteredAgents.map((ag, idx) => {
-                const visual = resolveVisual(ag);
+                const visual = resolveAgentAvatarConfig(ag);
                 const selected = ag.agente_id === currentAgent?.agente_id;
                 const active = idx === highlightedIdx;
                 return (
@@ -186,7 +180,7 @@ export const TaskAgentSelect: React.FC<TaskAgentSelectProps> = ({
                     }`}
                   >
                     <div className="flex min-w-0 items-center gap-2">
-                      <MascoteAvatar shape={visual.shape} color={visual.color} size={22} mood="idle" />
+                      <MascoteAvatar avatar={visual} agentKey={ag.agente_id} size={22} mood="idle" />
                       <div className="min-w-0">
                         <div className="truncate text-[14px] font-semibold text-white">{ag.nome}</div>
                         <div className="truncate text-[12px] font-normal text-[#979797]">{ag.papel}</div>

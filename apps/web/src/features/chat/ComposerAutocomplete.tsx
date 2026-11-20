@@ -11,7 +11,11 @@ import {
   Paperclip,
   Video,
 } from "lucide-react";
-import { getDefaultMascotForAgent, MascoteAvatar } from "../../components/MascoteAvatar";
+import {
+  MascoteAvatar,
+  resolveAgentAvatarConfig,
+  type AgentAvatarVisual,
+} from "../../components/MascoteAvatar";
 
 export interface ComposerTriggerMatch {
   kind: "slash" | "mention";
@@ -129,7 +133,7 @@ export type ComposerAutocompleteItem =
       key: string;
       kind: "agent";
       agente: AgenteRegistro;
-      avatar: { shape: AvatarShape; color: string };
+      avatar: AgentAvatarVisual;
     }
   | {
       key: string;
@@ -209,16 +213,11 @@ export function buildComposerAutocompleteItems(params: {
     })
     .slice(0, 8)
     .map((agente) => {
-      const cfg = (agente.config ?? {}) as Record<string, unknown>;
-      const fb = getDefaultMascotForAgent(agente.agente_id);
       return {
         key: `agent:${agente.agente_id}`,
         kind: "agent",
         agente,
-        avatar: {
-          shape: (typeof cfg.avatar_shape === "string" ? cfg.avatar_shape : fb.shape) as AvatarShape,
-          color: typeof cfg.avatar_color === "string" ? cfg.avatar_color : fb.color,
-        },
+        avatar: resolveAgentAvatarConfig(agente),
       };
     });
 
@@ -356,8 +355,8 @@ export const ComposerAutocomplete: React.FC<ComposerAutocompleteProps> = ({
               {item.kind === "agent" && (
                 <>
                   <MascoteAvatar
-                    shape={item.avatar.shape}
-                    color={item.avatar.color}
+                    avatar={item.avatar}
+                    agentKey={item.agente.agente_id}
                     size={26}
                     label={item.agente.nome}
                   />

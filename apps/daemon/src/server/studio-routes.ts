@@ -8,6 +8,7 @@ import {
   type AnexoChat,
   type AprendizadoConfig,
   type ArquivoStudio,
+  type AvatarStyle,
   type BackupModelChoice,
   type BackupModelsConfig,
   type CanalEquipe,
@@ -3452,6 +3453,209 @@ export async function tryHandleStudioRoute(
     return true;
   }
 
+  if (method === "POST" && path === "/api/agentes/avatar/upload") {
+    const body = await readJsonBody(req);
+    const rawBase64 =
+      typeof body.conteudo_base64 === "string"
+        ? body.conteudo_base64
+        : typeof body.data_base64 === "string"
+          ? body.data_base64
+          : "";
+    if (!rawBase64.trim()) {
+      sendJson(res, 400, { ok: false, erro: "Campo obrigatório: 'conteudo_base64'." });
+      return true;
+    }
+
+    const dataUriMatch = rawBase64.match(/^data:([^;]+);base64,/i);
+    const rawMime = (
+      dataUriMatch?.[1] ??
+      (typeof body.mime_type === "string" ? body.mime_type : "")
+    )
+      .trim()
+      .toLowerCase();
+
+    const extFromMime =
+      rawMime === "image/png"
+        ? ".png"
+        : rawMime === "image/jpeg" || rawMime === "image/jpg"
+          ? ".jpg"
+          : rawMime === "image/webp"
+            ? ".webp"
+            : null;
+
+    if (!extFromMime) {
+      sendJson(res, 400, {
+        ok: false,
+        erro: "Formato inválido. Envie uma imagem PNG, JPG/JPEG ou WebP.",
+      });
+      return true;
+    }
+
+    const base64Clean = rawBase64.replace(/^data:[^;]+;base64,/i, "").trim();
+    const buffer = Buffer.from(base64Clean, "base64");
+    if (buffer.length === 0) {
+      sendJson(res, 400, { ok: false, erro: "Imagem base64 vazia ou inválida." });
+      return true;
+    }
+    if (buffer.length > 5 * 1024 * 1024) {
+      sendJson(res, 413, { ok: false, erro: "A foto do avatar excede o limite de 5 MB." });
+      return true;
+    }
+
+    const avatarDir = resolve(workspaceRoot, "recursos", "avatares");
+    mkdirSync(avatarDir, { recursive: true });
+    const fileName = `avatar-${randomUUID().slice(0, 12)}${extFromMime}`;
+    const targetPath = resolve(avatarDir, fileName);
+    writeFileSync(targetPath, buffer);
+
+    const relPath = `recursos/avatares/${fileName}`;
+    const normalizedMime = extFromMime === ".jpg" ? "image/jpeg" : `image/${extFromMime.slice(1)}`;
+    sendJson(res, 201, {
+      ok: true,
+      avatar_image_url: `/api/arquivos/raw?path=${encodeURIComponent(relPath)}`,
+      caminho_relativo: relPath,
+      mime_type: normalizedMime,
+      tamanho_bytes: buffer.length,
+    });
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/agentes/avatar/gerar") {
+    const body = await readJsonBody(req);
+    const rawPrompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    if (rawPrompt.length < 3) {
+      sendJson(res, 400, {
+        ok: false,
+        erro: "Descreva o avatar com pelo menos 3 caracteres antes de gerar.",
+      });
+      return true;
+    }
+
+    const estiloPrompt = typeof body.estilo === "string" ? body.estilo.trim() : "";
+    const nomeAgente = typeof body.nome_agente === "string" ? body.nome_agente.trim() : "";
+    const styleClause = estiloPrompt ? `Estilo visual desejado: ${estiloPrompt}. ` : "";
+    const roleClause = nomeAgente ? `Personagem/Agente: ${nomeAgente}. ` : "";
+    const avatarPrompt = `Crie um avatar quadrado 1:1 para ícone de perfil circular de aplicativo. ${roleClause}${styleClause}Composição: rosto ou personagem perfeitamente centralizado no quadro, enquadramento fechado de busto/cabeça com respiro nas bordas para recorte redondo, iluminação expressiva, alta nitidez e fundo limpo/harmonioso em baixa complexidade visual. Descrição do usuário: ${rawPrompt}. Sem textos, letras, números ou marcas d'água.`;
+
+    const hasGeminiImgKey = Boolean(
+      deps.vault && resolveVaultSecretCaseInsensitive(deps.vault, "gemini_api_key", "google_api_key")
+    );
+    const hasOpenAiImgKey = Boolean(
+      deps.vault && resolveVaultSecretCaseInsensitive(deps.vault, "openai_api_key")
+    );
+    const hasFalImgKey = Boolean(
+      deps.vault && resolveVaultSecretCaseInsensitive(deps.vault, "fal_api_key", "flux_api_key")
+    );
+    const hasImgApiKey = hasGeminiImgKey || hasOpenAiImgKey || hasFalImgKey;
+
+    const agService = providerConnection.getAntigravityService();
+    const agSnapshot = await agService.getLiveSnapshot(false).catch(() => null);
+    const hasAntigravityAccount = Boolean(
+      agSnapshot?.contas.some((c) => c.estado === "conectado" || Boolean(c.token_valido))
+    );
+
+    if (!hasImgApiKey && !hasAntigravityAccount) {
+      sendJson(res, 400, {
+        ok: false,
+        erro: "Nenhuma chave de geração de imagem (Gemini/OpenAI/Flux no Cofre) ou conta Google/Antigravity conectada. Conecte um provedor ou envie uma foto do seu computador.",
+      });
+      return true;
+    }
+
+    const avatarDir = resolve(workspaceRoot, "recursos", "avatares");
+    mkdirSync(avatarDir, { recursive: true });
+    let generatedResult:
+      | { relPath: string; engine: string; model: string }
+      | null = null;
+    let lastGenError: unknown = null;
+
+    if (hasImgApiKey && deps.vault) {
+      try {
+        const fileName = `avatar-ia-${randomUUID().slice(0, 10)}.png`;
+        const diskPath = resolve(avatarDir, fileName);
+        const imgRes = await generateImageTool(
+          {
+            aspect_ratio: "1:1",
+            prompt: avatarPrompt,
+            output_path: diskPath,
+          },
+          { vault: deps.vault }
+        );
+        generatedResult = {
+          relPath: `recursos/avatares/${fileName}`,
+          engine: imgRes.engine_used,
+          model: imgRes.model_used,
+        };
+      } catch (err) {
+        lastGenError = err;
+      }
+    }
+
+    if (!generatedResult && hasAntigravityAccount && agSnapshot) {
+      try {
+        const imgGen = await agService.executeCodeAssistGenerate({
+          model: agSnapshot.imageGenerationModelIds[0] ?? "gemini-3.1-flash-image",
+          messages: [{ role: "user", text: avatarPrompt }],
+          generateImage: true,
+        });
+        if (imgGen.images.length > 0) {
+          const firstImg = imgGen.images[0]!;
+          const ext = firstImg.mimeType.includes("png")
+            ? ".png"
+            : firstImg.mimeType.includes("webp")
+              ? ".webp"
+              : ".jpg";
+          const fileName = `avatar-ia-${randomUUID().slice(0, 10)}${ext}`;
+          const diskPath = resolve(avatarDir, fileName);
+          writeFileSync(diskPath, Buffer.from(firstImg.dataBase64, "base64"));
+          generatedResult = {
+            relPath: `recursos/avatares/${fileName}`,
+            engine: "antigravity",
+            model: imgGen.modelUsed,
+          };
+        }
+      } catch (err) {
+        lastGenError = err;
+      }
+    }
+
+    if (!generatedResult) {
+      const msg =
+        lastGenError instanceof Error
+          ? lastGenError.message
+          : "O provedor de imagem não retornou arquivo válido.";
+      sendJson(res, 502, {
+        ok: false,
+        erro: `Falha ao gerar avatar com IA: ${msg}`,
+      });
+      return true;
+    }
+
+    sendJson(res, 201, {
+      ok: true,
+      avatar_image_url: `/api/arquivos/raw?path=${encodeURIComponent(generatedResult.relPath)}`,
+      caminho_relativo: generatedResult.relPath,
+      engine: generatedResult.engine,
+      model: generatedResult.model,
+    });
+    return true;
+  }
+
+  const VALID_AVATAR_STYLES = new Set<AvatarStyle>([
+    "classic",
+    "plush",
+    "cartoon",
+    "robots",
+    "personas",
+    "pets",
+    "monsters",
+    "image",
+  ]);
+  const sanitizeAvatarStyle = (raw: unknown): AvatarStyle | undefined =>
+    typeof raw === "string" && VALID_AVATAR_STYLES.has(raw as AvatarStyle)
+      ? (raw as AvatarStyle)
+      : undefined;
+
   if (method === "POST" && path === "/api/agentes") {
     const body = await readJsonBody(req);
     if (typeof body.nome !== "string" || body.nome.trim().length === 0) {
@@ -3481,12 +3685,36 @@ export async function tryHandleStudioRoute(
       ? interpolateBrandPlaceholders(rawPromptBase, currentBrand)
       : rawPromptBase;
 
+    const incomingBodyConfig =
+      body.config && typeof body.config === "object"
+        ? (body.config as Record<string, unknown>)
+        : {};
+    const resolvedAvatarStyle =
+      sanitizeAvatarStyle(body.avatar_style) ??
+      sanitizeAvatarStyle(incomingBodyConfig.avatar_style) ??
+      "classic";
+    const resolvedAvatarVariant =
+      typeof body.avatar_variant === "string" && body.avatar_variant.trim()
+        ? body.avatar_variant.trim()
+        : typeof incomingBodyConfig.avatar_variant === "string" && incomingBodyConfig.avatar_variant.trim()
+          ? incomingBodyConfig.avatar_variant.trim()
+          : undefined;
+    const resolvedAvatarImageUrl =
+      typeof body.avatar_image_url === "string" && body.avatar_image_url.trim()
+        ? body.avatar_image_url.trim()
+        : typeof incomingBodyConfig.avatar_image_url === "string" && incomingBodyConfig.avatar_image_url.trim()
+          ? incomingBodyConfig.avatar_image_url.trim()
+          : null;
+
     const config = {
       frente: "custom",
       pasta: typeof body.pasta === "string" ? body.pasta : "Agentes Customizados",
       skill_slug: "custom-agent",
       avatar_shape: typeof body.avatar_shape === "string" ? body.avatar_shape : "rounded_square",
       avatar_color: typeof body.avatar_color === "string" ? body.avatar_color : "#38bdf8",
+      avatar_style: resolvedAvatarStyle,
+      ...(resolvedAvatarVariant ? { avatar_variant: resolvedAvatarVariant } : {}),
+      ...(resolvedAvatarImageUrl ? { avatar_image_url: resolvedAvatarImageUrl } : {}),
       effort: typeof body.effort === "string" ? body.effort : "alto",
       prompt_base: resolvedPromptBase,
       customizado: true,
@@ -3659,12 +3887,30 @@ export async function tryHandleStudioRoute(
             : null
           : (existing.section_id ?? null);
 
+    const nextAvatarStyle =
+      sanitizeAvatarStyle(body.avatar_style) ?? sanitizeAvatarStyle(incomingConfig.avatar_style);
+    const nextAvatarVariant =
+      typeof body.avatar_variant === "string" && body.avatar_variant.trim()
+        ? body.avatar_variant.trim()
+        : typeof incomingConfig.avatar_variant === "string" && incomingConfig.avatar_variant.trim()
+          ? incomingConfig.avatar_variant.trim()
+          : undefined;
+    const hasExplicitAvatarImage =
+      body.avatar_image_url !== undefined || incomingConfig.avatar_image_url !== undefined;
+    const rawAvatarImage =
+      body.avatar_image_url !== undefined ? body.avatar_image_url : incomingConfig.avatar_image_url;
+    const nextAvatarImageUrl =
+      typeof rawAvatarImage === "string" && rawAvatarImage.trim() ? rawAvatarImage.trim() : null;
+
     const nextConfig = {
       ...currentConfig,
       ...incomingConfig,
       ...(typeof body.effort === "string" ? { effort: body.effort } : {}),
       ...(typeof body.avatar_shape === "string" ? { avatar_shape: body.avatar_shape } : {}),
       ...(typeof body.avatar_color === "string" ? { avatar_color: body.avatar_color } : {}),
+      ...(nextAvatarStyle ? { avatar_style: nextAvatarStyle } : {}),
+      ...(nextAvatarVariant ? { avatar_variant: nextAvatarVariant } : {}),
+      ...(hasExplicitAvatarImage ? { avatar_image_url: nextAvatarImageUrl } : {}),
       ...(typeof body.prompt_base === "string" ? { prompt_base: body.prompt_base } : {}),
       ...(body.modo_ocupado === "steer" || body.modo_ocupado === "queue"
         ? { modo_ocupado: body.modo_ocupado }
@@ -3749,6 +3995,9 @@ export async function tryHandleStudioRoute(
       skill_slug: def.skill_slug,
       avatar_shape: def.avatar_shape,
       avatar_color: def.avatar_color,
+      avatar_style: "classic" as const,
+      avatar_variant: def.avatar_shape,
+      avatar_image_url: null,
       effort: def.effort,
       ferramentas: def.ferramentas,
       prompt_base: def.prompt_base,

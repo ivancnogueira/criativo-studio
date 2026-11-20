@@ -19,7 +19,10 @@ import {
   Webhook,
   X,
 } from "lucide-react";
-import { getDefaultMascotForAgent, MascoteAvatar } from "../../components/MascoteAvatar";
+import {
+  MascoteAvatar,
+  resolveAgentAvatarConfig,
+} from "../../components/MascoteAvatar";
 import { daemonApi } from "../../services/websocket-client";
 
 interface RoutineFlowsCanvasProps {
@@ -86,16 +89,8 @@ export function computeConnectProblem(
   return null;
 }
 
-function getAgentAvatar(ag: AgenteRegistro | undefined, id: string): {
-  shape: AvatarShape;
-  color: string;
-} {
-  const cfg = (ag?.config ?? {}) as Record<string, unknown>;
-  const fb = getDefaultMascotForAgent(id);
-  return {
-    shape: (typeof cfg.avatar_shape === "string" ? cfg.avatar_shape : fb.shape) as AvatarShape,
-    color: typeof cfg.avatar_color === "string" ? cfg.avatar_color : fb.color,
-  };
+function getAgentAvatar(ag: AgenteRegistro | undefined, id: string) {
+  return resolveAgentAvatarConfig(ag, id);
 }
 
 function stepBadgeMeta(status: RoutineFlowStep["status"] | "waiting" | "unreachable"): {
@@ -357,7 +352,7 @@ export const RoutineFlowsCanvas: React.FC<RoutineFlowsCanvasProps> = ({
       {/* Cabeçalho do Canvas (48px) */}
       <header className="h-[48px] shrink-0 px-4 border-b border-white/[0.06] bg-[#1A1A1A] flex items-center justify-between gap-2">
         <div className="flex items-center gap-3 min-w-0">
-          <MascoteAvatar shape={ownerAvatar.shape} color={ownerAvatar.color} size={24} />
+          <MascoteAvatar avatar={ownerAvatar} agentKey={agente.agente_id} size={24} />
           <h1 className="text-[20px] font-semibold text-[#F0F0F0] truncate">{agente.nome}</h1>
 
           {/* Seletor customizado de lente de foco (zero elemento select HTML) */}
@@ -737,7 +732,7 @@ export const RoutineFlowsCanvas: React.FC<RoutineFlowsCanvasProps> = ({
 
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 min-w-0">
-                        <MascoteAvatar shape={vis.shape} color={vis.color} size={24} />
+                        <MascoteAvatar avatar={vis} agentKey={agId} size={24} />
                         <span className="text-[14px] font-semibold text-[#F0F0F0] truncate">
                           {agObj?.nome ?? agId}
                         </span>

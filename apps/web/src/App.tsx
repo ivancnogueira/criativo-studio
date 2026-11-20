@@ -67,7 +67,13 @@ import {
   X,
 } from "lucide-react";
 import { DynamicIsland, type StudioTabItem } from "./components/DynamicIsland";
-import { getDefaultMascotForAgent, MascoteAvatar } from "./components/MascoteAvatar";
+import {
+  inferTaskContextFromActivity,
+  MascoteAvatar,
+  resolveAgentAvatarConfig,
+  type AvatarTaskContext,
+  type MascotEyeMood,
+} from "./components/MascoteAvatar";
 import {
   resolveInitialSplashStageFromSearch,
   StudioSplashPreloader,
@@ -212,14 +218,8 @@ function getThreadLaneKey(agenteId: string, threadId?: string | null): string {
   return `${agenteId}:${threadId ?? "main"}`;
 }
 
-function getAgentAvatar(ag?: AgenteRegistro | null): { shape: AvatarShape; color: string } {
-  if (!ag) return { shape: "blob", color: "#38bdf8" };
-  const cfg = (ag.config ?? {}) as Record<string, unknown>;
-  const fb = getDefaultMascotForAgent(ag.agente_id);
-  return {
-    shape: (typeof cfg.avatar_shape === "string" ? cfg.avatar_shape : fb.shape) as AvatarShape,
-    color: typeof cfg.avatar_color === "string" ? cfg.avatar_color : fb.color,
-  };
+function getAgentAvatar(ag?: AgenteRegistro | null) {
+  return resolveAgentAvatarConfig(ag);
 }
 
 function mergeUniqueMessages(
@@ -1973,6 +1973,58 @@ export function App() {
     return ids;
   }, [agentes, allThreads, liveRunByChat, liveRunByThread]);
 
+  const agentActivityByAgentId = useMemo<
+    Record<string, { mood: MascotEyeMood; activity: AvatarTaskContext }>
+  >(() => {
+    const out: Record<string, { mood: MascotEyeMood; activity: AvatarTaskContext }> = {};
+
+    for (const ag of agentes) {
+      const id = ag.agente_id;
+      const runFromChat = liveRunByChat[`agente:${id}`];
+      const threadEntry = Object.entries(liveRunByThread).find(([thId, r]) => {
+        if (r?.agenteId === id) return true;
+        return allThreads.some((t) => t.thread_id === thId && t.agente_id === id);
+      });
+      const activeRun = runFromChat ?? threadEntry?.[1] ?? null;
+      const awaitingTakeover = Boolean(takeoverByAgent[id]);
+
+      const agentTasks = tarefas.filter((t) => t.agente_id === id);
+      const runningTask = agentTasks.find((t) => t.status === "executando");
+      const waitingTask = agentTasks.find((t) => t.status === "aguardando_aprovacao");
+      const recentFailedTask = agentTasks.find((t) => t.status === "falha");
+
+      const isWorking = workingAgentIds.has(id);
+      const lastStep = activeRun?.steps?.[activeRun.steps.length - 1];
+
+      let mood: MascotEyeMood = "idle";
+      if (recentFailedTask && !isWorking && !activeRun) {
+        mood = "failed";
+      } else if (awaitingTakeover || waitingTask) {
+        mood = "waiting";
+      } else if (isWorking || activeRun || runningTask) {
+        mood = "working";
+      }
+
+      const activity = inferTaskContextFromActivity({
+        mood,
+        toolName: lastStep?.ferramenta ?? null,
+        statusText:
+          activeRun?.statusText ??
+          lastStep?.titulo ??
+          runningTask?.titulo ??
+          recentFailedTask?.titulo ??
+          null,
+        isStreaming: Boolean(activeRun?.streamingText),
+        awaitingApproval: awaitingTakeover || Boolean(waitingTask),
+        agentStatus: ag.status,
+      });
+
+      out[id] = { mood, activity };
+    }
+
+    return out;
+  }, [agentes, allThreads, liveRunByChat, liveRunByThread, takeoverByAgent, tarefas, workingAgentIds]);
+
   const dynamicIslandTabs = useMemo<StudioTabItem[]>(() => {
     if (centerMode.type === "channel") {
       const ch = activeChannel;
@@ -2004,14 +2056,20 @@ export function App() {
     const ag = activeAgent;
     if (!ag) return [];
     const vis = getAgentAvatar(ag);
+    const live = agentActivityByAgentId[ag.agente_id];
     const agentTab: StudioTabItem = {
       id: `agent:${ag.agente_id}`,
       titulo: ag.nome,
       kind: "agent",
       closable: false,
+      style: vis.style,
       shape: vis.shape,
+      variant: vis.variant,
       color: vis.color,
+      imageUrl: vis.imageUrl,
       working: workingAgentIds.has(ag.agente_id),
+      mood: live?.mood,
+      activity: live?.activity,
     };
 
     const agentThreads = (threadsByAgent[ag.agente_id]?.threads ?? allThreads.filter((t) => t.agente_id === ag.agente_id)).filter(
@@ -2039,6 +2097,7 @@ export function App() {
   }, [
     activeAgent,
     activeChannel,
+    agentActivityByAgentId,
     allThreads,
     centerMode,
     liveRunByThread,
@@ -2985,6 +3044,7 @@ export function App() {
                     agentes={agentes}
                     canais={canais}
                     workingAgentIds={workingAgentIds}
+                    agentActivityByAgentId={agentActivityByAgentId}
                   selectedAgentId={
                     centerMode.type === "agent" || centerMode.type === "thread"
                       ? activeAgent?.agente_id ?? null
@@ -3403,6 +3463,7 @@ export function App() {
                         activeTabId={activeBrowserTabId}
                         framesByTab={browserFramesByTab}
                         agentName={activeAgent?.nome ?? "Agente"}
+                        agentAvatar={getAgentAvatar(activeAgent)}
                         agentAvatarShape={getAgentAvatar(activeAgent).shape}
                         agentAvatarColor={getAgentAvatar(activeAgent).color}
                         agentWorking={activeAgent ? workingAgentIds.has(activeAgent.agente_id) : false}
@@ -4025,8 +4086,8 @@ export function App() {
                             }`}
                           >
                             <MascoteAvatar
-                              shape={av.shape}
-                              color={av.color}
+                              avatar={av}
+                              agentKey={ag.agente_id}
                               size={26}
                               label={ag.nome}
                             />
@@ -4061,8 +4122,8 @@ export function App() {
                       <div className="h-[46px] shrink-0 border-b border-white/[0.06] bg-[#141416] px-4 flex items-center justify-between gap-3">
                         <div className="min-w-0 flex items-center gap-2.5">
                           <MascoteAvatar
-                            shape={getAgentAvatar(selectedRoutineAgent).shape}
-                            color={getAgentAvatar(selectedRoutineAgent).color}
+                            avatar={getAgentAvatar(selectedRoutineAgent)}
+                            agentKey={selectedRoutineAgent.agente_id}
                             size={24}
                             label={selectedRoutineAgent.nome}
                           />
@@ -4539,6 +4600,7 @@ export function App() {
           activeTabId={activeBrowserTabId}
           framesByTab={browserFramesByTab}
           agentName={activeAgent?.nome ?? "Agente"}
+          agentAvatar={getAgentAvatar(activeAgent)}
           agentAvatarShape={getAgentAvatar(activeAgent).shape}
           agentAvatarColor={getAgentAvatar(activeAgent).color}
           agentWorking={activeAgent ? workingAgentIds.has(activeAgent.agente_id) : false}

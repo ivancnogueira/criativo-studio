@@ -1,12 +1,18 @@
 import React, { useEffect, useState } from "react";
-import type { AvatarShape, PerguntaLateralTroca } from "@criativo/contracts";
+import type { AvatarShape, AvatarStyle, PerguntaLateralTroca } from "@criativo/contracts";
 import { Loader2, MessageCircleQuestion, RotateCcw, Send, X } from "lucide-react";
 import { MascoteAvatar } from "../../components/MascoteAvatar";
 
 export interface SideQuestionPanelProps {
   open: boolean;
   agenteNome: string;
-  agenteAvatar?: { shape: AvatarShape; color: string };
+  agenteAvatar?: {
+    shape: AvatarShape;
+    color: string;
+    style?: AvatarStyle;
+    variant?: string;
+    imageUrl?: string | null;
+  };
   threadId: string | null;
   onAsk: (
     pergunta: string,
@@ -102,10 +108,10 @@ export const SideQuestionPanel: React.FC<SideQuestionPanelProps> = ({
         <div className="flex items-center gap-2">
           {agenteAvatar && (
             <MascoteAvatar
-              shape={agenteAvatar.shape}
-              color={agenteAvatar.color}
+              avatar={agenteAvatar}
               size={22}
               mood={loading ? "working" : "idle"}
+              activity={loading ? "talking" : "idle"}
             />
           )}
           <span className="text-[14px] font-semibold text-white">Perguntar ao lado</span>

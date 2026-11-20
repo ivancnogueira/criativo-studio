@@ -31,8 +31,10 @@ import {
 } from "lucide-react";
 import {
   ChannelMascoteCluster,
-  getDefaultMascotForAgent,
   MascoteAvatar,
+  resolveAgentAvatarConfig,
+  type AvatarTaskContext,
+  type MascotEyeMood,
 } from "./MascoteAvatar";
 import { UpdateNotificationBanner } from "../features/updates/UpdateNotificationBanner";
 
@@ -69,16 +71,15 @@ export interface SidebarProps {
   onOpenUpdateSettings?: () => void;
   widthPx?: number;
   workingAgentIds?: Set<string> | ReadonlyArray<string>;
+  agentActivityByAgentId?: Record<
+    string,
+    { mood?: MascotEyeMood; activity?: AvatarTaskContext | null }
+  >;
   onDismissSetupAssistant?: () => Promise<void> | void;
 }
 
-function getAgentVisual(ag: AgenteRegistro): { shape: AvatarShape; color: string } {
-  const cfg = (ag.config ?? {}) as Record<string, unknown>;
-  const fallback = getDefaultMascotForAgent(ag.agente_id);
-  return {
-    shape: (typeof cfg.avatar_shape === "string" ? cfg.avatar_shape : fallback.shape) as AvatarShape,
-    color: typeof cfg.avatar_color === "string" ? cfg.avatar_color : fallback.color,
-  };
+function getAgentVisual(ag: AgenteRegistro) {
+  return resolveAgentAvatarConfig(ag);
 }
 
 function formatHour(iso?: string | null): string {
@@ -138,6 +139,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenUpdateSettings,
   widthPx,
   workingAgentIds,
+  agentActivityByAgentId,
   onDismissSetupAssistant,
 }) => {
   const workingAgentSet = useMemo(() => new Set(workingAgentIds ?? []), [workingAgentIds]);
@@ -441,11 +443,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
           <div className="relative shrink-0">
             <MascoteAvatar
-              shape={vis.shape}
-              color={vis.color}
+              avatar={vis}
+              agentKey={ag.agente_id}
               size={38}
               animated={isWorking}
-              mood={isWorking ? "working" : (ag.nao_lidas ?? 0) > 0 ? "waiting" : "idle"}
+              mood={
+                agentActivityByAgentId?.[ag.agente_id]?.mood ??
+                (isWorking ? "working" : (ag.nao_lidas ?? 0) > 0 ? "waiting" : "idle")
+              }
+              activity={agentActivityByAgentId?.[ag.agente_id]?.activity ?? null}
             />
             {showUnreadBadge && (ag.nao_lidas ?? 0) > 0 && (
               <span className="absolute -bottom-0.5 -right-0.5 h-4 min-w-[16px] px-1 rounded-full bg-[#74B9FF] text-[#0D0D0D] text-[10px] font-bold flex items-center justify-center ring-2 ring-[#1A1A1A]">
@@ -967,10 +973,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className="w-full flex items-center gap-2.5 px-1.5 py-1 rounded-lg text-left"
             >
               <MascoteAvatar
-                shape={getAgentVisual(setupAssistantAgent).shape}
-                color={getAgentVisual(setupAssistantAgent).color}
+                avatar={getAgentVisual(setupAssistantAgent)}
+                agentKey={setupAssistantAgent.agente_id}
                 size={32}
                 animated={setupAssistantAgent.status === "trabalhando"}
+                mood={
+                  agentActivityByAgentId?.[setupAssistantAgent.agente_id]?.mood ??
+                  (setupAssistantAgent.status === "trabalhando" ? "working" : "idle")
+                }
+                activity={agentActivityByAgentId?.[setupAssistantAgent.agente_id]?.activity ?? null}
               />
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] font-semibold text-white truncate">
@@ -1074,8 +1085,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   const selected = selectedChannelId === canal.canal_id;
                   const members = canal.membros_agentes.map((id) => {
                     const match = agentes.find((a) => a.agente_id === id);
-                    const vis = match ? getAgentVisual(match) : getDefaultMascotForAgent(id);
-                    return { agente_id: id, shape: vis.shape, color: vis.color };
+                    const vis = resolveAgentAvatarConfig(match, id);
+                    return { agente_id: id, ...vis };
                   });
                   return (
                     <button

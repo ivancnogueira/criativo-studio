@@ -4,6 +4,7 @@ import type {
   AgenteRegistro,
   ArquivoStudio,
   AvatarShape,
+  AvatarStyle,
   BackupModelsConfig,
   BrowserProfileInfo,
   BrowserProfileProxyPayload,
@@ -33,7 +34,10 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { MascoteAppearancePicker } from "../../components/MascoteAvatar";
+import {
+  MascoteAppearancePicker,
+  resolveAgentAvatarConfig,
+} from "../../components/MascoteAvatar";
 import { CarbonSelect, type CarbonSelectOption } from "../../components/ui/CarbonControls";
 import { ServerBrowserProfilesPanel } from "../browser/ServerBrowserProfilesPanel";
 import { ApprovalBridge } from "../preview/ApprovalBridge";
@@ -83,6 +87,9 @@ export interface RightInspectorPanelProps {
       prompt_base?: string;
       avatar_shape?: AvatarShape;
       avatar_color?: string;
+      avatar_style?: AvatarStyle;
+      avatar_variant?: string;
+      avatar_image_url?: string | null;
       effort?: NivelEsforco;
       backup_models?: BackupModelsConfig;
       permission_level?: PermissionLevel;
@@ -182,6 +189,9 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   );
   const [nomeDraft, setNomeDraft] = useState(agente?.nome ?? "");
   const [promptDraft, setPromptDraft] = useState("");
+  const [styleDraft, setStyleDraft] = useState<AvatarStyle>("classic");
+  const [variantDraft, setVariantDraft] = useState<string>("blob");
+  const [imageUrlDraft, setImageUrlDraft] = useState<string | null>(null);
   const [shapeDraft, setShapeDraft] = useState<AvatarShape>("blob");
   const [colorDraft, setColorDraft] = useState("#38bdf8");
   const [permissionDraft, setPermissionDraft] = useState<PermissionLevel>("workspace");
@@ -213,12 +223,14 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   useEffect(() => {
     if (!agente) return;
     const cfg = (agente.config ?? {}) as Record<string, unknown>;
+    const resolvedVis = resolveAgentAvatarConfig(agente);
     setNomeDraft(agente.nome);
     setPromptDraft(typeof cfg.prompt_base === "string" ? cfg.prompt_base : "");
-    setShapeDraft(
-      (typeof cfg.avatar_shape === "string" ? cfg.avatar_shape : "blob") as AvatarShape
-    );
-    setColorDraft(typeof cfg.avatar_color === "string" ? cfg.avatar_color : "#38bdf8");
+    setStyleDraft(resolvedVis.style);
+    setVariantDraft(resolvedVis.variant);
+    setImageUrlDraft(resolvedVis.imageUrl ?? null);
+    setShapeDraft(resolvedVis.shape);
+    setColorDraft(resolvedVis.color);
 
     const perm = (agente.permission_level ??
       cfg.permission_level ??
@@ -273,6 +285,9 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
         prompt_base: promptDraft,
         avatar_shape: shapeDraft,
         avatar_color: colorDraft,
+        avatar_style: styleDraft,
+        avatar_variant: variantDraft,
+        avatar_image_url: styleDraft === "image" ? imageUrlDraft : null,
         permission_level: permissionDraft,
         browser_profile_id: browserProfileDraft === "shared" ? null : browserProfileDraft,
         allow_new_chat: allowNewChatDraft,
@@ -655,10 +670,19 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
             <form onSubmit={handleSaveConfig} className="space-y-3.5">
               <div className="rounded-xl bg-[#212121] border border-white/[0.06] p-3">
                 <MascoteAppearancePicker
+                  compact
+                  showLivePreview
                   color={colorDraft}
                   shape={shapeDraft}
+                  style={styleDraft}
+                  variant={variantDraft}
+                  imageUrl={imageUrlDraft}
+                  agentName={nomeDraft}
                   onChangeColor={setColorDraft}
                   onChangeShape={setShapeDraft}
+                  onChangeStyle={setStyleDraft}
+                  onChangeVariant={setVariantDraft}
+                  onChangeImageUrl={setImageUrlDraft}
                 />
               </div>
 

@@ -9,7 +9,10 @@ import type {
   TarefaRegistro,
 } from "@criativo/contracts";
 import { Archive, ChevronDown, ChevronRight, Clock, Loader2, Sparkles } from "lucide-react";
-import { getDefaultMascotForAgent, MascoteAvatar } from "../../components/MascoteAvatar";
+import {
+  MascoteAvatar,
+  resolveAgentAvatarConfig,
+} from "../../components/MascoteAvatar";
 import { daemonApi } from "../../services/websocket-client";
 import type { AgentStepLog } from "../trace/AgentStepsWaterfall";
 import { TASK_UNDO_WINDOW_MS, TasksComposer, TaskTookLine, type PendingUndoTask } from "../tasks/TasksComposer";
@@ -371,12 +374,9 @@ export const TasksQueuePage: React.FC<TasksQueuePageProps> = ({
 
   const resolveAgentVisual = (agenteId: string) => {
     const ag = agentes.find((a) => a.agente_id === agenteId);
-    const cfg = (ag?.config ?? {}) as Record<string, unknown>;
-    const fb = getDefaultMascotForAgent(agenteId);
     return {
       nome: ag?.nome ?? agenteId,
-      shape: (typeof cfg.avatar_shape === "string" ? cfg.avatar_shape : fb.shape) as AvatarShape,
-      color: typeof cfg.avatar_color === "string" ? cfg.avatar_color : fb.color,
+      avatar: resolveAgentAvatarConfig(ag, agenteId),
     };
   };
 
@@ -502,10 +502,21 @@ export const TasksQueuePage: React.FC<TasksQueuePageProps> = ({
                             >
                               <div className="flex min-w-0 items-center gap-4">
                                 <MascoteAvatar
-                                  shape={visual.shape}
-                                  color={visual.color}
+                                  avatar={visual.avatar}
+                                  agentKey={item.agenteId}
                                   size={28}
-                                  mood={item.section === "running" ? "working" : "idle"}
+                                  mood={
+                                    item.section === "running"
+                                      ? "working"
+                                      : item.tarefa?.status === "falha"
+                                        ? "failed"
+                                        : item.tarefa?.status === "aguardando_aprovacao"
+                                          ? "waiting"
+                                          : item.tarefa?.status === "concluido"
+                                            ? "completed"
+                                            : "idle"
+                                  }
+                                  activity={item.titulo}
                                 />
                                 <div className="min-w-0">
                                   <div className="truncate text-[14px] font-semibold text-white">

@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { AgenteRegistro, AvatarShape } from "@criativo/contracts";
 import { Mic, Pin, PinOff, Plus, Radio, Square } from "lucide-react";
-import { MascoteAvatar, getDefaultMascotForAgent } from "../../components/MascoteAvatar";
+import {
+  MascoteAvatar,
+  resolveAgentAvatarConfig,
+} from "../../components/MascoteAvatar";
 
 type LiveVoiceState = "ouvindo" | "processando" | "falando";
 
@@ -417,10 +420,7 @@ export const QuickAgentDrawer: React.FC<QuickAgentDrawerProps> = ({
 
           <div className="flex flex-col items-center gap-1.5">
             {quickList.map((ag) => {
-              const cfg = (ag.config ?? {}) as Record<string, unknown>;
-              const fb = getDefaultMascotForAgent(ag.agente_id);
-              const shape = (typeof cfg.avatar_shape === "string" ? cfg.avatar_shape : fb.shape) as AvatarShape;
-              const color = typeof cfg.avatar_color === "string" ? cfg.avatar_color : fb.color;
+              const vis = resolveAgentAvatarConfig(ag);
               const selected = selectedAgentId === ag.agente_id;
               const working = workingSet.has(ag.agente_id) || ag.status === "trabalhando";
               const unread = ag.nao_lidas ?? 0;
@@ -442,8 +442,8 @@ export const QuickAgentDrawer: React.FC<QuickAgentDrawerProps> = ({
                     <span className="absolute -left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-[#42A0FF]" />
                   )}
                   <MascoteAvatar
-                    shape={shape}
-                    color={color}
+                    avatar={vis}
+                    agentKey={ag.agente_id}
                     size={34}
                     animated={working}
                     mood={working ? "working" : unread > 0 ? "waiting" : "idle"}

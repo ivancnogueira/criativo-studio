@@ -1,7 +1,16 @@
 import React, { useState } from "react";
-import type { AvatarShape, NivelEsforco, ProvedorStatusInfo } from "@criativo/contracts";
+import type {
+  AvatarShape,
+  AvatarStyle,
+  NivelEsforco,
+  ProvedorStatusInfo,
+} from "@criativo/contracts";
 import { ChevronDown } from "lucide-react";
-import { MascoteAppearancePicker, MascoteAvatar } from "../../components/MascoteAvatar";
+import {
+  getDefaultVariantForStyle,
+  MascoteAppearancePicker,
+  MascoteAvatar,
+} from "../../components/MascoteAvatar";
 import {
   inferProviderFromModelId,
   ModelProviderPopover,
@@ -15,6 +24,9 @@ export interface NewAgentPayload {
   modelo_padrao: string;
   avatar_shape: AvatarShape;
   avatar_color: string;
+  avatar_style?: AvatarStyle;
+  avatar_variant?: string;
+  avatar_image_url?: string | null;
   effort: NivelEsforco;
 }
 
@@ -113,6 +125,9 @@ export const NewAgentScreen: React.FC<NewAgentScreenProps> = ({
   const [prompt, setPrompt] = useState("");
   const [color, setColor] = useState("#38bdf8");
   const [shape, setShape] = useState<AvatarShape>("rounded_square");
+  const [style, setStyle] = useState<AvatarStyle>("classic");
+  const [variant, setVariant] = useState<string>("rounded_square");
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [modelo, setModelo] = useState("gemini-2.5-flash");
   const [effort, setEffort] = useState<NivelEsforco>("alto");
   const [popoverOpen, setPopoverOpen] = useState(false);
@@ -134,6 +149,9 @@ export const NewAgentScreen: React.FC<NewAgentScreenProps> = ({
         modelo_padrao: modelo,
         avatar_shape: shape,
         avatar_color: color,
+        avatar_style: style,
+        avatar_variant: variant || getDefaultVariantForStyle(style, shape),
+        avatar_image_url: style === "image" ? imageUrl : null,
         effort,
       });
     } finally {
@@ -143,12 +161,15 @@ export const NewAgentScreen: React.FC<NewAgentScreenProps> = ({
 
   return (
     <div className="flex-1 h-full bg-[#1A1A1A] flex flex-col justify-between overflow-y-auto px-6 py-8">
-      <div className="my-auto mx-auto w-full max-w-[390px] flex flex-col items-center">
+      <div className="my-auto mx-auto w-full max-w-[460px] flex flex-col items-center">
         {/* Mascote interativo no centro */}
-        <div className="mb-5">
+        <div className="mb-4">
           <MascoteAvatar
+            style={style}
             shape={shape}
+            variant={variant}
             color={color}
+            imageUrl={imageUrl}
             size={84}
             trackCursor
             animated
@@ -156,13 +177,20 @@ export const NewAgentScreen: React.FC<NewAgentScreenProps> = ({
           />
         </div>
 
-        {/* Seletor de 17 cores em 2 linhas + 8 silhuetas */}
-        <div className="mb-6">
+        {/* Seletor completo: 8 estilos + 17 cores + 20 variações + Foto/IA */}
+        <div className="mb-6 w-full">
           <MascoteAppearancePicker
             color={color}
             shape={shape}
+            style={style}
+            variant={variant}
+            imageUrl={imageUrl}
+            agentName={nome}
             onChangeColor={setColor}
             onChangeShape={setShape}
+            onChangeStyle={setStyle}
+            onChangeVariant={setVariant}
+            onChangeImageUrl={setImageUrl}
           />
         </div>
 
@@ -245,7 +273,10 @@ export const NewAgentScreen: React.FC<NewAgentScreenProps> = ({
               onClick={() => {
                 setNome(sug.nome);
                 setPrompt(sug.prompt);
+                setStyle("classic");
                 setShape(sug.shape);
+                setVariant(sug.shape);
+                setImageUrl(null);
                 setColor(sug.color);
                 setModelo(sug.modelo);
                 setEffort(sug.effort);

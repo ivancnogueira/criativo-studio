@@ -39,7 +39,10 @@ import {
   Upload,
   Zap,
 } from "lucide-react";
-import { MascoteAvatar, getDefaultMascotForAgent } from "../../components/MascoteAvatar";
+import {
+  MascoteAvatar,
+  resolveAgentAvatarConfig,
+} from "../../components/MascoteAvatar";
 import { ProviderLogo } from "../../components/ProviderLogo";
 import {
   WORKFLOW_PORT_META,
@@ -508,7 +511,6 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
     agentes[0]?.agente_id ??
     "estrategista";
   const chosenAgent = agentes.find((a) => a.agente_id === chosenAgentId) ?? agentes[0];
-  const chosenMascot = getDefaultMascotForAgent(chosenAgentId);
 
   const outputTarget: WorkflowOutputTarget =
     node.target ??
@@ -947,8 +949,8 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
             >
               <span className="flex min-w-0 items-center gap-2">
                 <MascoteAvatar
-                  shape={(chosenAgent?.config?.avatar_shape as WorkflowNo["shape"] as any) ?? chosenMascot.shape}
-                  color={(chosenAgent?.config?.avatar_color as string) ?? chosenMascot.color}
+                  avatar={resolveAgentAvatarConfig(chosenAgent, chosenAgentId)}
+                  agentKey={chosenAgentId}
                   size={20}
                 />
                 <span className="truncate">{chosenAgent?.nome ?? chosenAgentId}</span>
@@ -961,7 +963,6 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
                 className="absolute left-0 top-full z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-white/[0.12] bg-[#212121] p-1 shadow-2xl"
               >
                 {agentes.map((ag) => {
-                  const mDef = getDefaultMascotForAgent(ag.agente_id);
                   return (
                     <button
                       key={ag.agente_id}
@@ -978,8 +979,8 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
                       className="flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-[12px] text-[#DCDCDC] hover:bg-[#2A2A2A]"
                     >
                       <MascoteAvatar
-                        shape={(ag.config?.avatar_shape as any) ?? mDef.shape}
-                        color={(ag.config?.avatar_color as string) ?? mDef.color}
+                        avatar={resolveAgentAvatarConfig(ag)}
+                        agentKey={ag.agente_id}
                         size={18}
                       />
                       <span className="truncate">{ag.nome}</span>

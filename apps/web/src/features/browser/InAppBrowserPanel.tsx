@@ -14,7 +14,10 @@ import {
   RotateCw,
   X,
 } from "lucide-react";
-import { MascoteAvatar } from "../../components/MascoteAvatar";
+import {
+  MascoteAvatar,
+  type AgentAvatarVisual,
+} from "../../components/MascoteAvatar";
 import { BrowserTeachBar } from "./BrowserTeachBar";
 
 export interface BrowserLiveFrame {
@@ -54,6 +57,7 @@ export interface InAppBrowserPanelProps {
   activeTabId: string | null;
   framesByTab: Record<string, BrowserLiveFrame>;
   agentName: string;
+  agentAvatar?: Partial<AgentAvatarVisual> | null;
   agentAvatarShape?: AvatarShape;
   agentAvatarColor?: string;
   agentWorking?: boolean;
@@ -99,6 +103,7 @@ export const InAppBrowserPanel: React.FC<InAppBrowserPanelProps> = ({
   activeTabId,
   framesByTab,
   agentName,
+  agentAvatar = null,
   agentAvatarShape = "hex",
   agentAvatarColor = "#42A0FF",
   agentWorking = false,
@@ -395,11 +400,13 @@ export const InAppBrowserPanel: React.FC<InAppBrowserPanelProps> = ({
         {/* Pill central estilo Dynamic Island com agente + Assumir / Terminei */}
         <div className="hidden sm:flex items-center gap-2.5 h-[32px] pl-2.5 pr-1.5 rounded-full bg-[#000000] border border-white/10 shadow-[0_6px_20px_rgba(0,0,0,0.65)] shrink-0">
           <MascoteAvatar
+            avatar={agentAvatar}
             shape={agentAvatarShape}
             color={agentAvatarColor}
             size={18}
             animated={agentWorking}
-            mood={agentWorking ? "working" : "idle"}
+            mood={takeoverPending ? "waiting" : agentWorking ? "working" : "idle"}
+            activity={takeoverPending ? "approval" : agentWorking ? "research" : "idle"}
           />
           <span className="text-[12px] font-medium text-[#DCDCDC] max-w-[140px] truncate">
             {agentName}
@@ -699,11 +706,13 @@ export const InAppBrowserPanel: React.FC<InAppBrowserPanelProps> = ({
               className="pointer-events-auto flex w-full max-w-[460px] items-center gap-2 rounded-full border border-white/12 bg-[#1B1B20]/95 backdrop-blur-xl p-1.5 pl-2.5 shadow-2xl"
             >
               <MascoteAvatar
+                avatar={agentAvatar}
                 shape={agentAvatarShape}
                 color={agentAvatarColor}
                 size={22}
                 animated={agentWorking}
-                mood={agentWorking ? "working" : "idle"}
+                mood={takeoverPending ? "waiting" : agentWorking ? "working" : "idle"}
+                activity={takeoverPending ? "approval" : agentWorking ? "research" : "idle"}
               />
               <input
                 type="text"

@@ -12,6 +12,7 @@ import type {
   AprendizadoConfig,
   ArquivoStudio,
   AvatarShape,
+  AvatarStyle,
   BackupModelChoice,
   BackupModelsConfig,
   BibliotecaPasta,
@@ -721,6 +722,9 @@ export const daemonApi = {
     modelo_padrao: string;
     avatar_shape: AvatarShape;
     avatar_color: string;
+    avatar_style?: AvatarStyle;
+    avatar_variant?: string;
+    avatar_image_url?: string | null;
     effort: NivelEsforco;
   }): Promise<AgenteRegistro> {
     const res = await fetch("/api/agentes", {
@@ -745,6 +749,9 @@ export const daemonApi = {
       prompt_base?: string;
       avatar_shape?: AvatarShape;
       avatar_color?: string;
+      avatar_style?: AvatarStyle;
+      avatar_variant?: string;
+      avatar_image_url?: string | null;
       backup_models?: BackupModelsConfig;
       permission_level?: PermissionLevel;
       allow_new_chat?: boolean;
@@ -768,6 +775,48 @@ export const daemonApi = {
       ? (JSON.parse(json.agente.config_json) as Record<string, unknown>)
       : {};
     return { ...json.agente, config: json.agente.config ?? cfg };
+  },
+
+  async uploadAgentAvatar(file: File): Promise<{
+    ok: boolean;
+    avatar_image_url: string;
+    caminho_relativo: string;
+    mime_type: string;
+    tamanho_bytes: number;
+  }> {
+    const dataUrl = await new Promise<string>((resolveRead, rejectRead) => {
+      const reader = new FileReader();
+      reader.onload = () => resolveRead(String(reader.result ?? ""));
+      reader.onerror = () => rejectRead(new Error("Falha ao ler imagem local."));
+      reader.readAsDataURL(file);
+    });
+    return await requestJson("/api/agentes/avatar/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        nome: file.name,
+        mime_type: file.type || "image/png",
+        conteudo_base64: dataUrl,
+      }),
+    });
+  },
+
+  async generateAgentAvatar(input: {
+    prompt: string;
+    estilo?: string;
+    nome_agente?: string;
+  }): Promise<{
+    ok: boolean;
+    avatar_image_url: string;
+    caminho_relativo: string;
+    engine?: string;
+    model?: string;
+  }> {
+    return await requestJson("/api/agentes/avatar/gerar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
   },
 
   async restoreAgentDefaults(agenteId: string): Promise<AgenteRegistro> {

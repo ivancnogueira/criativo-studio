@@ -34,6 +34,16 @@ export type AvatarShape =
   | "rounded_square"
   | "octo";
 
+export type AvatarStyle =
+  | "classic"
+  | "plush"
+  | "cartoon"
+  | "robots"
+  | "personas"
+  | "pets"
+  | "monsters"
+  | "image";
+
 export type CanalOrigem = "web" | "whatsapp" | "telegram" | "rotina_cron" | "webhook";
 
 export type StatusTarefa =
@@ -482,6 +492,9 @@ export interface AgenteConfigVisual {
   pasta?: string;
   avatar_shape?: AvatarShape;
   avatar_color?: string;
+  avatar_style?: AvatarStyle;
+  avatar_variant?: string;
+  avatar_image_url?: string | null;
   effort?: NivelEsforco;
   customizado?: boolean;
   prompt_base?: string;

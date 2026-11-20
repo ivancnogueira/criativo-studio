@@ -1,5 +1,5 @@
 import React from "react";
-import type { AvatarShape, StatusMensageria } from "@criativo/contracts";
+import type { AvatarShape, AvatarStyle, StatusMensageria } from "@criativo/contracts";
 import {
   ChevronLeft,
   ChevronRight,
@@ -12,7 +12,11 @@ import {
   Smartphone,
   X,
 } from "lucide-react";
-import { MascoteAvatar } from "./MascoteAvatar";
+import {
+  MascoteAvatar,
+  type AvatarTaskContext,
+  type MascotEyeMood,
+} from "./MascoteAvatar";
 
 export interface StudioTabItem {
   id: string;
@@ -20,8 +24,13 @@ export interface StudioTabItem {
   kind?: "agent" | "topic";
   closable?: boolean;
   working?: boolean;
+  style?: AvatarStyle;
   shape?: AvatarShape;
+  variant?: string;
   color?: string;
+  imageUrl?: string | null;
+  activity?: AvatarTaskContext | null;
+  mood?: MascotEyeMood;
 }
 
 interface DynamicIslandProps {
@@ -156,11 +165,15 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
                     />
                   ) : (
                     <MascoteAvatar
+                      style={tab.style ?? "classic"}
                       shape={tab.shape ?? "blob"}
+                      variant={tab.variant}
                       color={tab.color ?? "#38bdf8"}
+                      imageUrl={tab.imageUrl}
                       size={16}
                       animated={Boolean(tab.working)}
-                      mood={tab.working ? "working" : "idle"}
+                      mood={tab.mood ?? (tab.working ? "working" : "idle")}
+                      activity={tab.activity ?? null}
                     />
                   )}
                   <span className="truncate font-medium">{tab.titulo}</span>

@@ -22,7 +22,10 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { getDefaultMascotForAgent, MascoteAvatar } from "../../components/MascoteAvatar";
+import {
+  MascoteAvatar,
+  resolveAgentAvatarConfig,
+} from "../../components/MascoteAvatar";
 import { ApprovalBridge } from "../preview/ApprovalBridge";
 import { InstagramMobilePreview } from "../preview/InstagramMobilePreview";
 import { AgentStepsWaterfall, type AgentStepLog } from "../trace/AgentStepsWaterfall";
@@ -132,10 +135,10 @@ export const TasksSidePanel: React.FC<TasksSidePanelProps> = ({
     window.addEventListener("mouseup", onUp);
   };
 
-  const cfg = (agente?.config ?? {}) as Record<string, unknown>;
-  const fb = getDefaultMascotForAgent(agente?.agente_id ?? thread?.agente_id ?? "estrategista");
-  const avatarShape = (typeof cfg.avatar_shape === "string" ? cfg.avatar_shape : fb.shape) as AvatarShape;
-  const avatarColor = typeof cfg.avatar_color === "string" ? cfg.avatar_color : fb.color;
+  const avatarVisual = resolveAgentAvatarConfig(
+    agente,
+    agente?.agente_id ?? thread?.agente_id ?? "estrategista"
+  );
   const isRunning = thread?.estado === "executando" || tarefa?.status === "executando";
   const isArchived = Boolean(thread?.arquivada_em);
   const messages: MensagemChat[] = pagina?.mensagens ?? [];
@@ -229,10 +232,19 @@ export const TasksSidePanel: React.FC<TasksSidePanelProps> = ({
       <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-white/[0.06] bg-[#141414] px-4">
         <div className="flex min-w-0 items-center gap-2">
           <MascoteAvatar
-            shape={avatarShape}
-            color={avatarColor}
+            avatar={avatarVisual}
+            agentKey={agente?.agente_id ?? thread?.agente_id}
             size={24}
-            mood={isRunning ? "working" : "idle"}
+            mood={
+              tarefa?.status === "falha"
+                ? "failed"
+                : tarefa?.status === "aguardando_aprovacao"
+                  ? "waiting"
+                  : isRunning
+                    ? "working"
+                    : "idle"
+            }
+            activity={tarefa?.titulo ?? thread?.titulo ?? null}
           />
           {editingTitle && thread ? (
             <input

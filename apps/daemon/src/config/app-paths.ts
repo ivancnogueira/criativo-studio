@@ -186,6 +186,7 @@ export function bootstrapUserDataDirectory(paths: StudioResolvedPaths): StudioPa
     "recursos/referencias/stories",
     "recursos/personagens",
     "recursos/uploads",
+    "recursos/avatares",
     "saidas/artes",
     "saidas/carrosseis",
     "saidas/posts-individuais",
