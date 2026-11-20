@@ -107,6 +107,10 @@ import {
 } from "./studio-tools-bridge.ts";
 export { selectBalancedVisualAssets, type LabeledVisualAsset };
 import {
+  generateImageTool,
+  resolveVaultSecretCaseInsensitive,
+} from "../engine/tools/generate-image.ts";
+import {
   BackupModelsResolver,
   isRetryableQuotaOrProviderError,
   MAX_BACKUP_MODELS,
@@ -554,7 +558,7 @@ async function runTextModelWorkflowToolLoop(params: {
                 mensagem_status: evt.mensagem,
                 step: {
                   id: evt.stepId,
-                  ferramenta: "generate_image",
+                  ferramenta: toolName,
                   titulo: evt.mensagem,
                   formato: evt.formato,
                   status: evt.status,
@@ -563,7 +567,7 @@ async function runTextModelWorkflowToolLoop(params: {
             },
           });
           if (
-            toolName === "generate_image" &&
+            (toolName === "generate_image" || toolName === "generate_video") &&
             out &&
             typeof out === "object" &&
             "anexo" in out &&
@@ -923,6 +927,56 @@ interface ChatProgressReport {
   delta?: string;
 }
 
+/**
+ * Sincroniza anexos gerados pelo agente neste turno no banco (`gerado` ou `video`),
+ * garantindo exibição no chat inclusive quando criados via chamada HTTP ao MCP Bridge.
+ */
+function syncTurnGeneratedMediaAttachments(
+  db: CriativoDatabase,
+  agenteId: string,
+  turnStartedIso: string,
+  anexosGerados: AnexoChat[],
+): void {
+  try {
+    const existingIds = new Set(anexosGerados.map((a) => a.arquivo_id));
+    const existingPaths = new Set(anexosGerados.map((a) => a.caminho_relativo));
+    const rows = db.connection
+      .prepare(
+        `SELECT arquivo_id, nome_original, caminho_relativo, mime_type, tamanho_bytes, tipo_uso
+         FROM projecao_arquivos
+         WHERE agente_id = ?
+           AND tipo_uso IN ('gerado', 'video')
+           AND criado_em >= ?
+         ORDER BY criado_em ASC;`
+      )
+      .all(agenteId, turnStartedIso) as Array<{
+      arquivo_id: string;
+      nome_original: string;
+      caminho_relativo: string;
+      mime_type: string;
+      tamanho_bytes: number;
+      tipo_uso: string;
+    }>;
+
+    for (const row of rows) {
+      if (existingIds.has(row.arquivo_id) || existingPaths.has(row.caminho_relativo)) {
+        continue;
+      }
+      anexosGerados.push({
+        arquivo_id: row.arquivo_id,
+        nome: row.nome_original,
+        caminho_relativo: row.caminho_relativo,
+        url: `/api/arquivos/raw?path=${encodeURIComponent(row.caminho_relativo)}`,
+        mime_type: row.mime_type,
+        tamanho_bytes: row.tamanho_bytes,
+        tipo_uso: row.tipo_uso === "video" ? "video" : "gerado",
+      });
+    }
+  } catch {
+    // ignora caso tabela não esteja disponível em cenários mínimos
+  }
+}
+
 export async function generateAgentChatReply(
   deps: StudioRoutesDeps,
   agente: {
@@ -959,6 +1013,7 @@ export async function generateAgentChatReply(
   anexosGerados: AnexoChat[];
   usageLimitAsk?: UsageLimitAskPayload;
 }> {
+  const turnStartedIso = new Date().toISOString();
   onProgress?.({
     fase: "iniciado",
     mensagem_status: `Preparando contexto para ${agente.nome}...`,
@@ -1348,9 +1403,10 @@ export async function generateAgentChatReply(
   if (asksVisualAsset || anexos.length > 0) {
     labeledVisualAssets = selectBalancedVisualAssets(deps.db, workspaceRoot, {
       explicitAttachments: anexos,
-      maxFotos: 3,
-      maxReferencias: 2,
+      maxFotos: 6,
+      maxReferencias: 4,
       maxLogos: 1,
+      maxTotal: 14,
     });
   }
 
@@ -1359,7 +1415,7 @@ export async function generateAgentChatReply(
       ? labeledVisualAssets.map((a) => a.path)
       : anexos.map((a) => resolve(workspaceRoot, a.caminho_relativo)).filter((p) => existsSync(p));
 
-  const formatoVisualPedido = lower.includes("storie")
+  const formatoVisualPedido: "3:4" | "9:16" | "1:1" | "16:9" = lower.includes("storie")
     ? "9:16"
     : lower.includes("quadrad") || lower.includes("1:1")
       ? "1:1"
@@ -1367,13 +1423,24 @@ export async function generateAgentChatReply(
         ? "16:9"
         : "3:4";
 
-  // Se houver conta conectada e pedido visual explícito, gera arte real via gemini-3.1-flash-image
-  if (hasAntigravityAccount && asksVisualAsset) {
+  const hasGeminiImgKey = Boolean(
+    deps.vault && resolveVaultSecretCaseInsensitive(deps.vault, "gemini_api_key", "google_api_key")
+  );
+  const hasOpenAiImgKey = Boolean(
+    deps.vault && resolveVaultSecretCaseInsensitive(deps.vault, "openai_api_key")
+  );
+  const hasFalImgKey = Boolean(
+    deps.vault && resolveVaultSecretCaseInsensitive(deps.vault, "fal_api_key", "flux_api_key")
+  );
+  const hasImgApiKey = hasGeminiImgKey || hasOpenAiImgKey || hasFalImgKey;
+
+  // Se houver API Key (Nano Banana 2.1 / GPT Image 2.6 / Flux) ou conta Google/Antigravity, gera arte real
+  if ((hasAntigravityAccount || hasImgApiKey) && asksVisualAsset) {
     const tImgStart = Date.now();
     const imgStepId = `step-img-${randomUUID().slice(0, 8)}`;
     onProgress?.({
       fase: "etapa",
-      mensagem_status: `Gerando arte ${formatoVisualPedido} com suas fotos reais...`,
+      mensagem_status: `Gerando arte ${formatoVisualPedido} com ${resolvedImageDiskPaths.length} referência(s)...`,
       step: {
         id: imgStepId,
         ferramenta: "generate_image",
@@ -1383,34 +1450,92 @@ export async function generateAgentChatReply(
       },
     });
     try {
-      const imgGen = await agService.executeCodeAssistGenerate({
-        model: agSnapshot.imageGenerationModelIds[0] ?? "gemini-3.1-flash-image",
-        messages: [
-          {
-            role: "user",
-            text: `Crie uma arte profissional de Instagram (${formatoVisualPedido}) para ${onboarding.marca_nome} (${onboarding.perfil_handle}). Preserve fielmente o rosto e características da pessoa nas fotos rotuladas como [FOTO REAL DO USUÁRIO], utilizando [REFERÊNCIA DE ESTILO] somente como inspiração estética. Solicitação do usuário: ${userPrompt}. Estética editorial contemporânea, alta legibilidade e contraste, sem marcas d'água.`,
-          },
-        ],
-        imagePaths: resolvedImageDiskPaths,
-        labeledImages: labeledVisualAssets,
-        generateImage: true,
-        agentId: agente.agente_id,
-        preferredAccountId: typeof config.provider_account_id === "string" ? config.provider_account_id : null,
-      });
+      const visualPromptText = `Crie uma arte profissional de Instagram (${formatoVisualPedido}) para ${onboarding.marca_nome} (${onboarding.perfil_handle}). Preserve fielmente o rosto e características da pessoa nas fotos rotuladas como [FOTO REAL DO USUÁRIO], utilizando [REFERÊNCIA DE ESTILO] somente como inspiração estética. Solicitação do usuário: ${userPrompt}. Estética editorial contemporânea, alta legibilidade e contraste, sem marcas d'água.`;
 
-      if (imgGen.images.length > 0) {
-        const firstImg = imgGen.images[0];
-        const ext = firstImg.mimeType.includes("png") ? ".png" : firstImg.mimeType.includes("webp") ? ".webp" : ".jpg";
-        const arquivoId = `arte-${randomUUID().slice(0, 8)}`;
-        const dirArtes = resolve(workspaceRoot, "saidas", "artes");
-        mkdirSync(dirArtes, { recursive: true });
-        const fileName = `${arquivoId}${ext}`;
-        const diskPath = resolve(dirArtes, fileName);
-        const buf = Buffer.from(firstImg.dataBase64, "base64");
-        writeFileSync(diskPath, buf);
+      let generatedArtifact:
+        | {
+            arquivoId: string;
+            fileName: string;
+            relPath: string;
+            mimeType: string;
+            bufLength: number;
+            modelUsed: string;
+            providerUsed: string;
+            usage: { uncachedInput: number; cachedInput: number; output: number };
+          }
+        | null = null;
 
-        const relPath = `saidas/artes/${fileName}`;
-        const urlRaw = `/api/arquivos/raw?path=${encodeURIComponent(relPath)}`;
+      if (hasImgApiKey && deps.vault) {
+        try {
+          const dirArtes = resolve(workspaceRoot, "saidas", "artes");
+          mkdirSync(dirArtes, { recursive: true });
+          const arquivoId = `arte-${randomUUID().slice(0, 8)}`;
+          const fileName = `${arquivoId}.png`;
+          const diskPath = resolve(dirArtes, fileName);
+          const apiImgRes = await generateImageTool(
+            {
+              aspect_ratio: formatoVisualPedido,
+              prompt: visualPromptText,
+              image_paths: resolvedImageDiskPaths,
+              facial_consistency: labeledVisualAssets.some((a) => a.role === "foto_real"),
+              output_path: diskPath,
+            },
+            { vault: deps.vault }
+          );
+          const buf = readFileSync(diskPath);
+          generatedArtifact = {
+            arquivoId,
+            fileName,
+            relPath: `saidas/artes/${fileName}`,
+            mimeType: apiImgRes.mime_type,
+            bufLength: buf.length,
+            modelUsed: apiImgRes.model_used,
+            providerUsed: apiImgRes.engine_used,
+            usage: { uncachedInput: 0, cachedInput: 0, output: 1290 },
+          };
+        } catch (apiImgErr) {
+          if (!hasAntigravityAccount) {
+            throw apiImgErr;
+          }
+        }
+      }
+
+      if (!generatedArtifact && hasAntigravityAccount) {
+        const imgGen = await agService.executeCodeAssistGenerate({
+          model: agSnapshot.imageGenerationModelIds[0] ?? "gemini-3.1-flash-image",
+          messages: [{ role: "user", text: visualPromptText }],
+          imagePaths: resolvedImageDiskPaths,
+          labeledImages: labeledVisualAssets,
+          generateImage: true,
+          agentId: agente.agente_id,
+          preferredAccountId: typeof config.provider_account_id === "string" ? config.provider_account_id : null,
+        });
+
+        if (imgGen.images.length > 0) {
+          const firstImg = imgGen.images[0]!;
+          const ext = firstImg.mimeType.includes("png") ? ".png" : firstImg.mimeType.includes("webp") ? ".webp" : ".jpg";
+          const arquivoId = `arte-${randomUUID().slice(0, 8)}`;
+          const dirArtes = resolve(workspaceRoot, "saidas", "artes");
+          mkdirSync(dirArtes, { recursive: true });
+          const fileName = `${arquivoId}${ext}`;
+          const diskPath = resolve(dirArtes, fileName);
+          const buf = Buffer.from(firstImg.dataBase64, "base64");
+          writeFileSync(diskPath, buf);
+          generatedArtifact = {
+            arquivoId,
+            fileName,
+            relPath: `saidas/artes/${fileName}`,
+            mimeType: firstImg.mimeType,
+            bufLength: buf.length,
+            modelUsed: imgGen.modelUsed,
+            providerUsed: "antigravity",
+            usage: imgGen.usage,
+          };
+        }
+      }
+
+      if (generatedArtifact) {
+        const urlRaw = `/api/arquivos/raw?path=${encodeURIComponent(generatedArtifact.relPath)}`;
         const agora = new Date().toISOString();
 
         deps.db.connection
@@ -1418,15 +1543,24 @@ export async function generateAgentChatReply(
             `INSERT INTO projecao_arquivos (arquivo_id, nome_original, caminho_relativo, mime_type, tamanho_bytes, tipo_uso, agente_id, tarefa_id, criado_em)
              VALUES (?, ?, ?, ?, ?, 'gerado', ?, ?, ?);`
           )
-          .run(arquivoId, fileName, relPath, firstImg.mimeType, buf.length, agente.agente_id, tarefaCriadaId, agora);
+          .run(
+            generatedArtifact.arquivoId,
+            generatedArtifact.fileName,
+            generatedArtifact.relPath,
+            generatedArtifact.mimeType,
+            generatedArtifact.bufLength,
+            agente.agente_id,
+            tarefaCriadaId,
+            agora
+          );
 
         anexosGerados.push({
-          arquivo_id: arquivoId,
-          nome: fileName,
-          caminho_relativo: relPath,
+          arquivo_id: generatedArtifact.arquivoId,
+          nome: generatedArtifact.fileName,
+          caminho_relativo: generatedArtifact.relPath,
           url: urlRaw,
-          mime_type: firstImg.mimeType,
-          tamanho_bytes: buf.length,
+          mime_type: generatedArtifact.mimeType,
+          tamanho_bytes: generatedArtifact.bufLength,
           tipo_uso: "gerado",
         });
 
@@ -1434,17 +1568,17 @@ export async function generateAgentChatReply(
           agentId: agente.agente_id,
           sessionId,
           turnId: `${turnId}:img`,
-          provider: "antigravity",
-          model: imgGen.modelUsed,
-          uncachedInput: imgGen.usage.uncachedInput,
-          cachedInput: imgGen.usage.cachedInput,
-          output: imgGen.usage.output,
+          provider: generatedArtifact.providerUsed,
+          model: generatedArtifact.modelUsed,
+          uncachedInput: generatedArtifact.usage.uncachedInput,
+          cachedInput: generatedArtifact.usage.cachedInput,
+          output: generatedArtifact.usage.output,
         });
 
         if (tarefaCriadaId) {
           deps.queue.updateTaskStatus(tarefaCriadaId, "aguardando_aprovacao", {
             preview_url: urlRaw,
-            imagem_caminho: relPath,
+            imagem_caminho: generatedArtifact.relPath,
             titulo: userPrompt.slice(0, 80),
             formato: lower.includes("storie") ? "9:16" : "4:5",
             aprovado: false,
@@ -1468,9 +1602,9 @@ export async function generateAgentChatReply(
 
         const imgDoneStep: PassoChat = {
           id: imgStepId,
-          ferramenta: `generate_image:${imgGen.modelUsed}`,
-          titulo: `Arte real gerada (${(buf.length / 1024).toFixed(0)} KB · ${imgGen.modelUsed})`,
-          detalhes: relPath,
+          ferramenta: `generate_image:${generatedArtifact.modelUsed}`,
+          titulo: `Arte real gerada (${(generatedArtifact.bufLength / 1024).toFixed(0)} KB · ${generatedArtifact.modelUsed})`,
+          detalhes: generatedArtifact.relPath,
           formato: formatoVisualPedido,
           status: "concluido",
           duracao_ms: Date.now() - tImgStart,
@@ -2217,6 +2351,11 @@ export async function generateAgentChatReply(
     return null;
   };
 
+  const finalizeTurnAnexos = (): AnexoChat[] => {
+    syncTurnGeneratedMediaAttachments(deps.db, agente.agente_id, turnStartedIso, anexosGerados);
+    return anexosGerados;
+  };
+
   const preferredAcc =
     options?.overrideAccountId !== undefined
       ? options.overrideAccountId
@@ -2226,7 +2365,7 @@ export async function generateAgentChatReply(
 
   const primaryReplyText = await invokeModelAttempt(initialModel, preferredAcc);
   if (primaryReplyText !== null) {
-    return { markdown: primaryReplyText, steps, tarefaCriadaId, anexosGerados };
+    return { markdown: primaryReplyText, steps, tarefaCriadaId, anexosGerados: finalizeTurnAnexos() };
   }
 
   // Cascade / Ask via BackupModelsResolver quando ocorrer erro retentável (rate limit, cota, 5xx)
@@ -2263,7 +2402,7 @@ export async function generateAgentChatReply(
 
         const backupText = await invokeModelAttempt(candidate.modelo, candidate.conta_id ?? null);
         if (backupText !== null) {
-          return { markdown: backupText, steps, tarefaCriadaId, anexosGerados };
+          return { markdown: backupText, steps, tarefaCriadaId, anexosGerados: finalizeTurnAnexos() };
         }
         backupResolver.markModelCooldown(candidate.provedor, candidate.modelo);
       }
@@ -2307,7 +2446,7 @@ export async function generateAgentChatReply(
         markdown: `O modelo **${initialModel}** atingiu seu limite ou retornou indisponibilidade temporária (\`${(execState.lastExecutionError ?? "quota_exceeded").slice(0, 120)}\`). Escolha abaixo um modelo reserva para continuar sem alterar seu modelo padrão:`,
         steps,
         tarefaCriadaId,
-        anexosGerados,
+        anexosGerados: finalizeTurnAnexos(),
         usageLimitAsk,
       };
     }
@@ -2326,11 +2465,12 @@ export async function generateAgentChatReply(
       "",
       `**Estágio atual:** ${metaValidationSummary.estagio} — ${metaValidationSummary.resumo}`,
     ].join("\n");
-    return { markdown: metaReportMarkdown, steps, tarefaCriadaId, anexosGerados };
+    return { markdown: metaReportMarkdown, steps, tarefaCriadaId, anexosGerados: finalizeTurnAnexos() };
   }
 
   // 5. Resposta honesta: diferencia erro técnico em provedor conectado vs ausência real de conexão
   if (options?.channelOrigin === "whatsapp") {
+    const readyAnexos = finalizeTurnAnexos();
     const cleanErr = execState.hadConnectedRoute
       ? `Não consegui concluir a chamada em *${agente.modelo_padrao}* (${providerName}): ${(execState.lastExecutionError ?? "sem resposta do servidor").slice(0, 140)}. Tente novamente em instantes ou revise a conta em Conexões.`
       : `O modelo *${agente.modelo_padrao}* (${providerName}) ainda não está conectado no Criativo Studio. Conecte uma conta em Conexões e tente novamente.`;
@@ -2338,15 +2478,16 @@ export async function generateAgentChatReply(
       markdown: `*${agente.nome}*: ${cleanErr}`,
       steps,
       tarefaCriadaId,
-      anexosGerados,
+      anexosGerados: readyAnexos,
     };
   }
 
+  const readyAnexos = finalizeTurnAnexos();
   const statusLabel = execState.hadConnectedRoute ? "Falha na chamada" : "Não conectado";
   const detailLine = execState.hadConnectedRoute
     ? `Erro técnico ao executar **${agente.modelo_padrao}** (${providerName}): \`${execState.lastExecutionError ?? "sem resposta do servidor"}\`. Tente novamente ou reautentique sua conta em **Conexões**.`
-    : anexosGerados.length > 0
-      ? `Arte gerada e salva em \`${anexosGerados[0].caminho_relativo}\`.`
+    : readyAnexos.length > 0
+      ? `Mídia gerada e salva em \`${readyAnexos[0].caminho_relativo}\`.`
       : `Nenhum provedor conectado para o modelo **${agente.modelo_padrao}** (\`${providerName}\`). Abra **Conexões** e clique para conectar via navegador (Google, Claude ou ChatGPT), utilize modelos gratuitos do **OpenCode** ou salve uma API Key.`;
 
   const structuredFallback = [
@@ -2357,13 +2498,13 @@ export async function generateAgentChatReply(
     "| Etapa do Plano | Ação | Status |",
     "|---|---|---|",
     `| 1. Diagnóstico | Contexto de \`${skillSlug}\` (${agente.modelo_padrao}) | Pronto |`,
-    `| 2. Execução IA | ${anexosGerados.length > 0 ? `Arte gerada em \`${anexosGerados[0].caminho_relativo}\`` : execState.hadConnectedRoute ? `Falha técnica: ${(execState.lastExecutionError ?? "erro").slice(0, 70)}` : "Aguardando conta conectada ou API Key"} | ${anexosGerados.length > 0 ? "Concluído" : statusLabel} |`,
+    `| 2. Execução IA | ${readyAnexos.length > 0 ? `Mídia gerada em \`${readyAnexos[0].caminho_relativo}\`` : execState.hadConnectedRoute ? `Falha técnica: ${(execState.lastExecutionError ?? "erro").slice(0, 70)}` : "Aguardando conta conectada ou API Key"} | ${readyAnexos.length > 0 ? "Concluído" : statusLabel} |`,
     `| 3. Segurança Meta | Aprovação humana obrigatória antes da publicação | Ativo |`,
     "",
     detailLine,
   ].join("\n");
 
-  return { markdown: structuredFallback, steps, tarefaCriadaId, anexosGerados };
+  return { markdown: structuredFallback, steps, tarefaCriadaId, anexosGerados: readyAnexos };
 }
 
 /**

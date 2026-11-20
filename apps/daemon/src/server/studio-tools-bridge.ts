@@ -97,6 +97,16 @@ import type {
 } from "../engine/tools/browser-automation.ts";
 import { readVideoTool } from "../engine/tools/video-reader.ts";
 import { readImageTool } from "../engine/tools/image-reader.ts";
+import {
+  generateImageTool,
+  MAX_REFERENCES_BY_ENGINE,
+  resolveVaultSecretCaseInsensitive,
+  type ImageProviderEngine,
+} from "../engine/tools/generate-image.ts";
+import {
+  generateVideoTool,
+  MAX_VIDEO_REFERENCE_IMAGES,
+} from "../engine/tools/generate-video.ts";
 import type { ScreenCaptureBridge } from "../engine/tools/screen-capture-bridge.ts";
 import { parseBackupModelsJson } from "../engine/runner/backup-models-resolver.ts";
 import type { TranscriptionService } from "../voice/transcription-service.ts";
@@ -368,8 +378,9 @@ export interface LabeledVisualAsset extends LabeledImageInput {
 }
 
 /**
- * Seleciona ativos visuais balanceados para geração de imagem, priorizando fotos reais
- * em `recursos/fotos/` e `recursos/personagens/` antes de referências de estilo e logos.
+ * Seleciona ativos visuais para geração de imagem/vídeo.
+ * Quando o agente informa listas explícitas (`specificImages`, `specificFotos` ou `specificReferencias`),
+ * respeita exatamente a quantidade escolhida até `maxTotal` sem corte artificial em 3 fotos.
  */
 export function selectBalancedVisualAssets(
   db: CriativoDatabase,
@@ -377,22 +388,40 @@ export function selectBalancedVisualAssets(
   options: {
     explicitAttachments?: AnexoChat[];
     usarFotosReais?: boolean;
+    specificImages?: string[];
     specificFotos?: string[];
     specificReferencias?: string[];
     maxFotos?: number;
     maxReferencias?: number;
     maxLogos?: number;
+    maxTotal?: number;
   } = {}
 ): LabeledVisualAsset[] {
   const maxFotos = options.maxFotos ?? 3;
   const maxReferencias = options.maxReferencias ?? 2;
   const maxLogos = options.maxLogos ?? 1;
+  const maxTotal =
+    typeof options.maxTotal === "number" && Number.isFinite(options.maxTotal)
+      ? Math.max(0, Math.trunc(options.maxTotal))
+      : 14;
   const usarFotosReais = options.usarFotosReais !== false;
 
   const picked: LabeledVisualAsset[] = [];
   const seenAbs = new Set<string>();
 
+  const inferRoleFromRelPath = (relPath: string): LabeledImageInput["role"] => {
+    const lower = relPath.toLowerCase();
+    if (lower.includes("/fotos/") || lower.startsWith("recursos/fotos/") || lower.includes("/personagens/") || lower.startsWith("recursos/personagens/")) {
+      return "foto_real";
+    }
+    if (lower.includes("/logos/") || lower.startsWith("recursos/logos/")) {
+      return "logo";
+    }
+    return "referencia_estilo";
+  };
+
   const pushAsset = (relRaw: string, role: LabeledImageInput["role"]) => {
+    if (picked.length >= maxTotal) return;
     const cleanRel = relRaw.replaceAll("\\", "/").replace(/^\/+/, "");
     if (!cleanRel || cleanRel.includes("..")) return;
     const abs = resolve(workspaceRoot, cleanRel);
@@ -412,15 +441,21 @@ export function selectBalancedVisualAssets(
     }
   }
 
+  for (const rel of options.specificImages ?? []) {
+    pushAsset(rel, inferRoleFromRelPath(rel));
+  }
+  for (const rel of options.specificFotos ?? []) {
+    pushAsset(rel, "foto_real");
+  }
+  for (const rel of options.specificReferencias ?? []) {
+    pushAsset(rel, "referencia_estilo");
+  }
+
   if (process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1") {
     return picked;
   }
 
   if (usarFotosReais && maxFotos > 0) {
-    for (const rel of options.specificFotos ?? []) {
-      if (picked.filter((p) => p.role === "foto_real").length >= maxFotos) break;
-      pushAsset(rel, "foto_real");
-    }
     const fotoRows = db.connection
       .prepare(
         `SELECT caminho_relativo FROM projecao_arquivos
@@ -434,20 +469,17 @@ export function selectBalancedVisualAssets(
            WHEN caminho_relativo LIKE 'recursos/personagens/%' THEN 1
            ELSE 2
          END, criado_em DESC
-         LIMIT 12;`
+         LIMIT 24;`
       )
       .all() as Array<{ caminho_relativo: string }>;
     for (const row of fotoRows) {
+      if (picked.length >= maxTotal) break;
       if (picked.filter((p) => p.role === "foto_real").length >= maxFotos) break;
       pushAsset(row.caminho_relativo, "foto_real");
     }
   }
 
   if (maxReferencias > 0) {
-    for (const rel of options.specificReferencias ?? []) {
-      if (picked.filter((p) => p.role === "referencia_estilo").length >= maxReferencias) break;
-      pushAsset(rel, "referencia_estilo");
-    }
     const refRows = db.connection
       .prepare(
         `SELECT caminho_relativo FROM projecao_arquivos
@@ -456,10 +488,11 @@ export function selectBalancedVisualAssets(
            AND mime_type LIKE 'image/%'
            AND mime_type NOT LIKE '%svg%'
          ORDER BY criado_em DESC
-         LIMIT 10;`
+         LIMIT 24;`
       )
       .all() as Array<{ caminho_relativo: string }>;
     for (const row of refRows) {
+      if (picked.length >= maxTotal) break;
       if (picked.filter((p) => p.role === "referencia_estilo").length >= maxReferencias) break;
       pushAsset(row.caminho_relativo, "referencia_estilo");
     }
@@ -473,10 +506,11 @@ export function selectBalancedVisualAssets(
            AND mime_type LIKE 'image/%'
            AND mime_type NOT LIKE '%svg%'
          ORDER BY criado_em DESC
-         LIMIT 4;`
+         LIMIT 6;`
       )
       .all() as Array<{ caminho_relativo: string }>;
     for (const row of logoRows) {
+      if (picked.length >= maxTotal) break;
       if (picked.filter((p) => p.role === "logo").length >= maxLogos) break;
       pushAsset(row.caminho_relativo, "logo");
     }
@@ -703,8 +737,10 @@ export function buildStudioLiveContext(deps: {
 
   lines.push(
     "",
-    "### Navegador CDP, Mídia, Sidebar & Showcase",
+    "### Navegador CDP, Mídia, Geração de Imagens/Vídeos, Sidebar & Showcase",
     "- Use `criativo_browser` (action: open, list_tabs, navigate, snapshot, click, type, fill_fields, press, scroll, screenshot, request_takeover, submit_secret, close_tab) para operar o Chromium real.",
+    "- Use `generate_image` para artes reais (Gemini Nano Banana 2.1 até 14 referências, GPT Image 2.6/2.5 até 16 referências via API Key ou Antigravity); você decide quantas e quais referências enviar via `imagens_referencia`.",
+    "- Use `generate_video` para gerar vídeos MP4 com áudio nativo sincronizado via Gemini Omni 1.2 Flash (3 a 15s, até 6 imagens de referência via `imagens_referencia`).",
     "- Use `read_video(url, frames?)`, `read_image(path)` e `capture_screen(purpose)` para inspeção visual; `list_sections`/`assign_agent_section` para Sidebar e `list_sites`/`publish_site` para Showcase.",
   );
 
@@ -1088,7 +1124,7 @@ export const PHASE10_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "generate_image",
     description:
-      "Gera uma imagem ou arte visual real (post 3:4, stories 9:16, carrossel ou anúncio), priorizando automaticamente fotos reais do usuário em recursos/fotos/ e usando referências apenas para estética, salvando em saidas/artes/.",
+      "Gera uma imagem ou arte visual real via Gemini Nano Banana 2.1 (até 14 referências), OpenAI GPT Image 2.6/2.5 (até 16 referências via /images/edits), Flux ou Antigravity. Você decide quantas e quais referências enviar via `imagens_referencia` (ou `fotos_especificas`/`referencias_especificas`).",
     parameters: {
       type: "object",
       properties: {
@@ -1101,9 +1137,33 @@ export const PHASE10_TOOL_DEFINITIONS: ToolDefinition[] = [
           enum: ["3:4", "9:16", "1:1", "16:9"],
           description: "Proporção desejada: '3:4' (post feed), '9:16' (stories), '1:1' ou '16:9'.",
         },
+        motor: {
+          type: "string",
+          enum: ["auto", "gemini", "openai", "antigravity", "flux"],
+          description: "Motor de geração preferido. Padrão 'auto' prioriza API Keys configuradas (Nano Banana 2.1 / GPT Image 2.6) ou conta Antigravity.",
+        },
+        modelo: {
+          type: "string",
+          description: "Modelo explícito opcional (ex.: 'gemini-nano-banana-2.1', 'gpt-image-2.6-sunburst', 'gpt-image-2.5-sunburst').",
+        },
+        resolucao: {
+          type: "string",
+          enum: ["1K", "2K", "4K"],
+          description: "Resolução desejada no Gemini Nano Banana 2.1 (padrão '2K').",
+        },
+        qualidade: {
+          type: "string",
+          enum: ["low", "medium", "high"],
+          description: "Qualidade desejada no GPT Image (padrão 'high').",
+        },
         usar_fotos_reais: {
           type: "boolean",
-          description: "Se true (padrão), prioriza fotos reais de recursos/fotos/ preservando rosto e identidade.",
+          description: "Se false, evita incluir fotos reais automaticamente quando nenhuma lista explícita for passada.",
+        },
+        imagens_referencia: {
+          type: "array",
+          items: { type: "string" },
+          description: "Lista livre escolhida pelo agente com caminhos relativos de fotos, referências estéticas e/ou logos (até 14 no Gemini ou 16 no GPT Image).",
         },
         fotos_especificas: {
           type: "array",
@@ -1115,6 +1175,72 @@ export const PHASE10_TOOL_DEFINITIONS: ToolDefinition[] = [
           items: { type: "string" },
           description: "Caminhos relativos opcionais de referências de estilo em recursos/referencias/.",
         },
+        max_fotos: {
+          type: "number",
+          description: "Quantidade máxima opcional de fotos reais para busca automática quando nenhuma lista explícita for informada.",
+        },
+        max_referencias: {
+          type: "number",
+          description: "Quantidade máxima opcional de referências estéticas para busca automática.",
+        },
+        max_logos: {
+          type: "number",
+          description: "Quantidade máxima opcional de logos para busca automática.",
+        },
+      },
+      required: ["prompt"],
+    },
+  },
+  {
+    name: "generate_video",
+    description:
+      "Gera um vídeo MP4 curto com áudio nativo sincronizado usando Gemini Omni 1.2 Flash (`gemini-omni-1.2-flash`), com duração de 3 a 15s e até 6 imagens de referência à escolha do agente, salvando em saidas/videos/.",
+    parameters: {
+      type: "object",
+      properties: {
+        prompt: {
+          type: "string",
+          description: "Descrição cinematográfica detalhada da cena, movimento de câmera, ação, falas/áudio ambiente e ritmo visual.",
+        },
+        formato: {
+          type: "string",
+          enum: ["9:16", "16:9", "1:1"],
+          description: "Proporção do vídeo: '9:16' (Reels/Shorts/Stories), '16:9' (landscape) ou '1:1'. Padrão '9:16'.",
+        },
+        duracao_segundos: {
+          type: "number",
+          description: "Duração do clipe em segundos inteiros (mínimo 3, máximo 15, padrão 8).",
+        },
+        resolucao: {
+          type: "string",
+          enum: ["360p", "720p", "1080p", "4k"],
+          description: "Resolução de saída desejada (padrão '720p').",
+        },
+        modelo: {
+          type: "string",
+          description: "Modelo opcional (padrão 'gemini-omni-1.2-flash').",
+        },
+        usar_fotos_reais: {
+          type: "boolean",
+          description: "Se true (padrão quando não passar imagens_referencia), inclui fotos reais da marca para consistência.",
+        },
+        imagens_referencia: {
+          type: "array",
+          items: { type: "string" },
+          description: "Lista livre escolhida pelo agente com até 6 imagens de referência (personagem, produto, cenário).",
+        },
+        fotos_especificas: {
+          type: "array",
+          items: { type: "string" },
+          description: "Caminhos relativos opcionais de fotos específicas em recursos/fotos/.",
+        },
+        referencias_especificas: {
+          type: "array",
+          items: { type: "string" },
+          description: "Caminhos relativos opcionais de referências visuais em recursos/referencias/.",
+        },
+        max_fotos: { type: "number" },
+        max_referencias: { type: "number" },
       },
       required: ["prompt"],
     },
@@ -1853,104 +1979,373 @@ export async function executeStudioExtensionTool(
     }
 
     case "generate_image": {
-      if (!deps.providerConnection) {
-        throw new Error("ProviderConnectionService indisponível para gerar imagem.");
-      }
       const promptImg = readStringArg(args, "prompt", "descricao", "briefing");
       if (!promptImg) {
         throw new Error("Informe 'prompt' para gerar a imagem.");
       }
       const rawFmt = readStringArg(args, "formato", "aspect_ratio") ?? "3:4";
-      const formato =
+      const formato: "3:4" | "9:16" | "1:1" | "16:9" =
         rawFmt === "9:16" || rawFmt === "3:4" || rawFmt === "1:1" || rawFmt === "16:9"
           ? rawFmt
           : "3:4";
+
+      const rawMotor = (readStringArg(args, "motor", "engine") ?? "auto").toLowerCase();
+      const modeloSolicitado = readStringArg(args, "modelo", "model");
+      const rawRes = readStringArg(args, "resolucao", "resolution");
+      const resolucao = rawRes === "1K" || rawRes === "2K" || rawRes === "4K" ? rawRes : undefined;
+      const rawQual = readStringArg(args, "qualidade", "quality");
+      const qualidade = rawQual === "low" || rawQual === "medium" || rawQual === "high" ? rawQual : undefined;
+
       const usarFotosReais = args.usar_fotos_reais !== false;
+      const specificImages = readStringArrayArg(args, "imagens_referencia", "image_paths");
       const specificFotos = readStringArrayArg(args, "fotos_especificas", "fotos");
       const specificReferencias = readStringArrayArg(args, "referencias_especificas", "referencias");
+      const explicitAny =
+        specificImages.length > 0 || specificFotos.length > 0 || specificReferencias.length > 0;
 
-      const agService = deps.providerConnection.getAntigravityService();
-      const agSnapshot = await agService.getLiveSnapshot(false);
-      const hasAccount = agSnapshot.contas.some((c) => c.estado === "conectado" || Boolean(c.token_valido));
-      if (!hasAccount) {
-        throw new Error("Nenhuma conta Google/Antigravity conectada para gerar imagem.");
+      const maxFotos =
+        typeof args.max_fotos === "number" && Number.isFinite(args.max_fotos)
+          ? Math.max(0, Math.trunc(args.max_fotos))
+          : explicitAny
+            ? 0
+            : usarFotosReais
+              ? 6
+              : 0;
+      const maxReferencias =
+        typeof args.max_referencias === "number" && Number.isFinite(args.max_referencias)
+          ? Math.max(0, Math.trunc(args.max_referencias))
+          : explicitAny
+            ? 0
+            : 4;
+      const maxLogos =
+        typeof args.max_logos === "number" && Number.isFinite(args.max_logos)
+          ? Math.max(0, Math.trunc(args.max_logos))
+          : explicitAny
+            ? 0
+            : 1;
+
+      const hasGeminiKey = Boolean(
+        deps.vault && resolveVaultSecretCaseInsensitive(deps.vault, "gemini_api_key", "google_api_key")
+      );
+      const hasOpenAiKey = Boolean(
+        deps.vault && resolveVaultSecretCaseInsensitive(deps.vault, "openai_api_key")
+      );
+      const hasFalKey = Boolean(
+        deps.vault && resolveVaultSecretCaseInsensitive(deps.vault, "fal_api_key", "flux_api_key")
+      );
+      const agService = deps.providerConnection?.getAntigravityService() ?? null;
+      const agSnapshot = agService ? await agService.getLiveSnapshot(false).catch(() => null) : null;
+      const hasAntigravityAccount = Boolean(
+        agSnapshot?.contas?.some((c) => c.estado === "conectado" || Boolean(c.token_valido))
+      );
+
+      type ImageCandidateEngine = ImageProviderEngine | "antigravity";
+      const engineQueue: ImageCandidateEngine[] = [];
+
+      if (
+        rawMotor === "gemini" ||
+        rawMotor === "openai" ||
+        rawMotor === "flux" ||
+        rawMotor === "antigravity"
+      ) {
+        if (rawMotor === "gemini" && !hasGeminiKey) {
+          throw new Error("GEMINI_API_KEY ausente no Cofre para gerar via Gemini Nano Banana 2.1.");
+        }
+        if (rawMotor === "openai" && !hasOpenAiKey) {
+          throw new Error("OPENAI_API_KEY ausente no Cofre para gerar via OpenAI GPT Image.");
+        }
+        if (rawMotor === "flux" && !hasFalKey) {
+          throw new Error("FAL_API_KEY / FLUX_API_KEY ausente no Cofre para gerar via Flux.");
+        }
+        if (rawMotor === "antigravity" && (!agService || !hasAntigravityAccount)) {
+          throw new Error("Nenhuma conta Google/Antigravity conectada para gerar imagem.");
+        }
+        engineQueue.push(rawMotor);
+      } else {
+        if (hasGeminiKey) engineQueue.push("gemini");
+        if (hasAntigravityAccount && agService) {
+          engineQueue.push("antigravity");
+          if (hasOpenAiKey) engineQueue.push("openai");
+        } else if (hasOpenAiKey) {
+          engineQueue.push("openai");
+        }
+        if (hasFalKey) engineQueue.push("flux");
       }
 
+      if (engineQueue.length === 0) {
+        throw new Error(
+          "Nenhum motor de geração de imagem configurado. Salve uma Gemini API Key (Nano Banana 2.1), OpenAI API Key (GPT Image 2.6/2.5), Flux Key no Cofre ou conecte uma conta Google/Antigravity em Conexões."
+        );
+      }
+
+      const maxTotalRefs = engineQueue[0] === "openai" ? MAX_REFERENCES_BY_ENGINE.openai : MAX_REFERENCES_BY_ENGINE.gemini;
       const assets = selectBalancedVisualAssets(deps.db, workspaceRoot, {
         usarFotosReais,
+        specificImages,
         specificFotos,
         specificReferencias,
+        maxFotos,
+        maxReferencias,
+        maxLogos,
+        maxTotal: maxTotalRefs,
       });
 
       const imgStepId = `step-img-${randomUUID().slice(0, 8)}`;
       deps.onImageProgress?.({
         status: "executando",
         formato,
-        mensagem: `Gerando arte ${formato} com ${assets.filter((a) => a.role === "foto_real").length} foto(s) real(is)...`,
+        mensagem: `Gerando arte ${formato} com ${assets.length} referência(s)...`,
         stepId: imgStepId,
       });
 
       try {
-        const onboarding = deps.providerConnection.getOnboardingState();
-        const imgGen = await agService.executeCodeAssistGenerate({
-          model: agSnapshot.imageGenerationModelIds[0] ?? "gemini-3.1-flash-image",
-          messages: [
-            {
-              role: "user",
-              text: `Crie uma arte profissional de Instagram (${formato}) para ${onboarding.marca_nome} (${onboarding.perfil_handle}). Preserve fielmente as fotos reais do usuário rotuladas como [FOTO REAL DO USUÁRIO]. Instrução visual: ${promptImg}`,
-            },
-          ],
-          imagePaths: assets.map((a) => a.path),
-          labeledImages: assets,
-          generateImage: true,
-          agentId: deps.agenteId,
-        });
-
-        if (imgGen.images.length === 0) {
-          deps.onImageProgress?.({
-            status: "erro",
-            formato,
-            mensagem: "O gerador não retornou imagem neste turno.",
-            stepId: imgStepId,
-          });
-          throw new Error("O modelo de imagem não retornou arquivo visual neste turno.");
-        }
-
-        const firstImg = imgGen.images[0];
-        const ext = firstImg.mimeType.includes("png") ? ".png" : firstImg.mimeType.includes("webp") ? ".webp" : ".jpg";
-        const arquivoId = `arte-${randomUUID().slice(0, 8)}`;
+        const onboarding = deps.providerConnection?.getOnboardingState() ?? {
+          marca_nome: "[NOME_DA_MARCA]",
+          perfil_handle: "[@SEU_PERFIL]",
+        };
         const dirArtes = resolve(workspaceRoot, "saidas", "artes");
         mkdirSync(dirArtes, { recursive: true });
-        const fileName = `${arquivoId}${ext}`;
-        const diskPath = resolve(dirArtes, fileName);
-        const buf = Buffer.from(firstImg.dataBase64, "base64");
-        writeFileSync(diskPath, buf);
+        const arquivoId = `arte-${randomUUID().slice(0, 8)}`;
+        const hasFacialRef = assets.some((a) => a.role === "foto_real");
+        const composedPrompt = `Crie uma arte profissional de Instagram (${formato}) para ${onboarding.marca_nome} (${onboarding.perfil_handle}). Preserve fielmente as fotos reais do usuário rotuladas como [FOTO REAL DO USUÁRIO]. Instrução visual: ${promptImg}`;
 
-        const relPath = `saidas/artes/${fileName}`;
+        let lastErr: unknown = null;
+        for (const candidateEngine of engineQueue) {
+          try {
+            let fileName = `${arquivoId}.png`;
+            let diskPath = resolve(dirArtes, fileName);
+            let mimeType = "image/png";
+            let modelUsed = "";
+            let referencesLoaded = assets.length;
+
+            if (candidateEngine === "antigravity" && agService && agSnapshot) {
+              const imgGen = await agService.executeCodeAssistGenerate({
+                model: modeloSolicitado || agSnapshot.imageGenerationModelIds[0] || "gemini-3.1-flash-image",
+                messages: [{ role: "user", text: composedPrompt }],
+                imagePaths: assets.map((a) => a.path),
+                labeledImages: assets,
+                generateImage: true,
+                agentId: deps.agenteId,
+              });
+              if (imgGen.images.length === 0) {
+                throw new Error("O modelo de imagem Antigravity não retornou arquivo visual neste turno.");
+              }
+              const firstImg = imgGen.images[0]!;
+              mimeType = firstImg.mimeType;
+              const ext = mimeType.includes("png") ? ".png" : mimeType.includes("webp") ? ".webp" : ".jpg";
+              fileName = `${arquivoId}${ext}`;
+              diskPath = resolve(dirArtes, fileName);
+              writeFileSync(diskPath, Buffer.from(firstImg.dataBase64, "base64"));
+              modelUsed = imgGen.modelUsed;
+            } else if (deps.vault && candidateEngine !== "antigravity") {
+              const imgRes = await generateImageTool(
+                {
+                  aspect_ratio: formato,
+                  prompt: composedPrompt,
+                  image_paths: assets.map((a) => a.path),
+                  facial_consistency: hasFacialRef || usarFotosReais,
+                  output_path: diskPath,
+                  engine: candidateEngine,
+                  model: modeloSolicitado,
+                  resolution: resolucao,
+                  quality: qualidade,
+                },
+                { vault: deps.vault, fetchImpl: deps.fetchImpl }
+              );
+              mimeType = imgRes.mime_type;
+              modelUsed = imgRes.model_used;
+              referencesLoaded = imgRes.references_loaded;
+            } else {
+              continue;
+            }
+
+            const buf = readFileSync(diskPath);
+            const relPath = `saidas/artes/${fileName}`;
+            const urlRaw = `/api/arquivos/raw?path=${encodeURIComponent(relPath)}`;
+            const agora = new Date().toISOString();
+            deps.db.connection
+              .prepare(
+                `INSERT INTO projecao_arquivos (arquivo_id, nome_original, caminho_relativo, mime_type, tamanho_bytes, tipo_uso, agente_id, tarefa_id, criado_em)
+                 VALUES (?, ?, ?, ?, ?, 'gerado', ?, NULL, ?);`
+              )
+              .run(arquivoId, fileName, relPath, mimeType, buf.length, deps.agenteId ?? null, agora);
+
+            const anexo: AnexoChat = {
+              arquivo_id: arquivoId,
+              nome: fileName,
+              caminho_relativo: relPath,
+              url: urlRaw,
+              mime_type: mimeType,
+              tamanho_bytes: buf.length,
+              tipo_uso: "gerado",
+            };
+
+            deps.onImageProgress?.({
+              status: "concluido",
+              formato,
+              mensagem: `Arte gerada (${(buf.length / 1024).toFixed(0)} KB · ${modelUsed})`,
+              stepId: imgStepId,
+            });
+
+            return {
+              ok: true,
+              anexo,
+              caminho_relativo: relPath,
+              url: urlRaw,
+              formato,
+              engine_used: candidateEngine,
+              modelUsed,
+              references_loaded: referencesLoaded,
+              tamanho_bytes: buf.length,
+              fotos_utilizadas: assets.filter((a) => a.role === "foto_real").map((a) => a.relPath),
+              referencias_utilizadas: assets.filter((a) => a.role === "referencia_estilo").map((a) => a.relPath),
+            };
+          } catch (attemptErr) {
+            lastErr = attemptErr;
+            if (rawMotor !== "auto") throw attemptErr;
+          }
+        }
+
+        throw lastErr instanceof Error ? lastErr : new Error("Falha na geração visual.");
+      } catch (err) {
+        deps.onImageProgress?.({
+          status: "erro",
+          formato,
+          mensagem: err instanceof Error ? err.message.slice(0, 90) : "Falha na geração visual.",
+          stepId: imgStepId,
+        });
+        throw err;
+      }
+    }
+
+    case "generate_video": {
+      if (!deps.vault) {
+        throw new Error("VaultService indisponível para gerar vídeo com Gemini Omni 1.2 Flash.");
+      }
+      const promptVid = readStringArg(args, "prompt", "descricao", "briefing");
+      if (!promptVid) {
+        throw new Error("Informe 'prompt' para gerar o vídeo.");
+      }
+      const rawFmt = readStringArg(args, "formato", "aspect_ratio") ?? "9:16";
+      const formato: "9:16" | "16:9" | "1:1" =
+        rawFmt === "16:9" || rawFmt === "1:1" || rawFmt === "9:16" ? rawFmt : "9:16";
+      const duracaoSeg =
+        typeof args.duracao_segundos === "number" && Number.isFinite(args.duracao_segundos)
+          ? Math.round(args.duracao_segundos)
+          : typeof args.duration_seconds === "number" && Number.isFinite(args.duration_seconds)
+            ? Math.round(args.duration_seconds)
+            : 8;
+      const rawRes = readStringArg(args, "resolucao", "resolution");
+      const resolucao =
+        rawRes === "360p" || rawRes === "720p" || rawRes === "1080p" || rawRes === "4k"
+          ? rawRes
+          : "720p";
+      const modeloSolicitado = readStringArg(args, "modelo", "model");
+
+      const specificImages = readStringArrayArg(args, "imagens_referencia", "image_paths");
+      const specificFotos = readStringArrayArg(args, "fotos_especificas", "fotos");
+      const specificReferencias = readStringArrayArg(args, "referencias_especificas", "referencias");
+      const explicitAny =
+        specificImages.length > 0 || specificFotos.length > 0 || specificReferencias.length > 0;
+      const usarFotosReais = args.usar_fotos_reais !== false;
+
+      const maxFotos =
+        typeof args.max_fotos === "number" && Number.isFinite(args.max_fotos)
+          ? Math.max(0, Math.trunc(args.max_fotos))
+          : explicitAny
+            ? 0
+            : usarFotosReais
+              ? 3
+              : 0;
+      const maxReferencias =
+        typeof args.max_referencias === "number" && Number.isFinite(args.max_referencias)
+          ? Math.max(0, Math.trunc(args.max_referencias))
+          : explicitAny
+            ? 0
+            : 2;
+
+      const assets =
+        !explicitAny && args.usar_fotos_reais === false && maxReferencias === 0
+          ? []
+          : selectBalancedVisualAssets(deps.db, workspaceRoot, {
+              usarFotosReais,
+              specificImages,
+              specificFotos,
+              specificReferencias,
+              maxFotos,
+              maxReferencias,
+              maxLogos: 0,
+              maxTotal: MAX_VIDEO_REFERENCE_IMAGES,
+            });
+
+      const vidStepId = `step-vid-${randomUUID().slice(0, 8)}`;
+      deps.onImageProgress?.({
+        status: "executando",
+        formato,
+        mensagem: `Gerando vídeo ${formato} (${duracaoSeg}s · ${resolucao}) com ${assets.length} referência(s)...`,
+        stepId: vidStepId,
+      });
+
+      try {
+        const onboarding = deps.providerConnection?.getOnboardingState() ?? {
+          marca_nome: "[NOME_DA_MARCA]",
+          perfil_handle: "[@SEU_PERFIL]",
+        };
+        const dirVideos = resolve(workspaceRoot, "saidas", "videos");
+        mkdirSync(dirVideos, { recursive: true });
+        const arquivoId = `video-${randomUUID().slice(0, 8)}`;
+        const fileName = `${arquivoId}.mp4`;
+        const diskPath = resolve(dirVideos, fileName);
+
+        const vidRes = await generateVideoTool(
+          {
+            prompt: `Vídeo criativo para ${onboarding.marca_nome} (${onboarding.perfil_handle}). ${promptVid}`,
+            aspect_ratio: formato,
+            duration_seconds: duracaoSeg,
+            resolution: resolucao,
+            image_paths: assets.map((a) => a.path),
+            output_path: diskPath,
+            model: modeloSolicitado,
+          },
+          {
+            vault: deps.vault,
+            fetchImpl: deps.fetchImpl,
+            onProgress: (msg) => {
+              deps.onImageProgress?.({
+                status: "executando",
+                formato,
+                mensagem: msg,
+                stepId: vidStepId,
+              });
+            },
+          }
+        );
+
+        const relPath = `saidas/videos/${fileName}`;
         const urlRaw = `/api/arquivos/raw?path=${encodeURIComponent(relPath)}`;
         const agora = new Date().toISOString();
         deps.db.connection
           .prepare(
             `INSERT INTO projecao_arquivos (arquivo_id, nome_original, caminho_relativo, mime_type, tamanho_bytes, tipo_uso, agente_id, tarefa_id, criado_em)
-             VALUES (?, ?, ?, ?, ?, 'gerado', ?, NULL, ?);`
+             VALUES (?, ?, ?, 'video/mp4', ?, 'video', ?, NULL, ?);`
           )
-          .run(arquivoId, fileName, relPath, firstImg.mimeType, buf.length, deps.agenteId ?? null, agora);
+          .run(arquivoId, fileName, relPath, vidRes.size_bytes, deps.agenteId ?? null, agora);
 
         const anexo: AnexoChat = {
           arquivo_id: arquivoId,
           nome: fileName,
           caminho_relativo: relPath,
           url: urlRaw,
-          mime_type: firstImg.mimeType,
-          tamanho_bytes: buf.length,
-          tipo_uso: "gerado",
+          mime_type: "video/mp4",
+          tamanho_bytes: vidRes.size_bytes,
+          tipo_uso: "video",
         };
 
         deps.onImageProgress?.({
           status: "concluido",
           formato,
-          mensagem: `Arte gerada (${(buf.length / 1024).toFixed(0)} KB · ${imgGen.modelUsed})`,
-          stepId: imgStepId,
+          mensagem: `Vídeo gerado (${(vidRes.size_bytes / 1024).toFixed(0)} KB · ${vidRes.duration_seconds}s · ${vidRes.model_used})`,
+          stepId: vidStepId,
         });
 
         return {
@@ -1959,17 +2354,19 @@ export async function executeStudioExtensionTool(
           caminho_relativo: relPath,
           url: urlRaw,
           formato,
-          modelUsed: imgGen.modelUsed,
-          tamanho_bytes: buf.length,
-          fotos_utilizadas: assets.filter((a) => a.role === "foto_real").map((a) => a.relPath),
-          referencias_utilizadas: assets.filter((a) => a.role === "referencia_estilo").map((a) => a.relPath),
+          duracao_segundos: vidRes.duration_seconds,
+          resolucao: vidRes.resolution,
+          modelUsed: vidRes.model_used,
+          references_loaded: vidRes.references_loaded,
+          tamanho_bytes: vidRes.size_bytes,
+          interaction_id: vidRes.interaction_id,
         };
       } catch (err) {
         deps.onImageProgress?.({
           status: "erro",
           formato,
-          mensagem: err instanceof Error ? err.message.slice(0, 90) : "Falha na geração visual.",
-          stepId: imgStepId,
+          mensagem: err instanceof Error ? err.message.slice(0, 90) : "Falha na geração de vídeo.",
+          stepId: vidStepId,
         });
         throw err;
       }

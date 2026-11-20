@@ -91,6 +91,7 @@ const META_TOOLS = new Set([
 
 const MEDIA_TOOLS = new Set([
   "generate_image",
+  "generate_video",
   "read_video",
   "read_image",
   "crop_margem_segura",
@@ -237,7 +238,7 @@ const META_INTENT_RE =
   /\b(meta|instagram|insta|graph\s*api|insights|m[eé]trica|m[eé]tricas|alcance|engajamento|seguidores|publicar|publica[cç][aã]o|postar|token\s+meta|conta\s+instagram)\b/i;
 
 const MEDIA_INTENT_RE =
-  /\b(imagem|imagens|arte|artes|foto|fotos|carrossel|carross[eé]is|slide|slides|post|posts|storie|stories|story|reel|reels|v[ií]deo|v[ií]deos|render|remotion|banner|criativo|criativos|capa|thumb|thumbnail|margem\s+segura)\b/i;
+  /\b(imagem|imagens|arte|artes|foto|fotos|carrossel|carross[eé]is|slide|slides|post|posts|storie|stories|story|reel|reels|v[ií]deo|v[ií]deos|render|remotion|banner|criativo|criativos|capa|thumb|thumbnail|margem\s+segura|omniflash|omni|clipe|clipes|animar|anima[cç][aã]o)\b/i;
 
 const IMAGE_GENERATION_OR_VISUAL_EDIT_RE =
   /\b(crie|criar|gere|gerar|fa[cç]a|fazer|produza|produzir|monte|montar|desenhe|desenhar|ilustre|edite|editar|refa[cç]a|ajuste|ajustar|banner|capa|imagem|imagens|arte|artes|carrossel|post|storie|stories|criativo|criativos|an[uú]ncio)\b/i;

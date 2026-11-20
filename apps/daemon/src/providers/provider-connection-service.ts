@@ -48,6 +48,8 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogMeta[] = [
     fallbackModelos: [
       { id: "gemini-3.8-flash-high", rotulo: "Gemini 3.8 Flash", padrao: true, suporta_imagem: true, esforcos_suportados: ["baixo", "medio", "alto"] },
       { id: "gemini-2.5-pro", rotulo: "Gemini 2.5 Pro", suporta_imagem: true, esforcos_suportados: ["baixo", "medio", "alto"] },
+      { id: "gemini-nano-banana-2.1", rotulo: "Gemini Nano Banana 2.1 (Imagem)", suporta_imagem: true },
+      { id: "gemini-omni-1.2-flash", rotulo: "Gemini Omni 1.2 Flash (Vídeo + Áudio)", suporta_imagem: true },
       { id: "gemini-3.1-flash-image", rotulo: "Gemini 3.1 Flash Image (Nano Banana)", suporta_imagem: true },
     ],
   },
@@ -76,7 +78,8 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogMeta[] = [
       { id: "gpt-5.4", rotulo: "GPT-5.4 (Codex)", padrao: true, suporta_imagem: true, esforcos_suportados: ["baixo", "medio", "alto"] },
       { id: "gpt-4o", rotulo: "GPT-4o", suporta_imagem: true, esforcos_suportados: ["baixo", "medio", "alto"] },
       { id: "o3-mini", rotulo: "o3-mini (Raciocínio)", esforcos_suportados: ["baixo", "medio", "alto"] },
-      { id: "gpt-image-1", rotulo: "GPT Image 2.5", suporta_imagem: true },
+      { id: "gpt-image-2.6-sunburst", rotulo: "GPT Image 2.6 Sunburst", suporta_imagem: true },
+      { id: "gpt-image-2.5-sunburst", rotulo: "GPT Image 2.5 Sunburst", suporta_imagem: true },
     ],
   },
   {

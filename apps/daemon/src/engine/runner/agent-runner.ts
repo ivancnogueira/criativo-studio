@@ -57,6 +57,7 @@ import {
   isRetryableQuotaOrProviderError,
 } from "./backup-models-resolver.ts";
 import { generateImageTool, type GenerateImageParams } from "../tools/generate-image.ts";
+import { generateVideoTool, type GenerateVideoParams } from "../tools/generate-video.ts";
 import { metaPublishTool, type MetaPublishParams } from "../tools/meta-publish.ts";
 import { executeRemotionRender, type RemotionRenderParams } from "../tools/remotion-bridge.ts";
 import { processImageMarginsAndCrop, type TargetAspect } from "../tools/sharp-pipeline.ts";
@@ -134,11 +135,11 @@ const NATIVE_TOOLS_SCHEMA: ToolDefinition[] = [
   {
     name: "generate_image",
     description:
-      "Dispara a geração de imagem por IA usando Imagen 3 / Gemini / DALL-E / Flux com fotos e referências de entrada",
+      "Dispara a geração de imagem por IA usando Gemini Nano Banana 2.1, OpenAI GPT Image 2.6/2.5 ou Flux com quantas referências você decidir enviar",
     parameters: {
       type: "object",
       properties: {
-        aspect_ratio: { type: "string", enum: ["3:4", "9:16", "1:1"] },
+        aspect_ratio: { type: "string", enum: ["3:4", "9:16", "1:1", "16:9"] },
         prompt: {
           type: "string",
           description:
@@ -148,16 +149,42 @@ const NATIVE_TOOLS_SCHEMA: ToolDefinition[] = [
           type: "array",
           items: { type: "string" },
           description:
-            "Caminhos locais para referências visuais, foto real do especialista e logo da marca",
+            "Caminhos locais para quantas referências visuais desejar (fotos reais, referências estéticas e logo da marca)",
         },
         facial_consistency: {
           type: "boolean",
           description:
             "Garante a preservação biométrica do rosto do sujeito de image_paths",
         },
+        engine: { type: "string", enum: ["gemini", "openai", "flux"] },
+        model: { type: "string" },
+        resolution: { type: "string", enum: ["1K", "2K", "4K"] },
+        quality: { type: "string", enum: ["low", "medium", "high"] },
         output_path: { type: "string" },
       },
       required: ["aspect_ratio", "prompt", "output_path"],
+    },
+  },
+  {
+    name: "generate_video",
+    description:
+      "Gera vídeo MP4 com áudio nativo sincronizado via Gemini Omni 1.2 Flash (3 a 15s, até 6 imagens de referência)",
+    parameters: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "Direção de cena, movimento de câmera, ação e áudio/fala desejada" },
+        aspect_ratio: { type: "string", enum: ["9:16", "16:9", "1:1"] },
+        duration_seconds: { type: "number", description: "Duração em segundos (3 a 15)" },
+        resolution: { type: "string", enum: ["360p", "720p", "1080p", "4k"] },
+        image_paths: {
+          type: "array",
+          items: { type: "string" },
+          description: "Caminhos locais de até 6 imagens de referência para consistência",
+        },
+        model: { type: "string" },
+        output_path: { type: "string" },
+      },
+      required: ["prompt", "output_path"],
     },
   },
   {
@@ -560,6 +587,24 @@ export class AgentRunner {
         });
       }
       const res = await generateImageTool(args, { vault: this.vault });
+      context.generatedArtifacts.push(res.output_path);
+      return res;
+    }
+
+    if (call.name === "generate_video") {
+      const args = call.arguments as unknown as GenerateVideoParams;
+      const governance = readAgentGovernance(this.db, context.agenteId);
+      const effectiveRoot = this.workspaceRoot ?? process.cwd();
+      if (args.output_path) {
+        assertAgentPermissionForPath({
+          rawPath: args.output_path,
+          workspaceRoot: effectiveRoot,
+          permissionLevel: governance.permissionLevel,
+          agenteId: context.agenteId,
+          operation: "write",
+        });
+      }
+      const res = await generateVideoTool(args, { vault: this.vault });
       context.generatedArtifacts.push(res.output_path);
       return res;
     }
