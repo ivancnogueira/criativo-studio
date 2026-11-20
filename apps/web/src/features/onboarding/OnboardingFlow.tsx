@@ -207,6 +207,11 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
 
   const handleChooseFree = async () => {
     setProviderModeChoice("gratuito");
+    const openCodeReady = provedores.some((p) => p.provedor === "opencode" && p.conectado);
+    if (!openCodeReady) {
+      setStatusNote("Preparando OpenCode gratuito...");
+      void onConnectProvider("opencode", "").catch(() => {});
+    }
     await handleFinishStudio("gratuito");
   };
 
@@ -315,14 +320,27 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
 
   const handleSaveProvider = async (provedor: ProviderName, key?: string) => {
     setBusyProvider(provedor);
-    setStatusNote(null);
+    setStatusNote(
+      provedor === "opencode" && !key
+        ? "Baixando OpenCode gratuito..."
+        : null
+    );
     setErrorNote(null);
     try {
       await onConnectProvider(provedor, key);
       setSelectedProvider(provedor);
       setEditingKeyFor(null);
       setApiKeyDraft("");
-      setStatusNote(`Provedor ${provedor.toUpperCase()} conectado com segurança no Cofre.`);
+      setStatusNote(
+        provedor === "opencode" && !key
+          ? "OpenCode instalado e modelos gratuitos prontos!"
+          : `Provedor ${provedor.toUpperCase()} conectado com segurança no Cofre.`
+      );
+    } catch (err) {
+      setStatusNote(null);
+      setErrorNote(
+        err instanceof Error ? err.message : `Não foi possível conectar ${provedor}.`
+      );
     } finally {
       setBusyProvider(null);
     }
@@ -418,7 +436,7 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
                 <div className="text-[12px] text-[#979797]">
                   {opencodeFreeCount > 0
                     ? `Sem assinatura externa · OpenCode (${opencodeFreeCount} modelos gratuitos prontos).`
-                    : "Sem assinatura externa · OpenCode ou Ollama local."}
+                    : "Sem assinatura externa · OpenCode (instalação automática gratuita)."}
                 </div>
               </div>
               <ChevronRight className="h-4 w-4 text-[#6A6A6A]" />
@@ -726,6 +744,7 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
                       </button>
                       <button
                         type="button"
+                        disabled={busyProvider === prov.provedor}
                         onClick={() => {
                           setSelectedProvider(prov.provedor);
                           if (prov.provedor === "grok") {
@@ -733,12 +752,23 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
                           } else if (prov.conectado) {
                             setStatusNote(`${prov.rotulo} selecionado como provedor inicial.`);
                           } else {
-                            void handleSaveProvider(prov.provedor);
+                            void handleSaveProvider(
+                              prov.provedor,
+                              prov.provedor === "opencode" ? "" : undefined
+                            );
                           }
                         }}
-                        className="rounded-full bg-[#242424] hover:bg-[#2A2A2A] border border-white/10 px-3 py-1 text-[11.5px] font-medium text-white"
+                        className="rounded-full bg-[#242424] hover:bg-[#2A2A2A] disabled:opacity-60 border border-white/10 px-3 py-1 text-[11.5px] font-medium text-white"
                       >
-                        {prov.conectado ? "Usar" : prov.provedor === "grok" ? "API Key" : "Verificar"}
+                        {prov.conectado
+                          ? "Usar"
+                          : prov.provedor === "grok"
+                            ? "API Key"
+                            : prov.provedor === "opencode"
+                              ? busyProvider === "opencode"
+                                ? "Instalando..."
+                                : "Instalar grátis"
+                              : "Verificar"}
                       </button>
                     </div>
                     {isEditingExtra && (

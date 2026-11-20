@@ -68,6 +68,11 @@ import {
 } from "lucide-react";
 import { DynamicIsland, type StudioTabItem } from "./components/DynamicIsland";
 import { getDefaultMascotForAgent, MascoteAvatar } from "./components/MascoteAvatar";
+import {
+  resolveInitialSplashStageFromSearch,
+  StudioSplashPreloader,
+  type SplashInitialStage,
+} from "./components/StudioSplashPreloader";
 import { Sidebar } from "./components/Sidebar";
 import { SplitResizeHandle } from "./components/ui/SplitResizeHandle";
 import { WorkspaceRail, type StudioNavSection } from "./components/WorkspaceRail";
@@ -229,6 +234,22 @@ function mergeUniqueMessages(
 
 export function App() {
   const [bootLoading, setBootLoading] = useState(true);
+  const [splashStage, setSplashStage] = useState<SplashInitialStage>(() =>
+    typeof window !== "undefined"
+      ? resolveInitialSplashStageFromSearch(window.location.search)
+      : "scout"
+  );
+  const [splashDismissed, setSplashDismissed] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("fromSplash") || url.searchParams.has("splashElapsed")) {
+      url.searchParams.delete("fromSplash");
+      url.searchParams.delete("splashElapsed");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+  }, []);
   const [onboarding, setOnboarding] = useState<OnboardingEstado | null>(null);
   const [activeSection, setActiveSection] = useState<StudioNavSection>("agentes");
   const [centerMode, setCenterMode] = useState<AgentCenterMode>({
@@ -420,6 +441,13 @@ export function App() {
   const [showcaseSites, setShowcaseSites] = useState<ShowcaseSiteSummary[]>([]);
   const [liveVoiceActive, setLiveVoiceActive] = useState(false);
   const [licenseStatus, setLicenseStatus] = useState<LicenseActivationStatus | null>(null);
+  const isAppBooting = bootLoading || Boolean(licenseStatus?.valid && !onboarding);
+  useEffect(() => {
+    if (isAppBooting && splashDismissed) {
+      setSplashStage("jumping");
+      setSplashDismissed(false);
+    }
+  }, [isAppBooting, splashDismissed]);
   const [servers, setServers] = useState<StudioServerRecord[]>([]);
   const [activeServerId, setActiveServerIdState] = useState<string>(() => getActiveServerId());
   const [serverQuota, setServerQuota] = useState<ServerQuotaSummary | null>(null);
@@ -2715,10 +2743,19 @@ export function App() {
     []
   );
 
-  if (bootLoading || (licenseStatus?.valid && !onboarding)) {
+  const renderSplashOverlay = () =>
+    !splashDismissed ? (
+      <StudioSplashPreloader
+        loading={isAppBooting}
+        initialStage={splashStage}
+        onRevealComplete={() => setSplashDismissed(true)}
+      />
+    ) : null;
+
+  if (isAppBooting) {
     return (
-      <div className="min-h-screen w-full bg-[#141414] flex items-center justify-center text-[#979797] text-[13px]">
-        Iniciando Criativo AI Studio...
+      <div className="min-h-screen w-full bg-[#0D0D0D]">
+        {renderSplashOverlay()}
       </div>
     );
   }
@@ -2726,120 +2763,127 @@ export function App() {
   // Gatekeeper de Licença Comercial (Fase 16)
   if (licenseStatus && !licenseStatus.valid) {
     return (
-      <LicenseActivationGate
-        status={licenseStatus}
-        onActivate={async (payload) => {
-          const next = await daemonApi.ativarLicenca(payload);
-          if (next.valid) {
-            setBootLoading(true);
-            setLicenseStatus(next);
-            try {
-              await hydrateAll();
-            } finally {
-              setBootLoading(false);
+      <>
+        <LicenseActivationGate
+          status={licenseStatus}
+          onActivate={async (payload) => {
+            const next = await daemonApi.ativarLicenca(payload);
+            if (next.valid) {
+              setBootLoading(true);
+              setLicenseStatus(next);
+              try {
+                await hydrateAll();
+              } finally {
+                setBootLoading(false);
+              }
+            } else {
+              setLicenseStatus(next);
             }
-          } else {
-            setLicenseStatus(next);
-          }
-          return next;
-        }}
-        onDeactivateDevice={async (payload) => {
-          const res = await daemonApi.desvincularDispositivoLicenca(payload);
-          if (res.status) setLicenseStatus(res.status);
-          return res;
-        }}
-        onRefreshStatus={async () => {
-          const next = await daemonApi.sincronizarLicenca();
-          if (next.valid) {
-            setBootLoading(true);
-            setLicenseStatus(next);
-            try {
-              await hydrateAll();
-            } finally {
-              setBootLoading(false);
+            return next;
+          }}
+          onDeactivateDevice={async (payload) => {
+            const res = await daemonApi.desvincularDispositivoLicenca(payload);
+            if (res.status) setLicenseStatus(res.status);
+            return res;
+          }}
+          onRefreshStatus={async () => {
+            const next = await daemonApi.sincronizarLicenca();
+            if (next.valid) {
+              setBootLoading(true);
+              setLicenseStatus(next);
+              try {
+                await hydrateAll();
+              } finally {
+                setBootLoading(false);
+              }
+            } else {
+              setLicenseStatus(next);
             }
-          } else {
-            setLicenseStatus(next);
-          }
-        }}
-      />
+          }}
+        />
+        {renderSplashOverlay()}
+      </>
     );
   }
 
   // Etapa de Onboarding híbrido 4 etapas (com opções puláveis em marca/canais)
   if (onboarding && !onboarding.onboarding_concluido) {
     return (
-      <OnboardingFlow
-        initialState={onboarding}
-        provedores={provedores}
-        unlockedAgentsCount={
-          licenseStatus?.unlocked_agents_count ??
-          agentes.filter(
-            (a) =>
-              a.agente_id !== "assistente_setup" &&
-              (a.config as Record<string, unknown>)?.upgrade_desbloqueado !== false
-          ).length
-        }
-        onConnectProvider={async (prov, key) => {
-          await daemonApi.connectProvider(prov, key);
-          setProvedores(await daemonApi.listProvidersStatus(false));
-        }}
-        onConnectProviderViaBrowser={handleConnectViaBrowser}
-        onCancelProviderBrowserSignIn={handleCancelBrowserSignIn}
-        pendingAuthUrl={pendingAuthLink}
-        onUploadCategorizedFile={async (file, categoria) => {
-          const res = await daemonApi.uploadFileCategorized(file, categoria);
-          setArquivos(await daemonApi.listFiles());
-          if (res.onboarding) setOnboarding(res.onboarding);
-          return res;
-        }}
-        onSaveBrandIdentity={async (patch) => {
-          await daemonApi.saveBrandIdentity(patch);
-        }}
-        onTestInstagram={async (payload) => {
-          const saved = await daemonApi.connectLojaApp("instagram", {
-            flowId: "instagram-vault-keys",
-            kind: "key",
-            contaRotulo: payload.contaRotulo?.trim() || "Principal",
-            fields: {
-              IG_USER_ID: payload.igUserId.trim(),
-              IG_ACCESS_TOKEN: payload.accessToken.trim(),
-            },
-          });
-          return {
-            ok: Boolean(saved.validationReport?.ok ?? saved.nativeAccount?.testado_ok),
-            resumo:
-              saved.validationReport?.resumo ??
-              (saved.nativeAccount?.ultimo_erro || "Credenciais Meta salvas no Cofre."),
-            username: saved.nativeAccount?.perfil_conectado?.username ?? null,
-          };
-        }}
-        onComplete={async (patch) => {
-          if (patch.marca_nome || patch.perfil_handle) {
-            await daemonApi.saveBrandIdentity({
-              marca_nome: patch.marca_nome,
-              perfil_handle: patch.perfil_handle,
-            });
+      <>
+        <OnboardingFlow
+          initialState={onboarding}
+          provedores={provedores}
+          unlockedAgentsCount={
+            licenseStatus?.unlocked_agents_count ??
+            agentes.filter(
+              (a) =>
+                a.agente_id !== "assistente_setup" &&
+                (a.config as Record<string, unknown>)?.upgrade_desbloqueado !== false
+            ).length
           }
-          const updated = await daemonApi.updateOnboarding(patch);
-          setOnboarding(updated);
-          const [provList, usageSnap, agList, filesList] = await Promise.all([
-            daemonApi.listProvidersStatus(false),
-            daemonApi.getProvidersUsage(),
-            daemonApi.listAgents(),
-            daemonApi.listFiles(),
-          ]);
-          setProvedores(provList);
-          setUso(usageSnap);
-          setAgentes(agList);
-          setArquivos(filesList);
-        }}
-      />
+          onConnectProvider={async (prov, key) => {
+            await daemonApi.connectProvider(prov, key);
+            setProvedores(await daemonApi.listProvidersStatus(false));
+          }}
+          onConnectProviderViaBrowser={handleConnectViaBrowser}
+          onCancelProviderBrowserSignIn={handleCancelBrowserSignIn}
+          pendingAuthUrl={pendingAuthLink}
+          onUploadCategorizedFile={async (file, categoria) => {
+            const res = await daemonApi.uploadFileCategorized(file, categoria);
+            setArquivos(await daemonApi.listFiles());
+            if (res.onboarding) setOnboarding(res.onboarding);
+            return res;
+          }}
+          onSaveBrandIdentity={async (patch) => {
+            await daemonApi.saveBrandIdentity(patch);
+          }}
+          onTestInstagram={async (payload) => {
+            const saved = await daemonApi.connectLojaApp("instagram", {
+              flowId: "instagram-vault-keys",
+              kind: "key",
+              contaRotulo: payload.contaRotulo?.trim() || "Principal",
+              fields: {
+                IG_USER_ID: payload.igUserId.trim(),
+                IG_ACCESS_TOKEN: payload.accessToken.trim(),
+              },
+            });
+            return {
+              ok: Boolean(saved.validationReport?.ok ?? saved.nativeAccount?.testado_ok),
+              resumo:
+                saved.validationReport?.resumo ??
+                (saved.nativeAccount?.ultimo_erro || "Credenciais Meta salvas no Cofre."),
+              username: saved.nativeAccount?.perfil_conectado?.username ?? null,
+            };
+          }}
+          onComplete={async (patch) => {
+            if (patch.marca_nome || patch.perfil_handle) {
+              await daemonApi.saveBrandIdentity({
+                marca_nome: patch.marca_nome,
+                perfil_handle: patch.perfil_handle,
+              });
+            }
+            const updated = await daemonApi.updateOnboarding(patch);
+            setOnboarding(updated);
+            const [provList, usageSnap, agList, filesList] = await Promise.all([
+              daemonApi.listProvidersStatus(false),
+              daemonApi.getProvidersUsage(),
+              daemonApi.listAgents(),
+              daemonApi.listFiles(),
+            ]);
+            setProvedores(provList);
+            setUso(usageSnap);
+            setAgentes(agList);
+            setArquivos(filesList);
+          }}
+        />
+        {renderSplashOverlay()}
+      </>
     );
   }
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-[#0D0D0D] text-white flex">
+    <>
+      <div className="h-screen w-screen overflow-hidden bg-[#0D0D0D] text-white flex">
       {/* Trilho estreito à esquerda (52px) */}
       <WorkspaceRail
         activeSection={activeSection}
@@ -4758,6 +4802,8 @@ export function App() {
           await handleSwitchServer(nextActiveId);
         }}
       />
-    </div>
+      </div>
+      {renderSplashOverlay()}
+    </>
   );
 }

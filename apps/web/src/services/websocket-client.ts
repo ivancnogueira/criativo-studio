@@ -539,7 +539,13 @@ export const daemonApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ provedor, api_key: apiKey }),
     });
-    const json = (await res.json()) as { provedor: ProvedorStatusInfo };
+    const json = (await res.json().catch(() => ({}))) as {
+      provedor?: ProvedorStatusInfo;
+      erro?: string;
+    };
+    if (!res.ok || !json.provedor) {
+      throw new Error(json.erro || `Falha ao conectar provedor (${res.status}).`);
+    }
     return json.provedor;
   },
 

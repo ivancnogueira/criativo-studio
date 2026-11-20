@@ -146,6 +146,7 @@ export const ProvidersCatalogView: React.FC<ProvidersCatalogViewProps> = ({
   const [manualLabel, setManualLabel] = useState("");
   const [manualToken, setManualToken] = useState("");
   const [refreshingRuntime, setRefreshingRuntime] = useState(false);
+  const [installingOpenCode, setInstallingOpenCode] = useState(false);
 
   const activeDefaultInfo = useMemo(
     () => provedores.find((p) => p.provedor === defaultProvider) ?? provedores[0],
@@ -507,7 +508,9 @@ export const ProvidersCatalogView: React.FC<ProvidersCatalogViewProps> = ({
                   <div>
                     <div className="text-[13px] font-medium text-white">Não conectado</div>
                     <p className="text-[11.5px] text-[#8E8E93] mt-0.5">
-                      Autentique sua conta diretamente no navegador em pasta isolada do Studio.
+                      {detailProvider.provedor === "gemini"
+                        ? "Autentique sua conta Google no navegador (requer Antigravity CLI) ou cole uma Gemini API Key abaixo sem instalar nada."
+                        : "Autentique sua conta diretamente no navegador em pasta isolada do Studio."}
                     </p>
                   </div>
                   <button
@@ -530,20 +533,48 @@ export const ProvidersCatalogView: React.FC<ProvidersCatalogViewProps> = ({
                     {detailProvider.conectado ? "Conectado" : "Não conectado"}
                   </div>
                   <p className="text-[11.5px] text-[#8E8E93] mt-0.5">
-                    {detailProvider.subtitulo}
+                    {detailProvider.provedor === "opencode" && !detailProvider.conectado
+                      ? "Instalação automática gratuita (sem conta e sem precisar de Node.js)."
+                      : detailProvider.subtitulo}
                   </p>
                 </div>
-                {onRefreshProviders && (
+                {detailProvider.provedor === "opencode" && !detailProvider.conectado ? (
                   <button
                     type="button"
+                    disabled={installingOpenCode}
                     onClick={async () => {
-                      await onRefreshProviders();
-                      onShowToast(`Status de ${detailProvider.rotulo} atualizado.`);
+                      setInstallingOpenCode(true);
+                      try {
+                        await onConnectApiKey("opencode", "");
+                        await onRefreshProviders?.();
+                        onShowToast("OpenCode instalado e modelos gratuitos prontos!");
+                      } catch (err) {
+                        onShowToast(
+                          err instanceof Error
+                            ? err.message
+                            : "Não foi possível instalar o OpenCode automaticamente."
+                        );
+                      } finally {
+                        setInstallingOpenCode(false);
+                      }
                     }}
-                    className="rounded-xl bg-[#242428] hover:bg-[#303036] border border-white/[0.08] px-3.5 py-1.5 text-[12px] font-medium text-white"
+                    className="rounded-xl bg-[#F0F0F0] hover:bg-white disabled:opacity-60 text-[#141414] px-3.5 py-1.5 text-[12px] font-semibold transition-colors shrink-0"
                   >
-                    Reconectar
+                    {installingOpenCode ? "Instalando..." : "Instalar OpenCode (Grátis)"}
                   </button>
+                ) : (
+                  onRefreshProviders && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await onRefreshProviders();
+                        onShowToast(`Status de ${detailProvider.rotulo} atualizado.`);
+                      }}
+                      className="rounded-xl bg-[#242428] hover:bg-[#303036] border border-white/[0.08] px-3.5 py-1.5 text-[12px] font-medium text-white"
+                    >
+                      Reconectar
+                    </button>
+                  )
                 )}
               </div>
             )}

@@ -928,6 +928,18 @@ export class ProviderConnectionService {
     );
   }
 
+  public async ensureOpenCodeRuntimeInBackground(): Promise<{
+    installed: boolean;
+    connected: boolean;
+  }> {
+    const existing = resolveManagedProviderRuntime("opencode");
+    if (existing.executable) {
+      return { installed: false, connected: true };
+    }
+    const inst = await this.opencodeLive.ensureInstalled();
+    return { installed: inst.installedNow, connected: inst.ok };
+  }
+
   public async connectProvider(
     provedor: ProviderName,
     options?:
@@ -945,6 +957,15 @@ export class ProviderConnectionService {
     const opts = typeof options === "string" ? { apiKey: options } : (options ?? {});
     const cleanKey = typeof opts.apiKey === "string" ? opts.apiKey.trim() : "";
 
+    if (provedor === "opencode" && !resolveManagedProviderRuntime("opencode").executable) {
+      const inst = await this.opencodeLive.ensureInstalled();
+      if (!inst.ok && cleanKey.length === 0) {
+        throw new Error(
+          inst.error || "Não foi possível instalar o runtime gratuito do OpenCode automaticamente."
+        );
+      }
+    }
+
     if (cleanKey.length > 0 && meta.vaultKeys[0]) {
       this.vault.setSecret(meta.vaultKeys[0], cleanKey);
     }
@@ -956,7 +977,7 @@ export class ProviderConnectionService {
     }
     apiKeyModelsCache.delete(provedor);
 
-    const list = await this.getProvidersStatus(false);
+    const list = await this.getProvidersStatus(provedor === "opencode");
     return list.find((item) => item.provedor === provedor)!;
   }
 

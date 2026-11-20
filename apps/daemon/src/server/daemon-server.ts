@@ -2289,6 +2289,29 @@ function tryServeWebStatic(
       void drainAllPendingLanes();
     }, options.workerPollMs ?? 500);
     workerTimer.unref?.();
+
+    const skipBgAutoInstall =
+      process.env.NODE_ENV === "test" ||
+      process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1" ||
+      process.env.CRIATIVO_DISABLE_AUTO_INSTALL === "1" ||
+      process.execArgv.includes("--test") ||
+      process.argv.includes("--test");
+    if (!skipBgAutoInstall) {
+      void providerConnection
+        .ensureOpenCodeRuntimeInBackground()
+        .then((res) => {
+          if (res.installed && res.connected) {
+            wsHub.broadcast("provider:updated", {
+              provedor: "opencode",
+              conectado: true,
+              modo: "cli",
+            });
+          }
+        })
+        .catch((err) => {
+          console.warn("[Daemon] Auto-instalação em background do OpenCode ignorada:", err);
+        });
+    }
   }
 
   const shouldAutoBootWhatsApp =

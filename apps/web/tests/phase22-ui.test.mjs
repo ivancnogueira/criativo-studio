@@ -307,4 +307,115 @@ describe("Fase 22 — Navegador Integrado, Dock Flutuante Desktop, WhatsApp Sync
     assert.match(appSrc, /onCreateQuickThread=\{\(\) => void handleCreateNewTopic\(\)\}/);
     assert.doesNotMatch(appSrc, /onCreateQuickThread=\{\(\) => setActiveSection\("tarefas"\)\}/);
   });
+
+  it("5. (SPLASH22-01) StudioSplashPreloader renderiza os 7 mascotes sem texto de boot e sincroniza com splash Electron", async () => {
+    const {
+      StudioSplashPreloader,
+      resolveInitialSplashStageFromSearch,
+    } = await vite.ssrLoadModule("/src/components/StudioSplashPreloader.tsx");
+
+    assert.equal(resolveInitialSplashStageFromSearch(""), "scout");
+    assert.equal(resolveInitialSplashStageFromSearch("?fromSplash=1&splashElapsed=800"), "expand");
+    assert.equal(resolveInitialSplashStageFromSearch("?fromSplash=1&splashElapsed=2400"), "jumping");
+
+    const html = renderToStaticMarkup(
+      React.createElement(StudioSplashPreloader, {
+        loading: true,
+        initialStage: "jumping",
+      })
+    );
+
+    assert.match(html, /data-testid="studio-splash-preloader"/);
+    assert.match(html, /role="status"/);
+    assert.match(html, /data-splash-stage="jumping"/);
+    for (const slot of [-3, -2, -1, 0, 1, 2, 3]) {
+      assert.match(html, new RegExp(`data-splash-mascot="${slot}"`));
+    }
+    assert.doesNotMatch(html, /Iniciando Criativo/i);
+    assert.doesNotMatch(html, /Iniciando sua equipe/i);
+
+    const appSrc = readFileSync(join(webRoot, "src", "App.tsx"), "utf8");
+    assert.match(appSrc, /StudioSplashPreloader/);
+    assert.doesNotMatch(appSrc, /Iniciando Criativo AI Studio/);
+
+    const desktopMainSrc = readFileSync(
+      join(webRoot, "..", "desktop", "src", "main.ts"),
+      "utf8"
+    );
+    assert.match(desktopMainSrc, /fromSplash=1&splashElapsed=/);
+    assert.doesNotMatch(desktopMainSrc, /Iniciando sua equipe de Agentes Especialistas/);
+  });
+
+  it("6. (OC22-INSTALL) ProvidersCatalogView exibe botão gratuito de instalação do OpenCode e orientação clara no Gemini", async () => {
+    const { ProvidersCatalogView } = await vite.ssrLoadModule(
+      "/src/features/pages/ProvidersCatalogView.tsx"
+    );
+
+    const baseProviders = [
+      {
+        provedor: "opencode",
+        rotulo: "OpenCode",
+        subtitulo: "Modelos gratuitos ativos neste computador (API Key opcional)",
+        conectado: false,
+        cli_detectado: false,
+        cli_versao: null,
+        cli_executavel: null,
+        vault_configurado: false,
+        modo_conexao: "nenhum",
+        modelos: [],
+        contas: [],
+        pool: null,
+        usado_por_agentes: [],
+        reporta_cota: false,
+      },
+      {
+        provedor: "gemini",
+        rotulo: "Gemini",
+        subtitulo: "Conta Google OAuth ou Gemini API Key",
+        conectado: false,
+        cli_detectado: false,
+        cli_versao: null,
+        cli_executavel: null,
+        vault_configurado: false,
+        modo_conexao: "nenhum",
+        modelos: [],
+        contas: [],
+        pool: null,
+        usado_por_agentes: [],
+        reporta_cota: false,
+      },
+    ];
+
+    const ocHtml = renderToStaticMarkup(
+      React.createElement(ProvidersCatalogView, {
+        provedores: baseProviders,
+        defaultProvider: "opencode",
+        initialDetailProviderId: "opencode",
+        authorizingProvider: null,
+        authError: null,
+        onStartBrowserSignIn: async () => {},
+        onConnectApiKey: async () => {},
+        onDisconnectProvider: async () => {},
+        onShowToast: () => {},
+      })
+    );
+    assert.match(ocHtml, /Instalar OpenCode \(Grátis\)/);
+    assert.match(ocHtml, /sem precisar de Node\.js/);
+
+    const gemHtml = renderToStaticMarkup(
+      React.createElement(ProvidersCatalogView, {
+        provedores: baseProviders,
+        defaultProvider: "gemini",
+        initialDetailProviderId: "gemini",
+        authorizingProvider: null,
+        authError: null,
+        onStartBrowserSignIn: async () => {},
+        onConnectApiKey: async () => {},
+        onDisconnectProvider: async () => {},
+        onShowToast: () => {},
+      })
+    );
+    assert.match(gemHtml, /Antigravity CLI/);
+    assert.match(gemHtml, /Gemini API Key/);
+  });
 });

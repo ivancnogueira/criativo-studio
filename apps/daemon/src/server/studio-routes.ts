@@ -2956,19 +2956,25 @@ export async function tryHandleStudioRoute(
       sendJson(res, 400, { erro: "Campo obrigatório: 'provedor'." });
       return true;
     }
-    const status = await providerConnection.connectProvider(body.provedor as ProviderName, {
-      apiKey: typeof body.api_key === "string" ? body.api_key : undefined,
-      modo:
-        typeof body.modo === "string"
-          ? (body.modo as "cli" | "api_key" | "local" | "assinatura")
-          : undefined,
-    });
-    wsHub.broadcast("provider:updated", {
-      provedor: status.provedor,
-      conectado: status.conectado,
-      modo: status.modo_conexao,
-    });
-    sendJson(res, 200, { provedor: status });
+    try {
+      const status = await providerConnection.connectProvider(body.provedor as ProviderName, {
+        apiKey: typeof body.api_key === "string" ? body.api_key : undefined,
+        modo:
+          typeof body.modo === "string"
+            ? (body.modo as "cli" | "api_key" | "local" | "assinatura")
+            : undefined,
+      });
+      wsHub.broadcast("provider:updated", {
+        provedor: status.provedor,
+        conectado: status.conectado,
+        modo: status.modo_conexao,
+      });
+      sendJson(res, 200, { provedor: status });
+    } catch (err) {
+      sendJson(res, 400, {
+        erro: err instanceof Error ? err.message : "Falha ao conectar provedor.",
+      });
+    }
     return true;
   }
 

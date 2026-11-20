@@ -5,7 +5,11 @@ import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import type { ModeloProvedorInfo } from "@criativo/contracts";
 import type { VaultService } from "../vault/vault-service.ts";
-import { resolveManagedProviderRuntime, spawnProviderProcess } from "./provider-runtime-resolver.ts";
+import {
+  ensureProviderRuntimeInstalled,
+  resolveManagedProviderRuntime,
+  spawnProviderProcess,
+} from "./provider-runtime-resolver.ts";
 
 const execFileAsync = promisify(execFile);
 const MODELS_CACHE_TTL_MS = 120_000;
@@ -438,6 +442,30 @@ export class OpenCodeLiveService {
     return this.worker;
   }
 
+  public async ensureInstalled(timeoutMs = 180_000): Promise<{
+    ok: boolean;
+    executable: string | null;
+    version: string | null;
+    installedNow: boolean;
+    error?: string;
+  }> {
+    const res = await ensureProviderRuntimeInstalled("opencode", {
+      appDataDir: this.appDataDir,
+      timeoutMs,
+    });
+    if (res.executable) {
+      this.modelsCache = null;
+      await this.getLiveCatalog(true).catch(() => null);
+    }
+    return {
+      ok: Boolean(res.executable),
+      executable: res.executable,
+      version: res.version,
+      installedNow: res.installedNow,
+      ...(res.error ? { error: res.error } : {}),
+    };
+  }
+
   public async executePrompt(input: {
     modelId: string;
     systemPrompt?: string;
@@ -452,9 +480,13 @@ export class OpenCodeLiveService {
     modelUsed: string;
     usage: { uncachedInput: number; cachedInput: number; output: number };
   }> {
-    const { executable } = resolveOpenCodeCliExecutable(this.appDataDir);
+    let { executable } = resolveOpenCodeCliExecutable(this.appDataDir);
     if (!executable) {
-      throw new Error("OpenCode CLI não encontrado neste computador.");
+      const ens = await this.ensureInstalled();
+      executable = ens.executable;
+      if (!executable) {
+        throw new Error(ens.error || "OpenCode CLI não encontrado neste computador.");
+      }
     }
 
     const sandboxCwd = resolve(this.workspaceCwd, "dados", "opencode-sandbox");
