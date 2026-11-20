@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { StatusTarefa, TarefaRegistro } from "@criativo/contracts";
+import type { AnexoChat, StatusTarefa, TarefaRegistro } from "@criativo/contracts";
 import { CriativoDatabase, initializeDatabase } from "../database/client.ts";
 import { FifoQueueManager } from "../queue/fifo-queue.ts";
 import { recoverInterruptedTasks } from "../queue/task-recovery.ts";
@@ -15,6 +15,7 @@ import {
   WhatsAppOrchestrator,
   WhatsAppSenderRules,
   WhatsAppSessionManager,
+  type AuthorizedWhatsAppMessageEvent,
   type WhatsAppApprovalNotifier,
   type SocketFactory,
 } from "@criativo/whatsapp";
@@ -48,7 +49,7 @@ import {
 import { ProviderConnectionService } from "../providers/provider-connection-service.ts";
 import { TranscriptionService } from "../voice/transcription-service.ts";
 import { ControlSocketServer } from "./control-socket.ts";
-import { importOpenBotTelemetryIfAvailable } from "./analytics-skills-service.ts";
+import { importExternalTelemetryIfAvailable } from "./analytics-skills-service.ts";
 import { tryHandleRoutineRoute } from "./routine-routes.ts";
 import { executeAgentConversationTurn, tryHandleStudioRoute } from "./studio-routes.ts";
 import { getBrandIdentity, syncBrandPlaceholdersInDatabase } from "./brand-onboarding-service.ts";
@@ -377,8 +378,8 @@ export async function createDaemonServer(
 
   const providers = new ProviderRegistry({ vault });
   seedDefaultStudioExperience(db);
-  if (process.env.CRIATIVO_IMPORT_OPENBOT_DB === "1") {
-    importOpenBotTelemetryIfAvailable(db);
+  if (process.env.CRIATIVO_IMPORT_EXTERNAL_DB === "1") {
+    importExternalTelemetryIfAvailable(db);
   }
   const providerConnection = new ProviderConnectionService({
     db,
@@ -472,6 +473,10 @@ export async function createDaemonServer(
   });
   catalogService.attachWhatsAppManager(whatsappManager);
 
+  let whatsappAuthorizedTurnHandler:
+    | ((event: AuthorizedWhatsAppMessageEvent) => Promise<boolean | void>)
+    | null = null;
+
   const whatsappOrchestrator = new WhatsAppOrchestrator({
     db: db.connection,
     sessionManager: whatsappManager,
@@ -528,6 +533,10 @@ export async function createDaemonServer(
       });
     },
     transcribeAudio: (buf, mime) => transcription.transcribeAudio(buf, mime),
+    onAuthorizedMessage: async (event) => {
+      if (!whatsappAuthorizedTurnHandler) return false;
+      return await whatsappAuthorizedTurnHandler(event);
+    },
     onPairingRequested: (contaId, request) => {
       wsHub.broadcast("whatsapp.pairing_solicitado", {
         conta_id: contaId,
@@ -1040,6 +1049,127 @@ export async function createDaemonServer(
 
   tasksService.setOnLaneWake(scheduleLaneDrain);
   queueControls.setOnLaneWake(scheduleLaneDrain);
+
+  whatsappAuthorizedTurnHandler = async (event) => {
+    const rawPrompt = event.text?.trim() ?? "";
+    const hasMediaAttachment = Boolean(event.media && event.media.diskPath);
+    if (!rawPrompt && !hasMediaAttachment) {
+      return false;
+    }
+
+    const accountRow = db.connection
+      .prepare(`SELECT agente_orquestrador_id FROM whatsapp_contas WHERE conta_id = ? LIMIT 1;`)
+      .get(event.contaId) as { agente_orquestrador_id?: string | null } | undefined;
+
+    const allAgents = db.connection
+      .prepare(`SELECT agente_id, nome, papel, modelo_padrao, config_json FROM projecao_agentes ORDER BY ordem_exibicao ASC;`)
+      .all() as Array<{
+      agente_id: string;
+      nome: string;
+      papel: string;
+      modelo_padrao: string;
+      config_json: string;
+    }>;
+
+    const mentionMatch = rawPrompt.match(/@([a-z0-9_-]+)/i);
+    const mentionedAgent = mentionMatch
+      ? allAgents.find((a) => a.agente_id.toLowerCase() === mentionMatch[1].toLowerCase())
+      : undefined;
+    const defaultAgentId = accountRow?.agente_orquestrador_id || "estrategista";
+    const agente =
+      mentionedAgent ??
+      allAgents.find((a) => a.agente_id === defaultAgentId) ??
+      allAgents[0];
+
+    if (!agente) {
+      return false;
+    }
+
+    const incomingAnexos: AnexoChat[] =
+      event.media && event.media.caminhoRelativo
+        ? [
+            {
+              arquivo_id: event.media.arquivoId,
+              nome: event.media.nomeOriginal,
+              caminho_relativo: event.media.caminhoRelativo,
+              url: `/api/arquivos/raw?path=${encodeURIComponent(event.media.caminhoRelativo)}`,
+              mime_type: event.media.mimeType,
+              tamanho_bytes: event.media.tamanhoBytes,
+              tipo_uso: "anexo",
+            },
+          ]
+        : [];
+
+    try {
+      const { agentMsg } = await executeAgentConversationTurn({
+        deps: {
+          ...baseStudioDepsForLanes,
+          phase13: phase13Bundle,
+          sharedTables,
+          memoryManager,
+          memoryReview,
+          skillLearning,
+          historySearch,
+          libraryFolders,
+          handoffBus,
+          visualPreview,
+          uiBlockRegistry,
+          apiKeysBridge,
+          phase14: phase14Services,
+        },
+        agente,
+        userPrompt: rawPrompt || "Analise este arquivo enviado pelo WhatsApp.",
+        anexos: incomingAnexos,
+        turnoId: `wpp-${randomUUID().slice(0, 8)}`,
+        originalUserPrompt: rawPrompt,
+      });
+
+      const replyText = agentMsg.conteudo_markdown?.trim();
+      if (replyText) {
+        const sent = await event.client.sendMessage(event.msg.remoteJid, {
+          text: replyText.slice(0, 8000),
+        });
+        const recordedReply = whatsappArchiveService.recordMessage({
+          mensagemId: sent.messageId,
+          contaId: event.contaId,
+          chatJid: event.msg.remoteJid,
+          remetenteJid: event.msg.remoteJid,
+          remetenteNome: agente.nome,
+          direcao: "saida",
+          tipoConteudo: "texto",
+          texto: replyText.slice(0, 8000),
+          ehGrupo: Boolean(event.msg.isGroup),
+          ackStatus: sent.ackStatus === "ack" ? "entregue" : "enviado",
+          metadados: { agente_id: agente.agente_id, self_chat: true },
+        });
+        wsHub.broadcast("whatsapp.mensagem_recebida", {
+          conta_id: event.contaId,
+          mensagem: recordedReply,
+        });
+      }
+
+      for (const anexo of agentMsg.anexos ?? []) {
+        const absImg = resolve(resolvedWorkspaceRoot, anexo.caminho_relativo);
+        if (anexo.mime_type?.startsWith("image/") && existsSync(absImg)) {
+          await event.client.sendMessage(event.msg.remoteJid, {
+            image: readFileSync(absImg),
+            caption: `${agente.nome} · ${anexo.nome}`.slice(0, 500),
+          });
+        }
+      }
+      return true;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      try {
+        await event.client.sendMessage(event.msg.remoteJid, {
+          text: `Não consegui processar sua solicitação agora (${errMsg.slice(0, 180)}). Verifique a conexão do provedor de IA no Criativo Studio.`,
+        });
+      } catch {
+        // Ignora falha secundária de envio caso o socket esteja desconectado
+      }
+      return true;
+    }
+  };
 
   const studioMcpBridge = new CriativoStudioMcpBridge({
     db,

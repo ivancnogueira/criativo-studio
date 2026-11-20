@@ -475,7 +475,7 @@ describe("Fase 20 — Backend, Gemini Schemas, Baileys, CDP Nativo, ACP, Marca &
     );
   });
 
-  it("7. (BRWS20-01) Proteção anti-SSRF CDP, BrowserCdpSessionManager nativo sem playwright-core, alias openbot_browser->criativo_browser e auto-aprovação ACP", async () => {
+  it("7. (BRWS20-01) Proteção anti-SSRF CDP, BrowserCdpSessionManager nativo sem playwright-core, criativo_browser e auto-aprovação ACP", async () => {
     // 7a. Validação anti-SSRF
     assert.throws(() => assertLoopbackCdpEndpoint("http://192.168.1.10:9222"), /loopback|SSRF/i);
     assert.equal(assertLoopbackCdpEndpoint(9222), "http://127.0.0.1:9222");
@@ -594,7 +594,7 @@ describe("Fase 20 — Backend, Gemini Schemas, Baileys, CDP Nativo, ACP, Marca &
       else process.env.CRIATIVO_BROWSER_DRIVER = prevDriver;
     }
 
-    // 7c. Verifica alias silencioso openbot_browser -> mesmo executor de criativo_browser
+    // 7c. Verifica executor oficial criativo_browser
     const aliasDir = makeTempDir("p20-alias-");
     const aliasDb = initializeDatabase(join(aliasDir, "s.sqlite"));
     const aliasVault = new VaultService(
@@ -603,7 +603,7 @@ describe("Fase 20 — Backend, Gemini Schemas, Baileys, CDP Nativo, ACP, Marca &
     );
     const aliasBrowser = new BrowserAutomationService(aliasDb, aliasVault, undefined, aliasDir);
     const aliasResult = await executePhase15ToolCall(
-      "openbot_browser",
+      "criativo_browser",
       { action: "status" },
       { agenteId: "estrategista", canalId: "canal-teste" },
       { db: aliasDb, workspaceRoot: aliasDir, browserService: aliasBrowser } as never

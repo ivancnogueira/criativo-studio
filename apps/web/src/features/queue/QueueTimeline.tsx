@@ -98,7 +98,7 @@ export function QueueTimeline({
           <button
             type="button"
             onClick={() => setShowCreate((prev) => !prev)}
-            className="openbot-btn-primary inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs shadow"
+            className="studio-btn-primary inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs shadow"
           >
             {showCreate ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
             Disparar Nova Tarefa
@@ -164,7 +164,7 @@ export function QueueTimeline({
             <button
               type="submit"
               disabled={submitting}
-              className="openbot-btn-primary px-3.5 py-1.5 text-xs disabled:opacity-50"
+              className="studio-btn-primary px-3.5 py-1.5 text-xs disabled:opacity-50"
             >
               {submitting ? "Enfileirando..." : "Adicionar na Fila FIFO"}
             </button>

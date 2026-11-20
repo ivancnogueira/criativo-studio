@@ -40,7 +40,7 @@ function extractUserFromJid(rawJid?: string | null): string | null {
   const trimmed = rawJid.trim();
   if (!trimmed) return null;
   const withoutDomain = trimmed.split("@")[0] ?? trimmed;
-  const user = withoutDomain.split(":")[0]?.trim() ?? "";
+  const user = withoutDomain.split(":")[0]?.trim().toLowerCase() ?? "";
   return user.length > 0 ? user : null;
 }
 
@@ -355,6 +355,9 @@ export class WhatsAppSenderRules {
       (isSameWhatsAppUser(msg.remoteJid, ownJid) ||
         isSameWhatsAppUser(msg.remoteJid, ownLid) ||
         isSameWhatsAppUser(msg.remoteJidAlt, ownJid) ||
+        isSameWhatsAppUser(msg.remoteJidAlt, ownLid) ||
+        isSameWhatsAppUser(msg.participant, ownJid) ||
+        isSameWhatsAppUser(msg.participant, ownLid) ||
         (ownDigits !== null &&
           resolvedPhone !== null &&
           whatsAppNumberForms(resolvedPhone).some((f) =>

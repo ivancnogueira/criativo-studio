@@ -116,20 +116,20 @@ export function applyUserSettingsToDocument(settings: StudioUserSettings): void 
   root.setAttribute("data-studio-theme", theme);
 
   if (theme === "midnight_contrast") {
-    root.style.setProperty("--openbot-bg-canvas", "#0D0D0D");
-    root.style.setProperty("--openbot-bg-surface", "#161616");
+    root.style.setProperty("--studio-bg-canvas", "#0D0D0D");
+    root.style.setProperty("--studio-bg-surface", "#161616");
   } else if (theme === "light") {
-    root.style.setProperty("--openbot-bg-canvas", "#F4F5F7");
-    root.style.setProperty("--openbot-bg-surface", "#FFFFFF");
+    root.style.setProperty("--studio-bg-canvas", "#F4F5F7");
+    root.style.setProperty("--studio-bg-surface", "#FFFFFF");
   } else {
-    root.style.setProperty("--openbot-bg-canvas", "#1a1a1a");
-    root.style.setProperty("--openbot-bg-surface", "#212121");
+    root.style.setProperty("--studio-bg-canvas", "#1a1a1a");
+    root.style.setProperty("--studio-bg-surface", "#212121");
   }
 
   const accentHex = /^#[0-9a-fA-F]{6}$/.test(aparencia.cor_acento ?? "")
     ? aparencia.cor_acento
     : "#007CF7";
-  root.style.setProperty("--openbot-accent", accentHex);
+  root.style.setProperty("--studio-accent", accentHex);
 
   const scale = ALLOWED_SCALES.has(Number(aparencia.escala))
     ? Number(aparencia.escala)
@@ -140,8 +140,8 @@ export function applyUserSettingsToDocument(settings: StudioUserSettings): void 
     UI_FONT_WHITELIST[aparencia.fonte_interface] ?? UI_FONT_WHITELIST.Inter;
   const monoStack =
     MONO_FONT_WHITELIST[aparencia.fonte_codigo] ?? MONO_FONT_WHITELIST["JetBrains Mono"];
-  root.style.setProperty("--openbot-font-sans", sansStack);
-  root.style.setProperty("--openbot-font-mono", monoStack);
+  root.style.setProperty("--studio-font-sans", sansStack);
+  root.style.setProperty("--studio-font-mono", monoStack);
 
   const lang = ALLOWED_LANGS.has(aparencia.idioma) ? aparencia.idioma : "pt-BR";
   root.setAttribute("lang", lang);

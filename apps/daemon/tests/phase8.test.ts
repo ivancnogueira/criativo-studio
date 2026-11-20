@@ -9,7 +9,7 @@ import { AntigravityLiveService } from "../src/providers/antigravity-live-servic
 import { CliOAuthAccountsService } from "../src/providers/cli-oauth-accounts-service.ts";
 import {
   computeHostAnalytics,
-  importOpenBotTelemetryIfAvailable,
+  importExternalTelemetryIfAvailable,
   listInstalledSkills,
   recordChatTurnUsage,
 } from "../src/server/analytics-skills-service.ts";
@@ -244,7 +244,7 @@ describe("Fase 8 — Conexões Reais Multi-Conta, Limites Dinâmicos, Analytics 
   });
 
   it("importa histórico de telemetria SQLite, registra novos turnos e expõe GET /api/uso/analytics", async () => {
-    const extDbPath = join(tempDir, "openbot-mock.db");
+    const extDbPath = join(tempDir, "ext-telemetry-mock.db");
     const extDb = new DatabaseSync(extDbPath);
     extDb.exec(`
       CREATE TABLE projection_agents (agent_id TEXT PRIMARY KEY, agent_json TEXT NOT NULL);
@@ -295,7 +295,7 @@ describe("Fase 8 — Conexões Reais Multi-Conta, Limites Dinâmicos, Analytics 
       );
     extDb.close();
 
-    const count = importOpenBotTelemetryIfAvailable(runtime.db, extDbPath);
+    const count = importExternalTelemetryIfAvailable(runtime.db, extDbPath);
     assert.equal(count, 1);
 
     recordChatTurnUsage(runtime.db, {

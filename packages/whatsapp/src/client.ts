@@ -217,7 +217,7 @@ async function defaultBaileysFactory(
     logger: silentBaileysLogger,
     syncFullHistory: false,
     markOnlineOnConnect: false,
-    emitOwnEvents: false,
+    emitOwnEvents: true,
     fireInitQueries: true,
     generateHighQualityLinkPreview: false,
     keepAliveIntervalMs: WA_KEEP_ALIVE_MS,
@@ -301,6 +301,7 @@ export class WhatsAppStudioClient {
   private readonly chatQueues = new Map<string, Promise<unknown>>();
   private readonly lastSendByChat = new Map<string, number>();
   private readonly lidCache = new Map<string, string | null>();
+  private cachedOwnLid: string | null = null;
 
   private currentStatus: WhatsAppStatusSnapshot;
 
@@ -337,6 +338,10 @@ export class WhatsAppStudioClient {
 
   public getSocket(): BaileysSocketLike | null {
     return this.socket;
+  }
+
+  public getOwnLid(): string | null {
+    return this.socket?.user?.lid ?? this.cachedOwnLid ?? null;
   }
 
   public onMessage(listener: (msg: IncomingWhatsAppMessage) => Promise<void> | void): () => void {
@@ -752,6 +757,10 @@ export class WhatsAppStudioClient {
     this.dropCurrentSocket();
 
     const { state, saveCreds, clearState } = await useSqliteAuthState(this.db, this.contaId);
+    const initialLid = (state.creds as { me?: { lid?: string } } | undefined)?.me?.lid;
+    if (typeof initialLid === "string" && initialLid.trim().length > 0) {
+      this.cachedOwnLid = initialLid.trim();
+    }
 
     if (this.manualDisconnect) {
       return;
@@ -802,6 +811,13 @@ export class WhatsAppStudioClient {
 
     socket.ev.on("creds.update", () => {
       if (this.socket !== socket) return;
+      const updatedLid =
+        socket.user?.lid ??
+        (state.creds as { me?: { lid?: string } } | undefined)?.me?.lid ??
+        null;
+      if (updatedLid) {
+        this.cachedOwnLid = updatedLid;
+      }
       void saveCreds();
     });
 
@@ -843,6 +859,13 @@ export class WhatsAppStudioClient {
       if (update.connection === "open") {
         this.openedAt = this.now();
         this.lastActivityAt = this.openedAt;
+        const openLid =
+          socket.user?.lid ??
+          (state.creds as { me?: { lid?: string } } | undefined)?.me?.lid ??
+          null;
+        if (openLid) {
+          this.cachedOwnLid = openLid;
+        }
         this.activeMode = "qr";
         this.activePhoneNumber = null;
         this.pairingCodeRequested = false;
@@ -936,6 +959,12 @@ export class WhatsAppStudioClient {
         if (this.socket !== socket) return;
         this.lastActivityAt = this.now();
 
+        const upsertType = upsert.type;
+        const isAppendUpsert = upsertType === "append";
+        if (upsertType && upsertType !== "notify" && !isAppendUpsert) {
+          return;
+        }
+
         for (const msg of upsert.messages ?? []) {
           const remoteJid = msg.key?.remoteJid;
           if (!remoteJid) continue;
@@ -944,6 +973,14 @@ export class WhatsAppStudioClient {
             isJidNewsletter(remoteJid) ||
             isJidBroadcast(remoteJid)
           ) {
+            continue;
+          }
+
+          const msgTimestampMs = readMessageTimestampMs(
+            msg.messageTimestamp,
+            isAppendUpsert ? 0 : this.now()
+          );
+          if (isAppendUpsert && this.openedAt > 0 && msgTimestampMs < this.openedAt - 15_000) {
             continue;
           }
 

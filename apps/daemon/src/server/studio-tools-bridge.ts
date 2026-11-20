@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   mcpConfigErrors,
@@ -50,6 +50,7 @@ import {
   redactMcpSecrets,
 } from "../mcp/mcp-redaction.ts";
 import type { ProviderConnectionService } from "../providers/provider-connection-service.ts";
+import type { LabeledImageInput } from "../providers/antigravity-acp-service.ts";
 import {
   executeRoutineToolCall,
   isRoutineToolName,
@@ -359,6 +360,128 @@ export function syncWorkspaceFilesToDatabase(db: CriativoDatabase, workspaceRoot
   return added;
 }
 
+export interface LabeledVisualAsset extends LabeledImageInput {
+  relPath: string;
+}
+
+/**
+ * Seleciona ativos visuais balanceados para geração de imagem, priorizando fotos reais
+ * em `recursos/fotos/` e `recursos/personagens/` antes de referências de estilo e logos.
+ */
+export function selectBalancedVisualAssets(
+  db: CriativoDatabase,
+  workspaceRoot: string,
+  options: {
+    explicitAttachments?: AnexoChat[];
+    usarFotosReais?: boolean;
+    specificFotos?: string[];
+    specificReferencias?: string[];
+    maxFotos?: number;
+    maxReferencias?: number;
+    maxLogos?: number;
+  } = {}
+): LabeledVisualAsset[] {
+  const maxFotos = options.maxFotos ?? 3;
+  const maxReferencias = options.maxReferencias ?? 2;
+  const maxLogos = options.maxLogos ?? 1;
+  const usarFotosReais = options.usarFotosReais !== false;
+
+  const picked: LabeledVisualAsset[] = [];
+  const seenAbs = new Set<string>();
+
+  const pushAsset = (relRaw: string, role: LabeledImageInput["role"]) => {
+    const cleanRel = relRaw.replaceAll("\\", "/").replace(/^\/+/, "");
+    if (!cleanRel || cleanRel.includes("..")) return;
+    const abs = resolve(workspaceRoot, cleanRel);
+    if (seenAbs.has(abs) || !existsSync(abs)) return;
+    seenAbs.add(abs);
+    picked.push({
+      path: abs,
+      relPath: cleanRel,
+      role,
+      label: cleanRel,
+    });
+  };
+
+  for (const att of options.explicitAttachments ?? []) {
+    if (att?.caminho_relativo) {
+      pushAsset(att.caminho_relativo, "anexo_usuario");
+    }
+  }
+
+  if (process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1") {
+    return picked;
+  }
+
+  if (usarFotosReais && maxFotos > 0) {
+    for (const rel of options.specificFotos ?? []) {
+      if (picked.filter((p) => p.role === "foto_real").length >= maxFotos) break;
+      pushAsset(rel, "foto_real");
+    }
+    const fotoRows = db.connection
+      .prepare(
+        `SELECT caminho_relativo FROM projecao_arquivos
+         WHERE (caminho_relativo LIKE 'recursos/fotos/%'
+                OR caminho_relativo LIKE 'recursos/personagens/%'
+                OR tipo_uso = 'personagem')
+           AND mime_type LIKE 'image/%'
+           AND mime_type NOT LIKE '%svg%'
+         ORDER BY CASE
+           WHEN caminho_relativo LIKE 'recursos/fotos/%' THEN 0
+           WHEN caminho_relativo LIKE 'recursos/personagens/%' THEN 1
+           ELSE 2
+         END, criado_em DESC
+         LIMIT 12;`
+      )
+      .all() as Array<{ caminho_relativo: string }>;
+    for (const row of fotoRows) {
+      if (picked.filter((p) => p.role === "foto_real").length >= maxFotos) break;
+      pushAsset(row.caminho_relativo, "foto_real");
+    }
+  }
+
+  if (maxReferencias > 0) {
+    for (const rel of options.specificReferencias ?? []) {
+      if (picked.filter((p) => p.role === "referencia_estilo").length >= maxReferencias) break;
+      pushAsset(rel, "referencia_estilo");
+    }
+    const refRows = db.connection
+      .prepare(
+        `SELECT caminho_relativo FROM projecao_arquivos
+         WHERE (caminho_relativo LIKE 'recursos/referencias/%' OR tipo_uso = 'referencia')
+           AND caminho_relativo NOT LIKE 'recursos/fotos/%'
+           AND mime_type LIKE 'image/%'
+           AND mime_type NOT LIKE '%svg%'
+         ORDER BY criado_em DESC
+         LIMIT 10;`
+      )
+      .all() as Array<{ caminho_relativo: string }>;
+    for (const row of refRows) {
+      if (picked.filter((p) => p.role === "referencia_estilo").length >= maxReferencias) break;
+      pushAsset(row.caminho_relativo, "referencia_estilo");
+    }
+  }
+
+  if (maxLogos > 0) {
+    const logoRows = db.connection
+      .prepare(
+        `SELECT caminho_relativo FROM projecao_arquivos
+         WHERE (caminho_relativo LIKE 'recursos/logos/%' OR tipo_uso = 'logo')
+           AND mime_type LIKE 'image/%'
+           AND mime_type NOT LIKE '%svg%'
+         ORDER BY criado_em DESC
+         LIMIT 4;`
+      )
+      .all() as Array<{ caminho_relativo: string }>;
+    for (const row of logoRows) {
+      if (picked.filter((p) => p.role === "logo").length >= maxLogos) break;
+      pushAsset(row.caminho_relativo, "logo");
+    }
+  }
+
+  return picked;
+}
+
 function readBrandSnippetIfRich(filePath: string, maxChars: number): string {
   if (!existsSync(filePath)) return "";
   try {
@@ -382,6 +505,7 @@ export function buildStudioLiveContext(deps: {
   workspaceRoot: string;
   agenteId?: string | null;
   memoryManager?: MemoryManager;
+  userPrompt?: string;
 }): string {
   syncWorkspaceFilesToDatabase(deps.db, deps.workspaceRoot);
 
@@ -405,16 +529,16 @@ export function buildStudioLiveContext(deps: {
 
   const canReadDisk = process.env.CRIATIVO_SKIP_LOCAL_PROBE !== "1";
   const perfilFileSnippet = canReadDisk
-    ? readBrandSnippetIfRich(resolve(deps.workspaceRoot, "conteudos", "perfil-da-marca.md"), 2500)
+    ? readBrandSnippetIfRich(resolve(deps.workspaceRoot, "conteudos", "perfil-da-marca.md"), 1200)
     : "";
   const idVisualSnippet = canReadDisk
-    ? readBrandSnippetIfRich(resolve(deps.workspaceRoot, "conteudos", "identidade-visual.yml"), 1400)
+    ? readBrandSnippetIfRich(resolve(deps.workspaceRoot, "conteudos", "identidade-visual.yml"), 800)
     : "";
   const brandbookSnippet = canReadDisk
-    ? readBrandSnippetIfRich(resolve(deps.workspaceRoot, "recursos", "brand", "brandbook.md"), 1500)
+    ? readBrandSnippetIfRich(resolve(deps.workspaceRoot, "recursos", "brand", "brandbook.md"), 800)
     : "";
   const designSystemSnippet = canReadDisk
-    ? readBrandSnippetIfRich(resolve(deps.workspaceRoot, "recursos", "brand", "design-system.md"), 1200)
+    ? readBrandSnippetIfRich(resolve(deps.workspaceRoot, "recursos", "brand", "design-system.md"), 600)
     : "";
 
   const lines: string[] = [
@@ -439,14 +563,42 @@ export function buildStudioLiveContext(deps: {
   ];
 
   if (files.length > 0) {
+    const fotosReais = files.filter(
+      (f) =>
+        f.caminho_relativo.startsWith("recursos/fotos/") ||
+        f.caminho_relativo.startsWith("recursos/personagens/") ||
+        f.tipo_uso === "personagem"
+    );
+    const refsEstilo = files.filter(
+      (f) => f.caminho_relativo.startsWith("recursos/referencias/") && !fotosReais.includes(f)
+    );
+    const logosMarca = files.filter(
+      (f) => (f.caminho_relativo.startsWith("recursos/logos/") || f.tipo_uso === "logo") && !fotosReais.includes(f)
+    );
+    const outrosArqs = files.filter(
+      (f) => !fotosReais.includes(f) && !refsEstilo.includes(f) && !logosMarca.includes(f)
+    );
     lines.push(
-      `- Arquivos/Referências/ImagePaths disponíveis (${files.length}): ${files
-        .map((f) => `${f.nome_original} (${f.tipo_uso}: ${f.caminho_relativo})`)
-        .join("; ")}`
+      `- Fotos reais do usuário (${fotosReais.length}): ${
+        fotosReais.length > 0
+          ? fotosReais.map((f) => `${f.nome_original} (${f.caminho_relativo})`).join("; ")
+          : "nenhuma em recursos/fotos/"
+      }`,
+      `- Referências de estilo (${refsEstilo.length}): ${
+        refsEstilo.length > 0
+          ? refsEstilo.map((f) => `${f.nome_original} (${f.caminho_relativo})`).join("; ")
+          : "nenhuma em recursos/referencias/"
+      }`,
+      ...(logosMarca.length > 0
+        ? [`- Logos da marca (${logosMarca.length}): ${logosMarca.map((f) => f.caminho_relativo).join("; ")}`]
+        : []),
+      ...(outrosArqs.length > 0
+        ? [`- Outras mídias/entregáveis (${outrosArqs.length}): ${outrosArqs.slice(0, 6).map((f) => f.caminho_relativo).join("; ")}`]
+        : [])
     );
   } else {
     lines.push(
-      "- Arquivos/Referências/ImagePaths disponíveis: nenhuma mídia salva ainda em recursos/referencias/, recursos/fotos/ ou recursos/logos/."
+      "- Arquivos/Referências/ImagePaths disponíveis: nenhuma mídia salva ainda em recursos/fotos/, recursos/referencias/ ou recursos/logos/."
     );
   }
 
@@ -463,11 +615,20 @@ export function buildStudioLiveContext(deps: {
     lines.push("", "### Design System (recursos/brand/design-system.md)", designSystemSnippet);
   }
 
+  const includeFullRoster =
+    !deps.agenteId ||
+    deps.agenteId === "orquestrador" ||
+    Boolean(deps.userPrompt && /(@|handoff|equipe|time|especialista|delegar|quem faz)/i.test(deps.userPrompt));
+
   lines.push(
     "",
     "### Equipe de Colegas para Handoff",
-    ROSTER_15_AGENTES.map((a) => `- \`@${a.agente_id}\`: ${a.nome} — ${a.papel}`).join("\n"),
-    "IMPORTANTE SOBRE HANDOFF: Só emita a tag `[HANDOFF:agente_id]` quando o usuário tiver pedido explicitamente para executar uma tarefa prática que exija passar o bastão para aquele especialista. NUNCA emita `[HANDOFF:...]` nem transfira a conversa quando estiver apenas se apresentando, respondendo 'oi', explicando o que você/sua equipe fazem ou tirando dúvidas."
+    ...(includeFullRoster
+      ? [ROSTER_15_AGENTES.map((a) => `- \`@${a.agente_id}\`: ${a.nome} — ${a.papel}`).join("\n")]
+      : [
+          `- Especialistas disponíveis: ${ROSTER_15_AGENTES.map((a) => `@${a.agente_id}`).join(", ")}.`,
+        ]),
+    "IMPORTANTE SOBRE HANDOFF: Só emita `[HANDOFF:agente_id]` sob pedido prático explícito que exija outro especialista. Nunca emita handoff ao se apresentar ou tirar dúvidas simples."
   );
 
   try {
@@ -508,10 +669,9 @@ export function buildStudioLiveContext(deps: {
 
   lines.push(
     "",
-    "### Navegador CDP, Mídia, Sidebar & Showcase (Fase 15)",
-    "- Use `criativo_browser` (ou `browser_open`, `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_fill_fields`, `browser_request_takeover`, `browser_submit_secret`) para navegar em sites dinâmicos JS com perfis persistentes.",
-    "- Use `read_video(url, frames?)` para resumir Reels/TikTok/YouTube públicos, `read_image(path)` para inspecionar imagens do workspace e `capture_screen(purpose)` para solicitar captura pontual da tela ao usuário.",
-    "- Use `list_sections`/`create_section`/`rename_section`/`delete_section`/`assign_agent_section` para organizar a Sidebar e `list_sites`/`publish_site`/`replace_site`/`delete_site` para Showcase local.",
+    "### Navegador CDP, Mídia, Sidebar & Showcase",
+    "- Use `criativo_browser` (action: open, list_tabs, navigate, snapshot, click, type, fill_fields, press, scroll, screenshot, request_takeover, submit_secret, close_tab) para operar o Chromium real.",
+    "- Use `read_video(url, frames?)`, `read_image(path)` e `capture_screen(purpose)` para inspeção visual; `list_sections`/`assign_agent_section` para Sidebar e `list_sites`/`publish_site` para Showcase.",
   );
 
   return lines.join("\n");
@@ -532,6 +692,12 @@ export interface StudioExtensionToolDeps {
   whatsappManager?: WhatsAppSessionManager;
   whatsappOrchestrator?: WhatsAppOrchestrator;
   fetchImpl?: FetchLike;
+  onImageProgress?: (evt: {
+    status: "executando" | "concluido" | "erro";
+    formato: string;
+    mensagem: string;
+    stepId: string;
+  }) => void;
 }
 
 export const PHASE10_TOOL_DEFINITIONS: ToolDefinition[] = [
@@ -883,6 +1049,40 @@ export const PHASE10_TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         motivo: { type: "string", description: "Resumo curto do que foi concluído ou dispensado." },
       },
+    },
+  },
+  {
+    name: "generate_image",
+    description:
+      "Gera uma imagem ou arte visual real (post 3:4, stories 9:16, carrossel ou anúncio), priorizando automaticamente fotos reais do usuário em recursos/fotos/ e usando referências apenas para estética, salvando em saidas/artes/.",
+    parameters: {
+      type: "object",
+      properties: {
+        prompt: {
+          type: "string",
+          description: "Briefing visual detalhado da arte (cena, texto na arte, composição e preservação da foto real).",
+        },
+        formato: {
+          type: "string",
+          enum: ["3:4", "9:16", "1:1", "16:9"],
+          description: "Proporção desejada: '3:4' (post feed), '9:16' (stories), '1:1' ou '16:9'.",
+        },
+        usar_fotos_reais: {
+          type: "boolean",
+          description: "Se true (padrão), prioriza fotos reais de recursos/fotos/ preservando rosto e identidade.",
+        },
+        fotos_especificas: {
+          type: "array",
+          items: { type: "string" },
+          description: "Caminhos relativos opcionais de fotos específicas em recursos/fotos/.",
+        },
+        referencias_especificas: {
+          type: "array",
+          items: { type: "string" },
+          description: "Caminhos relativos opcionais de referências de estilo em recursos/referencias/.",
+        },
+      },
+      required: ["prompt"],
     },
   },
 ];
@@ -1616,6 +1816,129 @@ export async function executeStudioExtensionTool(
         setup_assistant_visible: false,
         onboarding: state.onboarding,
       };
+    }
+
+    case "generate_image": {
+      if (!deps.providerConnection) {
+        throw new Error("ProviderConnectionService indisponível para gerar imagem.");
+      }
+      const promptImg = readStringArg(args, "prompt", "descricao", "briefing");
+      if (!promptImg) {
+        throw new Error("Informe 'prompt' para gerar a imagem.");
+      }
+      const rawFmt = readStringArg(args, "formato", "aspect_ratio") ?? "3:4";
+      const formato =
+        rawFmt === "9:16" || rawFmt === "3:4" || rawFmt === "1:1" || rawFmt === "16:9"
+          ? rawFmt
+          : "3:4";
+      const usarFotosReais = args.usar_fotos_reais !== false;
+      const specificFotos = readStringArrayArg(args, "fotos_especificas", "fotos");
+      const specificReferencias = readStringArrayArg(args, "referencias_especificas", "referencias");
+
+      const agService = deps.providerConnection.getAntigravityService();
+      const agSnapshot = await agService.getLiveSnapshot(false);
+      const hasAccount = agSnapshot.contas.some((c) => c.estado === "conectado" || Boolean(c.token_valido));
+      if (!hasAccount) {
+        throw new Error("Nenhuma conta Google/Antigravity conectada para gerar imagem.");
+      }
+
+      const assets = selectBalancedVisualAssets(deps.db, workspaceRoot, {
+        usarFotosReais,
+        specificFotos,
+        specificReferencias,
+      });
+
+      const imgStepId = `step-img-${randomUUID().slice(0, 8)}`;
+      deps.onImageProgress?.({
+        status: "executando",
+        formato,
+        mensagem: `Gerando arte ${formato} com ${assets.filter((a) => a.role === "foto_real").length} foto(s) real(is)...`,
+        stepId: imgStepId,
+      });
+
+      try {
+        const onboarding = deps.providerConnection.getOnboardingState();
+        const imgGen = await agService.executeCodeAssistGenerate({
+          model: agSnapshot.imageGenerationModelIds[0] ?? "gemini-3.1-flash-image",
+          messages: [
+            {
+              role: "user",
+              text: `Crie uma arte profissional de Instagram (${formato}) para ${onboarding.marca_nome} (${onboarding.perfil_handle}). Preserve fielmente as fotos reais do usuário rotuladas como [FOTO REAL DO USUÁRIO]. Instrução visual: ${promptImg}`,
+            },
+          ],
+          imagePaths: assets.map((a) => a.path),
+          labeledImages: assets,
+          generateImage: true,
+          agentId: deps.agenteId,
+        });
+
+        if (imgGen.images.length === 0) {
+          deps.onImageProgress?.({
+            status: "erro",
+            formato,
+            mensagem: "O gerador não retornou imagem neste turno.",
+            stepId: imgStepId,
+          });
+          throw new Error("O modelo de imagem não retornou arquivo visual neste turno.");
+        }
+
+        const firstImg = imgGen.images[0];
+        const ext = firstImg.mimeType.includes("png") ? ".png" : firstImg.mimeType.includes("webp") ? ".webp" : ".jpg";
+        const arquivoId = `arte-${randomUUID().slice(0, 8)}`;
+        const dirArtes = resolve(workspaceRoot, "saidas", "artes");
+        mkdirSync(dirArtes, { recursive: true });
+        const fileName = `${arquivoId}${ext}`;
+        const diskPath = resolve(dirArtes, fileName);
+        const buf = Buffer.from(firstImg.dataBase64, "base64");
+        writeFileSync(diskPath, buf);
+
+        const relPath = `saidas/artes/${fileName}`;
+        const urlRaw = `/api/arquivos/raw?path=${encodeURIComponent(relPath)}`;
+        const agora = new Date().toISOString();
+        deps.db.connection
+          .prepare(
+            `INSERT INTO projecao_arquivos (arquivo_id, nome_original, caminho_relativo, mime_type, tamanho_bytes, tipo_uso, agente_id, tarefa_id, criado_em)
+             VALUES (?, ?, ?, ?, ?, 'gerado', ?, NULL, ?);`
+          )
+          .run(arquivoId, fileName, relPath, firstImg.mimeType, buf.length, deps.agenteId ?? null, agora);
+
+        const anexo: AnexoChat = {
+          arquivo_id: arquivoId,
+          nome: fileName,
+          caminho_relativo: relPath,
+          url: urlRaw,
+          mime_type: firstImg.mimeType,
+          tamanho_bytes: buf.length,
+          tipo_uso: "gerado",
+        };
+
+        deps.onImageProgress?.({
+          status: "concluido",
+          formato,
+          mensagem: `Arte gerada (${(buf.length / 1024).toFixed(0)} KB · ${imgGen.modelUsed})`,
+          stepId: imgStepId,
+        });
+
+        return {
+          ok: true,
+          anexo,
+          caminho_relativo: relPath,
+          url: urlRaw,
+          formato,
+          modelUsed: imgGen.modelUsed,
+          tamanho_bytes: buf.length,
+          fotos_utilizadas: assets.filter((a) => a.role === "foto_real").map((a) => a.relPath),
+          referencias_utilizadas: assets.filter((a) => a.role === "referencia_estilo").map((a) => a.relPath),
+        };
+      } catch (err) {
+        deps.onImageProgress?.({
+          status: "erro",
+          formato,
+          mensagem: err instanceof Error ? err.message.slice(0, 90) : "Falha na geração visual.",
+          stepId: imgStepId,
+        });
+        throw err;
+      }
     }
 
     default:
@@ -3401,6 +3724,8 @@ export const BROWSER_DIRECT_ALIASES = [
   "browser_close_tab",
 ] as const;
 
+export const HIDDEN_CATALOG_TOOL_NAMES: ReadonlySet<string> = new Set<string>(BROWSER_DIRECT_ALIASES);
+
 export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
   {
     name: "criativo_browser",
@@ -3669,7 +3994,7 @@ export const PHASE15_TOOL_NAMES: ReadonlySet<string> = new Set(
 );
 
 export function isPhase15ToolName(name: string): boolean {
-  return PHASE15_TOOL_NAMES.has(name) || name === "openbot_browser";
+  return PHASE15_TOOL_NAMES.has(name);
 }
 
 export interface Phase15ToolServices {
@@ -3702,12 +4027,12 @@ export async function executePhase15ToolCall(
   const permissionLevel = ctx.permissionLevel ?? governance.permissionLevel;
   const browserProfileId = ctx.browserProfileId ?? governance.browserProfileId;
 
-  if (toolName === "criativo_browser" || toolName === "openbot_browser" || toolName.startsWith("browser_")) {
+  if (toolName === "criativo_browser" || toolName.startsWith("browser_")) {
     if (!services.browserService) {
       throw new Error("BrowserAutomationService não inicializado neste daemon.");
     }
     const rawAction =
-      toolName === "criativo_browser" || toolName === "openbot_browser"
+      toolName === "criativo_browser"
         ? readStringArg(args, "action", "acao")
         : toolName.slice("browser_".length);
     if (!rawAction) {

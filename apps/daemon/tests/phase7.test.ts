@@ -6,7 +6,7 @@ import { after, before, describe, it } from "node:test";
 import { SCHEMA_TABLE_NAMES } from "../src/database/schema.ts";
 import { createDaemonServer, type DaemonRuntime } from "../src/server/daemon-server.ts";
 
-describe("Fase 7 — Paridade OpenBot Backend (Onboarding, Provedores, Chat, Canais, Workflows & Uploads)", () => {
+describe("Fase 7 — Paridade Criativo Studio Backend (Onboarding, Provedores, Chat, Canais, Workflows & Uploads)", () => {
   let tempDir: string;
   let runtime: DaemonRuntime;
   let baseUrl: string;

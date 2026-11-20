@@ -244,7 +244,7 @@ export function UiBlockPrompt({
             type="button"
             disabled={submitting || selectedChoices.length === 0}
             onClick={() => void dispatchAction("apply_choice", { selected: selectedChoices })}
-            className="openbot-btn-primary rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414] disabled:opacity-40"
+            className="studio-btn-primary rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414] disabled:opacity-40"
           >
             Aplicar seleção
           </button>
@@ -400,7 +400,7 @@ export function UiBlockPrompt({
             type="button"
             disabled={submitting}
             onClick={() => void handleFormSubmit()}
-            className="openbot-btn-primary rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414]"
+            className="studio-btn-primary rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414]"
           >
             Submeter formulário
           </button>
@@ -442,7 +442,7 @@ export function UiBlockPrompt({
             type="button"
             disabled={submitting}
             onClick={() => void dispatchAction("start")}
-            className="openbot-btn-primary rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414]"
+            className="studio-btn-primary rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414]"
           >
             Iniciar plano
           </button>
@@ -530,7 +530,7 @@ export function UiBlockPrompt({
             type="button"
             disabled={submitting}
             onClick={() => void dispatchAction(primaryAction?.id ?? "confirm")}
-            className="openbot-btn-primary rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414] disabled:opacity-50"
+            className="studio-btn-primary rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414] disabled:opacity-50"
           >
             Aprovar ação
           </button>

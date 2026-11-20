@@ -102,7 +102,7 @@ const EFFORT_LABELS: Record<NivelEsforco, string> = {
 };
 
 /**
- * Construtor 'Novo agente' espelhado fielmente na Screenshot 3 do OpenBot.
+ * Construtor 'Novo agente' nativo do Criativo Studio.
  */
 export const NewAgentScreen: React.FC<NewAgentScreenProps> = ({
   provedores,
@@ -226,7 +226,7 @@ export const NewAgentScreen: React.FC<NewAgentScreenProps> = ({
             <button
               type="submit"
               disabled={submitting || !nome.trim()}
-              className="openbot-btn-primary px-6 py-2 text-[13px] shadow-md disabled:opacity-50"
+              className="studio-btn-primary px-6 py-2 text-[13px] shadow-md disabled:opacity-50"
             >
               {submitting ? "Criando..." : "Criar agente"}
             </button>

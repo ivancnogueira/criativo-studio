@@ -541,7 +541,7 @@ describe("Fase 14 — Aprendizado Autônomo, Shared Tables SQL, Generative UI, B
     const pageJson = (await pageRes.json()) as { ok: boolean; html: string };
     assert.equal(pageJson.ok, true);
     assert.match(pageJson.html, /window\.criativoPage/);
-    assert.match(pageJson.html, /--openbot-/);
+    assert.match(pageJson.html, /--studio-/);
 
     // 2. ask_user com isSecret: true mascara valor em projecao_chat_ui_blocos
     const askUserPromise = executePhase14ToolCall(

@@ -11,7 +11,13 @@ import type {
 } from "@criativo/contracts";
 import type { CriativoDatabase } from "../database/client.ts";
 import type { McpGateway } from "../mcp/mcp-gateway.ts";
-import { AntigravityAcpService, type AcpDiscoveredModel } from "./antigravity-acp-service.ts";
+import {
+  AntigravityAcpService,
+  formatLabeledImageInstruction,
+  type AcpDiscoveredModel,
+  type LabeledImageInput,
+} from "./antigravity-acp-service.ts";
+export type { LabeledImageInput };
 import {
   formatResetCountdownPtBr,
   refreshCachedQuotaGroupCountdowns,
@@ -92,9 +98,11 @@ export interface AntigravityLiveSnapshot {
 
 export interface CodeAssistGenerateInput {
   model: string;
+  effort?: string;
   systemPrompt?: string;
   messages: Array<{ role: "user" | "assistant"; text: string }>;
   imagePaths?: string[];
+  labeledImages?: LabeledImageInput[];
   generateImage?: boolean;
   preferredAccountId?: string | null;
   agentId?: string | null;
@@ -107,6 +115,7 @@ export interface CodeAssistGenerateOutput {
   modelUsed: string;
   accountId: string;
   accountEmail: string | null;
+  fallbackReason?: string;
   usage: {
     uncachedInput: number;
     cachedInput: number;
@@ -1104,8 +1113,10 @@ export class AntigravityLiveService {
             geminiDir: chosenEntry.geminiDir,
             cwd: sandboxCwd,
             promptText: combinedPrompt,
-            modelId: attempt === 0 ? input.model : undefined,
+            modelId: input.model,
+            effort: input.effort,
             imagePaths: input.imagePaths,
+            labeledImages: input.labeledImages,
             agentId: input.agentId,
             onDelta: attempt === 0 ? input.onDelta : undefined,
           });
@@ -1124,9 +1135,29 @@ export class AntigravityLiveService {
           acpLastError = new Error("Sessão ACP retornou resposta vazia.");
         } catch (err) {
           acpLastError = err;
+          const errMsg = err instanceof Error ? err.message : String(err);
+          // Não repete em caso de timeout/aborto para evitar espera duplicada
+          if (/timeout|timed out|abort|cancel/i.test(errMsg)) {
+            break;
+          }
         }
         this.acpService.disposeAccount(chosenEntry.id);
       }
+    }
+
+    const isInternalAcpModel = /orchestrator|argon|neon|g1-/i.test(input.model);
+    const acpErrorMessage =
+      acpLastError instanceof Error
+        ? acpLastError.message
+        : acpLastError
+          ? String(acpLastError)
+          : "";
+    if (!input.generateImage && cliAvailable && isInternalAcpModel) {
+      throw new Error(
+        acpErrorMessage
+          ? `Falha no runtime Antigravity ACP para o modelo ${input.model}: ${acpErrorMessage}`
+          : `O modelo ${input.model} requer sessão Antigravity ACP ativa e não pôde ser executado sem rebaixamento.`
+      );
     }
 
     // 2. Geração de IMAGEM ou ambientes HTTP puros (e.g. testes unitários sem CLI) via Code Assist REST
@@ -1154,14 +1185,24 @@ export class AntigravityLiveService {
       const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [
         { text: msg.text },
       ];
-      if (idx === input.messages.length - 1 && input.imagePaths && input.imagePaths.length > 0) {
-        for (const p of input.imagePaths) {
+      const restImages: Array<{ item: LabeledImageInput; labeled: boolean }> =
+        input.labeledImages && input.labeledImages.length > 0
+          ? input.labeledImages.map((item) => ({ item, labeled: true }))
+          : (input.imagePaths ?? []).map((p) => ({
+              item: { path: p, role: "anexo_usuario", label: p },
+              labeled: false,
+            }));
+      if (idx === input.messages.length - 1 && restImages.length > 0) {
+        for (const { item, labeled } of restImages) {
           try {
-            if (existsSync(p)) {
+            if (existsSync(item.path)) {
+              if (labeled) {
+                parts.push({ text: formatLabeledImageInstruction(item) });
+              }
               parts.push({
                 inlineData: {
-                  mimeType: inferImageMimeFromPath(p),
-                  data: readFileSync(p).toString("base64"),
+                  mimeType: inferImageMimeFromPath(item.path),
+                  data: readFileSync(item.path).toString("base64"),
                 },
               });
             }
@@ -1177,7 +1218,7 @@ export class AntigravityLiveService {
     });
 
     const normalizeRestCandidates = (requested: string, defModel: string | null): string[] => {
-      const isInternalAcp = /orchestrator|argon|g1-pro/i.test(requested);
+      const isInternalAcp = /orchestrator|argon|neon|g1-/i.test(requested);
       const list = isInternalAcp
         ? ["gemini-2.5-pro", "gemini-2.5-flash", defModel || "gemini-3.8-flash-high"]
         : [requested, defModel || "gemini-3.8-flash-high", "gemini-2.5-pro", "gemini-2.5-flash"];
@@ -1245,12 +1286,21 @@ export class AntigravityLiveService {
         const uncachedInput = Math.max(0, promptTokens - cachedInput);
         const output = Number(um?.candidatesTokenCount ?? 0) + Number(um?.thoughtsTokenCount ?? 0);
 
+        const fallbackReason = !input.generateImage
+          ? acpErrorMessage
+            ? `Fallback REST após falha ACP: ${acpErrorMessage.slice(0, 160)}`
+            : modelToTry !== input.model
+              ? `Modelo solicitado (${input.model}) redirecionado para ${modelToTry} via Code Assist REST.`
+              : undefined
+          : undefined;
+
         return {
           text: textParts.join("\n").trim(),
           images,
           modelUsed: modelToTry,
           accountId: chosenEntry.id,
           accountEmail: chosenEntry.email,
+          ...(fallbackReason ? { fallbackReason } : {}),
           usage: {
             uncachedInput,
             cachedInput,

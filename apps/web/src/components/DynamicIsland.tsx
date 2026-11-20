@@ -3,6 +3,7 @@ import type { AvatarShape, StatusMensageria } from "@criativo/contracts";
 import {
   ChevronLeft,
   ChevronRight,
+  GitFork,
   KeyRound,
   Maximize2,
   Minimize2,
@@ -16,6 +17,8 @@ import { MascoteAvatar } from "./MascoteAvatar";
 export interface StudioTabItem {
   id: string;
   titulo: string;
+  kind?: "agent" | "topic";
+  working?: boolean;
   shape?: AvatarShape;
   color?: string;
 }
@@ -28,12 +31,13 @@ interface DynamicIslandProps {
   whatsappStatus: StatusMensageria;
   onOpenWhatsAppModal: () => void;
   onOpenVaultModal: () => void;
-  // Extensões visuais estilo barra superior + abas OpenBot
+  // Extensões visuais estilo barra superior + abas criativo
   tabs?: StudioTabItem[];
   activeTabId?: string | null;
   onSelectTab?: (tabId: string) => void;
   onCloseTab?: (tabId: string) => void;
   onNewTab?: () => void;
+  onNewTopic?: () => void;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
   focusMode?: boolean;
@@ -44,7 +48,7 @@ interface DynamicIslandProps {
 }
 
 /**
- * Barra superior com navegação em abas e Dynamic Island central preta (#000000) idêntica ao OpenBot.
+ * Barra superior com navegação em abas e Dynamic Island central preta (#000000) do Criativo Studio.
  */
 export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   wsConnected,
@@ -59,6 +63,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   onSelectTab,
   onCloseTab,
   onNewTab,
+  onNewTopic,
   onToggleSidebar,
   focusMode = false,
   onToggleFocusMode,
@@ -78,7 +83,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
 
   return (
     <header className="relative h-[42px] shrink-0 bg-[#0D0D0D] border-b border-white/[0.06] flex items-center justify-between px-2.5 gap-2 select-none">
-      {/* Esquerda: controles de navegação + abas estilo OpenBot */}
+      {/* Esquerda: controles de navegação + abas Carbon Dark */}
       <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-x-auto no-scrollbar">
         <div className="flex items-center gap-0.5 text-[#979797] shrink-0 pr-1">
           <button
@@ -142,11 +147,21 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
                   onClick={() => onSelectTab?.(tab.id)}
                   className="flex items-center gap-1.5 min-w-0 text-left"
                 >
-                  <MascoteAvatar
-                    shape={tab.shape ?? "blob"}
-                    color={tab.color ?? "#38bdf8"}
-                    size={15}
-                  />
+                  {tab.kind === "topic" ? (
+                    <GitFork
+                      className={`h-3.5 w-3.5 shrink-0 ${
+                        tab.working ? "text-[#31CF76] animate-pulse" : "text-[#979797]"
+                      }`}
+                    />
+                  ) : (
+                    <MascoteAvatar
+                      shape={tab.shape ?? "blob"}
+                      color={tab.color ?? "#38bdf8"}
+                      size={16}
+                      animated={Boolean(tab.working)}
+                      mood={tab.working ? "working" : "idle"}
+                    />
+                  )}
                   <span className="truncate font-medium">{tab.titulo}</span>
                 </button>
                 {onCloseTab && tabs.length > 1 && (
@@ -166,12 +181,12 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
             );
           })}
 
-          {onNewTab && (
+          {(onNewTopic || onNewTab) && (
             <button
               type="button"
-              onClick={onNewTab}
-              title="Novo agente"
-              aria-label="Criar novo agente em nova aba"
+              onClick={onNewTopic ?? onNewTab}
+              title="Novo tópico"
+              aria-label="Novo tópico"
               className="h-7 w-7 rounded-lg flex items-center justify-center text-[#979797] hover:bg-[#212121] hover:text-white transition-colors shrink-0"
             >
               <Plus className="h-3.5 w-3.5" />
@@ -180,7 +195,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         </div>
       </div>
 
-      {/* Centro: Dynamic Island #000000 característica do OpenBot */}
+      {/* Centro: Dynamic Island #000000 do Criativo Studio */}
       <div
         className="hidden md:flex items-center gap-2.5 h-[30px] px-3.5 rounded-full bg-[#000000] border border-white/10 shadow-[0_6px_20px_rgba(0,0,0,0.65)] shrink-0"
         title={wsConnected ? "Daemon Live" : "Reconectando"}

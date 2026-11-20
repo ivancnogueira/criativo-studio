@@ -109,7 +109,7 @@ export function ImageLightbox({
           <a
             href={current.url}
             download
-            className="openbot-btn-primary inline-flex items-center gap-2 rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414]"
+            className="studio-btn-primary inline-flex items-center gap-2 rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414]"
           >
             <Download className="w-4 h-4" />
             Baixar arquivo
@@ -376,7 +376,7 @@ export function FilePreviewPanel({
         <a
           href={file.url}
           download={fileName}
-          className="openbot-btn-primary inline-flex items-center gap-2 rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414]"
+          className="studio-btn-primary inline-flex items-center gap-2 rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414]"
         >
           <Download className="w-4 h-4" />
           Baixar arquivo

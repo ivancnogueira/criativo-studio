@@ -95,7 +95,7 @@ export function resolveCliBinaryForProvider(
 
   const resolvedAppData = appDataDir ?? process.env.APPDATA ?? "";
   if (resolvedAppData) {
-    const baseRuntime = join(resolvedAppData, "OpenBot", "provider-runtimes", folderName);
+    const baseRuntime = join(resolvedAppData, "CriativoStudio", "provider-runtimes", folderName);
     try {
       if (existsSync(baseRuntime)) {
         const archDirs = readdirSync(baseRuntime);
@@ -541,7 +541,7 @@ export class CliOAuthAccountsService {
       let plano: string | null = null;
 
       if (provedor === "claude") {
-        // Espelha provider-runtime.ts do OpenBot: `stdio: "ignore"` força o CLI a usar callback HTTP localhost
+        // `stdio: "ignore"` força o CLI a usar callback HTTP localhost
         // (em vez de fallback manual "Paste code here") e envia a URL real apenas para `BROWSER=browser.cmd`.
         let openedFallbackBrowser = false;
         const launchBrowserOnce = (url: string) => {
@@ -640,7 +640,7 @@ export class CliOAuthAccountsService {
           // tenta leitura direta do .claude.json abaixo em listAccounts
         }
       } else {
-        // Fluxo oficial idêntico ao codex-login.ts do OpenBot: `codex app-server` + `account/login/start`
+        // Fluxo oficial de autenticação via `codex app-server` + `account/login/start`
         const appResult = await this.signInCodexViaAppServer({
           executable,
           codexHome: configDir,
@@ -722,7 +722,7 @@ export class CliOAuthAccountsService {
 
   /**
    * Executa login oficial ChatGPT/Codex usando `codex app-server` JSON-RPC (`account/login/start`),
-   * obtendo imediatamente a `authUrl` e aguardando `account/login/completed`, espelhando `codex-login.ts` do OpenBot.
+   * obtendo imediatamente a `authUrl` e aguardando `account/login/completed`.
    */
   private async signInCodexViaAppServer(input: {
     executable: string;

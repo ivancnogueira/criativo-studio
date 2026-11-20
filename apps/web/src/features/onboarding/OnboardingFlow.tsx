@@ -65,7 +65,7 @@ const ARCH_MASCOTS = [
 ];
 
 /**
- * Fluxo guiado em 2 etapas espelhado fielmente nas telas iniciais do OpenBot (Screenshots 1 e 2).
+ * Fluxo guiado em 2 etapas nativo do Criativo Studio.
  */
 export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
   initialState,
@@ -375,7 +375,7 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
               : "O Criativo Studio é gratuito para uso local. Escolha a IA para sua equipe criativa."}
           </p>
 
-          {/* Caixa agrupada estilo OpenBot */}
+          {/* Caixa agrupada Carbon Dark */}
           <div className="w-full rounded-2xl bg-[#1A1A1A] border border-white/10 overflow-hidden text-left shadow-2xl">
             <div className="px-4 py-3 border-b border-white/[0.06] grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <div>
@@ -775,14 +775,14 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
               type="button"
               disabled={submitting}
               onClick={() => setStep(3)}
-              className="openbot-btn-primary w-full py-2.5 text-[13.5px] shadow-lg"
+              className="studio-btn-primary w-full py-2.5 text-[13.5px] shadow-lg"
             >
               Avançar para marca e arquivos
             </button>
             <button
               type="button"
               onClick={() => setStep(1)}
-              className="openbot-btn-secondary w-full py-2.5 text-[13px]"
+              className="studio-btn-secondary w-full py-2.5 text-[13px]"
             >
               Voltar
             </button>
@@ -969,14 +969,14 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
                 void persistStep3BrandDraft().catch(() => {});
                 setStep(4);
               }}
-              className="openbot-btn-primary w-full py-2.5 text-[13.5px] shadow-lg"
+              className="studio-btn-primary w-full py-2.5 text-[13.5px] shadow-lg"
             >
               Avançar para Instagram e Canais
             </button>
             <button
               type="button"
               onClick={() => setStep(2)}
-              className="openbot-btn-secondary w-full py-2.5 text-[13px]"
+              className="studio-btn-secondary w-full py-2.5 text-[13px]"
             >
               Voltar
             </button>
@@ -1090,14 +1090,14 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
               type="button"
               disabled={submitting}
               onClick={() => void handleFinishStudio()}
-              className="openbot-btn-primary w-full py-2.5 text-[13.5px] shadow-lg"
+              className="studio-btn-primary w-full py-2.5 text-[13.5px] shadow-lg"
             >
               Finalizar e entrar no Estúdio
             </button>
             <button
               type="button"
               onClick={() => setStep(3)}
-              className="openbot-btn-secondary w-full py-2.5 text-[13px]"
+              className="studio-btn-secondary w-full py-2.5 text-[13px]"
             >
               Voltar
             </button>
@@ -1128,7 +1128,7 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
             <button
               type="button"
               onClick={() => setTermsModalOpen(false)}
-              className="openbot-btn-primary px-4 py-1.5 text-[12.5px]"
+              className="studio-btn-primary px-4 py-1.5 text-[12.5px]"
             >
               Entendi
             </button>

@@ -295,7 +295,7 @@ function findManagedRuntimeExecutable(
   try {
     const platArch =
       process.platform === "win32" ? "win32-x64" : process.platform === "darwin" ? "darwin-arm64" : "linux-x64";
-    const base = join(appDataDir, "OpenBot", "provider-runtimes", providerFolder, platArch);
+    const base = join(appDataDir, "CriativoStudio", "provider-runtimes", providerFolder, platArch);
     if (!existsSync(base)) return null;
     const versions = readdirSync(base, { withFileTypes: true })
       .filter((d) => d.isDirectory())

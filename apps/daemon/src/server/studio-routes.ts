@@ -1,5 +1,5 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, extname, relative, resolve, sep } from "node:path";
 import {
@@ -52,7 +52,7 @@ import type { AutoUpdateService } from "../updater/auto-update-service.ts";
 import {
   buildConnectorsList,
   computeHostAnalytics,
-  importOpenBotTelemetryIfAvailable,
+  importExternalTelemetryIfAvailable,
   listInstalledSkills,
   loadSkillPromptBySlug,
   recordChatTurnUsage,
@@ -83,6 +83,7 @@ import {
   executeStudioExtensionTool,
   executeStudioRoutineTool,
   getChatWorkflowToolCatalog,
+  HIDDEN_CATALOG_TOOL_NAMES,
   isAgentAuthorizedForStudioTool,
   isPhase10ExtensionTool,
   isPhase13ToolName,
@@ -98,10 +99,13 @@ import {
   readAgentContextCutoffAt,
   readAgentGovernance,
   ROUTINE_AGENT_TOOLS_SCHEMA,
+  selectBalancedVisualAssets,
   syncWorkspaceFilesToDatabase,
   validateMetaIntegration,
+  type LabeledVisualAsset,
   type Phase14ToolServices,
 } from "./studio-tools-bridge.ts";
+export { selectBalancedVisualAssets, type LabeledVisualAsset };
 import {
   BackupModelsResolver,
   isRetryableQuotaOrProviderError,
@@ -389,12 +393,30 @@ function resolveWorkflowRuntime(deps: StudioRoutesDeps): {
   };
 }
 
-interface ParsedTextToolCall {
+export interface ParsedTextToolCall {
   name: string;
   arguments: Record<string, unknown>;
 }
 
-function parseWorkflowTextToolCalls(text: string): ParsedTextToolCall[] {
+export function compactRecentHistory(
+  history: MensagemChat[],
+  maxMessages = 6,
+  maxCharsPerMessage = 1200
+): Array<{ role: "user" | "assistant"; text: string }> {
+  return history.slice(-maxMessages).map((item) => {
+    const raw = item.conteudo_markdown ?? "";
+    const text =
+      raw.length > maxCharsPerMessage
+        ? `${raw.slice(0, maxCharsPerMessage)}\n...[mensagem compactada]`
+        : raw;
+    return {
+      role: (item.autor === "usuario" ? "user" : "assistant") as "user" | "assistant",
+      text,
+    };
+  });
+}
+
+export function parseWorkflowTextToolCalls(text: string): ParsedTextToolCall[] {
   const calls: ParsedTextToolCall[] = [];
   const regex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi;
   let match: RegExpExecArray | null;
@@ -404,20 +426,25 @@ function parseWorkflowTextToolCalls(text: string): ParsedTextToolCall[] {
         name?: unknown;
         arguments?: unknown;
       };
-      if (
-        typeof parsed.name === "string" &&
-        (isWorkflowToolName(parsed.name) ||
-          isPhase13ToolName(parsed.name) ||
-          isPhase14ToolName(parsed.name) ||
-          isPhase15ToolName(parsed.name))
-      ) {
-        calls.push({
-          name: parsed.name,
-          arguments:
-            parsed.arguments && typeof parsed.arguments === "object"
-              ? (parsed.arguments as Record<string, unknown>)
-              : {},
-        });
+      if (typeof parsed.name === "string") {
+        const normalizedName = parsed.name
+          .replace(/^(?:mcp__criativo_studio__|criativo_studio_|criativo-studio_)/, "")
+          .trim();
+        if (
+          isWorkflowToolName(normalizedName) ||
+          isPhase13ToolName(normalizedName) ||
+          isPhase14ToolName(normalizedName) ||
+          isPhase15ToolName(normalizedName) ||
+          isPhase10ExtensionTool(normalizedName)
+        ) {
+          calls.push({
+            name: normalizedName,
+            arguments:
+              parsed.arguments && typeof parsed.arguments === "object"
+                ? (parsed.arguments as Record<string, unknown>)
+                : {},
+          });
+        }
       }
     } catch {
       // ignora bloco inválido
@@ -439,6 +466,7 @@ async function runTextModelWorkflowToolLoop(params: {
   isResumingWait?: boolean;
   signal?: AbortSignal;
   steps: PassoChat[];
+  anexosGerados?: AnexoChat[];
   onProgress?: (event: {
     fase: "iniciado" | "etapa" | "chunk" | "concluido" | "erro";
     mensagem_status?: string;
@@ -515,7 +543,29 @@ async function runTextModelWorkflowToolLoop(params: {
             skillsManager: params.deps.skillsManager,
             whatsappManager: params.deps.whatsappManager,
             whatsappOrchestrator: params.deps.whatsappOrchestrator,
+            onImageProgress: (evt) => {
+              params.onProgress?.({
+                fase: "etapa",
+                mensagem_status: evt.mensagem,
+                step: {
+                  id: evt.stepId,
+                  ferramenta: "generate_image",
+                  titulo: evt.mensagem,
+                  formato: evt.formato,
+                  status: evt.status,
+                },
+              });
+            },
           });
+          if (
+            toolName === "generate_image" &&
+            out &&
+            typeof out === "object" &&
+            "anexo" in out &&
+            (out as { anexo?: AnexoChat }).anexo
+          ) {
+            params.anexosGerados?.push((out as { anexo: AnexoChat }).anexo);
+          }
         } else if (isRoutineToolName(toolName)) {
           out = await executeStudioRoutineTool(toolName, call.arguments, {
             agenteId: params.agenteId,
@@ -668,15 +718,34 @@ export function isGreetingOrCapabilityQuestion(text: string): boolean {
   return false;
 }
 
+const VISUAL_FOLLOWUP_CORRECTION_RE =
+  /(n[aã]o\s+(sou\s+eu|use\s+ess[ae]|eh\s+essa)|esse\s+a[ií]\s+n[aã]o|foto\s+errad[ao]|pasta\s+errad[ao]|minhas?\s+fotos?|recursos\/fotos|refa[cç]a|tenta\s+de\s+novo|tentar\s+novamente|gera\s+outr[ao]|usa\s+a?\s*minha\s+foto|cade\s+a?\s*imagem|^\s*(kd|cad[eê])\??\s*$)/i;
+
 export function hasExplicitVisualGenerationIntent(
   userPrompt: string,
   agentId: string,
-  isHandoff = false
+  isHandoff = false,
+  history: MensagemChat[] = []
 ): boolean {
   if (isGreetingOrCapabilityQuestion(userPrompt)) return false;
-  if (!EXPLICIT_CREATION_ACTION_RE.test(userPrompt)) return false;
 
   const isVisualAgent = agentId.startsWith("designer_") || agentId === "consistencia_visual";
+  const hasRecentVisualContext =
+    isVisualAgent ||
+    history.slice(-6).some((m) => {
+      const hasGeneratedAnexo = Array.isArray(m.anexos) && m.anexos.some((a) => a?.tipo_uso === "gerado");
+      if (hasGeneratedAnexo) return true;
+      return /(gerar|processando\s+a\s+arte|arte|imagem|post|storie|carrossel|recursos\/fotos|recursos\/referencias)/i.test(
+        m.conteudo_markdown || ""
+      );
+    });
+
+  if (VISUAL_FOLLOWUP_CORRECTION_RE.test(userPrompt) && hasRecentVisualContext && !isHandoff) {
+    return true;
+  }
+
+  if (!EXPLICIT_CREATION_ACTION_RE.test(userPrompt)) return false;
+
   if (isVisualAgent) {
     return EXPLICIT_VISUAL_ASSET_NOUN_RE.test(userPrompt);
   }
@@ -879,6 +948,7 @@ export async function generateAgentChatReply(
     workspaceRoot,
     agenteId: agente.agente_id,
     memoryManager: deps.memoryManager,
+    userPrompt,
   });
 
   const promptBaseParts = [
@@ -900,6 +970,11 @@ export async function generateAgentChatReply(
   }
   if (memories.length > 0) {
     promptBaseParts.push(`Memórias do agente:\n${memories.map((m) => `- ${m.texto}`).join("\n")}`);
+  }
+  if (agente.agente_id.startsWith("designer_") || agente.agente_id === "consistencia_visual") {
+    promptBaseParts.push(
+      "REGRA ANTI-ALUCINAÇÃO VISUAL: NUNCA responda ao usuário dizendo 'já estou processando/gerando a arte' ou prometendo mostrar a imagem em instantes sem realmente invocar a ferramenta `generate_image`. Se nenhuma arte nova foi gerada neste turno, invoque `generate_image` agora ou explique exatamente o impedimento técnico."
+    );
   }
 
   // Ponte nativa para validação real da Meta Graph API (sem expor tokens)
@@ -991,6 +1066,9 @@ export async function generateAgentChatReply(
     ...studioPhase15Tools,
     ...mcpTools,
   ]) {
+    if (HIDDEN_CATALOG_TOOL_NAMES.has(t.name)) {
+      continue;
+    }
     if (
       !isAgentAuthorizedForStudioTool(t.name, agente.agente_id, {
         db: deps.db,
@@ -1006,7 +1084,7 @@ export async function generateAgentChatReply(
   }
   const availableChatTools = Array.from(availableChatToolsMap.values());
   const toolFallbackNames = availableChatTools.map((t) => t.name);
-  const studioToolsPromptGuidance = `\n\n## Ferramentas Nativas & MCP do Criativo Studio Disponíveis Neste Turno\nVocê tem acesso autorizado nesta sessão às seguintes ferramentas: ${toolFallbackNames.join(", ")}.\nSe estiver operando via servidor MCP \`criativo_studio\` (ou ferramentas \`mcp__criativo_studio__*\`), chame a ferramenta diretamente.\nCaso o runtime textual atual não exponha tools nativas, emita uma chamada explícita no formato:\n<tool_call>{"name":"nome_da_ferramenta","arguments":{...}}</tool_call>\n(Ex.: \`consultar_metricas_meta\` para métricas do Instagram na Graph API ${graphVersion}, \`validar_integracao_meta\` para checar credenciais do Cofre, \`list_memories\`/\`save_memory\`, etc.). Jamais invente métricas ou diga que não tem acesso se a ferramenta constar na lista acima.`;
+  const studioToolsPromptGuidance = `\n\n## Ferramentas Nativas & MCP (${toolFallbackNames.length})\nFerramentas autorizadas: ${toolFallbackNames.join(", ")}.\nPrefira chamar diretamente via MCP \`criativo_studio\` quando expostas no runtime; se apenas texto estiver ativo, emita \`<tool_call>{"name":"nome","arguments":{...}}</tool_call>\`. Nunca invente dados ou negue acesso a uma ferramenta listada acima.`;
 
   const governance = readAgentGovernance(deps.db, agente.agente_id);
   const initialModel = options?.overrideModel?.trim() || agente.modelo_padrao;
@@ -1101,7 +1179,8 @@ export async function generateAgentChatReply(
   const asksVisualAsset = hasExplicitVisualGenerationIntent(
     intentSourcePrompt,
     agente.agente_id,
-    Boolean(options?.isHandoff)
+    Boolean(options?.isHandoff),
+    history
   );
 
   if (asksProduction) {
@@ -1144,49 +1223,58 @@ export async function generateAgentChatReply(
   }
 
   const anexosGerados: AnexoChat[] = [];
-  let resolvedImageDiskPaths = anexos
-    .map((a) => resolve(workspaceRoot, a.caminho_relativo))
-    .filter((p) => existsSync(p));
+  let labeledVisualAssets: LabeledVisualAsset[] = [];
+  const isVisualRoleAgent =
+    agente.agente_id.startsWith("designer_") || agente.agente_id === "consistencia_visual";
 
-  // Quando o usuário não anexou na mensagem e é um turno visual/designer, carrega referências da marca do disco/SQLite
-  if (
-    resolvedImageDiskPaths.length === 0 &&
-    (asksVisualAsset || agente.agente_id.startsWith("designer_") || agente.agente_id === "consistencia_visual") &&
-    process.env.CRIATIVO_SKIP_LOCAL_PROBE !== "1"
-  ) {
-    const refRows = deps.db.connection
-      .prepare(
-        `SELECT caminho_relativo FROM projecao_arquivos
-         WHERE tipo_uso IN ('referencia', 'logo', 'personagem')
-           AND mime_type LIKE 'image/%'
-           AND mime_type NOT LIKE '%svg%'
-         ORDER BY CASE
-           WHEN caminho_relativo LIKE 'recursos/referencias/%' THEN 0
-           WHEN caminho_relativo LIKE 'recursos/fotos/%' THEN 1
-           WHEN caminho_relativo LIKE 'recursos/logos/%' THEN 2
-           ELSE 3
-         END, criado_em DESC
-         LIMIT 4;`
-      )
-      .all() as Array<{ caminho_relativo: string }>;
-    resolvedImageDiskPaths = refRows
-      .map((r) => resolve(workspaceRoot, r.caminho_relativo))
-      .filter((p) => existsSync(p));
+  if (asksVisualAsset || isVisualRoleAgent || anexos.length > 0) {
+    labeledVisualAssets = selectBalancedVisualAssets(deps.db, workspaceRoot, {
+      explicitAttachments: anexos,
+      maxFotos: 3,
+      maxReferencias: 2,
+      maxLogos: 1,
+    });
   }
+
+  let resolvedImageDiskPaths =
+    labeledVisualAssets.length > 0
+      ? labeledVisualAssets.map((a) => a.path)
+      : anexos.map((a) => resolve(workspaceRoot, a.caminho_relativo)).filter((p) => existsSync(p));
+
+  const formatoVisualPedido = lower.includes("storie")
+    ? "9:16"
+    : lower.includes("quadrad") || lower.includes("1:1")
+      ? "1:1"
+      : lower.includes("16:9")
+        ? "16:9"
+        : "3:4";
 
   // Se houver conta conectada e pedido visual explícito, gera arte real via gemini-3.1-flash-image
   if (hasAntigravityAccount && asksVisualAsset) {
     const tImgStart = Date.now();
+    const imgStepId = `step-img-${randomUUID().slice(0, 8)}`;
+    onProgress?.({
+      fase: "etapa",
+      mensagem_status: `Gerando arte ${formatoVisualPedido} com suas fotos reais...`,
+      step: {
+        id: imgStepId,
+        ferramenta: "generate_image",
+        titulo: `Gerando arte visual (${formatoVisualPedido})...`,
+        formato: formatoVisualPedido,
+        status: "executando",
+      },
+    });
     try {
       const imgGen = await agService.executeCodeAssistGenerate({
         model: agSnapshot.imageGenerationModelIds[0] ?? "gemini-3.1-flash-image",
         messages: [
           {
             role: "user",
-            text: `Crie uma arte profissional de Instagram para ${onboarding.marca_nome} (${onboarding.perfil_handle}). Solicitação do usuário: ${userPrompt}. Estética editorial contemporânea, alta legibilidade e contraste, sem marcas d'água.`,
+            text: `Crie uma arte profissional de Instagram (${formatoVisualPedido}) para ${onboarding.marca_nome} (${onboarding.perfil_handle}). Preserve fielmente o rosto e características da pessoa nas fotos rotuladas como [FOTO REAL DO USUÁRIO], utilizando [REFERÊNCIA DE ESTILO] somente como inspiração estética. Solicitação do usuário: ${userPrompt}. Estética editorial contemporânea, alta legibilidade e contraste, sem marcas d'água.`,
           },
         ],
         imagePaths: resolvedImageDiskPaths,
+        labeledImages: labeledVisualAssets,
         generateImage: true,
         agentId: agente.agente_id,
         preferredAccountId: typeof config.provider_account_id === "string" ? config.provider_account_id : null,
@@ -1260,22 +1348,51 @@ export async function generateAgentChatReply(
           });
         }
 
-        steps.push({
-          id: `step-${randomUUID().slice(0, 8)}`,
+        const imgDoneStep: PassoChat = {
+          id: imgStepId,
           ferramenta: `generate_image:${imgGen.modelUsed}`,
           titulo: `Arte real gerada (${(buf.length / 1024).toFixed(0)} KB · ${imgGen.modelUsed})`,
           detalhes: relPath,
+          formato: formatoVisualPedido,
           status: "concluido",
           duracao_ms: Date.now() - tImgStart,
+        };
+        steps.push(imgDoneStep);
+        onProgress?.({
+          fase: "etapa",
+          mensagem_status: imgDoneStep.titulo,
+          step: imgDoneStep,
+        });
+      } else {
+        const imgEmptyStep: PassoChat = {
+          id: imgStepId,
+          ferramenta: "generate_image",
+          titulo: "Gerador não retornou imagem neste turno",
+          formato: formatoVisualPedido,
+          status: "erro",
+          duracao_ms: Date.now() - tImgStart,
+        };
+        steps.push(imgEmptyStep);
+        onProgress?.({
+          fase: "etapa",
+          mensagem_status: imgEmptyStep.titulo,
+          step: imgEmptyStep,
         });
       }
     } catch (imgErr) {
-      steps.push({
-        id: `step-${randomUUID().slice(0, 8)}`,
+      const imgErrStep: PassoChat = {
+        id: imgStepId,
         ferramenta: "generate_image",
         titulo: `Aviso na geração de imagem: ${imgErr instanceof Error ? imgErr.message.slice(0, 90) : "falha na chamada"}`,
+        formato: formatoVisualPedido,
         status: "erro",
         duracao_ms: Date.now() - tImgStart,
+      };
+      steps.push(imgErrStep);
+      onProgress?.({
+        fase: "etapa",
+        mensagem_status: imgErrStep.titulo,
+        step: imgErrStep,
       });
     }
   }
@@ -1325,10 +1442,7 @@ export async function generateAgentChatReply(
       });
       const t0 = Date.now();
       try {
-        const cliMsgs = history.slice(-8).map((item) => ({
-          role: (item.autor === "usuario" ? "user" : "assistant") as "user" | "assistant",
-          text: item.conteudo_markdown,
-        }));
+        const cliMsgs = compactRecentHistory(history, 6, 1200);
         cliMsgs.push({
           role: "user",
           text:
@@ -1379,6 +1493,7 @@ export async function generateAgentChatReply(
           isResumingWait: Boolean(options?.wokenWaitsBlock),
           signal: options?.signal,
           steps,
+          anexosGerados,
           onProgress,
         });
 
@@ -1432,10 +1547,7 @@ export async function generateAgentChatReply(
       });
       const t0 = Date.now();
       try {
-        const ocMsgs = history.slice(-8).map((item) => ({
-          role: (item.autor === "usuario" ? "user" : "assistant") as "user" | "assistant",
-          text: item.conteudo_markdown,
-        }));
+        const ocMsgs = compactRecentHistory(history, 6, 1200);
         ocMsgs.push({
           role: "user",
           text:
@@ -1485,6 +1597,7 @@ export async function generateAgentChatReply(
             isResumingWait: Boolean(options?.wokenWaitsBlock),
             signal: options?.signal,
             steps,
+            anexosGerados,
             onProgress,
           });
 
@@ -1535,9 +1648,9 @@ export async function generateAgentChatReply(
       const t0 = Date.now();
       try {
         const client = deps.providers.getClientForModel(targetModel);
-        const turnMessages: ConversationMessage[] = history.slice(-8).map((item) => ({
-          role: (item.autor === "usuario" ? "user" : "assistant") as "user" | "assistant",
-          content: item.conteudo_markdown,
+        const turnMessages: ConversationMessage[] = compactRecentHistory(history, 6, 1200).map((item) => ({
+          role: item.role,
+          content: item.text,
         }));
         turnMessages.push({
           role: "user",
@@ -1857,10 +1970,7 @@ export async function generateAgentChatReply(
       });
       const t0 = Date.now();
       try {
-        const historyMsgs = history.slice(-8).map((item) => ({
-          role: (item.autor === "usuario" ? "user" : "assistant") as "user" | "assistant",
-          text: item.conteudo_markdown,
-        }));
+        const historyMsgs = compactRecentHistory(history, 6, 1200);
         historyMsgs.push({
           role: "user",
           text:
@@ -1869,12 +1979,16 @@ export async function generateAgentChatReply(
               : userPrompt,
         });
 
+        const agEffort = typeof config.effort === "string" ? config.effort : undefined;
+        const skipExtraImagesOnFollowUp = anexosGerados.length > 0;
         const agSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e especializada como ${agente.nome}. Use tabelas Markdown quando ajudar na organização. Nunca invente handles ou marcas reais: utilize apenas os informados pelo usuário.${studioToolsPromptGuidance}`;
         const liveResult = await agService.executeCodeAssistGenerate({
           model: targetModel,
+          effort: agEffort,
           systemPrompt: agSystemPrompt,
           messages: historyMsgs,
-          imagePaths: resolvedImageDiskPaths,
+          imagePaths: skipExtraImagesOnFollowUp ? [] : resolvedImageDiskPaths,
+          labeledImages: skipExtraImagesOnFollowUp ? [] : labeledVisualAssets,
           agentId: agente.agente_id,
           preferredAccountId: preferredAccId,
           onDelta: (delta) => {
@@ -1892,12 +2006,15 @@ export async function generateAgentChatReply(
             invokeFollowUp: async (followUpPrompt) => {
               const next = await agService.executeCodeAssistGenerate({
                 model: targetModel,
+                effort: agEffort,
                 systemPrompt: agSystemPrompt,
                 messages: [
                   ...historyMsgs,
                   { role: "assistant", text: liveResult.text },
                   { role: "user", text: followUpPrompt },
                 ],
+                imagePaths: [],
+                labeledImages: [],
                 agentId: agente.agente_id,
                 preferredAccountId: preferredAccId,
               });
@@ -1913,6 +2030,7 @@ export async function generateAgentChatReply(
             isResumingWait: Boolean(options?.wokenWaitsBlock),
             signal: options?.signal,
             steps,
+            anexosGerados,
             onProgress,
           });
 
@@ -1931,6 +2049,7 @@ export async function generateAgentChatReply(
             id: `step-${randomUUID().slice(0, 8)}`,
             ferramenta: `antigravity:${liveResult.modelUsed}`,
             titulo: `Executado via ${liveResult.modelUsed}${liveResult.accountEmail ? ` (${liveResult.accountEmail})` : ""} · ${liveResult.usage.uncachedInput + liveResult.usage.cachedInput + liveResult.usage.output} tokens`,
+            ...(liveResult.fallbackReason ? { detalhes: liveResult.fallbackReason } : {}),
             status: "concluido",
             duracao_ms: Date.now() - t0,
           });
@@ -2711,8 +2830,8 @@ export async function tryHandleStudioRoute(
   }
 
   if (method === "GET" && path === "/api/uso/analytics") {
-    if (url.searchParams.get("importOpenBot") === "1" || process.env.CRIATIVO_IMPORT_OPENBOT_DB === "1") {
-      importOpenBotTelemetryIfAvailable(db);
+    if (url.searchParams.get("importExternal") === "1" || process.env.CRIATIVO_IMPORT_EXTERNAL_DB === "1") {
+      importExternalTelemetryIfAvailable(db);
     }
     const dias = Number(url.searchParams.get("dias") ?? "30");
     const agenteId = url.searchParams.get("agente_id");
@@ -4774,6 +4893,73 @@ export async function tryHandleStudioRoute(
       arquivo,
       ...(brandExtraction ? { brandExtraction } : {}),
       onboarding: syncedSetup.onboarding,
+    });
+    return true;
+  }
+
+  const deleteArquivoMatch = path.match(/^\/api\/arquivos\/([^/]+)$/);
+  if (
+    method === "DELETE" &&
+    deleteArquivoMatch &&
+    deleteArquivoMatch[1] !== "raw" &&
+    deleteArquivoMatch[1] !== "upload"
+  ) {
+    const arquivoId = decodeURIComponent(deleteArquivoMatch[1]);
+    const row = db.connection
+      .prepare(`SELECT arquivo_id, caminho_relativo FROM projecao_arquivos WHERE arquivo_id = ? LIMIT 1;`)
+      .get(arquivoId) as { arquivo_id: string; caminho_relativo: string } | undefined;
+
+    if (!row) {
+      sendJson(res, 404, { erro: "Arquivo não encontrado." });
+      return true;
+    }
+
+    const relClean = row.caminho_relativo.replaceAll("\\", "/");
+    if (
+      !relClean ||
+      relClean.includes("..") ||
+      relClean.startsWith("/") ||
+      relClean.startsWith("\\")
+    ) {
+      sendJson(res, 403, { erro: "Caminho não permitido para exclusão." });
+      return true;
+    }
+
+    const deleteRoots = [
+      resolve(workspaceRoot, "recursos"),
+      resolve(workspaceRoot, "saidas"),
+    ];
+    const resolvedTarget = resolve(workspaceRoot, relClean);
+    const isDeleteAllowed = deleteRoots.some((root) => {
+      const rel = relative(root, resolvedTarget);
+      return rel !== "" && !rel.startsWith("..") && !rel.includes(`..${sep}`);
+    });
+
+    if (!isDeleteAllowed) {
+      sendJson(res, 403, { erro: "Exclusão permitida apenas dentro de recursos/ ou saidas/." });
+      return true;
+    }
+
+    try {
+      if (existsSync(resolvedTarget)) {
+        unlinkSync(resolvedTarget);
+      }
+    } catch (err) {
+      const code = (err as { code?: string } | null)?.code;
+      if (code !== "ENOENT") {
+        sendJson(res, 500, { erro: err instanceof Error ? err.message : "Erro ao remover arquivo físico." });
+        return true;
+      }
+    }
+
+    db.connection
+      .prepare(`DELETE FROM projecao_arquivos WHERE arquivo_id = ?;`)
+      .run(row.arquivo_id);
+
+    sendJson(res, 200, {
+      ok: true,
+      arquivo_id: row.arquivo_id,
+      caminho_relativo: row.caminho_relativo,
     });
     return true;
   }

@@ -508,7 +508,7 @@ export const RoutineFlowsCanvas: React.FC<RoutineFlowsCanvasProps> = ({
       {/* Área central + Inspetor lateral do canvas */}
       <div className="flex-1 min-h-0 flex overflow-hidden">
         <div
-          className="relative flex-1 overflow-hidden openbot-dot-grid"
+          className="relative flex-1 overflow-hidden studio-dot-grid"
           onPointerMove={handleCanvasPointerMove}
           onPointerUp={handleCanvasPointerUp}
           onPointerDown={(e) => {

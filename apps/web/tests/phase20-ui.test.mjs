@@ -8,7 +8,7 @@ import { createServer as createViteServer } from "vite";
 
 const webRoot = resolve(fileURLToPath(import.meta.url), "../..");
 
-describe("Fase 20 — Paridade OpenBot, In-Focus Settings, Rotinas, DynamicIsland, Loja & Chat", () => {
+describe("Fase 20 — Paridade de UX, In-Focus Settings, Rotinas, DynamicIsland, Loja & Chat", () => {
   let vite;
 
   before(async () => {

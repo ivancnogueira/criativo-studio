@@ -355,7 +355,7 @@ describe("Fase 11 — UI Agenda, Switch Rotinas, Webhook 3 Passos, Editor & Canv
         onOpenAgentChat: () => {},
       })
     );
-    assert.match(canvasHtml, /openbot-dot-grid/);
+    assert.match(canvasHtml, /studio-dot-grid/);
     assert.match(canvasHtml, /routine:rot-wh-1/);
     assert.match(canvasHtml, /agent:estrategista/);
     assert.match(canvasHtml, /Executar rotina agora/);

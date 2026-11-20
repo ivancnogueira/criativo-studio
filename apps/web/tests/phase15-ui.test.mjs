@@ -480,7 +480,8 @@ describe("Fase 15 — UI Carbon Dark SSR & Auditoria Estática Clean-Room", () =
         onSelectAgent: () => {},
       }),
     );
-    assert.match(drawerHtml, /Abrir barra rápida/);
+    assert.match(drawerHtml, /Recolher ilha lateral|Expandir ilha lateral de agentes/);
+    assert.match(drawerHtml, /Abrir rapidamente Estrategista Editorial/);
 
     const connectorsHtml = renderToStaticMarkup(
       React.createElement(ConnectorsPage, {

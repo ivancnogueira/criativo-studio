@@ -608,7 +608,7 @@ function renderFormattedMarkdownText(content: string): React.ReactNode {
 }
 
 /**
- * Tela de Conversa rica por Agente ou Canal em Equipe com fidelidade visual ao OpenBot (Screenshot 5).
+ * Tela de Conversa rica por Agente ou Canal em Equipe com fidelidade visual ao criativo .
  */
 export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
   mode,
@@ -1230,16 +1230,16 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
           />
         )}
 
-        {/* Cabeçalho da conversa com botão central de Modelo + Esforço (Screenshot 5) */}
+        {/* Cabeçalho da conversa com botão central de Modelo + Esforço  */}
         <div className="h-[48px] shrink-0 border-b border-white/[0.06] px-4 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
             {mode === "channel" ? (
-              <ChannelMascoteCluster members={channelMembers} size={30} />
+              <ChannelMascoteCluster members={channelMembers} size={34} />
             ) : (
               <MascoteAvatar
                 shape={avatarShape}
                 color={avatarColor}
-                size={30}
+                size={36}
                 mood={isWorking ? "working" : "idle"}
                 animated={isWorking}
               />
@@ -1509,7 +1509,7 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                 >
                 {!isUser && (
                   <div className="pt-1 shrink-0">
-                    <MascoteAvatar shape={avatarShape} color={avatarColor} size={28} />
+                    <MascoteAvatar shape={avatarShape} color={avatarColor} size={38} />
                   </div>
                 )}
 
@@ -1885,8 +1885,20 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
           </div>
         )}
 
-        {/* Feedback ao vivo estilo OpenBot/Antigravity enquanto o agente executa */}
-        {isWorking && (
+        {/* Feedback ao vivo estilo Criativo Studio enquanto o agente executa */}
+        {isWorking && (() => {
+          const activeImageStep = liveRun?.steps.find(
+            (st) => st.ferramenta?.includes("generate_image") && st.status === "executando"
+          );
+          const previewAspectClass =
+            activeImageStep?.formato === "9:16"
+              ? "aspect-[9/16] max-w-[210px]"
+              : activeImageStep?.formato === "1:1"
+                ? "aspect-square max-w-[260px]"
+                : activeImageStep?.formato === "16:9"
+                  ? "aspect-video max-w-[340px]"
+                  : "aspect-[3/4] max-w-[250px]";
+          return (
           <div className="flex gap-3 max-w-[820px] mr-auto pt-1" role="status" aria-live="polite">
             <div className="pt-0.5 shrink-0 flex flex-col items-center">
               <div className="flex items-center gap-1 mb-1">
@@ -1894,7 +1906,7 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                 <span className="h-1 w-1 rounded-full bg-[#A855F7] animate-bounce [animation-delay:-0.12s]" />
                 <span className="h-1 w-1 rounded-full bg-[#A855F7] animate-bounce" />
               </div>
-              <MascoteAvatar shape={avatarShape} color={avatarColor} size={28} animated mood="working" />
+              <MascoteAvatar shape={avatarShape} color={avatarColor} size={44} animated mood="working" />
             </div>
 
             <div className="flex-1 min-w-0 space-y-2.5">
@@ -1906,6 +1918,23 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                   {formatElapsedClock(elapsedSec)}
                 </span>
               </div>
+
+              {activeImageStep && (
+                <div
+                  data-testid="image-generating-preview"
+                  className={`studio-image-generating-card w-full ${previewAspectClass} flex flex-col items-center justify-end p-4`}
+                >
+                  <div className="relative z-10 w-full rounded-xl bg-[#141414]/80 backdrop-blur-md border border-white/10 px-3 py-2 text-center space-y-1">
+                    <div className="flex items-center justify-center gap-1.5 text-[12px] font-semibold text-white">
+                      <Loader2 className="h-3.5 w-3.5 text-[#42A0FF] animate-spin" />
+                      <span>Gerando imagem{activeImageStep.formato ? ` (${activeImageStep.formato})` : ""}...</span>
+                    </div>
+                    <p className="text-[11px] text-[#979797] truncate">
+                      {activeImageStep.titulo || "Compondo iluminação e referências"}
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {showAgentSteps && liveRun && liveRun.steps.length > 0 && (
                 <div className="rounded-xl bg-[#212121] border border-white/[0.06] px-3 py-2 space-y-1.5">
@@ -1970,7 +1999,8 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
               )}
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {takeoverSession && (
           <div className="max-w-[820px] mr-auto">
@@ -2047,7 +2077,7 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
         )}
       </div>
 
-      {/* Composer arredondado #212121 (Screenshot 5) */}
+      {/* Composer arredondado #212121  */}
       <div className="px-5 pb-4 pt-2 shrink-0">
         <div className="max-w-[820px] mx-auto">
           {mode === "agent" && onCloseWait && (

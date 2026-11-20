@@ -502,7 +502,7 @@ export const daemonApi = {
     });
   },
 
-  // --- Rotas Fase 7 (OpenBot Parity) ---
+  // --- Rotas Fase 7 (Paridade Carbon Dark) ---
   async getOnboarding(): Promise<OnboardingEstado> {
     const json = await requestJson<{ onboarding: OnboardingEstado }>("/api/onboarding");
     return json.onboarding;
@@ -1166,6 +1166,13 @@ export const daemonApi = {
     const res = await fetch("/api/arquivos");
     const json = (await res.json()) as { arquivos: ArquivoStudio[] };
     return json.arquivos ?? [];
+  },
+
+  async deleteFile(arquivoId: string): Promise<{ ok: boolean; arquivo_id: string }> {
+    return await requestJson<{ ok: boolean; arquivo_id: string }>(
+      `/api/arquivos/${encodeURIComponent(arquivoId)}`,
+      { method: "DELETE" }
+    );
   },
 
   async uploadFile(file: File, agenteId?: string | null): Promise<AnexoChat> {
@@ -2370,6 +2377,23 @@ export const daemonApi = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(input),
+      }
+    );
+  },
+
+  async createEmptyTopic(
+    agenteId: string,
+    titulo?: string
+  ): Promise<{ thread: AgenteThreadRegistro }> {
+    return await requestJson<{ thread: AgenteThreadRegistro }>(
+      `/api/agentes/${encodeURIComponent(agenteId)}/threads`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vazio: true,
+          ...(titulo ? { titulo } : {}),
+        }),
       }
     );
   },

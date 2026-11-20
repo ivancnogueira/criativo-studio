@@ -262,7 +262,7 @@ export function SharedTablesModal({
                       href={daemonApi.getSharedTableExportUrl(selectedName, "csv")}
                       download
                       onClick={() => setFeedbackMsg("Tabela exportada em CSV")}
-                      className="openbot-btn-primary inline-flex items-center gap-2 rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414]"
+                      className="studio-btn-primary inline-flex items-center gap-2 rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414]"
                     >
                       <FileSpreadsheet className="w-4 h-4" />
                       Exportar CSV

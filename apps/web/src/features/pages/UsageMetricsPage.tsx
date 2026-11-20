@@ -92,7 +92,7 @@ const PERIOD_OPTIONS: Array<{ dias: number; rotulo: string }> = [
 ];
 
 /**
- * Página dedicada 'Uso' espelhando o AgentUsageReport do OpenBot:
+ * Página dedicada 'Uso' espelhando o relatório completo de uso:
  * banner de dados parciais, hero USD/Indisponível, gráfico SVG diário, 6 totais e SlidingTabs.
  */
 export const UsageMetricsPage: React.FC<UsageMetricsPageProps> = ({
@@ -340,7 +340,7 @@ export const UsageMetricsPage: React.FC<UsageMetricsPageProps> = ({
           </button>
         </div>
 
-        {/* Banner de dados parciais no topo (Screenshot 3 OpenBot) */}
+        {/* Banner de dados parciais no topo (topo da página) */}
         {hasPartialBanner && (
           <div className="rounded-xl bg-[#212121] border border-white/[0.07] px-3.5 py-2 text-[12px] text-[#B5B5B5]">
             Dados parciais · {totais.turnos_sem_uso} turnos sem uso informado;{" "}
@@ -483,7 +483,7 @@ export const UsageMetricsPage: React.FC<UsageMetricsPageProps> = ({
           </div>
         </div>
 
-        {/* Seção Totais — 6 colunas idênticas ao OpenBot (Screenshot 3) */}
+        {/* Seção Totais — 6 colunas em 6 métricas principais */}
         <section className="space-y-3 pt-2">
           <h2 className="text-[13px] font-semibold text-[#E5E5E5]">Totais</h2>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
@@ -515,7 +515,7 @@ export const UsageMetricsPage: React.FC<UsageMetricsPageProps> = ({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-[13px] font-semibold text-[#E5E5E5]">Detalhamento</h2>
 
-            {/* SlidingTabs idêntica ao OpenBot */}
+            {/* SlidingTabs do Criativo Studio */}
             <div className="relative inline-grid grid-cols-4 rounded-xl bg-[#212121] border border-white/[0.06] p-1">
               <div
                 aria-hidden="true"

@@ -26,6 +26,7 @@ import {
   executeStudioExtensionTool,
   executeStudioRoutineTool,
   getChatWorkflowToolCatalog,
+  HIDDEN_CATALOG_TOOL_NAMES,
   isAgentAuthorizedForStudioTool,
   isPhase10ExtensionTool,
   isPhase13ToolName,
@@ -75,7 +76,20 @@ export interface CriativoStudioMcpBridgeOptions {
 
 export const INTERNAL_MCP_ROUTE_PATH = "/api/internal/mcp";
 const DEFAULT_MCP_PROTOCOL_VERSION = "2024-11-05";
-const SUPPORTED_MCP_PROTOCOL_VERSIONS = new Set(["2024-11-05", "2025-03-26", "2025-06-18"]);
+const SUPPORTED_MCP_PROTOCOL_VERSIONS = new Set([
+  "2024-11-05",
+  "2025-03-26",
+  "2025-06-18",
+  "2025-11-25",
+]);
+
+function negotiateMcpProtocolVersion(requested: unknown): string {
+  if (typeof requested !== "string") return DEFAULT_MCP_PROTOCOL_VERSION;
+  const trimmed = requested.trim();
+  if (SUPPORTED_MCP_PROTOCOL_VERSIONS.has(trimmed)) return trimmed;
+  if (/^202[56]-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  return DEFAULT_MCP_PROTOCOL_VERSION;
+}
 
 function sendJsonRpc(
   res: ServerResponse,
@@ -245,6 +259,7 @@ export class CriativoStudioMcpBridge {
     const dedup = new Map<string, ToolDefinition>();
 
     for (const tool of candidates) {
+      if (HIDDEN_CATALOG_TOOL_NAMES.has(tool.name)) continue;
       if (dedup.has(tool.name)) continue;
       if (
         !isAgentAuthorizedForStudioTool(tool.name, agentId, {
@@ -487,11 +502,7 @@ export class CriativoStudioMcpBridge {
     }
 
     if (rpcMethod === "initialize") {
-      const requestedProtocol =
-        typeof params.protocolVersion === "string" &&
-        SUPPORTED_MCP_PROTOCOL_VERSIONS.has(params.protocolVersion)
-          ? params.protocolVersion
-          : DEFAULT_MCP_PROTOCOL_VERSION;
+      const requestedProtocol = negotiateMcpProtocolVersion(params.protocolVersion);
       const incomingSessionId = readHeaderValue(req, "mcp-session-id");
       const sessionId =
         incomingSessionId && this.activeSessionIds.has(incomingSessionId)

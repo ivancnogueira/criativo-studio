@@ -1174,7 +1174,7 @@ export const WorkflowsCanvasPage: React.FC<WorkflowsCanvasPageProps> = ({
           backgroundSize: `${20 * zoom}px ${20 * zoom}px`,
           backgroundPosition: `${panOffset.x}px ${panOffset.y}px`,
         }}
-        className={`openbot-dot-grid relative h-full w-full overflow-hidden ${
+        className={`studio-dot-grid relative h-full w-full overflow-hidden ${
           activeTool === "hand"
             ? "cursor-grab active:cursor-grabbing"
             : activeTool === "draw"

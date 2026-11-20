@@ -185,7 +185,7 @@ const ConcentricQuotaRings: React.FC<{
 };
 
 /**
- * Trilho de navegação vertical estreito à esquerda (52px) espelhando o OpenBot Desktop,
+ * Trilho de navegação vertical estreito à esquerda (52px) espelhando o Criativo Studio Desktop,
  * com anéis concêntricos reais por conta conectada e popover de cotas ao vivo.
  */
 export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
@@ -508,7 +508,7 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
                       setFallbackPopoverOpen(false);
                       onSelectSection("conexoes");
                     }}
-                    className="openbot-btn-primary w-full py-1.5 text-[11.5px] text-center"
+                    className="studio-btn-primary w-full py-1.5 text-[11.5px] text-center"
                   >
                     Conectar Conta Agora
                   </button>
@@ -562,7 +562,7 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
           <Settings className="h-[17px] w-[17px]" />
         </button>
 
-        {/* Avatar quadrado do servidor ativo abrindo ServerSwitcherPopover (Print 1 OpenBot) */}
+        {/* Avatar quadrado do servidor ativo abrindo ServerSwitcherPopover (seletor de servidor) */}
         <div className="relative pt-0.5">
           <button
             type="button"

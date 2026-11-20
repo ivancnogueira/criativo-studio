@@ -208,7 +208,7 @@ describe("Fase 5 — Componentes React do Cockpit Web & Mobile", () => {
     );
   });
 
-  it("renderiza paridade OpenBot: MascoteAvatar, OnboardingFlow, NewAgentScreen, AgentConversationView e WorkflowsCanvasPage", async () => {
+  it("renderiza componentes principais: MascoteAvatar, OnboardingFlow, NewAgentScreen, AgentConversationView e WorkflowsCanvasPage", async () => {
     const { MascoteAvatar, ChannelMascoteCluster } = await vite.ssrLoadModule(
       "/src/components/MascoteAvatar.tsx"
     );
@@ -357,7 +357,7 @@ describe("Fase 5 — Componentes React do Cockpit Web & Mobile", () => {
     assert.match(wfHtml, /Uso/);
   });
 
-  it("renderiza Fase 8: anéis na Rail, UsageMetricsPage estilo OpenBot, ConnectorsPage sem select nativo e markdown seguro", async () => {
+  it("renderiza Fase 8: anéis na Rail, UsageMetricsPage Carbon Dark, ConnectorsPage sem select nativo e markdown seguro", async () => {
     const { WorkspaceRail } = await vite.ssrLoadModule("/src/components/WorkspaceRail.tsx");
     const { UsageMetricsPage } = await vite.ssrLoadModule("/src/features/pages/UsageMetricsPage.tsx");
     const { ConnectorsPage } = await vite.ssrLoadModule("/src/features/pages/ConnectorsPage.tsx");
@@ -571,11 +571,11 @@ describe("Fase 5 — Componentes React do Cockpit Web & Mobile", () => {
     assert.match(detailGeminiHtml, /Add key/);
     assert.match(detailGeminiHtml, /Adicionar conta/);
 
-    const { ProvidersOpenBotView } = await vite.ssrLoadModule(
-      "/src/features/pages/ProvidersOpenBotView.tsx"
+    const { ProvidersCatalogView } = await vite.ssrLoadModule(
+      "/src/features/pages/ProvidersCatalogView.tsx"
     );
     const connectingClaudeHtml = renderToStaticMarkup(
-      React.createElement(ProvidersOpenBotView, {
+      React.createElement(ProvidersCatalogView, {
         provedores: [
           {
             provedor: "claude",

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { AgenteRegistro, AvatarShape } from "@criativo/contracts";
-import { ChevronRight, Mic, PanelRightClose, PanelRightOpen, Radio, Square } from "lucide-react";
+import { Mic, Pin, PinOff, Plus, Radio, Square } from "lucide-react";
 import { MascoteAvatar, getDefaultMascotForAgent } from "../../components/MascoteAvatar";
 
 type LiveVoiceState = "ouvindo" | "processando" | "falando";
@@ -270,16 +270,22 @@ export const LiveVoiceBar: React.FC<LiveVoiceBarProps> = ({
   );
 };
 
+const AGENT_DOCK_PINNED_STORAGE_KEY = "criativo.agent_dock.pinned";
+
 export interface QuickAgentDrawerProps {
   enabled: boolean;
   agentes: Array<AgenteRegistro & { nao_lidas?: number }>;
   pinnedIds: string[];
   selectedAgentId: string | null;
   onSelectAgent: (agenteId: string) => void;
+  workingAgentIds?: Set<string> | ReadonlyArray<string>;
+  pinned?: boolean;
+  onTogglePinned?: () => void;
+  onCreateAgent?: () => void;
 }
 
 /**
- * Drawer flutuante recolhível (versão Web do AgentDock) para trocar agentes fixados em 1 clique.
+ * Ilha / Dock Lateral Vertical ancorado à direita (Fixo ou Recolhível com persistência local).
  */
 export const QuickAgentDrawer: React.FC<QuickAgentDrawerProps> = ({
   enabled,
@@ -287,91 +293,155 @@ export const QuickAgentDrawer: React.FC<QuickAgentDrawerProps> = ({
   pinnedIds,
   selectedAgentId,
   onSelectAgent,
+  workingAgentIds,
+  pinned,
+  onTogglePinned,
+  onCreateAgent,
 }) => {
-  const [expanded, setExpanded] = useState(false);
+  const [localPinned, setLocalPinned] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    try {
+      const saved = window.localStorage.getItem(AGENT_DOCK_PINNED_STORAGE_KEY);
+      return saved === null ? true : saved === "true";
+    } catch {
+      return true;
+    }
+  });
+  const [hoveredOrOpen, setHoveredOrOpen] = useState(false);
+
+  const isPinned = pinned ?? localPinned;
+  const handleTogglePin = () => {
+    if (onTogglePinned) {
+      onTogglePinned();
+      return;
+    }
+    setLocalPinned((prev) => {
+      const next = !prev;
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem(AGENT_DOCK_PINNED_STORAGE_KEY, String(next));
+        } catch {
+          // ignora erro de quota
+        }
+      }
+      if (!next) setHoveredOrOpen(false);
+      return next;
+    });
+  };
+
+  const workingSet = useMemo(() => {
+    if (!workingAgentIds) return new Set<string>();
+    return workingAgentIds instanceof Set
+      ? workingAgentIds
+      : new Set<string>(workingAgentIds);
+  }, [workingAgentIds]);
 
   const quickList = useMemo(() => {
     const byId = new Map(agentes.map((a) => [a.agente_id, a]));
-    const pinned = pinnedIds
+    const pinnedList = pinnedIds
       .map((id) => byId.get(id))
       .filter((a): a is AgenteRegistro & { nao_lidas?: number } => Boolean(a));
-    if (pinned.length > 0) return pinned.slice(0, 6);
-    return agentes.slice(0, 6);
+    if (pinnedList.length > 0) return pinnedList.slice(0, 7);
+    return agentes.slice(0, 7);
   }, [agentes, pinnedIds]);
 
   if (!enabled || quickList.length === 0) return null;
 
+  const isVisible = isPinned || hoveredOrOpen;
+
   return (
     <div
       data-testid="quick-agent-drawer"
-      className="fixed right-3 bottom-4 z-30 flex items-end gap-2"
+      onMouseEnter={() => {
+        if (!isPinned) setHoveredOrOpen(true);
+      }}
+      onMouseLeave={() => {
+        if (!isPinned) setHoveredOrOpen(false);
+      }}
+      className="fixed right-0 top-1/2 -translate-y-1/2 z-40 flex items-center"
     >
-      {expanded && (
-        <div className="rounded-2xl border border-white/10 bg-[#212121]/95 backdrop-blur p-2 shadow-2xl flex items-center gap-1.5">
-          {quickList.map((ag) => {
-            const cfg = (ag.config ?? {}) as Record<string, unknown>;
-            const fb = getDefaultMascotForAgent(ag.agente_id);
-            const shape = (typeof cfg.avatar_shape === "string" ? cfg.avatar_shape : fb.shape) as AvatarShape;
-            const color = typeof cfg.avatar_color === "string" ? cfg.avatar_color : fb.color;
-            const selected = selectedAgentId === ag.agente_id;
-            const working = ag.status === "trabalhando";
-            const unread = ag.nao_lidas ?? 0;
-
-            return (
-              <button
-                key={ag.agente_id}
-                type="button"
-                title={ag.nome}
-                aria-label={`Abrir rapidamente ${ag.nome}`}
-                onClick={() => onSelectAgent(ag.agente_id)}
-                className={`relative rounded-xl p-1.5 transition-colors ${
-                  selected ? "bg-[#007CF7]/25 ring-1 ring-[#007CF7]" : "hover:bg-[#2A2A2A]"
-                }`}
-              >
-                <MascoteAvatar
-                  shape={shape}
-                  color={color}
-                  size={30}
-                  animated={working}
-                  mood={working ? "working" : unread > 0 ? "waiting" : "idle"}
-                />
-                {unread > 0 && (
-                  <span className="absolute -top-1 -right-1 h-4 min-w-[16px] px-1 rounded-full bg-[#74B9FF] text-[#0D0D0D] text-[10px] font-bold flex items-center justify-center">
-                    {unread}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-          <button
-            type="button"
-            onClick={() => setExpanded(false)}
-            aria-label="Recolher barra rápida"
-            title="Recolher barra rápida"
-            className="h-9 w-8 rounded-xl border border-white/[0.06] bg-[#141414] flex items-center justify-center text-[#979797] hover:text-white"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
-        </div>
-      )}
-
-      {!expanded && (
+      {!isVisible && (
         <button
           type="button"
-          onClick={() => setExpanded(true)}
-          aria-label="Abrir barra rápida"
-          title="Abrir barra rápida de agentes"
-          className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-[#212121] px-3 py-2 text-[12px] font-semibold text-white shadow-xl hover:bg-[#2A2A2A]"
+          onClick={() => setHoveredOrOpen(true)}
+          aria-label="Expandir ilha lateral de agentes"
+          title="Expandir ilha lateral de agentes"
+          className="h-24 w-3.5 rounded-l-[24px] border border-r-0 border-[var(--studio-border)] bg-[#1B1B1E]/95 backdrop-blur-xl shadow-2xl flex items-center justify-center hover:w-5 hover:bg-[#242428] transition-all"
         >
-          <PanelRightOpen className="h-3.5 w-3.5 text-[#42A0FF]" />
-          <span>Barra rápida ({quickList.length})</span>
+          <span className="h-8 w-1 rounded-full bg-[#42A0FF]/70" />
         </button>
       )}
 
-      {expanded && (
-        <span className="sr-only">
-          <PanelRightClose />
-        </span>
+      {isVisible && (
+        <div className="rounded-l-[24px] border border-r-0 border-[var(--studio-border)] bg-[#1B1B1E]/95 backdrop-blur-xl shadow-2xl px-2 py-2.5 flex flex-col items-center gap-2">
+          <button
+            type="button"
+            onClick={handleTogglePin}
+            title={isPinned ? "Recolher ilha lateral" : "Fixar ilha na lateral"}
+            aria-label={isPinned ? "Recolher ilha lateral" : "Fixar ilha na lateral"}
+            className="h-7 w-7 rounded-full border border-white/[0.08] bg-[#141414]/80 hover:bg-[#2A2A2E] flex items-center justify-center text-[#979797] hover:text-white transition-colors"
+          >
+            {isPinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5 text-[#42A0FF]" />}
+          </button>
+
+          <div className="flex flex-col items-center gap-1.5">
+            {quickList.map((ag) => {
+              const cfg = (ag.config ?? {}) as Record<string, unknown>;
+              const fb = getDefaultMascotForAgent(ag.agente_id);
+              const shape = (typeof cfg.avatar_shape === "string" ? cfg.avatar_shape : fb.shape) as AvatarShape;
+              const color = typeof cfg.avatar_color === "string" ? cfg.avatar_color : fb.color;
+              const selected = selectedAgentId === ag.agente_id;
+              const working = workingSet.has(ag.agente_id) || ag.status === "trabalhando";
+              const unread = ag.nao_lidas ?? 0;
+
+              return (
+                <button
+                  key={ag.agente_id}
+                  type="button"
+                  title={ag.nome}
+                  aria-label={`Abrir rapidamente ${ag.nome}`}
+                  onClick={() => onSelectAgent(ag.agente_id)}
+                  className={`group relative rounded-2xl p-1.5 transition-all ${
+                    selected
+                      ? "bg-[#007CF7]/25 ring-1 ring-[#007CF7]"
+                      : "hover:bg-[#2A2A2E]"
+                  }`}
+                >
+                  {selected && (
+                    <span className="absolute -left-1 top-1/2 -translate-y-1/2 h-5 w-1 rounded-full bg-[#42A0FF]" />
+                  )}
+                  <MascoteAvatar
+                    shape={shape}
+                    color={color}
+                    size={34}
+                    animated={working}
+                    mood={working ? "working" : unread > 0 ? "waiting" : "idle"}
+                  />
+                  {unread > 0 && (
+                    <span className="absolute -top-1 -right-1 h-4 min-w-[16px] px-1 rounded-full bg-[#74B9FF] text-[#0D0D0D] text-[10px] font-bold flex items-center justify-center">
+                      {unread}
+                    </span>
+                  )}
+                  <span className="pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity absolute right-full mr-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-2.5 py-1 text-[11.5px] font-medium text-white shadow-xl">
+                    {ag.nome}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {onCreateAgent && (
+            <button
+              type="button"
+              onClick={onCreateAgent}
+              title="Criar novo agente"
+              aria-label="Criar novo agente"
+              className="mt-0.5 h-8 w-8 rounded-full border border-white/10 bg-[#141414]/90 hover:bg-[#007CF7]/20 hover:border-[#007CF7]/50 flex items-center justify-center text-[#979797] hover:text-white transition-colors"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

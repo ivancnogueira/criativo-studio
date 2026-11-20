@@ -393,6 +393,46 @@ export class AgentTasksService {
     return thread;
   }
 
+  public createEmptyTopicThread(input: {
+    agenteId: string;
+    titulo?: string;
+    bypassOpenLimit?: boolean;
+  }): AgenteThreadRegistro {
+    this.assertAgentExists(input.agenteId);
+    const threadId = `thread-${randomUUID()}`;
+    const cleanTitle = input.titulo?.trim().slice(0, 140) || "Novo tópico";
+    const thread = this.threadStore.createThread({
+      threadId,
+      agenteId: input.agenteId,
+      tarefaId: null,
+      origem: "usuario",
+      titulo: cleanTitle,
+      tituloOrigem: input.titulo?.trim() ? "usuario" : "auto",
+      estado: "ociosa",
+      progressoAtual: "Pronto para conversar",
+      bypassOpenLimit: input.bypassOpenLimit,
+    });
+    this.emitAgentSnapshot(input.agenteId);
+    return thread;
+  }
+
+  public maybeAutoRenameTopic(threadId: string, firstMessageText: string): AgenteThreadRegistro | null {
+    const existing = this.threadStore.getThread(threadId);
+    if (!existing) return null;
+    if (
+      (existing.titulo !== "Novo tópico" && existing.titulo !== "Nova tarefa") ||
+      existing.titulo_origem !== "auto"
+    ) {
+      return null;
+    }
+    const clean = firstMessageText.replace(/\s+/g, " ").trim();
+    if (!clean) return null;
+    const summary = clean.length > 42 ? `${clean.slice(0, 39).trim()}...` : clean;
+    const updated = this.threadStore.renameThread(threadId, summary, "auto");
+    this.emitAgentSnapshot(updated.agente_id);
+    return updated;
+  }
+
   public renameThread(threadId: string, titulo: string): AgenteThreadRegistro {
     const updated = this.threadStore.renameThread(threadId, titulo, "usuario");
     this.emitAgentSnapshot(updated.agente_id);

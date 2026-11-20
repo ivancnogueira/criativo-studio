@@ -108,6 +108,19 @@ export async function tryHandleThreadsRoute(
         const body = await readJsonBody(req);
         const conteudo = typeof body.conteudo === "string" ? body.conteudo : "";
         const anexos = Array.isArray(body.anexos) ? (body.anexos as AnexoChat[]) : [];
+        const isEmptyTopic =
+          body.vazio === true || (!conteudo.trim() && anexos.length === 0 && body.vazio !== false);
+
+        if (isEmptyTopic) {
+          const thread = tasksService.createEmptyTopicThread({
+            agenteId,
+            titulo: typeof body.titulo === "string" ? body.titulo : undefined,
+            bypassOpenLimit: body.bypass_open_limit === true,
+          });
+          sendJson(res, 201, { thread });
+          return true;
+        }
+
         const created = tasksService.createTaskThread({
           agenteId,
           origem: "usuario",
@@ -233,6 +246,10 @@ export async function tryHandleThreadsRoute(
             userMsg.resposta_para_mensagem_id ?? null,
             ordinal,
           );
+
+        if (conteudo.length > 0) {
+          tasksService.maybeAutoRenameTopic(threadId, conteudo);
+        }
 
         wsHub.broadcast("thread:message", {
           agente_id: thread.agente_id,

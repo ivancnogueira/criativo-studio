@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { ProviderLogo } from "../../components/ProviderLogo";
 
-export interface ProvidersOpenBotViewProps {
+export interface ProvidersCatalogViewProps {
   provedores: ProvedorStatusInfo[];
   defaultProvider: ProviderName;
   initialDetailProviderId?: ProviderName | null;
@@ -100,9 +100,9 @@ function browserConnectLabel(prov: ProviderName): string {
 }
 
 /**
- * Visual Master/Detail de Provedores de IA espelhado nas telas de Provedores do OpenBot.
+ * Visual Master/Detail de Provedores de IA do Criativo AI Studio.
  */
-export const ProvidersOpenBotView: React.FC<ProvidersOpenBotViewProps> = ({
+export const ProvidersCatalogView: React.FC<ProvidersCatalogViewProps> = ({
   provedores,
   defaultProvider,
   initialDetailProviderId = null,
@@ -256,7 +256,7 @@ export const ProvidersOpenBotView: React.FC<ProvidersOpenBotViewProps> = ({
           <span>Provedores</span>
         </button>
 
-        {/* Cabeçalho estilo OpenBot */}
+        {/* Cabeçalho do provedor */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3.5">
             <div className="h-11 w-11 rounded-2xl bg-[#1F1F22] border border-white/[0.08] flex items-center justify-center shrink-0">
@@ -652,8 +652,8 @@ export const ProvidersOpenBotView: React.FC<ProvidersOpenBotViewProps> = ({
               {editingKey && (
                 <div className="pt-2.5 border-t border-white/[0.06] flex flex-col sm:flex-row gap-2">
                   <input
-                    id={`openbot-key-${detailProvider.provedor}`}
-                    name={`openbot_key_${detailProvider.provedor}`}
+                    id={`studio-key-${detailProvider.provedor}`}
+                    name={`studio_key_${detailProvider.provedor}`}
                     aria-label={`Chave API de ${detailProvider.rotulo}`}
                     type="password"
                     value={keyDraft}
@@ -778,8 +778,8 @@ export const ProvidersOpenBotView: React.FC<ProvidersOpenBotViewProps> = ({
           </div>
 
           <input
-            id="openbot-search-models"
-            name="openbot_search_models"
+            id="studio-search-models"
+            name="studio_search_models"
             aria-label="Buscar modelos"
             type="text"
             value={modelQuery}
@@ -903,8 +903,8 @@ export const ProvidersOpenBotView: React.FC<ProvidersOpenBotViewProps> = ({
           <div className="relative w-full sm:w-64">
             <Search className="h-3.5 w-3.5 text-[#78787D] absolute left-3 top-1/2 -translate-y-1/2" />
             <input
-              id="openbot-search-providers"
-              name="openbot_search_providers"
+              id="studio-search-providers"
+              name="studio_search_providers"
               aria-label="Buscar provedores"
               type="text"
               value={providerQuery}

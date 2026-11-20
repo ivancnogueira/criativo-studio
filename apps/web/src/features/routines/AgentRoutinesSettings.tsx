@@ -479,7 +479,7 @@ export const AgentRoutinesSettings: React.FC<AgentRoutinesSettingsProps> = ({
 
   if (mode === "list") {
     return (
-      <div className="space-y-4 text-[#F0F0F0]">
+      <div className="w-full min-w-0 space-y-4 text-[#F0F0F0]">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             {onBackToHub && (
@@ -596,7 +596,7 @@ export const AgentRoutinesSettings: React.FC<AgentRoutinesSettingsProps> = ({
   }
 
   return (
-    <div className="space-y-4 text-[#F0F0F0]">
+    <div className="w-full min-w-0 space-y-4 text-[#F0F0F0]">
       {/* Cabeçalho do Editor */}
       <div className="flex items-center justify-between gap-2">
         <button

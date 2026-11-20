@@ -30,6 +30,7 @@ import {
   ShieldCheck,
   Smartphone,
   Sparkles,
+  Trash2,
   X,
 } from "lucide-react";
 import { MascoteAppearancePicker } from "../../components/MascoteAvatar";
@@ -70,6 +71,7 @@ export interface RightInspectorPanelProps {
   userBrowsingStepsCount?: number;
   onClose: () => void;
   onOpenFilesPage: () => void;
+  onDeleteFile?: (arquivoId: string) => Promise<void>;
   onOpenWhatsAppModal: () => void;
   onOpenRoutineThread?: (canalId: string) => void;
   onRoutinesChanged?: () => void;
@@ -156,6 +158,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   userBrowsingStepsCount = 0,
   onClose,
   onOpenFilesPage,
+  onDeleteFile,
   onOpenWhatsAppModal,
   onOpenRoutineThread,
   onRoutinesChanged,
@@ -197,6 +200,9 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   const [memories, setMemories] = useState<
     Array<{ memoria_id: string; texto: string; criado_em: string }>
   >([]);
+  const [confirmDeleteFileId, setConfirmDeleteFileId] = useState<string | null>(null);
+  const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
+  const [deleteFileError, setDeleteFileError] = useState<string | null>(null);
 
   useEffect(() => {
     if (routineFocusSignal?.subView === "routines") {
@@ -495,6 +501,11 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                 Ver galeria completa
               </button>
             </div>
+            {deleteFileError && (
+              <div className="rounded-lg border border-[#FD2F3B]/40 bg-[#FD2F3B]/10 px-2.5 py-1.5 text-[11.5px] text-[#FF7675]">
+                {deleteFileError}
+              </div>
+            )}
             {arquivos.length === 0 ? (
               <p className="text-[12px] text-[#979797] rounded-xl bg-[#212121] p-4 border border-white/[0.06]">
                 Nenhum arquivo enviado ainda. Use o botão <strong>+</strong> no chat para subir
@@ -503,31 +514,85 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
             ) : (
               <div className="space-y-2">
                 {arquivos.slice(0, 12).map((arq) => (
-                  <a
+                  <div
                     key={arq.arquivo_id}
-                    href={arq.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-2.5 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.06] p-2.5 transition-colors"
+                    className="flex items-center gap-2 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.06] p-2.5 transition-colors"
                   >
-                    {arq.mime_type.startsWith("image/") ? (
-                      <img
-                        src={arq.url}
-                        alt={arq.nome_original}
-                        className="h-10 w-10 rounded-lg object-cover bg-[#101010] shrink-0"
-                      />
-                    ) : (
-                      <FolderOpen className="h-5 w-5 text-[#42A0FF] shrink-0 ml-1" />
+                    <a
+                      href={arq.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-2.5 min-w-0 flex-1"
+                    >
+                      {arq.mime_type.startsWith("image/") ? (
+                        <img
+                          src={arq.url}
+                          alt={arq.nome_original}
+                          className="h-10 w-10 rounded-lg object-cover bg-[#101010] shrink-0"
+                        />
+                      ) : (
+                        <FolderOpen className="h-5 w-5 text-[#42A0FF] shrink-0 ml-1" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[12px] font-medium text-white truncate">
+                          {arq.nome_original}
+                        </p>
+                        <p className="text-[10.5px] text-[#6A6A6A] truncate">
+                          {arq.tipo_uso} · {(arq.tamanho_bytes / 1024).toFixed(1)} KB
+                        </p>
+                      </div>
+                    </a>
+
+                    {onDeleteFile && (
+                      confirmDeleteFileId === arq.arquivo_id ? (
+                        <div className="flex items-center gap-1 shrink-0 rounded-lg bg-[#141414] border border-[#FD2F3B]/40 px-1.5 py-1 text-[10.5px]">
+                          <span className="text-[#FF7675] font-medium">Excluir?</span>
+                          <button
+                            type="button"
+                            disabled={deletingFileId === arq.arquivo_id}
+                            onClick={async () => {
+                              setDeletingFileId(arq.arquivo_id);
+                              setDeleteFileError(null);
+                              try {
+                                await onDeleteFile(arq.arquivo_id);
+                                setConfirmDeleteFileId(null);
+                              } catch (err) {
+                                setDeleteFileError(
+                                  err instanceof Error ? err.message : "Erro ao excluir arquivo."
+                                );
+                              } finally {
+                                setDeletingFileId(null);
+                              }
+                            }}
+                            className="rounded px-1.5 py-0.5 bg-[#FD2F3B] text-white font-semibold hover:bg-[#e12732]"
+                          >
+                            Sim
+                          </button>
+                          <button
+                            type="button"
+                            disabled={deletingFileId === arq.arquivo_id}
+                            onClick={() => setConfirmDeleteFileId(null)}
+                            className="rounded px-1.5 py-0.5 bg-[#2A2A2A] text-[#DCDCDC] hover:bg-[#333336]"
+                          >
+                            Não
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          title="Excluir arquivo"
+                          aria-label={`Excluir ${arq.nome_original}`}
+                          onClick={() => {
+                            setDeleteFileError(null);
+                            setConfirmDeleteFileId(arq.arquivo_id);
+                          }}
+                          className="shrink-0 rounded-lg p-1.5 text-[#979797] hover:bg-[#FD2F3B]/15 hover:text-[#FF7675] transition-colors"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )
                     )}
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[12px] font-medium text-white truncate">
-                        {arq.nome_original}
-                      </p>
-                      <p className="text-[10.5px] text-[#6A6A6A] truncate">
-                        {arq.tipo_uso} · {(arq.tamanho_bytes / 1024).toFixed(1)} KB
-                      </p>
-                    </div>
-                  </a>
+                  </div>
                 ))}
               </div>
             )}
@@ -851,7 +916,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                 <button
                   type="submit"
                   disabled={saving}
-                  className="openbot-btn-primary flex-1 py-2 text-[12.5px]"
+                  className="studio-btn-primary flex-1 py-2 text-[12.5px]"
                 >
                   {saving ? "Aplicando..." : "Aplicar configurações"}
                 </button>
@@ -867,7 +932,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                         setSaving(false);
                       }
                     }}
-                    className="openbot-btn-secondary px-3 py-2 text-[12px]"
+                    className="studio-btn-secondary px-3 py-2 text-[12px]"
                   >
                     Restaurar padrão
                   </button>

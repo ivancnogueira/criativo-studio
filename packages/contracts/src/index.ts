@@ -561,6 +561,7 @@ export interface PassoChat {
   ferramenta: string;
   titulo: string;
   detalhes?: string;
+  formato?: string;
   status: "executando" | "concluido" | "erro";
   duracao_ms?: number;
 }
@@ -1076,7 +1077,7 @@ export interface ContaProvedorInfo {
   token_expira_em?: string | null;
   grupos_cota: GrupoCotaConta[];
   modelos_disponiveis?: string[];
-  origem?: "sistema" | "openbot" | "criativo";
+  origem?: "sistema" | "externo" | "criativo";
 }
 
 export interface PoolContasConfig {

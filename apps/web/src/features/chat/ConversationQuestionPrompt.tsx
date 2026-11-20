@@ -381,7 +381,7 @@ export function ConversationQuestionPrompt({
             type="button"
             disabled={submitting}
             onClick={() => void handleSubmitAll()}
-            className="openbot-btn-primary rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
+            className="studio-btn-primary rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
           >
             Submeter respostas
           </button>

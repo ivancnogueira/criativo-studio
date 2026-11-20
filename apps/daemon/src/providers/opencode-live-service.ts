@@ -48,7 +48,7 @@ export function resolveOpenCodeCliExecutable(appDataDir?: string): {
   // 1. Prioriza binário nativo gerenciado ou instalado sem depender de wrapper .cmd
   const resolvedAppData = appDataDir ?? process.env.APPDATA ?? "";
   if (resolvedAppData) {
-    const baseRuntime = join(resolvedAppData, "OpenBot", "provider-runtimes", "opencode");
+    const baseRuntime = join(resolvedAppData, "CriativoStudio", "provider-runtimes", "opencode");
     try {
       if (existsSync(baseRuntime)) {
         const archDirs = readdirSync(baseRuntime);
@@ -110,7 +110,7 @@ class OpenCodeAcpConnection {
     const isCmdWrapper = process.platform === "win32" && /\.(cmd|bat)$/i.test(executable);
     this.child = spawn(
       isCmdWrapper ? process.env.ComSpec || "cmd.exe" : executable,
-      isCmdWrapper ? ["/c", executable, "acp"] : ["acp"],
+      isCmdWrapper ? ["/c", executable, "acp", "--pure"] : ["acp", "--pure"],
       {
         cwd,
         env: {
@@ -123,6 +123,10 @@ class OpenCodeAcpConnection {
         windowsHide: true,
       }
     );
+
+    this.child.stdin.on("error", () => {
+      this.closed = true;
+    });
 
     const rl = createInterface({ input: this.child.stdout });
     rl.on("line", (line) => {
@@ -417,7 +421,7 @@ export class OpenCodeLiveService {
         const lower = id.toLowerCase();
         const isFree =
           lower.startsWith("opencode/") && (lower.endsWith("-free") || lower === "opencode/big-pickle");
-        // Sem API Key configurada, priorizamos somente modelos gratuitos prontos para rodar (como no OpenBot)
+        // Sem API Key configurada, priorizamos somente modelos gratuitos prontos para rodar
         if (!hasApiKey && !isFree) continue;
         seen.add(id);
         models.push({

@@ -592,7 +592,7 @@ export function WhatsAppIntegrationPanel({
               <div className="rounded-[10px] border border-[#31CF76]/25 bg-[#31CF76]/10 p-3 space-y-1.5">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[12px] font-semibold text-white">
-                    Conversa Interna (estilo OpenBot)
+                    Conversa Interna (Comigo mesmo)
                   </span>
                   {contacts.length === 0 && (
                     <span className="rounded-full bg-[#31CF76]/20 px-2 py-0.5 text-[10.5px] font-semibold text-[#31CF76]">

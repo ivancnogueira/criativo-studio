@@ -2,7 +2,7 @@ import React, { useEffect, useId, useRef, useState } from "react";
 import type { AvatarShape } from "@criativo/contracts";
 
 /**
- * 17 cores fiéis às duas fileiras do construtor de mascotes OpenBot (9 na 1ª linha + 8 na 2ª).
+ * 17 cores fiéis às duas fileiras do construtor de mascotes do Criativo Studio (9 na 1ª linha + 8 na 2ª).
  */
 export const MASCOT_COLOR_PALETTE: readonly string[] = [
   "#38bdf8", // Azul sky
@@ -73,16 +73,35 @@ export function getDefaultMascotForAgent(agentId: string): { shape: AvatarShape;
 }
 
 export type MascotEyeMood = "idle" | "working" | "waiting" | "failed" | "responded";
-type MascotEyeFace = "resting" | "wink" | "surpris" | "curieux" | "excite" | "attentif";
+type MascotEyeFace =
+  | "resting"
+  | "wink"
+  | "surpris"
+  | "curieux"
+  | "excite"
+  | "attentif"
+  | "squint"
+  | "focused"
+  | "wide";
 
-const HOVER_FACES: readonly MascotEyeFace[] = ["wink", "surpris", "curieux", "excite", "attentif"];
+const HOVER_FACES: readonly MascotEyeFace[] = [
+  "wink",
+  "surpris",
+  "curieux",
+  "excite",
+  "attentif",
+  "squint",
+  "wide",
+];
 const WORKING_GAZES: ReadonlyArray<{ face: MascotEyeFace; x: number; y: number }> = [
-  { face: "attentif", x: 0, y: -2.8 },
-  { face: "curieux", x: -2.9, y: -2.0 },
-  { face: "attentif", x: 2.9, y: -2.0 },
-  { face: "surpris", x: 0, y: -1.2 },
-  { face: "curieux", x: -2.2, y: 0.6 },
-  { face: "excite", x: 2.0, y: -1.4 },
+  { face: "squint", x: 0, y: -2.8 },
+  { face: "focused", x: -3.2, y: -2.2 },
+  { face: "squint", x: 3.2, y: -2.2 },
+  { face: "wide", x: 0, y: -1.4 },
+  { face: "curieux", x: -2.6, y: 0.8 },
+  { face: "focused", x: 2.6, y: 0.6 },
+  { face: "excite", x: 2.2, y: -1.6 },
+  { face: "attentif", x: -1.8, y: -2.6 },
 ];
 
 function pickDifferentHoverFace(prev: MascotEyeFace | null): MascotEyeFace {
@@ -129,7 +148,7 @@ export const MascoteAvatar: React.FC<MascoteAvatarProps> = ({
   const isWorking = mood === "working" || animated;
   const enableHover = hoverAnimate ?? size >= 24;
 
-  // Detecta hover e movimento do mouse no botão/linha pai (padrão HOVER_GROUP do OpenBot)
+  // Detecta hover e movimento do mouse no botão/linha pai (comportamento interativo no hover)
   useEffect(() => {
     if (!enableHover || typeof window === "undefined") return;
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
@@ -233,7 +252,7 @@ export const MascoteAvatar: React.FC<MascoteAvatarProps> = ({
     let cancelled = false;
 
     const scheduleStep = () => {
-      const delay = 750 + Math.random() * 1100;
+      const delay = 520 + Math.random() * 880;
       stepTimer = window.setTimeout(() => {
         if (cancelled) return;
         setWorkingIdx((prev) => (prev + 1 + Math.floor(Math.random() * 2)) % WORKING_GAZES.length);
@@ -302,26 +321,48 @@ export const MascoteAvatar: React.FC<MascoteAvatarProps> = ({
 
   const animClass = mood === "working" ? "mascote-working" : animated ? "mascote-idle" : "";
 
-  const leftScaleX = activeFace === "surpris" ? 1.18 : activeFace === "attentif" ? 1.06 : 1;
+  const leftScaleX =
+    activeFace === "surpris" || activeFace === "wide"
+      ? 1.18
+      : activeFace === "squint"
+        ? 1.16
+        : activeFace === "attentif" || activeFace === "focused"
+          ? 1.06
+          : 1;
   const leftScaleY = blinking
     ? 0.14
-    : activeFace === "surpris"
-      ? 1.16
-      : activeFace === "curieux"
-        ? 1.1
-        : activeFace === "attentif"
-          ? 0.84
+    : activeFace === "surpris" || activeFace === "wide"
+      ? 1.18
+      : activeFace === "squint"
+        ? 0.54
+        : activeFace === "focused"
+          ? 0.72
+          : activeFace === "curieux"
+            ? 1.1
+            : activeFace === "attentif"
+              ? 0.84
+              : 1;
+  const rightScaleX =
+    activeFace === "surpris" || activeFace === "wide"
+      ? 1.18
+      : activeFace === "squint"
+        ? 1.16
+        : activeFace === "attentif" || activeFace === "focused"
+          ? 1.06
           : 1;
-  const rightScaleX = activeFace === "surpris" ? 1.18 : activeFace === "attentif" ? 1.06 : 1;
   const rightScaleY = blinking
     ? 0.14
-    : activeFace === "surpris"
-      ? 1.16
-      : activeFace === "curieux"
-        ? 0.72
-        : activeFace === "attentif"
-          ? 0.84
-          : 1;
+    : activeFace === "surpris" || activeFace === "wide"
+      ? 1.18
+      : activeFace === "squint"
+        ? 0.54
+        : activeFace === "focused"
+          ? 0.72
+          : activeFace === "curieux"
+            ? 0.72
+            : activeFace === "attentif"
+              ? 0.84
+              : 1;
 
   return (
     <svg
@@ -355,7 +396,7 @@ export const MascoteAvatar: React.FC<MascoteAvatarProps> = ({
         />
       </g>
 
-      {/* Olhos animados estilo Bloub/OpenBot: transição fluida ao passar o mouse e trabalhar */}
+      {/* Olhos animados expressivos do mascote: transição fluida ao passar o mouse e trabalhar */}
       <g
         style={{
           transform: `translate(${activeOffsetX.toFixed(2)}px, ${activeOffsetY.toFixed(2)}px)`,
@@ -391,6 +432,7 @@ export const MascoteAvatar: React.FC<MascoteAvatarProps> = ({
             >
               <ellipse cx="40.5" cy="50" rx="5.2" ry="8.4" fill="#FFF8E7" />
               <ellipse cx="41.4" cy="49.2" rx="1.6" ry="3.2" fill="#E6D5B8" opacity="0.55" />
+              <circle cx="38.8" cy="46.2" r="1.45" fill="#FFFFFF" opacity="0.92" />
             </g>
 
             {/* Olho direito: fecha em piscadinha charmosa no estado "wink" */}
@@ -412,6 +454,7 @@ export const MascoteAvatar: React.FC<MascoteAvatarProps> = ({
               >
                 <ellipse cx="59.5" cy="50" rx="5.2" ry="8.4" fill="#FFF8E7" />
                 <ellipse cx="60.4" cy="49.2" rx="1.6" ry="3.2" fill="#E6D5B8" opacity="0.55" />
+                <circle cx="57.8" cy="46.2" r="1.45" fill="#FFFFFF" opacity="0.92" />
               </g>
             )}
           </>

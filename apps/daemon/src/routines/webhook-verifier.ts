@@ -67,9 +67,9 @@ export async function readRawBodyWithLimit(
 export function extractWebhookHeaders(
   headers: IncomingHttpHeaders
 ): ExtractedWebhookHeaders | null {
-  const nativeTs = readSingleHeader(headers, ["x-criativo-timestamp", "x-openbot-timestamp"]);
-  const nativeId = readSingleHeader(headers, ["x-criativo-delivery-id", "x-openbot-delivery-id"]);
-  const nativeSig = readSingleHeader(headers, ["x-criativo-signature", "x-openbot-signature"]);
+  const nativeTs = readSingleHeader(headers, ["x-criativo-timestamp"]);
+  const nativeId = readSingleHeader(headers, ["x-criativo-delivery-id"]);
+  const nativeSig = readSingleHeader(headers, ["x-criativo-signature"]);
 
   if (nativeTs && nativeId && nativeSig) {
     return {

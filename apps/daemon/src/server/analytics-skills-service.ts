@@ -324,19 +324,19 @@ export function recordSkillLoadUsage(
     );
 }
 
-export function importOpenBotTelemetryIfAvailable(db: CriativoDatabase, customOpenBotDbPath?: string): number {
-  if (!customOpenBotDbPath && process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1") {
+export function importExternalTelemetryIfAvailable(db: CriativoDatabase, customExternalDbPath?: string): number {
+  if (!customExternalDbPath && process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1") {
     return 0;
   }
   const appDataDir = process.env.APPDATA ?? join(homedir(), "AppData", "Roaming");
-  const openBotDbPath = customOpenBotDbPath ?? join(appDataDir, "OpenBot", "openbot.db");
-  if (!existsSync(openBotDbPath)) {
+  const extDbPath = customExternalDbPath ?? join(appDataDir, "CriativoStudio", "external-telemetry.db");
+  if (!existsSync(extDbPath)) {
     return 0;
   }
 
   let imported = 0;
   try {
-    const extDb = new DatabaseSync(openBotDbPath, { readOnly: true });
+    const extDb = new DatabaseSync(extDbPath, { readOnly: true });
     try {
       const records = extDb
         .prepare(
@@ -360,7 +360,7 @@ export function importOpenBotTelemetryIfAvailable(db: CriativoDatabase, customOp
       const insertStmt = db.connection.prepare(
         `INSERT OR IGNORE INTO projecao_uso_registros
          (record_id, agent_id, session_id, turn_id, provider, model, occurred_at, uncached_input, cached_input, cache_creation, output_tokens, estimated_cost_usd, rate_basis, origem, recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'openbot_importado', ?);`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'externo_importado', ?);`
       );
 
       for (const r of records) {
@@ -395,7 +395,7 @@ export function importOpenBotTelemetryIfAvailable(db: CriativoDatabase, customOp
         if (Number(res.changes ?? 0) > 0) imported += 1;
       }
 
-      // Importa nomes dos agentes externos do OpenBot para exibição amigável
+      // Importa nomes dos agentes externos compatíveis para exibição amigável
       try {
         const extAgents = extDb
           .prepare(`SELECT agent_id, agent_json FROM projection_agents;`)

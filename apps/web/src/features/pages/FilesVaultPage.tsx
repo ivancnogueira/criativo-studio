@@ -15,6 +15,7 @@ import {
   Image as ImageIcon,
   Search,
   Sparkles,
+  Trash2,
   Upload,
 } from "lucide-react";
 import { daemonApi } from "../../services/websocket-client";
@@ -23,9 +24,18 @@ import {
   type LibraryFolderSelection,
 } from "../files/LibraryFolderTree";
 
+export type VaultUploadCategory =
+  | "logo"
+  | "foto"
+  | "referencia"
+  | "personagem"
+  | "ficha_pdf"
+  | "upload";
+
 export interface FilesVaultPageProps {
   arquivos: ArquivoStudio[];
-  onUploadFile: (file: File) => Promise<AnexoChat>;
+  onUploadFile: (file: File, categoria?: VaultUploadCategory) => Promise<AnexoChat>;
+  onDeleteFile?: (arquivoId: string) => Promise<void>;
   agentes?: AgenteRegistro[];
   foldersSnapshot?: BibliotecasPastasSnapshot | null;
   onRefreshFolders?: () => Promise<void> | void;
@@ -46,18 +56,25 @@ const EMPTY_SNAPSHOT: BibliotecasPastasSnapshot = {
 export const FilesVaultPage: React.FC<FilesVaultPageProps> = ({
   arquivos,
   onUploadFile,
+  onDeleteFile,
   agentes = [],
   foldersSnapshot,
   onRefreshFolders,
   onPreviewFile,
 }) => {
-  const [filter, setFilter] = useState<"todos" | "referencia" | "gerado" | "video">("todos");
+  const [filter, setFilter] = useState<
+    "todos" | "fotos_reais" | "referencia" | "gerado" | "video"
+  >("todos");
+  const [uploadCategory, setUploadCategory] = useState<"foto" | "referencia" | "logo">("foto");
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [selection, setSelection] = useState<LibraryFolderSelection>({ kind: "all" });
   const [localSnapshot, setLocalSnapshot] = useState<BibliotecasPastasSnapshot>(
     foldersSnapshot ?? EMPTY_SNAPSHOT,
   );
   const [moveOpenForFileId, setMoveOpenForFileId] = useState<string | null>(null);
+  const [confirmDeleteFileId, setConfirmDeleteFileId] = useState<string | null>(null);
+  const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -119,7 +136,15 @@ export const FilesVaultPage: React.FC<FilesVaultPageProps> = ({
   const visible = useMemo(() => {
     const lowerQ = searchQuery.trim().toLowerCase();
     return arquivos.filter((arq) => {
-      if (filter !== "todos" && arq.tipo_uso !== filter) return false;
+      if (filter === "fotos_reais") {
+        const isRealPhoto =
+          arq.caminho_relativo.startsWith("recursos/fotos/") ||
+          arq.caminho_relativo.startsWith("recursos/personagens/") ||
+          arq.tipo_uso === "personagem";
+        if (!isRealPhoto) return false;
+      } else if (filter !== "todos" && arq.tipo_uso !== filter) {
+        return false;
+      }
       if (lowerQ && !arq.nome_original.toLowerCase().includes(lowerQ)) return false;
 
       if (selection.kind === "agent") {
@@ -149,11 +174,29 @@ export const FilesVaultPage: React.FC<FilesVaultPageProps> = ({
     setUploading(true);
     try {
       for (const file of Array.from(list)) {
-        await onUploadFile(file);
+        await onUploadFile(file, uploadCategory);
       }
       await onRefreshFolders?.();
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleConfirmDeleteFile = async (arquivoId: string) => {
+    setDeletingFileId(arquivoId);
+    setDeleteError(null);
+    try {
+      if (onDeleteFile) {
+        await onDeleteFile(arquivoId);
+      } else {
+        await daemonApi.deleteFile(arquivoId);
+      }
+      setConfirmDeleteFileId(null);
+      await onRefreshFolders?.();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Falha ao excluir arquivo.");
+    } finally {
+      setDeletingFileId(null);
     }
   };
 
@@ -227,7 +270,32 @@ export const FilesVaultPage: React.FC<FilesVaultPageProps> = ({
               </h1>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <div
+                role="group"
+                aria-label="Destino do upload"
+                className="inline-flex items-center rounded-lg bg-[#141414] border border-[rgba(255,255,255,0.08)] p-0.5"
+              >
+                {[
+                  { id: "foto" as const, label: "Foto real (recursos/fotos)" },
+                  { id: "referencia" as const, label: "Referência (recursos/referencias)" },
+                  { id: "logo" as const, label: "Logo" },
+                ].map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setUploadCategory(opt.id)}
+                    className={`rounded-md px-2.5 py-1.5 text-[11.5px] font-semibold transition-colors ${
+                      uploadCategory === opt.id
+                        ? "bg-[#2A2A2A] text-[#FFFFFF]"
+                        : "text-[#979797] hover:text-[#FFFFFF]"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
               <input
                 ref={inputRef}
                 id="files-page-upload"
@@ -246,19 +314,26 @@ export const FilesVaultPage: React.FC<FilesVaultPageProps> = ({
                 type="button"
                 disabled={uploading}
                 onClick={() => inputRef.current?.click()}
-                className="openbot-btn-primary rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414] inline-flex items-center gap-2"
+                className="studio-btn-primary rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414] inline-flex items-center gap-2"
               >
                 <Upload className="h-4 w-4" />
-                {uploading ? "Enviando arquivo..." : "Enviar Referência ImagePaths"}
+                {uploading ? "Enviando arquivo..." : "Enviar arquivo"}
               </button>
             </div>
           </div>
+
+          {deleteError && (
+            <div className="rounded-lg border border-[#FD2F3B]/40 bg-[#FD2F3B]/10 px-3 py-2 text-[12px] text-[#FF7675]">
+              {deleteError}
+            </div>
+          )}
 
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2 flex-wrap">
               {[
                 { id: "todos", label: `Todos (${arquivos.length})` },
-                { id: "referencia", label: "Referências / Fotos" },
+                { id: "fotos_reais", label: "Fotos reais" },
+                { id: "referencia", label: "Referências" },
                 { id: "gerado", label: "Artes Geradas" },
                 { id: "video", label: "Vídeos MP4" },
               ].map((tab) => (
@@ -380,16 +455,53 @@ export const FilesVaultPage: React.FC<FilesVaultPageProps> = ({
                           Mover arquivo
                         </button>
 
-                        <a
-                          href={arq.url}
-                          download={arq.nome_original}
-                          title="Baixar arquivo"
-                          aria-label="Baixar arquivo"
-                          className="inline-flex items-center gap-1 rounded-md bg-[#2A2A2A] hover:bg-[#242424] px-2 py-1 text-[12px] font-semibold text-[#FFFFFF]"
-                        >
-                          <Download className="h-3.5 w-3.5" />
-                          Baixar arquivo
-                        </a>
+                        <div className="flex items-center gap-1.5">
+                          <a
+                            href={arq.url}
+                            download={arq.nome_original}
+                            title="Baixar arquivo"
+                            aria-label="Baixar arquivo"
+                            className="inline-flex items-center gap-1 rounded-md bg-[#2A2A2A] hover:bg-[#242424] px-2 py-1 text-[12px] font-semibold text-[#FFFFFF]"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                            Baixar
+                          </a>
+
+                          {confirmDeleteFileId === arq.arquivo_id ? (
+                            <div className="inline-flex items-center gap-1 rounded-md bg-[#141414] border border-[#FD2F3B]/40 px-1.5 py-0.5 text-[11px]">
+                              <span className="text-[#FF7675] font-medium">Excluir?</span>
+                              <button
+                                type="button"
+                                disabled={deletingFileId === arq.arquivo_id}
+                                onClick={() => void handleConfirmDeleteFile(arq.arquivo_id)}
+                                className="rounded px-1.5 py-0.5 bg-[#FD2F3B] text-white font-semibold hover:bg-[#e12732]"
+                              >
+                                Sim
+                              </button>
+                              <button
+                                type="button"
+                                disabled={deletingFileId === arq.arquivo_id}
+                                onClick={() => setConfirmDeleteFileId(null)}
+                                className="rounded px-1.5 py-0.5 bg-[#2A2A2A] text-[#DCDCDC] hover:bg-[#333336]"
+                              >
+                                Não
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              title={`Excluir ${arq.nome_original}`}
+                              aria-label={`Excluir ${arq.nome_original}`}
+                              onClick={() => {
+                                setDeleteError(null);
+                                setConfirmDeleteFileId(arq.arquivo_id);
+                              }}
+                              className="inline-flex items-center justify-center rounded-md bg-[#242424] hover:bg-[#FD2F3B]/20 hover:text-[#FF7675] p-1.5 text-[#979797] transition-colors"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                       {isMoveOpen && (

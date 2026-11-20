@@ -68,6 +68,7 @@ export interface SidebarProps {
   onApplyUpdate?: () => void;
   onOpenUpdateSettings?: () => void;
   widthPx?: number;
+  workingAgentIds?: Set<string> | ReadonlyArray<string>;
   onDismissSetupAssistant?: () => Promise<void> | void;
 }
 
@@ -109,7 +110,7 @@ function stripMarkdownPreview(text?: string | null): string {
 }
 
 /**
- * Barra lateral estilo OpenBot (`~265px`) com busca, pastas colapsáveis, Canais em Equipe,
+ * Barra lateral Carbon Dark (`~265px`) com busca, pastas colapsáveis, Canais em Equipe,
  * badges #74B9FF em Não lidas e card inferior 'Criativo no WhatsApp'.
  */
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -136,8 +137,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onApplyUpdate,
   onOpenUpdateSettings,
   widthPx,
+  workingAgentIds,
   onDismissSetupAssistant,
 }) => {
+  const workingAgentSet = useMemo(() => new Set(workingAgentIds ?? []), [workingAgentIds]);
   const [search, setSearch] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [dismissWhatsAppCard, setDismissWhatsAppCard] = useState(false);
@@ -354,7 +357,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ) => {
     const vis = getAgentVisual(ag);
     const selected = selectedAgentId === ag.agente_id && !selectedChannelId;
-    const isWorking = ag.status === "trabalhando";
+    const isWorking = ag.status === "trabalhando" || workingAgentSet.has(ag.agente_id);
     const timeLabel = formatHour(ag.ultima_mensagem_em);
     const routineCount = routineCountsByAgent[ag.agente_id] ?? 0;
     const routineCountLabel =
@@ -1170,7 +1173,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         onOpenDetails={onOpenUpdateSettings}
       />
 
-      {/* Card fixo inferior estilo 'OpenBot para celular' (Screenshot 3) adaptado para WhatsApp */}
+      {/* Card fixo inferior de conexão rápida ao WhatsApp no celular */}
       {!dismissWhatsAppCard && (
         <div className="p-2.5 border-t border-white/[0.06]">
           <div className="relative rounded-xl bg-[#212121] border border-white/[0.07] p-3">

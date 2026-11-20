@@ -39,7 +39,7 @@ import {
   Volume2,
   X,
 } from "lucide-react";
-import { ProvidersOpenBotView } from "./ProvidersOpenBotView";
+import { ProvidersCatalogView } from "./ProvidersCatalogView";
 
 interface ConnectorsPageProps {
   provedores: ProvedorStatusInfo[];
@@ -190,7 +190,7 @@ const AgentCustomPicker: React.FC<{
 };
 
 /**
- * Central OpenBot de Conexões:
+ * Central de Conexões:
  * - Provedores de IA (multi-contas, Pool toggle, CLI version, modelos dinâmicos e cotas)
  * - Apps & Canais (WhatsApp, Instagram, Telegram, Slack, Discord, GitHub, Voz e MCP sem dropdown nativo)
  * - Showcase Local (Publicação aprovada de entregáveis estáticos em /showcase/:slug/)
@@ -546,7 +546,7 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
 
   return (
     <div className="flex-1 h-full w-full flex flex-col md:flex-row bg-[#171719] overflow-hidden">
-      {/* Subsidebar esquerda estilo OpenBot Settings */}
+      {/* Subsidebar esquerda estilo Configurações do Studio */}
       <aside
         aria-label="Navegação de Configurações"
         className="w-full md:w-[244px] shrink-0 bg-[#121214] border-b md:border-b-0 md:border-r border-white/[0.06] flex flex-col p-3.5 gap-3"
@@ -626,7 +626,7 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
         </div>
       </aside>
 
-      {/* Painel direito estilo OpenBot */}
+      {/* Painel direito Carbon Dark */}
       <div className="flex-1 h-full flex flex-col min-w-0 bg-[#171719]">
         <header className="h-12 px-6 border-b border-white/[0.06] flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2 text-[13.5px] font-medium text-white min-w-0">
@@ -649,7 +649,7 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
               <button
                 type="button"
                 onClick={() => void handleRefreshLive()}
-                className="openbot-btn-secondary px-2.5 py-1 text-[11.5px]"
+                className="studio-btn-secondary px-2.5 py-1 text-[11.5px]"
               >
                 Atualizar
               </button>
@@ -657,7 +657,7 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
             <button
               type="button"
               onClick={onReopenOnboarding}
-              className="openbot-btn-secondary px-2.5 py-1 text-[11.5px]"
+              className="studio-btn-secondary px-2.5 py-1 text-[11.5px]"
             >
               Onboarding
             </button>
@@ -672,9 +672,9 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
               </div>
             )}
 
-            {/* ABA 1: PROVEDORES DE IA (Layout Master/Detail espelhado no OpenBot) */}
+            {/* ABA 1: PROVEDORES DE IA (Layout Master/Detail no padrão Carbon Dark) */}
             {hubTab === "provedores" && (
-              <ProvidersOpenBotView
+              <ProvidersCatalogView
                 provedores={provedores}
                 defaultProvider={defaultProvider}
                 initialDetailProviderId={initialDetailProviderId}
@@ -830,7 +830,7 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
                     <button
                       type="button"
                       onClick={onOpenWhatsAppModal}
-                      className="openbot-btn-primary px-4 py-2 text-[12px]"
+                      className="studio-btn-primary px-4 py-2 text-[12px]"
                     >
                       {whatsappStatus === "conectado" ? "Gerenciar Conexão" : "Gerar QR Code"}
                     </button>
@@ -1006,7 +1006,7 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
                       type="button"
                       disabled={testingConnector}
                       onClick={() => void handleTest(activeConnector)}
-                      className="openbot-btn-secondary px-4 py-2 text-[12px] inline-flex items-center gap-1.5"
+                      className="studio-btn-secondary px-4 py-2 text-[12px] inline-flex items-center gap-1.5"
                     >
                       <FlaskConical className="h-3.5 w-3.5" />
                       {testingConnector ? "Testando..." : "Testar conector"}
@@ -1015,7 +1015,7 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
                   <button
                     type="button"
                     onClick={() => void handleSaveConnector(activeConnector)}
-                    className="openbot-btn-primary px-5 py-2 text-[12px]"
+                    className="studio-btn-primary px-5 py-2 text-[12px]"
                   >
                     Salvar credenciais
                   </button>

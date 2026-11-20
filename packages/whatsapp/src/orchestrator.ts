@@ -233,7 +233,7 @@ export class WhatsAppOrchestrator {
       socket?.user?.id ??
       accountCfg.jidProprio ??
       (accountCfg.numeroTelefone ? `${accountCfg.numeroTelefone}@s.whatsapp.net` : null);
-    const ownLid = socket?.user?.lid ?? null;
+    const ownLid = client.getOwnLid?.() ?? socket?.user?.lid ?? null;
 
     const evaluation = await this.deps.senderRules.evaluateIncoming({
       contaId,

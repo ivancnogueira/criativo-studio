@@ -1,6 +1,6 @@
 /**
  * Compilador e serviço de pré-visualização de interfaces HTML sandboxed (`ChatVisualPreviewService` — CHAT-01).
- * Injeta variáveis CSS `--openbot-*` / Carbon Dark e a ponte congelada `window.criativoPage`
+ * Injeta variáveis CSS `--studio-*` / Carbon Dark e a ponte congelada `window.criativoPage`
  * comunicando-se exclusivamente via `window.parent.postMessage` (JSON-RPC 2.0) dentro de `<iframe sandbox="allow-scripts allow-forms">`.
  */
 import { randomUUID } from "node:crypto";
@@ -28,16 +28,16 @@ function buildVisualBaseCss(theme: "dark" | "light"): string {
   if (theme === "light") {
     return `
       :root {
-        --openbot-bg: #ffffff;
-        --openbot-surface: #f5f5f7;
-        --openbot-card: #ffffff;
-        --openbot-border: rgba(0, 0, 0, 0.12);
-        --openbot-fg: #141414;
-        --openbot-muted-fg: #5c5c5c;
-        --openbot-accent: #007CF7;
-        --openbot-success: #16a34a;
-        --openbot-warning: #d97706;
-        --openbot-danger: #FD2F3B;
+        --studio-bg: #ffffff;
+        --studio-surface: #f5f5f7;
+        --studio-card: #ffffff;
+        --studio-border: rgba(0, 0, 0, 0.12);
+        --studio-fg: #141414;
+        --studio-muted-fg: #5c5c5c;
+        --studio-accent: #007CF7;
+        --studio-success: #16a34a;
+        --studio-warning: #d97706;
+        --studio-danger: #FD2F3B;
         --background: transparent;
         --foreground: #141414;
         --muted: #f4f4f5;
@@ -63,16 +63,16 @@ function buildVisualBaseCss(theme: "dark" | "light"): string {
 
   return `
     :root {
-      --openbot-bg: #141414;
-      --openbot-surface: #1A1A1A;
-      --openbot-card: #212121;
-      --openbot-border: rgba(255, 255, 255, 0.12);
-      --openbot-fg: #F0F0F0;
-      --openbot-muted-fg: #979797;
-      --openbot-accent: #42A0FF;
-      --openbot-success: #31CF76;
-      --openbot-warning: #FF9412;
-      --openbot-danger: #FD2F3B;
+      --studio-bg: #141414;
+      --studio-surface: #1A1A1A;
+      --studio-card: #212121;
+      --studio-border: rgba(255, 255, 255, 0.12);
+      --studio-fg: #F0F0F0;
+      --studio-muted-fg: #979797;
+      --studio-accent: #42A0FF;
+      --studio-success: #31CF76;
+      --studio-warning: #FF9412;
+      --studio-danger: #FD2F3B;
       --background: transparent;
       --foreground: #ffffff;
       --muted: #212121;
@@ -147,10 +147,8 @@ const BOOTSTRAP_SCRIPT = `
 
   try {
     Object.defineProperty(window, "criativoPage", { value: bridge, writable: false, configurable: false });
-    Object.defineProperty(window, "openbotPage", { value: bridge, writable: false, configurable: false });
   } catch (_e) {
     window.criativoPage = bridge;
-    window.openbotPage = bridge;
   }
 
   function reportHeight() {
@@ -223,7 +221,7 @@ const BOOTSTRAP_SCRIPT = `
 `;
 
 /**
- * Envolve ou injeta no `<head>` do HTML os tokens CSS `--openbot-*` e a ponte `window.criativoPage`.
+ * Envolve ou injeta no `<head>` do HTML os tokens CSS `--studio-*` e a ponte `window.criativoPage`.
  */
 export function chatVisualDocument(
   rawHtml: string,

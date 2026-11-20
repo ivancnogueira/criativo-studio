@@ -1,0 +1,50 @@
+:root {
+  --studio-bg-frame: #0d0d0d;
+  --studio-bg-native-canvas: #141414;
+  --studio-bg-canvas: #1a1a1a;
+  --studio-bg-surface: #212121;
+  --studio-bg-surface-raised: #242424;
+  --studio-bg-control-active: #2a2a2a;
+  --studio-bg-sheet-inset: #101010;
+  --studio-bg-notch: #000000;
+
+  --studio-border: rgba(255, 255, 255, 0.06);
+  --studio-border-strong: rgba(255, 255, 255, 0.12);
+  --studio-border-grouped: #333335;
+
+  --studio-text-primary: #ffffff;
+  --studio-text-secondary: #dcdcdc;
+  --studio-text-muted: #979797;
+  --studio-text-dim: #6a6a6a;
+
+  --studio-surface-light: #f0f0f0;
+  --studio-text-on-light: #141414;
+
+  --studio-accent: #007cf7;
+  --studio-accent-text: #42a0ff;
+  --studio-unread-surface: #74b9ff;
+  --studio-success: #31cf76;
+  --studio-warning: #ff9412;
+  --studio-danger: #fd2f3b;
+  --studio-danger-text: #ff6069;
+
+  --studio-provider-claude: #d97757;
+  --studio-provider-gemini: #8e75b2;
+
+  --studio-font-sans:
+    -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  --studio-font-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --studio-radius-sm: 6px;
+  --studio-radius-md: 8px;
+  --studio-radius-lg: 12px;
+  --studio-radius-card: 14px;
+  --studio-radius-xl: 20px;
+  --studio-radius-bubble: 22px;
+  --studio-radius-pill: 999px;
+
+  --studio-shadow-popover: 0 14px 40px rgba(0, 0, 0, 0.55);
+  --studio-shadow-dialog: 0 24px 64px rgba(0, 0, 0, 0.72);
+  --studio-shadow-dynamic-island: 0 8px 24px rgba(0, 0, 0, 0.6);
+}

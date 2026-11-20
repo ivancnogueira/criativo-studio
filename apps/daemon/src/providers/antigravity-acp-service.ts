@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { extname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -71,12 +72,36 @@ export type McpServersResolver = (
   agentId?: string | null
 ) => Promise<unknown[]> | unknown[];
 
+export type VisualImageRole = "foto_real" | "referencia_estilo" | "logo" | "anexo_usuario";
+
+export interface LabeledImageInput {
+  path: string;
+  role: VisualImageRole;
+  label?: string;
+}
+
+export function formatLabeledImageInstruction(img: LabeledImageInput): string {
+  const safeLabel = (img.label || img.path || "midia").replace(/[\r\n]+/g, " ").trim().slice(0, 140);
+  if (img.role === "foto_real") {
+    return `[FOTO REAL DO USUÁRIO - preservar fielmente rosto, traços, expressão e aparência: ${safeLabel}]`;
+  }
+  if (img.role === "referencia_estilo") {
+    return `[REFERÊNCIA DE ESTILO - usar apenas paleta, iluminação e composição visual; NÃO copiar nem substituir o rosto da pessoa real: ${safeLabel}]`;
+  }
+  if (img.role === "logo") {
+    return `[LOGO OFICIAL DA MARCA - preservar tipografia e símbolo se incluído: ${safeLabel}]`;
+  }
+  return `[ANEXO VISUAL ENVIADO PELO USUÁRIO NESTE TURNO: ${safeLabel}]`;
+}
+
 export interface AcpPromptExecutionInput {
   geminiDir: string;
   cwd: string;
   promptText: string;
   modelId?: string;
+  effort?: string;
   imagePaths?: string[];
+  labeledImages?: LabeledImageInput[];
   timeoutMs?: number;
   agentId?: string | null;
   mcpServers?: unknown[];
@@ -119,17 +144,45 @@ interface AcpSessionNewResult {
   };
 }
 
-function resolveAcpModelSelection(requestedId: string, candidateIds: string[]): string | null {
+function getEffortSuffixOrder(effort?: string): string[] {
+  const clean = (effort ?? "").trim().toLowerCase();
+  if (clean === "baixo" || clean === "low") {
+    return ["-low", "-medium", "-high", "-xhigh"];
+  }
+  if (clean === "alto" || clean === "high") {
+    return ["-high", "-xhigh", "-medium", "-low"];
+  }
+  if (clean === "maximo" || clean === "máximo" || clean === "xhigh") {
+    return ["-xhigh", "-high", "-medium", "-low"];
+  }
+  return ["-medium", "-high", "-low", "-xhigh"];
+}
+
+export function resolveAcpModelSelection(
+  requestedId: string,
+  candidateIds: string[],
+  effort?: string
+): string | null {
+  const baseId = requestedId.replace(/-(low|medium|high|xhigh)$/i, "");
+  const suffixOrder = getEffortSuffixOrder(effort);
+
+  if (effort) {
+    for (const suffix of suffixOrder) {
+      const candidate = `${baseId}${suffix}`;
+      if (candidateIds.includes(candidate)) return candidate;
+    }
+  }
+
   if (candidateIds.includes(requestedId)) return requestedId;
-  for (const suffix of ["-medium", "-high", "-low", "-xhigh"]) {
-    const candidate = `${requestedId}${suffix}`;
+  for (const suffix of suffixOrder) {
+    const candidate = `${baseId}${suffix}`;
     if (candidateIds.includes(candidate)) return candidate;
   }
-  return candidateIds.find((c) => c.startsWith(`${requestedId}-`)) ?? null;
+  return candidateIds.find((c) => c.startsWith(`${baseId}-`)) ?? null;
 }
 
 const DEFAULT_SIGN_IN_TIMEOUT_MS = 180_000;
-const DEFAULT_PROMPT_TIMEOUT_MS = 90_000;
+export const DEFAULT_PROMPT_TIMEOUT_MS = 180_000;
 const WORKER_IDLE_TTL_MS = 5 * 60_000;
 
 function inferMimeFromImagePath(filePath: string): string {
@@ -146,7 +199,7 @@ export function resolveAntigravityCliExecutable(appDataDir?: string): string | n
 
   const resolvedAppData = appDataDir ?? process.env.APPDATA ?? "";
   if (resolvedAppData) {
-    const baseRuntime = join(resolvedAppData, "OpenBot", "provider-runtimes", "antigravity");
+    const baseRuntime = join(resolvedAppData, "CriativoStudio", "provider-runtimes", "antigravity");
     try {
       if (existsSync(baseRuntime)) {
         const archDirs = readdirSync(baseRuntime);
@@ -181,6 +234,12 @@ export function resolveAntigravityCliExecutable(appDataDir?: string): string | n
       const candidate = join(dir, n);
       if (existsSync(candidate)) return candidate;
     }
+  }
+
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local");
+    const agyLocal = join(localAppData, "agy", "bin", "agy.exe");
+    if (existsSync(agyLocal)) return agyLocal;
   }
 
   return null;
@@ -270,6 +329,10 @@ class AcpProcessConnection {
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
       windowsHide: !opts.interactiveLogin,
+    });
+
+    this.child.stdin.on("error", () => {
+      this.closed = true;
     });
 
     const rl = createInterface({ input: this.child.stdout });
@@ -509,7 +572,9 @@ class AcpProcessConnection {
     cwd: string;
     promptText: string;
     modelId?: string;
+    effort?: string;
     imagePaths?: string[];
+    labeledImages?: LabeledImageInput[];
     timeoutMs: number;
     agentId?: string | null;
     mcpServers?: unknown[];
@@ -542,7 +607,7 @@ class AcpProcessConnection {
 
     // Seleciona o modelo solicitado (ou variante correspondente ao prefixo) na sessão ACP
     if (input.modelId) {
-      const resolvedId = resolveAcpModelSelection(input.modelId, candidateIds) ?? input.modelId;
+      const resolvedId = resolveAcpModelSelection(input.modelId, candidateIds, input.effort) ?? input.modelId;
       if (modelOpt?.id && modelOpt.options?.some((o) => o.value === resolvedId)) {
         try {
           await this.request(
@@ -567,14 +632,26 @@ class AcpProcessConnection {
     }
 
     const promptBlocks: Array<Record<string, unknown>> = [{ type: "text", text: input.promptText }];
-    if (this.supportsImages && input.imagePaths && input.imagePaths.length > 0) {
-      for (const imgPath of input.imagePaths.slice(0, 3)) {
+    const labeledList =
+      this.supportsImages && input.labeledImages && input.labeledImages.length > 0
+        ? input.labeledImages.slice(0, 5)
+        : this.supportsImages && input.imagePaths && input.imagePaths.length > 0
+          ? input.imagePaths.slice(0, 3).map((p) => ({ path: p, role: "anexo_usuario" as const, label: p }))
+          : [];
+    if (labeledList.length > 0) {
+      for (const item of labeledList) {
         try {
-          if (existsSync(imgPath)) {
+          if (existsSync(item.path)) {
+            if (input.labeledImages && input.labeledImages.length > 0) {
+              promptBlocks.push({
+                type: "text",
+                text: formatLabeledImageInstruction(item),
+              });
+            }
             promptBlocks.push({
               type: "image",
-              mimeType: inferMimeFromImagePath(imgPath),
-              data: readFileSync(imgPath).toString("base64"),
+              mimeType: inferMimeFromImagePath(item.path),
+              data: readFileSync(item.path).toString("base64"),
             });
           }
         } catch {
@@ -843,7 +920,9 @@ export class AntigravityAcpService {
         cwd: input.cwd,
         promptText: input.promptText,
         modelId: input.modelId,
+        effort: input.effort,
         imagePaths: input.imagePaths,
+        labeledImages: input.labeledImages,
         timeoutMs: input.timeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS,
         agentId: input.agentId,
         mcpServers: resolvedMcpServers,

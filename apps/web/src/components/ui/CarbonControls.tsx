@@ -226,7 +226,7 @@ interface SlidingTabsProps<T extends string = string> {
 }
 
 /**
- * Alternador segmentado estilo OpenBot / Carbon Dark (`role="tablist"` e `role="tab"`).
+ * Alternador segmentado Carbon Dark / Carbon Dark (`role="tablist"` e `role="tab"`).
  */
 export function SlidingTabs<T extends string = string>({
   ariaLabel = "Seletor de abas",

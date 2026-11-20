@@ -127,6 +127,7 @@ const USER_SETTINGS_STORAGE_KEY = "criativo_user_settings";
 const LAST_TAB_STORAGE_KEY = "criativo_last_tab_id";
 const SIDEBAR_WIDTH_KEY = "criativo_sidebar_width";
 const INSPECTOR_WIDTH_KEY = "criativo_inspector_width";
+const AGENT_DOCK_PINNED_KEY = "criativo.agent_dock.pinned";
 const DEFAULT_SIDEBAR_WIDTH = 276;
 const DEFAULT_INSPECTOR_WIDTH = 330;
 
@@ -351,6 +352,28 @@ export function App() {
   const [routinesAgentSearch, setRoutinesAgentSearch] = useState("");
   const [routinesSelectedRoutineId, setRoutinesSelectedRoutineId] = useState<string | null>(null);
   const [routinesRightOpen, setRoutinesRightOpen] = useState(true);
+  const [agentDockPinned, setAgentDockPinned] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    try {
+      const saved = window.localStorage.getItem(AGENT_DOCK_PINNED_KEY);
+      return saved === null ? true : saved === "true";
+    } catch {
+      return true;
+    }
+  });
+  const handleToggleAgentDockPinned = useCallback(() => {
+    setAgentDockPinned((prev) => {
+      const next = !prev;
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem(AGENT_DOCK_PINNED_KEY, String(next));
+        } catch {
+          // ignora erro de quota
+        }
+      }
+      return next;
+    });
+  }, []);
   const lastNonSettingsSectionRef = useRef<StudioNavSection>("agentes");
   const [sidebarLayout, setSidebarLayout] = useState<SidebarLayoutSnapshot | null>(null);
   const [browserStatus, setBrowserStatus] = useState<BrowserStatusReport | null>(null);
@@ -1640,6 +1663,42 @@ export function App() {
     );
   };
 
+  const handleCreateNewTopic = useCallback(async () => {
+    const currentAgentId =
+      centerMode.type === "agent" || centerMode.type === "thread" ? centerMode.agenteId : null;
+    const targetAgent =
+      (currentAgentId ? agentes.find((a) => a.agente_id === currentAgentId) : null) ??
+      agentes.find((a) => a.agente_id === "estrategista") ??
+      agentes[0] ??
+      null;
+    const targetAgentId = targetAgent?.agente_id ?? "estrategista";
+    const vis = getAgentAvatar(targetAgent);
+    const { thread } = await daemonApi.createEmptyTopic(targetAgentId);
+    setAllThreads((prev) => [
+      thread,
+      ...prev.filter((t) => t.thread_id !== thread.thread_id),
+    ]);
+    setThreadChatById((prev) => ({
+      ...prev,
+      [thread.thread_id]: prev[thread.thread_id] ?? [],
+    }));
+    setActiveThreadIdByAgent((prev) => ({
+      ...prev,
+      [targetAgentId]: thread.thread_id,
+    }));
+    ensureAndActivateTab(
+      {
+        id: `thread:${targetAgentId}:${thread.thread_id}`,
+        titulo: thread.titulo || "Novo tópico",
+        kind: "topic",
+        shape: vis.shape,
+        color: vis.color,
+      },
+      { type: "thread", agenteId: targetAgentId, threadId: thread.thread_id }
+    );
+    await refreshAgentThreadsState(targetAgentId, thread.thread_id).catch(() => {});
+  }, [agentes, centerMode, ensureAndActivateTab, refreshAgentThreadsState]);
+
   const handleSelectTab = (tabId: string) => {
     setActiveTabId(tabId);
     setActiveSection("agentes");
@@ -1712,6 +1771,50 @@ export function App() {
         ? `main:${activeAgent.agente_id}`
         : "";
 
+  const workingAgentIds = useMemo<Set<string>>(() => {
+    const ids = new Set<string>();
+    for (const [key, run] of Object.entries(liveRunByChat)) {
+      if (run?.agenteId) ids.add(run.agenteId);
+      if (key.startsWith("agente:")) ids.add(key.slice("agente:".length));
+    }
+    for (const [thId, run] of Object.entries(liveRunByThread)) {
+      if (run?.agenteId) {
+        ids.add(run.agenteId);
+        continue;
+      }
+      const matched = allThreads.find((t) => t.thread_id === thId);
+      if (matched?.agente_id) ids.add(matched.agente_id);
+    }
+    for (const ag of agentes) {
+      if (ag.status === "trabalhando") ids.add(ag.agente_id);
+    }
+    return ids;
+  }, [agentes, allThreads, liveRunByChat, liveRunByThread]);
+
+  const dynamicIslandTabs = useMemo<StudioTabItem[]>(() => {
+    return openTabs.map((tab) => {
+      if (tab.id.startsWith("thread:")) {
+        const rest = tab.id.slice("thread:".length);
+        const sep = rest.indexOf(":");
+        const thId = sep > 0 ? rest.slice(sep + 1) : "";
+        return {
+          ...tab,
+          kind: "topic",
+          working: thId ? Boolean(liveRunByThread[thId]) : false,
+        };
+      }
+      if (tab.id.startsWith("agent:")) {
+        const agId = tab.id.slice("agent:".length);
+        return {
+          ...tab,
+          kind: tab.kind ?? "agent",
+          working: workingAgentIds.has(agId),
+        };
+      }
+      return tab;
+    });
+  }, [liveRunByThread, openTabs, workingAgentIds]);
+
   const activeChatKey =
     activeSideThreadId && activeSideThreadId.startsWith("rotina:")
       ? activeSideThreadId
@@ -1769,8 +1872,13 @@ export function App() {
     [tarefas, selectedTaskId]
   );
 
-  const handleUploadFile = async (file: File): Promise<AnexoChat> => {
-    const uploaded = await daemonApi.uploadFile(file, activeAgent?.agente_id ?? null);
+  const handleUploadFile = async (
+    file: File,
+    categoria?: "logo" | "foto" | "referencia" | "personagem" | "ficha_pdf" | "upload"
+  ): Promise<AnexoChat> => {
+    const uploaded = categoria
+      ? (await daemonApi.uploadFileCategorized(file, categoria, activeAgent?.agente_id ?? null)).anexo
+      : await daemonApi.uploadFile(file, activeAgent?.agente_id ?? null);
     const [refreshedFiles, refreshedFolders] = await Promise.all([
       daemonApi.listFiles(),
       daemonApi.listLibraryFolders().catch(() => null),
@@ -1778,6 +1886,12 @@ export function App() {
     setArquivos(refreshedFiles);
     if (refreshedFolders) setFoldersSnapshot(refreshedFolders);
     return uploaded;
+  };
+
+  const handleDeleteFile = async (arquivoId: string): Promise<void> => {
+    await daemonApi.deleteFile(arquivoId);
+    setArquivos((prev) => prev.filter((a) => a.arquivo_id !== arquivoId));
+    await refreshLibraryFolders();
   };
 
   const handleSubmitUiBlock = async (payload: UiBlockSubmitPayload): Promise<void> => {
@@ -1899,6 +2013,22 @@ export function App() {
       }
       setSendingChat(true);
       let keepLiveRun = hadExistingRun;
+      const shouldRenameTopicTab =
+        (activeThread?.titulo === "Novo tópico" ||
+          openTabs.find((t) => t.id === `thread:${activeAgent.agente_id}:${threadId}`)?.titulo ===
+            "Novo tópico") &&
+        conteudo.trim().length > 0;
+      if (shouldRenameTopicTab) {
+        const cleanTitle = conteudo.trim().replace(/\s+/g, " ");
+        const nextTitle = cleanTitle.length > 42 ? `${cleanTitle.slice(0, 39)}...` : cleanTitle;
+        setOpenTabs((prev) =>
+          prev.map((tab) =>
+            tab.id === `thread:${activeAgent.agente_id}:${threadId}`
+              ? { ...tab, titulo: nextTitle }
+              : tab
+          )
+        );
+      }
       try {
         const res = await daemonApi.sendThreadMessage(threadId, payloadContent, anexos);
         if (res.enfileirada || res.steered) {
@@ -1921,6 +2051,9 @@ export function App() {
               )
             ),
           }));
+          if (shouldRenameTopicTab) {
+            await refreshAgentThreadsState(activeAgent.agente_id, threadId);
+          }
         }
       } finally {
         if (!keepLiveRun) {
@@ -2516,11 +2649,12 @@ export function App() {
             whatsappStatus={whatsappStatus}
             onOpenWhatsAppModal={() => setWhatsappModalOpen(true)}
             onOpenVaultModal={() => setActiveSection("conexoes")}
-            tabs={openTabs}
+            tabs={dynamicIslandTabs}
             activeTabId={activeTabId}
             onSelectTab={handleSelectTab}
             onCloseTab={handleCloseTab}
-            onNewTab={handleOpenNewAgentTab}
+            onNewTopic={() => void handleCreateNewTopic()}
+            onNewTab={() => void handleCreateNewTopic()}
             sidebarCollapsed={!sidebarOpen}
             onToggleSidebar={() => {
               setSidebarOpen((s) => {
@@ -2569,6 +2703,7 @@ export function App() {
                     showModeTabs={false}
                     agentes={agentes}
                     canais={canais}
+                    workingAgentIds={workingAgentIds}
                   selectedAgentId={
                     centerMode.type === "agent" || centerMode.type === "thread"
                       ? activeAgent?.agente_id ?? null
@@ -2996,6 +3131,7 @@ export function App() {
                       previewTarefa={previewTarefa}
                       onClose={() => setInspectorOpen(false)}
                       onOpenFilesPage={() => setActiveSection("arquivos")}
+                      onDeleteFile={handleDeleteFile}
                       onOpenWhatsAppModal={() => setWhatsappModalOpen(true)}
                       onCreateBrowserProfile={async (input) => {
                         await daemonApi.createBrowserProfile(input);
@@ -3297,6 +3433,7 @@ export function App() {
             <FilesVaultPage
               arquivos={arquivos}
               onUploadFile={handleUploadFile}
+              onDeleteFile={handleDeleteFile}
               agentes={agentes}
               foldersSnapshot={foldersSnapshot}
               onRefreshFolders={refreshLibraryFolders}
@@ -3615,7 +3752,12 @@ export function App() {
                         />
 
                         {routinesRightOpen && (
-                          <div className="w-[380px] xl:w-[420px] shrink-0 border-l border-white/[0.06] bg-[#141416] flex flex-col overflow-hidden">
+                          <div
+                            data-testid="routines-right-panel"
+                            className={`w-[380px] xl:w-[420px] shrink-0 border-l border-white/[0.06] bg-[#141416] flex flex-col min-h-0 overflow-y-auto px-5 py-5 pb-12 ${
+                              agentDockPinned ? "pr-16" : ""
+                            }`}
+                          >
                             <AgentRoutinesSettings
                               key={selectedRoutineAgent.agente_id}
                               ownerKind="agente"
@@ -3904,11 +4046,11 @@ export function App() {
               <button
                 type="button"
                 onClick={() => setChannelModalOpen(false)}
-                className="openbot-btn-secondary px-4 py-1.5 text-[12.5px]"
+                className="studio-btn-secondary px-4 py-1.5 text-[12.5px]"
               >
                 Cancelar
               </button>
-              <button type="submit" className="openbot-btn-primary px-5 py-1.5 text-[12.5px]">
+              <button type="submit" className="studio-btn-primary px-5 py-1.5 text-[12.5px]">
                 Criar Canal
               </button>
             </div>
@@ -3946,7 +4088,7 @@ export function App() {
               <button
                 type="button"
                 onClick={() => setHelpModalOpen(false)}
-                className="openbot-btn-primary px-4 py-1.5 text-[12.5px]"
+                className="studio-btn-primary px-4 py-1.5 text-[12.5px]"
               >
                 Fechar
               </button>
@@ -4008,6 +4150,10 @@ export function App() {
         agentes={agentes}
         pinnedIds={sidebarLayout?.pins ?? []}
         selectedAgentId={activeAgent?.agente_id ?? null}
+        workingAgentIds={workingAgentIds}
+        pinned={agentDockPinned}
+        onTogglePinned={handleToggleAgentDockPinned}
+        onCreateAgent={handleOpenNewAgentTab}
         onSelectAgent={handleSelectAgent}
       />
 
