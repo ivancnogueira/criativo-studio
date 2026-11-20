@@ -441,7 +441,7 @@ export function App() {
   const [showcaseSites, setShowcaseSites] = useState<ShowcaseSiteSummary[]>([]);
   const [liveVoiceActive, setLiveVoiceActive] = useState(false);
   const [licenseStatus, setLicenseStatus] = useState<LicenseActivationStatus | null>(null);
-  const isAppBooting = bootLoading || Boolean(licenseStatus?.valid && !onboarding);
+  const isAppBooting = bootLoading;
   useEffect(() => {
     if (isAppBooting && splashDismissed) {
       setSplashStage("jumping");
@@ -601,20 +601,24 @@ export function App() {
         remoteServersSnap,
         remoteUpdateStatus,
       ] = await Promise.all([
-        daemonApi.getOnboarding(),
-        daemonApi.listAgents(),
-        daemonApi.listChannels(),
-        daemonApi.listTasks(),
-        daemonApi.getWhatsAppStatus(),
-        daemonApi.listProvidersStatus(false),
-        daemonApi.getProvidersUsage(false),
-        daemonApi.getUsageAnalytics({ dias: 30, agente_id: null }),
-        daemonApi.listSkills(),
-        daemonApi.listUpgrades(),
-        daemonApi.listConnectors(),
-        daemonApi.listWorkflows(),
-        daemonApi.listFiles(),
-        daemonApi.getVaultStatus(),
+        daemonApi.getOnboarding().catch(() => null),
+        daemonApi.listAgents().catch(() => [] as AgenteEnriquecido[]),
+        daemonApi.listChannels().catch(() => [] as CanalEquipe[]),
+        daemonApi.listTasks().catch(() => [] as TarefaRegistro[]),
+        daemonApi
+          .getWhatsAppStatus()
+          .catch(() => ({ status: "desconectado" as StatusMensageria, qrcode_base64: null })),
+        daemonApi.listProvidersStatus(false).catch(() => [] as ProvedorStatusInfo[]),
+        daemonApi.getProvidersUsage(false).catch(() => null),
+        daemonApi.getUsageAnalytics({ dias: 30, agente_id: null }).catch(() => null),
+        daemonApi.listSkills().catch(() => [] as HabilidadeInstaladaInfo[]),
+        daemonApi.listUpgrades().catch(() => [] as PacoteUpgradeInfo[]),
+        daemonApi.listConnectors().catch(() => [] as ConectorIntegracaoInfo[]),
+        daemonApi.listWorkflows().catch(() => []),
+        daemonApi.listFiles().catch(() => [] as ArquivoStudio[]),
+        daemonApi
+          .getVaultStatus()
+          .catch(() => [] as Array<{ chave_nome: string; atualizado_em: string }>),
         daemonApi.listWhatsAppAccounts().catch(() => [] as WhatsAppContaResumo[]),
         daemonApi.listAllThreads().catch(() => [] as AgenteThreadRegistro[]),
         daemonApi.listLibraryFolders().catch(() => null),
@@ -644,15 +648,15 @@ export function App() {
         }
       }
 
-      setOnboarding(onb);
+      if (onb) setOnboarding(onb);
       setAgentes(agList);
       setCanais(chList);
       setTarefas(tList);
       setWhatsappStatus(wa.status);
       setWhatsappQr(wa.qrcode_base64);
       setProvedores(provList);
-      setUso(usageSnap);
-      setAnalyticsUso(analyticsData);
+      if (usageSnap) setUso(usageSnap);
+      if (analyticsData) setAnalyticsUso(analyticsData);
       setHabilidades(skillsList);
       setUpgrades(upgradeList);
       setConectores(connList);
@@ -2754,9 +2758,10 @@ export function App() {
 
   if (isAppBooting) {
     return (
-      <div className="min-h-screen w-full bg-[#0D0D0D]">
+      <>
+        <div className="min-h-screen w-full bg-[#0D0D0D]" />
         {renderSplashOverlay()}
-      </div>
+      </>
     );
   }
 

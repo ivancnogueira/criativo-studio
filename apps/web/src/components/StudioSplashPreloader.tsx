@@ -44,15 +44,21 @@ const SHAPE_PATHS: Record<AvatarShape, string> = {
     "M50 8 C54 8 58 10 62 14 L86 38 C92 44 92 56 86 62 L62 86 C56 92 44 92 38 86 L14 62 C8 56 8 44 14 38 L38 14 C42 10 46 8 50 8 Z",
 };
 
+const SPLASH_STAGE_WIDTH = 960;
+const SPLASH_STAGE_HEIGHT = 380;
+const SPLASH_HORIZON_TOP = 250;
+const SPLASH_MASCOT_SIZE = 104;
+const SPLASH_SCOUT_SCALE = 2.65;
+
 // Equipe fixa de 7 mascotes (3 à esquerda + batedor central + 3 à direita)
 const SPLASH_SQUAD: readonly MascotMemberSpec[] = [
-  { slot: -3, x: -186, xStart: -48, yEnd: -2, shape: "octo", color: "#a855f7" },
-  { slot: -2, x: -124, xStart: -24, yEnd: -6, shape: "pill", color: "#3b82f6" },
-  { slot: -1, x: -62, xStart: 0, yEnd: -10, shape: "hex", color: "#22c55e" },
-  { slot: 0, x: 0, xStart: 0, yEnd: -14, shape: "blob", color: "#f97316" },
-  { slot: 1, x: 62, xStart: 0, yEnd: -10, shape: "diamond", color: "#f27ba5" },
-  { slot: 2, x: 124, xStart: 24, yEnd: -6, shape: "rounded_square", color: "#2dd4bf" },
-  { slot: 3, x: 186, xStart: 48, yEnd: -2, shape: "triangle", color: "#eab308" },
+  { slot: -3, x: -396, xStart: -104, yEnd: -4, shape: "octo", color: "#a855f7" },
+  { slot: -2, x: -264, xStart: -52, yEnd: -12, shape: "pill", color: "#3b82f6" },
+  { slot: -1, x: -132, xStart: 0, yEnd: -20, shape: "hex", color: "#22c55e" },
+  { slot: 0, x: 0, xStart: 0, yEnd: -28, shape: "blob", color: "#f97316" },
+  { slot: 1, x: 132, xStart: 0, yEnd: -20, shape: "diamond", color: "#f27ba5" },
+  { slot: 2, x: 264, xStart: 52, yEnd: -12, shape: "rounded_square", color: "#2dd4bf" },
+  { slot: 3, x: 396, xStart: 104, yEnd: -4, shape: "triangle", color: "#eab308" },
 ];
 
 const INITIAL_VISUAL_STATES: MascotVisualState[] = SPLASH_SQUAD.map((m) => ({
@@ -61,6 +67,37 @@ const INITIAL_VISUAL_STATES: MascotVisualState[] = SPLASH_SQUAD.map((m) => ({
   gy: m.slot === 0 ? -0.8 : 0,
   spark: false,
 }));
+
+export const SPLASH_REVEAL_TIMINGS = {
+  burstMs: 160,
+  openMs: 350,
+  completeMs: 920,
+  reducedCompleteMs: 240,
+} as const;
+
+/**
+ * Calcula a escala proporcional do palco para ocupar ~70% da largura da tela sem vazar verticalmente.
+ */
+export function computeSplashStageScale(
+  viewportWidth?: number,
+  viewportHeight?: number
+): number {
+  const w =
+    typeof viewportWidth === "number"
+      ? viewportWidth
+      : typeof window !== "undefined"
+        ? window.innerWidth
+        : 1380;
+  const h =
+    typeof viewportHeight === "number"
+      ? viewportHeight
+      : typeof window !== "undefined"
+        ? window.innerHeight
+        : 880;
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return 1;
+  const raw = Math.min((w * 0.72) / SPLASH_STAGE_WIDTH, (h * 0.62) / SPLASH_STAGE_HEIGHT);
+  return Math.max(0.35, Math.min(1.85, Number(raw.toFixed(4))));
+}
 
 /**
  * Decide em qual ato o preloader do React deve iniciar para dar continuidade exata
@@ -97,7 +134,12 @@ const SplashMascotSvg: React.FC<SplashMascotSvgProps> = ({
   const ryR = face === "curieux" ? 6.2 : 8.4;
 
   return (
-    <svg width={52} height={52} viewBox="0 0 100 100" style={{ overflow: "visible", display: "block" }}>
+    <svg
+      width={SPLASH_MASCOT_SIZE}
+      height={SPLASH_MASCOT_SIZE}
+      viewBox="0 0 100 100"
+      style={{ overflow: "visible", display: "block" }}
+    >
       <defs>
         <radialGradient id={`plush-splash-${uidPrefix}`} cx="36%" cy="28%" r="72%">
           <stop offset="0%" stopColor="#ffffff" stopOpacity="0.48" />
@@ -196,9 +238,31 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
       : INITIAL_VISUAL_STATES
   );
 
+  const [stageScale, setStageScale] = useState<number>(() => computeSplashStageScale());
   const revealStartedRef = useRef(false);
+  const revealTimersRef = useRef<number[]>([]);
   const onRevealCompleteRef = useRef(onRevealComplete);
   onRevealCompleteRef.current = onRevealComplete;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const updateScale = () => setStageScale(computeSplashStageScale());
+    updateScale();
+    window.addEventListener("resize", updateScale);
+    return () => {
+      window.removeEventListener("resize", updateScale);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      for (const id of revealTimersRef.current) {
+        window.clearTimeout(id);
+      }
+      revealTimersRef.current = [];
+      revealStartedRef.current = false;
+    };
+  }, []);
 
   const setMemberVisual = (idx: number, patch: Partial<MascotVisualState>) => {
     setVisuals((prev) => prev.map((item, i) => (i === idx ? { ...item, ...patch } : item)));
@@ -303,21 +367,25 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
     };
   }, [stage, reducedMotion]);
 
-  // Ato 4: Dispara o Reveal somente após loading=false E entrada já no estágio jumping
+  // Ato 4: Dispara o Reveal somente após loading=false E entrada já no estágio jumping.
+  // Os timers ficam em revealTimersRef (limpos apenas no unmount) para que a transição
+  // jumping -> reveal-squash nunca cancele reveal-burst / reveal-open / onRevealComplete.
   useEffect(() => {
     if (loading || stage !== "jumping" || revealStartedRef.current) return;
     revealStartedRef.current = true;
 
-    const timers: number[] = [];
-    const schedule = (fn: () => void, ms: number) => {
+    const scheduleReveal = (fn: () => void, ms: number) => {
       const id = window.setTimeout(fn, ms);
-      timers.push(id);
+      revealTimersRef.current.push(id);
     };
 
     if (reducedMotion) {
       setStage("reveal-open");
-      schedule(() => onRevealCompleteRef.current?.(), 240);
-      return () => timers.forEach((id) => window.clearTimeout(id));
+      scheduleReveal(
+        () => onRevealCompleteRef.current?.(),
+        SPLASH_REVEAL_TIMINGS.reducedCompleteMs
+      );
+      return;
     }
 
     // Fase 1: Squash sincronizado + todos felizes (^ ^)
@@ -325,23 +393,19 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
     setStage("reveal-squash");
 
     // Fase 2: Salto conjunto em leque + faíscas + anel laranja
-    schedule(() => {
+    scheduleReveal(() => {
       setVisuals(SPLASH_SQUAD.map(() => ({ face: "excite", gx: 0, gy: 0, spark: true })));
       setStage("reveal-burst");
-    }, 160);
+    }, SPLASH_REVEAL_TIMINGS.burstMs);
 
     // Fase 3: Portal circular abrindo a interface por baixo
-    schedule(() => {
+    scheduleReveal(() => {
       setStage("reveal-open");
-    }, 350);
+    }, SPLASH_REVEAL_TIMINGS.openMs);
 
-    schedule(() => {
+    scheduleReveal(() => {
       onRevealCompleteRef.current?.();
-    }, 920);
-
-    return () => {
-      timers.forEach((id) => window.clearTimeout(id));
-    };
+    }, SPLASH_REVEAL_TIMINGS.completeMs);
   }, [loading, stage, reducedMotion]);
 
   const isRevealing =
@@ -374,23 +438,29 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
           : "clip-path 560ms cubic-bezier(0.76, 0, 0.24, 1), opacity 340ms ease",
       }}
     >
-      {/* Palco fixo centralizado (mesmas coordenadas usadas no splash nativo Electron) */}
+      {/* Palco fixo centralizado com escala responsiva (~70% da tela, mesmas coordenadas do splash Electron) */}
       <div
-        className="relative"
-        style={{ width: 460, maxWidth: "calc(100vw - 24px)", height: 240 }}
+        className="relative shrink-0"
+        data-splash-stage-root="1"
+        style={{
+          width: SPLASH_STAGE_WIDTH,
+          height: SPLASH_STAGE_HEIGHT,
+          transform: `scale(${stageScale})`,
+          transformOrigin: "center center",
+        }}
       >
         {/* Brilho ambiente sob a linha do horizonte */}
         <div
           aria-hidden="true"
           className="pointer-events-none absolute left-1/2"
           style={{
-            top: 154,
-            width: 440,
-            height: 120,
+            top: SPLASH_HORIZON_TOP,
+            width: 900,
+            height: 210,
             transform: "translate(-50%, -45%)",
             background:
               "radial-gradient(ellipse at center, rgba(249, 115, 22, 0.22) 0%, rgba(56, 189, 248, 0.09) 48%, transparent 74%)",
-            filter: "blur(20px)",
+            filter: "blur(36px)",
             opacity: stage === "reveal-burst" || stage === "reveal-open" ? 0 : 1,
             transition: "opacity 380ms ease",
           }}
@@ -399,12 +469,12 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
         {/* Anel laranja de impacto no Reveal */}
         <div
           aria-hidden="true"
-          className={`pointer-events-none absolute left-1/2 top-1/2 rounded-full border-2 border-[#FF6B00] ${
+          className={`pointer-events-none absolute left-1/2 top-1/2 rounded-full border-[3px] border-[#FF6B00] ${
             stage === "reveal-burst" || stage === "reveal-open" ? "studio-splash-ring-pop" : ""
           }`}
           style={{
-            width: 96,
-            height: 96,
+            width: 180,
+            height: 180,
             transform: "translate(-50%, -50%) scale(0.35)",
             opacity: stage === "reveal-burst" || stage === "reveal-open" ? undefined : 0,
           }}
@@ -414,13 +484,9 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
         <div
           className="absolute inset-x-0 top-0"
           style={{
-            height: 154,
-            clipPath: clipUnlocked
-              ? "inset(-140px -80px -160px -80px)"
-              : "inset(-120px 0px 0px 0px)",
-            WebkitClipPath: clipUnlocked
-              ? "inset(-140px -80px -160px -80px)"
-              : "inset(-120px 0px 0px 0px)",
+            height: SPLASH_HORIZON_TOP,
+            clipPath: clipUnlocked ? "none" : "inset(-360px -80px 0px -80px)",
+            WebkitClipPath: clipUnlocked ? "none" : "inset(-360px -80px 0px -80px)",
           }}
         >
           {SPLASH_SQUAD.map((m, i) => {
@@ -433,22 +499,22 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
             let slotTransition = "transform 500ms cubic-bezier(0.34, 1.56, 0.64, 1), opacity 280ms ease";
 
             if (stage === "reveal-burst" || stage === "reveal-open") {
-              const fanX = m.x * 1.68;
-              const fanY = -152 - Math.abs(m.slot) * 12;
+              const fanX = m.x * 1.48;
+              const fanY = -240 - Math.abs(m.slot) * 18;
               slotTransform = `translate(calc(-50% + ${fanX}px), ${fanY}px) scale(0.86)`;
               slotOpacity = 0;
               slotTransition = "transform 340ms cubic-bezier(0.22, 1, 0.36, 1), opacity 280ms ease";
             } else if (stage === "scout" && isScout) {
               slotTransform = peekRaised
-                ? "translate(-50%, 40px) scale(2.15)"
-                : "translate(-50%, 116px) scale(2.15)";
+                ? `translate(-50%, 100px) scale(${SPLASH_SCOUT_SCALE})`
+                : `translate(-50%, 290px) scale(${SPLASH_SCOUT_SCALE})`;
               slotOpacity = 1;
               slotTransition = "transform 620ms cubic-bezier(0.22, 1, 0.36, 1), opacity 260ms ease";
             } else if (visible) {
               slotTransform = `translate(calc(-50% + ${m.x}px), ${m.yEnd}px) scale(1)`;
               slotOpacity = 1;
             } else {
-              slotTransform = `translate(calc(-50% + ${m.xStart}px), 62px) scale(0.5)`;
+              slotTransform = `translate(calc(-50% + ${m.xStart}px), 124px) scale(0.5)`;
               slotOpacity = 0;
             }
 
@@ -459,9 +525,9 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
 
             const jumperTransform =
               stage === "reveal-squash"
-                ? "translateY(8px) scale(1.16, 0.82)"
+                ? "translateY(14px) scale(1.16, 0.82)"
                 : stage === "reveal-burst" || stage === "reveal-open"
-                  ? "translateY(-10px) scale(0.95, 1.08)"
+                  ? "translateY(-18px) scale(0.95, 1.08)"
                   : isScout && stage === "scout"
                     ? `rotate(${scoutTiltDeg}deg)`
                     : undefined;
@@ -472,8 +538,8 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
                 data-splash-mascot={m.slot}
                 className="absolute bottom-0 left-1/2"
                 style={{
-                  width: 52,
-                  height: 52,
+                  width: SPLASH_MASCOT_SIZE,
+                  height: SPLASH_MASCOT_SIZE,
                   transformOrigin: "center bottom",
                   zIndex: isScout ? 8 : 7 - Math.abs(m.slot),
                   transform: slotTransform,
@@ -485,8 +551,8 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
                 <div
                   className={`relative ${jumperClass}`}
                   style={{
-                    width: 52,
-                    height: 52,
+                    width: SPLASH_MASCOT_SIZE,
+                    height: SPLASH_MASCOT_SIZE,
                     transformOrigin: "center bottom",
                     animationDelay: stage === "jumping" ? `${i * 115}ms` : undefined,
                     transform: jumperTransform,
@@ -502,9 +568,9 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
                     aria-hidden="true"
                     className="pointer-events-none absolute left-1/2"
                     style={{
-                      top: -17,
+                      top: -30,
                       transform: visual.spark
-                        ? "translateX(-50%) translateY(-6px) scale(1)"
+                        ? "translateX(-50%) translateY(-10px) scale(1)"
                         : "translateX(-50%) scale(0.35)",
                       opacity: visual.spark ? 1 : 0,
                       transition:
@@ -512,10 +578,10 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
                     }}
                   >
                     <svg
-                      width={15}
-                      height={15}
+                      width={26}
+                      height={26}
                       viewBox="0 0 24 24"
-                      style={{ display: "block", filter: `drop-shadow(0 0 6px ${m.color})` }}
+                      style={{ display: "block", filter: `drop-shadow(0 0 8px ${m.color})` }}
                     >
                       <path
                         d="M12 2 L14.4 9.6 L22 12 L14.4 14.4 L12 22 L9.6 14.4 L2 12 L9.6 9.6 Z"
@@ -545,14 +611,14 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
           aria-hidden="true"
           className="pointer-events-none absolute left-1/2 rounded-full"
           style={{
-            top: 154,
-            height: 1.5,
+            top: SPLASH_HORIZON_TOP,
+            height: 2,
             width:
               stage === "reveal-burst" || stage === "reveal-open"
-                ? 520
+                ? 1040
                 : lineWide
-                  ? 460
-                  : 136,
+                  ? 940
+                  : 320,
             transform: "translateX(-50%)",
             opacity:
               stage === "reveal-burst" || stage === "reveal-open"
@@ -562,7 +628,7 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
                   : 1,
             background:
               "linear-gradient(90deg, transparent, rgba(255, 107, 0, 0.52), rgba(255, 255, 255, 0.34), rgba(255, 107, 0, 0.52), transparent)",
-            boxShadow: "0 0 14px rgba(255, 107, 0, 0.32)",
+            boxShadow: "0 0 22px rgba(255, 107, 0, 0.36)",
             transition: "width 540ms cubic-bezier(0.22, 1, 0.36, 1), opacity 320ms ease",
           }}
         />

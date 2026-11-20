@@ -310,13 +310,24 @@ describe("Fase 22 — Navegador Integrado, Dock Flutuante Desktop, WhatsApp Sync
 
   it("5. (SPLASH22-01) StudioSplashPreloader renderiza os 7 mascotes sem texto de boot e sincroniza com splash Electron", async () => {
     const {
+      SPLASH_REVEAL_TIMINGS,
       StudioSplashPreloader,
+      computeSplashStageScale,
       resolveInitialSplashStageFromSearch,
     } = await vite.ssrLoadModule("/src/components/StudioSplashPreloader.tsx");
 
     assert.equal(resolveInitialSplashStageFromSearch(""), "scout");
     assert.equal(resolveInitialSplashStageFromSearch("?fromSplash=1&splashElapsed=800"), "expand");
     assert.equal(resolveInitialSplashStageFromSearch("?fromSplash=1&splashElapsed=2400"), "jumping");
+
+    const scaleFullHd = computeSplashStageScale(1920, 1040);
+    assert.ok(scaleFullHd > 1.35 && scaleFullHd <= 1.5, `Escala esperada ~1.44 em Full HD, obtida ${scaleFullHd}`);
+    assert.ok(computeSplashStageScale(1380, 880) > 1.0);
+    const scaleMin = computeSplashStageScale(1024, 680);
+    assert.ok(scaleMin > 0.7 && scaleMin < 0.85, `Escala esperada entre 0.7 e 0.85 em 1024x680, obtida ${scaleMin}`);
+
+    assert.ok(SPLASH_REVEAL_TIMINGS.burstMs < SPLASH_REVEAL_TIMINGS.openMs);
+    assert.ok(SPLASH_REVEAL_TIMINGS.openMs < SPLASH_REVEAL_TIMINGS.completeMs);
 
     const html = renderToStaticMarkup(
       React.createElement(StudioSplashPreloader, {
@@ -328,21 +339,47 @@ describe("Fase 22 — Navegador Integrado, Dock Flutuante Desktop, WhatsApp Sync
     assert.match(html, /data-testid="studio-splash-preloader"/);
     assert.match(html, /role="status"/);
     assert.match(html, /data-splash-stage="jumping"/);
+    assert.match(html, /data-splash-stage-root="1"/);
     for (const slot of [-3, -2, -1, 0, 1, 2, 3]) {
       assert.match(html, new RegExp(`data-splash-mascot="${slot}"`));
     }
     assert.doesNotMatch(html, /Iniciando Criativo/i);
     assert.doesNotMatch(html, /Iniciando sua equipe/i);
 
+    const splashSrc = readFileSync(
+      join(webRoot, "src", "components", "StudioSplashPreloader.tsx"),
+      "utf8"
+    );
+    assert.match(splashSrc, /revealTimersRef\.current/);
+    const act4Match = splashSrc.match(
+      /\/\/ Ato 4:[\s\S]*?useEffect\(\(\) => \{([\s\S]*?)\}, \[loading, stage, reducedMotion\]\);/
+    );
+    assert.ok(act4Match, "Bloco do Ato 4 em StudioSplashPreloader.tsx não encontrado");
+    assert.match(act4Match[1], /scheduleReveal\(/);
+    assert.doesNotMatch(
+      act4Match[1],
+      /clearTimeout/,
+      "O effect do Ato 4 não deve cancelar timers no cleanup ao mudar stage para reveal-squash"
+    );
+
     const appSrc = readFileSync(join(webRoot, "src", "App.tsx"), "utf8");
     assert.match(appSrc, /StudioSplashPreloader/);
     assert.doesNotMatch(appSrc, /Iniciando Criativo AI Studio/);
+    assert.match(appSrc, /const isAppBooting = bootLoading;/);
+    assert.doesNotMatch(appSrc, /isAppBooting = bootLoading \|\|/);
+    assert.match(
+      appSrc,
+      /if \(isAppBooting\) \{\s*return \(\s*<>\s*<div className="min-h-screen w-full bg-\[#0D0D0D\]" \/>\s*\{renderSplashOverlay\(\)\}\s*<\/>\s*\);\s*\}/
+    );
 
     const desktopMainSrc = readFileSync(
       join(webRoot, "..", "desktop", "src", "main.ts"),
       "utf8"
     );
     assert.match(desktopMainSrc, /fromSplash=1&splashElapsed=/);
+    assert.match(desktopMainSrc, /applyStageScale/);
+    assert.match(desktopMainSrc, /scale\(2\.65\)/);
+    assert.match(desktopMainSrc, /win\.maximize\(\)/);
     assert.doesNotMatch(desktopMainSrc, /Iniciando sua equipe de Agentes Especialistas/);
   });
 
