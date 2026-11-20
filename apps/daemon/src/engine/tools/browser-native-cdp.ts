@@ -482,7 +482,7 @@ class NativeCdpLocator {
           );
         }
         el.scrollIntoView?.({ block: "center", inline: "center", behavior: "instant" });
-        const fn = (0, eval)(`(${serializedFn})`);
+        const fn = (0, eval)(`(function(){ var __name = function(f){ return f; }; return (${serializedFn}); })()`);
         return fn(el, extraPayload);
       },
       { spec: this.spec, serializedFn: fnStr, extraPayload: payload ?? null },
@@ -674,6 +674,19 @@ export class NativeCdpPage {
       this.cdp.send("DOM.enable").catch(() => {}),
       this.cdp.send("Network.enable").catch(() => {}),
     ]);
+    await this.cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => {});
+    try {
+      const ver = await this.cdp.send<{ userAgent?: string }>("Browser.getVersion");
+      const rawUa = typeof ver?.userAgent === "string" ? ver.userAgent : "";
+      if (rawUa.includes("HeadlessChrome/")) {
+        await this.cdp.send("Network.setUserAgentOverride", {
+          userAgent: rawUa.replace(/HeadlessChrome\//g, "Chrome/"),
+          acceptLanguage: "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+        });
+      }
+    } catch {
+      // Fallback silencioso caso o endpoint CDP não exponha Browser.getVersion
+    }
     await this.setViewportSize(DEFAULT_VIEWPORT).catch(() => {});
 
     this.cdp.on("Page.frameNavigated", (payload: { frame?: { parentId?: string; url?: string } }) => {
@@ -834,7 +847,7 @@ export class NativeCdpPage {
   ): Promise<R> {
     const expression =
       typeof fnOrExpression === "function"
-        ? `(${fnOrExpression.toString()})(${arg === undefined ? "" : JSON.stringify(arg)})`
+        ? `((function(){ var __name = function(fn){ return fn; }; return (${fnOrExpression.toString()}); })())(${arg === undefined ? "" : JSON.stringify(arg)})`
         : String(fnOrExpression);
 
     const out = await this.cdp.send<{
@@ -859,6 +872,43 @@ export class NativeCdpPage {
     return out?.result?.value as R;
   }
 
+  public async goBack(): Promise<boolean> {
+    const hist = await this.cdp.send<{
+      currentIndex?: number;
+      entries?: Array<{ id?: number; url?: string; title?: string }>;
+    }>("Page.getNavigationHistory");
+    const idx = typeof hist?.currentIndex === "number" ? hist.currentIndex : 0;
+    const prevEntry = idx > 0 ? hist?.entries?.[idx - 1] : undefined;
+    if (!prevEntry?.id) return false;
+    await this.cdp.send("Page.navigateToHistoryEntry", { entryId: prevEntry.id });
+    if (prevEntry.url) this.currentUrl = prevEntry.url;
+    if (prevEntry.title) this.currentTitle = prevEntry.title;
+    this.emit("framenavigated", this.mainFrameSentinel);
+    return true;
+  }
+
+  public async goForward(): Promise<boolean> {
+    const hist = await this.cdp.send<{
+      currentIndex?: number;
+      entries?: Array<{ id?: number; url?: string; title?: string }>;
+    }>("Page.getNavigationHistory");
+    const idx = typeof hist?.currentIndex === "number" ? hist.currentIndex : 0;
+    const nextEntry = hist?.entries?.[idx + 1];
+    if (!nextEntry?.id) return false;
+    await this.cdp.send("Page.navigateToHistoryEntry", { entryId: nextEntry.id });
+    if (nextEntry.url) this.currentUrl = nextEntry.url;
+    if (nextEntry.title) this.currentTitle = nextEntry.title;
+    this.emit("framenavigated", this.mainFrameSentinel);
+    return true;
+  }
+
+  public async reload(): Promise<void> {
+    await this.cdp.send("Page.reload", { ignoreCache: false });
+    await this.waitForLoadState("load", { timeout: 8_000 }).catch(() => {});
+    this.currentTitle = await this.title();
+    this.emit("framenavigated", this.mainFrameSentinel);
+  }
+
   public async screenshot(opts?: {
     type?: "png" | "jpeg";
     quality?: number;
@@ -866,6 +916,7 @@ export class NativeCdpPage {
     const format = opts?.type === "jpeg" ? "jpeg" : "png";
     const res = await this.cdp.send<{ data?: string }>("Page.captureScreenshot", {
       format,
+      fromSurface: true,
       ...(format === "jpeg" ? { quality: opts?.quality ?? 75 } : {}),
     });
     if (!res?.data) {
@@ -1092,6 +1143,7 @@ export class NativeCdpBrowserSession {
       "--remote-debugging-address=127.0.0.1",
       `--user-data-dir=${opts.userDataDir}`,
       "--window-size=1280,800",
+      "--disable-blink-features=AutomationControlled",
       ...(opts.headless ? ["--headless=new"] : []),
       ...(opts.proxy?.server ? [`--proxy-server=${opts.proxy.server}`] : []),
       ...opts.args,

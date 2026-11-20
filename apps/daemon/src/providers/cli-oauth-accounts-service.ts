@@ -26,6 +26,11 @@ import {
   buildDualWindowQuotaGroup,
   refreshCachedQuotaGroupCountdowns,
 } from "./provider-quota-utils.ts";
+import {
+  ensureProviderRuntimeInstalled,
+  resolveManagedProviderRuntime,
+  spawnProviderProcess,
+} from "./provider-runtime-resolver.ts";
 
 export interface CliAccountRecord {
   id: string;
@@ -79,67 +84,9 @@ export function resolveCliBinaryForProvider(
   provedor: "claude" | "openai",
   appDataDir?: string
 ): { executable: string | null; version: string | null } {
-  if (process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1") {
-    return { executable: null, version: null };
-  }
-
-  const folderName = provedor === "claude" ? "claude" : "codex";
-  const binName =
-    provedor === "claude"
-      ? process.platform === "win32"
-        ? "claude.exe"
-        : "claude"
-      : process.platform === "win32"
-        ? "codex.exe"
-        : "codex";
-
-  const resolvedAppData = appDataDir ?? process.env.APPDATA ?? "";
-  if (resolvedAppData) {
-    const baseRuntime = join(resolvedAppData, "CriativoStudio", "provider-runtimes", folderName);
-    try {
-      if (existsSync(baseRuntime)) {
-        const archDirs = readdirSync(baseRuntime);
-        for (const arch of archDirs) {
-          const versionsDir = join(baseRuntime, arch);
-          try {
-            const versions = readdirSync(versionsDir).sort().reverse();
-            for (const ver of versions) {
-              const exe = join(versionsDir, ver, "bin", binName);
-              if (existsSync(exe)) {
-                return { executable: exe, version: ver };
-              }
-            }
-          } catch {
-            // ignora erro de leitura
-          }
-        }
-      }
-    } catch {
-      // ignora ausência do diretório
-    }
-  }
-
-  const pathEntries = (process.env.PATH ?? "").split(process.platform === "win32" ? ";" : ":");
-  const pathCandidates =
-    provedor === "claude"
-      ? process.platform === "win32"
-        ? ["claude.exe", "claude.cmd"]
-        : ["claude"]
-      : process.platform === "win32"
-        ? ["codex.exe", "codex.cmd"]
-        : ["codex"];
-
-  for (const dir of pathEntries) {
-    if (!dir) continue;
-    for (const candidate of pathCandidates) {
-      const full = join(dir, candidate);
-      if (existsSync(full)) {
-        return { executable: full, version: "PATH" };
-      }
-    }
-  }
-
-  return { executable: null, version: null };
+  return resolveManagedProviderRuntime(provedor === "claude" ? "claude" : "codex", {
+    appDataDir,
+  });
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -167,13 +114,13 @@ function spawnCommandWithStdin(input: {
   onRegisterAbort?: (abortFn: () => void) => void;
 }): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(input.executable, input.args, {
+    const child = spawnProviderProcess(input.executable, input.args, {
       cwd: input.cwd,
       env: input.env,
       stdio: ["pipe", "pipe", "pipe"],
-      shell: false,
       windowsHide: !input.interactiveWindow,
     });
+    child.stdin.on("error", () => {});
 
     let stdout = "";
     let stderr = "";
@@ -522,14 +469,23 @@ export class CliOAuthAccountsService {
     label?: string,
     onAuthUrl?: (url: string) => void
   ): Promise<ContaProvedorInfo> {
-    const { executable } = resolveCliBinaryForProvider(provedor, this.appDataDir);
+    let executable = resolveCliBinaryForProvider(provedor, this.appDataDir).executable;
     if (!executable) {
-      throw new Error(
-        provedor === "claude"
-          ? "Runtime Claude Code (claude.exe) não encontrado na máquina para autenticar no navegador."
-          : "Runtime Codex CLI (codex.exe) não encontrado na máquina para autenticar ChatGPT no navegador."
+      const installed = await ensureProviderRuntimeInstalled(
+        provedor === "claude" ? "claude" : "codex",
+        { appDataDir: this.appDataDir }
       );
+      executable = installed.executable;
+      if (!executable) {
+        const extraReason = installed.error ? ` (${installed.error})` : "";
+        throw new Error(
+          provedor === "claude"
+            ? `Runtime Claude Code (claude) não encontrado e não pôde ser instalado automaticamente${extraReason}.`
+            : `Runtime Codex CLI (codex) não encontrado e não pôde ser instalado automaticamente${extraReason}.`
+        );
+      }
     }
+    const resolvedExecutable = executable;
 
     const prefix = provedor === "claude" ? "cl" : "oa";
     const id = `${prefix}-${randomUUID().slice(0, 8)}`;
@@ -559,15 +515,13 @@ export class CliOAuthAccountsService {
         };
         try {
           await new Promise<void>((resolvePromise, rejectPromise) => {
-            const isCmd = process.platform === "win32" && /\.(cmd|bat)$/i.test(executable);
-            const child = spawn(
-              isCmd ? process.env.ComSpec || "cmd.exe" : executable,
-              isCmd ? ["/c", executable, "auth", "login", "--claudeai"] : ["auth", "login", "--claudeai"],
+            const child = spawnProviderProcess(
+              resolvedExecutable,
+              ["auth", "login", "--claudeai"],
               {
                 cwd: this.workspaceCwd,
                 env,
                 stdio: "ignore",
-                shell: false,
                 windowsHide: process.platform === "win32",
               }
             );
@@ -642,7 +596,7 @@ export class CliOAuthAccountsService {
       } else {
         // Fluxo oficial de autenticação via `codex app-server` + `account/login/start`
         const appResult = await this.signInCodexViaAppServer({
-          executable,
+          executable: resolvedExecutable,
           codexHome: configDir,
           onAuthUrl: (url) => {
             onAuthUrl?.(url);
@@ -732,21 +686,16 @@ export class CliOAuthAccountsService {
     onRegisterAbort?: (abortFn: () => void) => void;
   }): Promise<{ email: string | null; plano: string | null }> {
     const timeoutMs = input.timeoutMs ?? LOGIN_TIMEOUT_MS;
-    const isCmd = process.platform === "win32" && /\.(cmd|bat)$/i.test(input.executable);
-    const child = spawn(
-      isCmd ? process.env.ComSpec || "cmd.exe" : input.executable,
-      isCmd ? ["/c", input.executable, "app-server"] : ["app-server"],
-      {
-        cwd: this.workspaceCwd,
-        env: {
-          ...process.env,
-          CODEX_HOME: input.codexHome,
-        },
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: false,
-        windowsHide: true,
-      }
-    );
+    const child = spawnProviderProcess(input.executable, ["app-server"], {
+      cwd: this.workspaceCwd,
+      env: {
+        ...process.env,
+        CODEX_HOME: input.codexHome,
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    child.stdin.on("error", () => {});
 
     return new Promise<{ email: string | null; plano: string | null }>((resolvePromise, rejectPromise) => {
       let nextId = 1;
@@ -1066,22 +1015,17 @@ export class CliOAuthAccountsService {
     method: string,
     params: Record<string, unknown>
   ): Promise<TResult | null> {
-    const isCmd = process.platform === "win32" && /\.(cmd|bat)$/i.test(executable);
     return new Promise((resolvePromise) => {
-      const child = spawn(
-        isCmd ? process.env.ComSpec || "cmd.exe" : executable,
-        isCmd ? ["/c", executable, "app-server"] : ["app-server"],
-        {
-          cwd: this.workspaceCwd,
-          env: {
-            ...process.env,
-            CODEX_HOME: codexHome,
-          },
-          stdio: ["pipe", "pipe", "pipe"],
-          shell: false,
-          windowsHide: true,
-        }
-      );
+      const child = spawnProviderProcess(executable, ["app-server"], {
+        cwd: this.workspaceCwd,
+        env: {
+          ...process.env,
+          CODEX_HOME: codexHome,
+        },
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      });
+      child.stdin.on("error", () => {});
 
       let settled = false;
       const done = (res: TResult | null) => {
@@ -1228,24 +1172,19 @@ export class CliOAuthAccountsService {
     executable: string,
     configDir: string | null
   ): Promise<ModeloProvedorInfo[]> {
-    const isCmd = process.platform === "win32" && /\.(cmd|bat)$/i.test(executable);
     const args = ["--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"];
     return new Promise((resolvePromise) => {
-      const child = spawn(
-        isCmd ? process.env.ComSpec || "cmd.exe" : executable,
-        isCmd ? ["/c", executable, ...args] : args,
-        {
-          cwd: this.workspaceCwd,
-          env: {
-            ...process.env,
-            DISABLE_AUTOUPDATER: "1",
-            ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}),
-          },
-          stdio: ["pipe", "pipe", "pipe"],
-          shell: false,
-          windowsHide: true,
-        }
-      );
+      const child = spawnProviderProcess(executable, args, {
+        cwd: this.workspaceCwd,
+        env: {
+          ...process.env,
+          DISABLE_AUTOUPDATER: "1",
+          ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}),
+        },
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      });
+      child.stdin.on("error", () => {});
 
       let settled = false;
       const done = (res: ModeloProvedorInfo[]) => {

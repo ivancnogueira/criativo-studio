@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { extname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { resolveManagedProviderRuntime } from "./provider-runtime-resolver.ts";
 
 /**
  * No Windows o Antigravity CLI abre a página de login Google diretamente (Chrome/rundll32)
@@ -193,56 +194,9 @@ function inferMimeFromImagePath(filePath: string): string {
 }
 
 export function resolveAntigravityCliExecutable(appDataDir?: string): string | null {
-  if (process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1") {
-    return null;
-  }
-
-  const resolvedAppData = appDataDir ?? process.env.APPDATA ?? "";
-  if (resolvedAppData) {
-    const baseRuntime = join(resolvedAppData, "CriativoStudio", "provider-runtimes", "antigravity");
-    try {
-      if (existsSync(baseRuntime)) {
-        const archDirs = readdirSync(baseRuntime);
-        for (const arch of archDirs) {
-          const versionsDir = join(baseRuntime, arch);
-          try {
-            const versions = readdirSync(versionsDir).sort().reverse();
-            for (const ver of versions) {
-              const exe = join(
-                versionsDir,
-                ver,
-                "bin",
-                process.platform === "win32" ? "antigravity.exe" : "antigravity"
-              );
-              if (existsSync(exe)) return exe;
-            }
-          } catch {
-            // ignora diretório ilegível
-          }
-        }
-      }
-    } catch {
-      // ignora erro de leitura
-    }
-  }
-
-  const pathEntries = (process.env.PATH ?? "").split(process.platform === "win32" ? ";" : ":");
-  const names = process.platform === "win32" ? ["antigravity.exe", "agy.exe", "agy.cmd"] : ["antigravity", "agy"];
-  for (const dir of pathEntries) {
-    if (!dir) continue;
-    for (const n of names) {
-      const candidate = join(dir, n);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-
-  if (process.platform === "win32") {
-    const localAppData = process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local");
-    const agyLocal = join(localAppData, "agy", "bin", "agy.exe");
-    if (existsSync(agyLocal)) return agyLocal;
-  }
-
-  return null;
+  const binNames =
+    process.platform === "win32" ? ["antigravity.exe", "agy.exe", "agy.cmd"] : ["antigravity", "agy"];
+  return resolveManagedProviderRuntime("antigravity", { appDataDir, binNames }).executable;
 }
 
 export function readAccountTokenFile(geminiDir: string): AcpAuthTokenSnapshot | null {

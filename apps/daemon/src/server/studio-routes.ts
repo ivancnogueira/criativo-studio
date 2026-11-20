@@ -913,6 +913,7 @@ export async function generateAgentChatReply(
     isRoutine?: boolean;
     overrideModel?: string;
     overrideAccountId?: string | null;
+    channelOrigin?: "web" | "whatsapp";
   }
 ): Promise<{
   markdown: string;
@@ -1040,6 +1041,11 @@ export async function generateAgentChatReply(
           !options?.threadId || options.threadId.startsWith("main:") || Boolean(options?.isRoutine),
         wokenWaitsBlock: options?.wokenWaitsBlock,
       }),
+    );
+  }
+  if (options?.channelOrigin === "whatsapp") {
+    promptBaseParts.push(
+      "[CANAL WHATSAPP ATIVO] Você está respondendo no WhatsApp (tela de celular). Seja natural, direto e conciso (máximo 1 a 4 parágrafos curtos ou lista breve com •). NUNCA use tabelas Markdown (|...|), NUNCA use títulos com # ou ##, e evite blocos longos de texto. Use apenas *negrito* simples quando necessário. Se o conteúdo completo for extenso, envie primeiro o resumo objetivo e pergunte se deseja os detalhes.",
     );
   }
 
@@ -1660,7 +1666,10 @@ export async function generateAgentChatReply(
               : userPrompt,
         });
 
-        const systemPromptChat = `${promptBase}\nResponda sempre em pt-br com objetividade, tabelas Markdown quando útil e zero dados fictícios de clientes reais.`;
+        const systemPromptChat =
+          options?.channelOrigin === "whatsapp"
+            ? `${promptBase}\nResponda sempre em pt-br com objetividade para celular (sem tabelas Markdown e sem cabeçalhos #) e zero dados fictícios de clientes reais.`
+            : `${promptBase}\nResponda sempre em pt-br com objetividade, tabelas Markdown quando útil e zero dados fictícios de clientes reais.`;
         let totalInputTokens = 0;
         let totalOutputTokens = 0;
         let finalReplyText = "";
@@ -2228,6 +2237,8 @@ export async function executeAgentConversationTurn(params: {
   isHandoff?: boolean;
   originalUserPrompt?: string;
   respostaParaMensagemId?: string | null;
+  channelOrigin?: "web" | "whatsapp";
+  extraMetadados?: Record<string, unknown>;
   onProgress?: (prog: ChatProgressReport) => void;
 }): Promise<{
   agentMsg: MensagemChat;
@@ -2306,6 +2317,7 @@ export async function executeAgentConversationTurn(params: {
         wokenWaitsBlock: params.wokenWaitsBlock,
         entregaOrigemId: params.entregaOrigemId,
         isRoutine: params.isRoutine,
+        channelOrigin: params.channelOrigin,
       },
     );
   } catch (err) {
@@ -2335,9 +2347,12 @@ export async function executeAgentConversationTurn(params: {
   const nextOrdinal = maxOrdRow.max_ord + 1;
   const nowIso = new Date(Date.now() + 2).toISOString();
 
-  const replyMetadados: Record<string, unknown> | undefined = reply.usageLimitAsk
-    ? { usage_limit_ask: reply.usageLimitAsk }
-    : undefined;
+  const mergedMeta: Record<string, unknown> = {
+    ...(params.extraMetadados ?? {}),
+    ...(reply.usageLimitAsk ? { usage_limit_ask: reply.usageLimitAsk } : {}),
+  };
+  const replyMetadados: Record<string, unknown> | undefined =
+    Object.keys(mergedMeta).length > 0 ? mergedMeta : undefined;
 
   const agentMsg: MensagemChat = {
     mensagem_id: `msg-${randomUUID()}`,

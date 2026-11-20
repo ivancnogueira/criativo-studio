@@ -240,7 +240,7 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
   );
 
   const [authorizingProvider, setAuthorizingProvider] = useState<string | null>(null);
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<{ provedor: ProviderName; message: string } | null>(null);
 
   const [vaultKeyDraftName, setVaultKeyDraftName] = useState("");
   const [vaultKeyDraftVal, setVaultKeyDraftVal] = useState("");
@@ -679,10 +679,19 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
                 defaultProvider={defaultProvider}
                 initialDetailProviderId={initialDetailProviderId}
                 authorizingProvider={authorizingProvider}
-                authError={authError}
+                authError={
+                  authError &&
+                  activeDetailProvider &&
+                  authError.provedor === activeDetailProvider.provedor
+                    ? authError.message
+                    : null
+                }
                 pendingAuthUrl={pendingAuthUrl}
                 onSelectDefaultProvider={onSelectDefaultProvider}
-                onActiveProviderChange={setActiveDetailProvider}
+                onActiveProviderChange={(prov) => {
+                  setActiveDetailProvider(prov);
+                  setAuthError(null);
+                }}
                 onStartBrowserSignIn={async (provTarget, label) => {
                   if (!onConnectProviderViaBrowser) return;
                   setAuthError(null);
@@ -691,7 +700,10 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
                     const res = await onConnectProviderViaBrowser(provTarget, label);
                     if (!res.ok) {
                       if (!res.canceled) {
-                        setAuthError(res.erro ?? "Não foi possível concluir o login no navegador.");
+                        setAuthError({
+                          provedor: provTarget,
+                          message: res.erro ?? "Não foi possível concluir o login no navegador.",
+                        });
                       }
                     } else {
                       showToast(`Conta ${provTarget} conectada com sucesso!`);

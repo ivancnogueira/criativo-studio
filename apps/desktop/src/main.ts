@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, session, shell, type Tray } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, session, shell, type Tray } from "electron";
 import {
   resolveDesktopProductRoot,
   resolveSafeUpdateArtifactPath,
@@ -10,11 +10,13 @@ import {
   type EmbeddedDaemonHandle,
   type UpdateRestartPayload,
 } from "./daemon-launcher.ts";
+import { FloatingDockController } from "./floating-dock.ts";
 import { createStudioTray } from "./tray-manager.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let mainWindow: BrowserWindow | null = null;
+let floatingDock: FloatingDockController | null = null;
 let daemonHandle: EmbeddedDaemonHandle | null = null;
 let trayHandle: Tray | null = null;
 let isQuitting = false;
@@ -188,6 +190,50 @@ function registerIpcHandlers(userDataDir: string): void {
     });
     return await res.json();
   });
+
+  ipcMain.handle("criativo:dock-get-state", () => {
+    return floatingDock?.getState() ?? { visible: false, expanded: false, side: "right" };
+  });
+
+  ipcMain.handle("criativo:dock-set-expanded", (_evt, rawPayload: unknown) => {
+    const payload =
+      rawPayload && typeof rawPayload === "object"
+        ? (rawPayload as { expanded?: unknown; pillHeight?: unknown })
+        : {};
+    const expanded = Boolean(payload.expanded);
+    const pillHeight = typeof payload.pillHeight === "number" ? payload.pillHeight : undefined;
+    return floatingDock?.setExpanded(expanded, pillHeight) ?? { side: "right" };
+  });
+
+  ipcMain.handle("criativo:dock-set-visible", async (_evt, visible: unknown) => {
+    if (!floatingDock) return false;
+    return await floatingDock.setVisible(Boolean(visible));
+  });
+
+  ipcMain.handle("criativo:dock-start-drag", () => {
+    floatingDock?.startDrag();
+  });
+
+  ipcMain.handle("criativo:dock-move-drag", () => {
+    floatingDock?.moveDrag();
+  });
+
+  ipcMain.handle("criativo:dock-end-drag", () => {
+    return floatingDock?.endDrag() ?? { side: "right" };
+  });
+
+  ipcMain.handle("criativo:open-main-window", (_evt, rawOpts: unknown) => {
+    focusOrShowMainWindow();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      const payload =
+        rawOpts && typeof rawOpts === "object"
+          ? (rawOpts as { agenteId?: string; action?: "new-agent" })
+          : {};
+      if (payload.agenteId || payload.action) {
+        mainWindow.webContents.send("criativo:main-navigate", payload);
+      }
+    }
+  });
 }
 
 async function handleUpdateRestart(userDataDir: string, payload: UpdateRestartPayload): Promise<void> {
@@ -221,6 +267,8 @@ async function handleUpdateRestart(userDataDir: string, payload: UpdateRestartPa
 
   trayHandle?.destroy();
   trayHandle = null;
+  floatingDock?.destroy();
+  floatingDock = null;
   isQuitting = true;
 
   if (payload.mode === "native_installer" && safeArtifactPath) {
@@ -295,6 +343,18 @@ async function bootstrapDesktop(): Promise<void> {
     const origin = wc?.getURL?.() || "";
     callback(isAllowedLoopbackOrigin(origin) && allowedPermissions.has(permission));
   });
+  session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
+    try {
+      const sources = await desktopCapturer.getSources({ types: ["screen", "window"] });
+      if (sources.length > 0) {
+        callback({ video: sources[0] });
+        return;
+      }
+    } catch {
+      // fallback seguro caso desktopCapturer falhe
+    }
+    callback({});
+  });
 
   activeBootLogPath = join(userDataDir, "logs", "desktop-boot.log");
   writeDesktopLog(`Iniciando Criativo AI Studio v${app.getVersion()} (packaged=${app.isPackaged})`);
@@ -352,6 +412,9 @@ async function bootstrapDesktop(): Promise<void> {
     productRoot,
     userDataDir,
     onShowWindow: () => focusOrShowMainWindow(),
+    onToggleFloatingDock: () => {
+      void floatingDock?.toggleVisible();
+    },
     onCheckUpdates: () => {
       void fetch(`${daemonHandle?.baseUrl}/api/studio/updates/check`, { method: "POST" }).catch(() => {});
     },
@@ -362,6 +425,15 @@ async function bootstrapDesktop(): Promise<void> {
   });
 
   await mainWindow.loadURL(daemonHandle.baseUrl);
+
+  floatingDock = new FloatingDockController({
+    daemonBaseUrl: daemonHandle.baseUrl,
+    userDataDir,
+    isAllowedOrigin: (rawUrl) => isLocalDaemonOrigin(rawUrl, daemonHandle?.port ?? 3000),
+    onOpenExternal: (rawUrl) => openExternalValidated(rawUrl),
+    onLog: writeDesktopLog,
+  });
+  await floatingDock.init();
 }
 
 app.on("before-quit", () => {
@@ -369,6 +441,8 @@ app.on("before-quit", () => {
 });
 
 app.on("will-quit", (event: { preventDefault: () => void }) => {
+  floatingDock?.destroy();
+  floatingDock = null;
   if (!daemonHandle) return;
   const handle = daemonHandle;
   daemonHandle = null;

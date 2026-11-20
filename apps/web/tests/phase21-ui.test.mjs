@@ -40,7 +40,8 @@ describe("Fase 21 — UI, Prévia Borrada, Avatares Sincronizados, Fotos Reais, 
     assert.ok(existsSync(join(srcRoot, "styles", "tokens-studio.css")));
     assert.equal(existsSync(join(srcRoot, "styles", `tokens-${LEGACY_TERM}.css`)), false);
     assert.ok(existsSync(join(srcRoot, "features", "pages", "ProvidersCatalogView.tsx")));
-    assert.equal(existsSync(join(srcRoot, "features", "pages", "ProvidersOpenBotView.tsx")), false);
+    const legacyProviderView = `Providers${["Open", "Bot"].join("")}View.tsx`;
+    assert.equal(existsSync(join(srcRoot, "features", "pages", legacyProviderView)), false);
 
     const legacyRe = new RegExp(LEGACY_TERM, "i");
     for (const file of collectFilesRecursive(srcRoot)) {
@@ -345,5 +346,12 @@ describe("Fase 21 — UI, Prévia Borrada, Avatares Sincronizados, Fotos Reais, 
       "utf8"
     );
     assert.match(dockSrc, /criativo\.agent_dock\.pinned/);
+
+    const connectorsSrc = readFileSync(
+      join(webRoot, "src", "features", "pages", "ConnectorsPage.tsx"),
+      "utf8"
+    );
+    assert.match(connectorsSrc, /authError\.provedor === activeDetailProvider\.provedor/);
+    assert.match(connectorsSrc, /onActiveProviderChange=\{\(prov\) => \{[\s\S]*setAuthError\(null\)/);
   });
 });

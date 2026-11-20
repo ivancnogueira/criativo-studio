@@ -318,20 +318,24 @@ export async function tryHandlePhase15Route(
         sendJson(res, 400, { erro: `Tipo de evento CDP inválido: '${eventType}'.` });
         return true;
       }
-      const result = await browserService.dispatchTakeoverInput(tabId, {
-        type: eventType,
-        x: typeof body.x === "number" ? body.x : undefined,
-        y: typeof body.y === "number" ? body.y : undefined,
-        button:
-          body.button === "right" || body.button === "middle" ? body.button : "left",
-        clickCount: typeof body.clickCount === "number" ? body.clickCount : undefined,
-        deltaX: typeof body.deltaX === "number" ? body.deltaX : undefined,
-        deltaY: typeof body.deltaY === "number" ? body.deltaY : undefined,
-        key: typeof body.key === "string" ? body.key.slice(0, 64) : undefined,
-        code: typeof body.code === "string" ? body.code.slice(0, 64) : undefined,
-        text: typeof body.text === "string" ? body.text.slice(0, 256) : undefined,
-        modifiers: typeof body.modifiers === "number" ? body.modifiers : undefined,
-      });
+      const result = await browserService.dispatchTakeoverInput(
+        tabId,
+        {
+          type: eventType,
+          x: typeof body.x === "number" ? body.x : undefined,
+          y: typeof body.y === "number" ? body.y : undefined,
+          button:
+            body.button === "right" || body.button === "middle" ? body.button : "left",
+          clickCount: typeof body.clickCount === "number" ? body.clickCount : undefined,
+          deltaX: typeof body.deltaX === "number" ? body.deltaX : undefined,
+          deltaY: typeof body.deltaY === "number" ? body.deltaY : undefined,
+          key: typeof body.key === "string" ? body.key.slice(0, 64) : undefined,
+          code: typeof body.code === "string" ? body.code.slice(0, 64) : undefined,
+          text: typeof body.text === "string" ? body.text.slice(0, 512) : undefined,
+          modifiers: typeof body.modifiers === "number" ? body.modifiers : undefined,
+        },
+        { autoAssume: Boolean(body.autoAssume) },
+      );
       sendJson(res, 200, result);
     } catch (err) {
       sendJson(res, mapHttpErrorStatus(err), {

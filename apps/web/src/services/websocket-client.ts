@@ -3130,6 +3130,7 @@ export const daemonApi = {
       code?: string;
       text?: string;
       modifiers?: number;
+      autoAssume?: boolean;
     }
   ): Promise<{ ok: boolean }> {
     return await requestJson<{ ok: boolean }>(

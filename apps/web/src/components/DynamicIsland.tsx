@@ -18,6 +18,7 @@ export interface StudioTabItem {
   id: string;
   titulo: string;
   kind?: "agent" | "topic";
+  closable?: boolean;
   working?: boolean;
   shape?: AvatarShape;
   color?: string;
@@ -164,7 +165,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
                   )}
                   <span className="truncate font-medium">{tab.titulo}</span>
                 </button>
-                {onCloseTab && tabs.length > 1 && (
+                {onCloseTab && (tab.kind === "topic" || tab.closable === true) && (
                   <button
                     type="button"
                     onClick={(e) => {

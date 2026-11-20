@@ -209,9 +209,7 @@ export class BrowserCdpSessionManager {
 
   public async ensurePersistentContext(opts: LaunchProfileContextOptions): Promise<BrowserContext> {
     const wantsHeadless =
-      opts.headless ??
-      (process.env.CRIATIVO_BROWSER_HEADLESS === "1" ||
-        (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY));
+      opts.headless ?? (process.env.CRIATIVO_BROWSER_HEADLESS !== "0");
     const cdpSig = opts.cdpUrl ? `cdp:${opts.cdpUrl}` : "spawn";
     const proxySig = `${cdpSig}|${wantsHeadless ? "headless" : "headed"}|${
       opts.proxy ? `${opts.proxy.server}|${opts.proxy.username ?? ""}` : "direct"
@@ -248,8 +246,7 @@ export class BrowserCdpSessionManager {
 
     mkdirSync(opts.userDataDir, { recursive: true });
 
-    const preferNative =
-      !wantsHeadless || process.env.CRIATIVO_BROWSER_DRIVER === "native";
+    const preferNative = process.env.CRIATIVO_BROWSER_DRIVER !== "playwright";
     const pw = preferNative ? null : await import("playwright-core").catch(() => null);
 
     let context: BrowserContext;
@@ -399,7 +396,7 @@ export class BrowserCdpSessionManager {
     return entry;
   }
 
-  public async startScreencast(
+  public async captureAndEmitFrame(
     tabId: string,
     onFrame: (frame: {
       tabId: string;
@@ -412,15 +409,51 @@ export class BrowserCdpSessionManager {
     }) => void,
   ): Promise<void> {
     const entry = this.tabs.get(tabId);
+    if (!entry || !entry.page) return;
+    try {
+      const buf = await entry.page.screenshot({ type: "jpeg", quality: 72 });
+      const vp = entry.page.viewportSize() ?? { width: 1280, height: 800 };
+      entry.virtualUrl = entry.page.url();
+      entry.virtualTitle = await entry.page.title().catch(() => entry.virtualTitle);
+      entry.lastFrameSentAt = Date.now();
+      onFrame({
+        tabId: entry.tabId,
+        dataUrl: `data:image/jpeg;base64,${buf.toString("base64")}`,
+        width: vp.width,
+        height: vp.height,
+        url: entry.virtualUrl,
+        title: entry.virtualTitle,
+        userControl: entry.userControl,
+      });
+    } catch {
+      // Ignora falha transitória durante navegação inicial
+    }
+  }
+
+  public async startScreencast(
+    tabId: string,
+    onFrame: (frame: {
+      tabId: string;
+      dataUrl: string;
+      width: number;
+      height: number;
+      url: string;
+      title: string;
+      userControl: boolean;
+    }) => void,
+    fpsIntervalMs = MIN_SCREENCAST_FRAME_INTERVAL_MS,
+  ): Promise<void> {
+    const entry = this.tabs.get(tabId);
     if (!entry || entry.screencastActive) return;
 
     entry.screencastActive = true;
     entry.lastActivityAt = Date.now();
+    const minInterval = Math.max(MIN_SCREENCAST_FRAME_INTERVAL_MS, fpsIntervalMs);
 
     const emitThrottled = (base64Jpeg: string, width = 1280, height = 800): void => {
       const now = Date.now();
-      if (now - entry.lastFrameSentAt < MIN_SCREENCAST_FRAME_INTERVAL_MS) {
-        return; // Backpressure: descarta quadros intermediários acima de 8 fps
+      if (now - entry.lastFrameSentAt < minInterval) {
+        return; // Backpressure: descarta quadros intermediários acima do limite configurado
       }
       entry.lastFrameSentAt = now;
       onFrame({
@@ -435,6 +468,8 @@ export class BrowserCdpSessionManager {
     };
 
     if (entry.cdpSession && entry.page) {
+      await this.captureAndEmitFrame(tabId, onFrame);
+
       try {
         entry.cdpSession.on("Page.screencastFrame", async (payload: {
           data: string;

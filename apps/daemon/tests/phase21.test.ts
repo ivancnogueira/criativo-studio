@@ -24,6 +24,7 @@ import {
 } from "../src/providers/antigravity-acp-service.ts";
 import { AntigravityLiveService } from "../src/providers/antigravity-live-service.ts";
 import { OpenCodeLiveService } from "../src/providers/opencode-live-service.ts";
+import { resolveManagedProviderRuntime } from "../src/providers/provider-runtime-resolver.ts";
 import { ProviderConnectionService } from "../src/providers/provider-connection-service.ts";
 import { seedDefaultStudioExperience } from "../src/engine/runner/roster-defaults.ts";
 import { createDaemonServer, type DaemonRuntime } from "../src/server/daemon-server.ts";
@@ -672,5 +673,61 @@ describe("Fase 21 — Fotos Reais, generate_image, ACP Effort, MCP 2025-11-25, W
     assert.ok(renamed);
     assert.match(renamed.titulo, /Planejar calendário editorial/);
     assert.equal(renamed.titulo_origem, "auto");
+  });
+
+  it("7. resolveManagedProviderRuntime descobre CLIs em CriativoStudio, fallback agnóstico */provider-runtimes e npm/node_modules/.bin", () => {
+    const appDataMock = makeTempDir("p21-runtimes-");
+    const isWin = process.platform === "win32";
+    const archDir = isWin ? "win32-x64" : process.platform === "darwin" ? "darwin-arm64" : "linux-x64";
+
+    const claudeBin = isWin ? "claude.exe" : "claude";
+    const codexBin = isWin ? "codex.exe" : "codex";
+    const opencodeNpmBin = isWin ? "opencode.cmd" : "opencode";
+
+    // Prioridade 1: CriativoStudio/provider-runtimes/claude sobre outro vendor compatível
+    const prioClaudeDir = join(appDataMock, "CriativoStudio", "provider-runtimes", "claude", archDir, "2.1.328", "bin");
+    const compatClaudeDir = join(appDataMock, "TerceiroTeste", "provider-runtimes", "claude", archDir, "1.0.0", "bin");
+    mkdirSync(prioClaudeDir, { recursive: true });
+    mkdirSync(compatClaudeDir, { recursive: true });
+    writeFileSync(join(prioClaudeDir, claudeBin), "stub", "utf8");
+    writeFileSync(join(compatClaudeDir, claudeBin), "stub", "utf8");
+
+    // Fallback agnóstico <appData>/<vendor>/provider-runtimes/codex quando não existe em CriativoStudio
+    const compatCodexDir = join(appDataMock, "TerceiroTeste", "provider-runtimes", "codex", archDir, "0.170.0", "bin");
+    mkdirSync(compatCodexDir, { recursive: true });
+    writeFileSync(join(compatCodexDir, codexBin), "stub", "utf8");
+
+    // Fallback gerenciado via npm prefix em CriativoStudio/provider-runtimes/opencode/npm/node_modules/.bin
+    const npmBinDir = join(appDataMock, "CriativoStudio", "provider-runtimes", "opencode", "npm", "node_modules", ".bin");
+    mkdirSync(npmBinDir, { recursive: true });
+    writeFileSync(join(npmBinDir, opencodeNpmBin), "stub", "utf8");
+
+    const prevProbe = process.env.CRIATIVO_SKIP_LOCAL_PROBE;
+    delete process.env.CRIATIVO_SKIP_LOCAL_PROBE;
+    try {
+      const claudeRes = resolveManagedProviderRuntime("claude", {
+        appDataDir: appDataMock,
+        includeSystemPaths: false,
+      });
+      assert.equal(claudeRes.executable, join(prioClaudeDir, claudeBin));
+      assert.equal(claudeRes.version, "2.1.328");
+
+      const codexRes = resolveManagedProviderRuntime("codex", {
+        appDataDir: appDataMock,
+        includeSystemPaths: false,
+      });
+      assert.equal(codexRes.executable, join(compatCodexDir, codexBin));
+      assert.equal(codexRes.version, "0.170.0");
+
+      const opencodeRes = resolveManagedProviderRuntime("opencode", {
+        appDataDir: appDataMock,
+        includeSystemPaths: false,
+      });
+      assert.equal(opencodeRes.executable, join(npmBinDir, opencodeNpmBin));
+      assert.equal(opencodeRes.version, "managed-npm");
+    } finally {
+      if (prevProbe !== undefined) process.env.CRIATIVO_SKIP_LOCAL_PROBE = prevProbe;
+      else process.env.CRIATIVO_SKIP_LOCAL_PROBE = "1";
+    }
   });
 });

@@ -45,6 +45,7 @@ import {
   Radio,
   RotateCcw,
   Send,
+  Smartphone,
   Sparkles,
   Square,
   Wrench,
@@ -246,6 +247,7 @@ interface AgentConversationViewProps {
   onSelectThread?: (threadId: string | null) => void;
   onCreateQuickThread?: () => void;
   onDismissThreadTab?: (threadId: string) => void;
+  hideInlineThreadTabs?: boolean;
   pagination?: {
     has_older: boolean;
     older_count?: number;
@@ -637,6 +639,7 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
   onSelectThread,
   onCreateQuickThread,
   onDismissThreadTab,
+  hideInlineThreadTabs = false,
   pagination,
   highlightedMessageId = null,
   onLoadOlderMessages,
@@ -1220,7 +1223,7 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
       className="flex-1 min-w-0 h-full bg-[#1A1A1A] flex overflow-hidden"
     >
       <div className="flex-1 min-w-0 h-full flex flex-col overflow-hidden">
-        {mode === "agent" && onSelectThread && onCreateQuickThread && (
+        {!hideInlineThreadTabs && mode === "agent" && onSelectThread && onCreateQuickThread && (
           <ThreadTabsBar
             threads={threads}
             activeThreadId={activeThread?.thread_id ?? null}
@@ -1495,6 +1498,8 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
             const blocks = splitMarkdownBlocks(msg.conteudo_markdown);
             const isHighlighted = highlightedMessageId === msg.mensagem_id;
             const isPinned = pins.some((p) => p.mensagem_id === msg.mensagem_id);
+            const isWhatsAppMsg =
+              (msg.metadados as Record<string, unknown> | undefined)?.origem === "whatsapp";
             const isBranchCutoff =
               Boolean(activeThread?.branch) &&
               activeThread?.branch?.ate_mensagem_id === msg.mensagem_id;
@@ -1527,9 +1532,21 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                         : "space-y-3"
                     }`}
                   >
+                  {isUser && isWhatsAppMsg && (
+                    <div className="mb-1 inline-flex items-center gap-1 rounded-full bg-[#31CF76]/15 px-2 py-0.5 text-[10.5px] font-semibold text-[#31CF76]">
+                      <Smartphone className="h-2.5 w-2.5" />
+                      <span>WhatsApp</span>
+                    </div>
+                  )}
                   {!isUser && msg.autor_nome && (
                     <div className="text-[11.5px] font-semibold text-[#979797] flex items-center gap-2">
                       <span>{msg.autor_nome}</span>
+                      {isWhatsAppMsg && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-[#31CF76]/15 px-2 py-0.5 text-[10.5px] font-semibold text-[#31CF76]">
+                          <Smartphone className="h-2.5 w-2.5" />
+                          <span>WhatsApp</span>
+                        </span>
+                      )}
                       <span className="text-[#6A6A6A] font-normal">
                         {new Date(msg.criado_em).toLocaleTimeString("pt-BR", {
                           hour: "2-digit",

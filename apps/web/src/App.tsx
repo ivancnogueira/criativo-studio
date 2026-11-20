@@ -15,6 +15,7 @@ import type {
   BrowserProxyConfig,
   BrowserSecretRequest,
   BrowserStatusReport,
+  BrowserTabSummary,
   BrowserTakeoverSession,
   CanalEquipe,
   CaptureScreenConsentRequest,
@@ -95,7 +96,13 @@ import { SchedulePage } from "./features/schedule/SchedulePage";
 import type { AgentStepLog } from "./features/trace/AgentStepsWaterfall";
 import { WhatsAppPairingModal } from "./features/whatsapp/WhatsAppPairingModal";
 import { BrowserTakeoverModal } from "./features/browser/BrowserTakeoverModal";
+import {
+  InAppBrowserPanel,
+  type BrowserLiveFrame,
+  type BrowserMouseKeyboardInput,
+} from "./features/browser/InAppBrowserPanel";
 import { UserBrowsingLogInspector } from "./features/browser/BrowserTeachBar";
+import { getCriativoDesktopBridge } from "./types/desktop-bridge";
 import {
   LiveVoiceBar,
   QuickAgentDrawer,
@@ -377,6 +384,10 @@ export function App() {
   const lastNonSettingsSectionRef = useRef<StudioNavSection>("agentes");
   const [sidebarLayout, setSidebarLayout] = useState<SidebarLayoutSnapshot | null>(null);
   const [browserStatus, setBrowserStatus] = useState<BrowserStatusReport | null>(null);
+  const [browserTabs, setBrowserTabs] = useState<BrowserTabSummary[]>([]);
+  const [browserFramesByTab, setBrowserFramesByTab] = useState<Record<string, BrowserLiveFrame>>({});
+  const [activeBrowserTabId, setActiveBrowserTabId] = useState<string | null>(null);
+  const [browserPanelMode, setBrowserPanelMode] = useState<"closed" | "sidebar" | "expanded">("closed");
   const [browserProfiles, setBrowserProfiles] = useState<BrowserProfileInfo[]>([]);
   const [browserProxies, setBrowserProxies] = useState<BrowserProxyConfig[]>([]);
   const [takeoverByAgent, setTakeoverByAgent] = useState<Record<string, BrowserTakeoverSession>>({});
@@ -645,7 +656,14 @@ export function App() {
       if (remoteSidebarLayout) setSidebarLayout(remoteSidebarLayout);
       setBrowserProfiles(remoteBrowserProfiles);
       setBrowserProxies(remoteBrowserProxies);
-      if (remoteBrowserStatus) setBrowserStatus(remoteBrowserStatus);
+      if (remoteBrowserStatus) {
+        setBrowserStatus(remoteBrowserStatus);
+        const initialTabs = remoteBrowserStatus.tabs ?? [];
+        setBrowserTabs(initialTabs);
+        if (initialTabs.length > 0) {
+          setActiveBrowserTabId((prev) => prev ?? initialTabs[0]!.tabId);
+        }
+      }
       setShowcaseSites(remoteShowcaseSites);
       if (remoteStorageUsage) setStorageUsage(remoteStorageUsage);
       if (remoteWhatsNew) setWhatsNew(remoteWhatsNew);
@@ -1204,6 +1222,25 @@ export function App() {
     // Fase 15 — Navegador CDP, Takeover, Captura de Tela, Sidebar, Settings & Showcase
     const unsubBrowserFrame = ws.on("browser:frame", (evt) => {
       setActiveTakeoverFrame(evt);
+      setBrowserFramesByTab((prev) => ({
+        ...prev,
+        [evt.tabId]: {
+          tabId: evt.tabId,
+          dataUrl: evt.dataUrl,
+          width: evt.width,
+          height: evt.height,
+          url: evt.url,
+          title: evt.title,
+          userControl: evt.userControl,
+        },
+      }));
+      setBrowserTabs((prev) =>
+        prev.map((t) =>
+          t.tabId === evt.tabId
+            ? { ...t, url: evt.url, title: evt.title, userControl: evt.userControl }
+            : t
+        )
+      );
       setActiveTakeoverModal((prev) =>
         prev && prev.tabId === evt.tabId
           ? { ...prev, url: evt.url, title: evt.title, previewDataUrl: evt.dataUrl }
@@ -1211,9 +1248,36 @@ export function App() {
       );
     });
 
+    const unsubBrowserTabs = ws.on("browser:tabs_updated", (evt) => {
+      const nextTabs = Array.isArray(evt.tabs) ? evt.tabs : [];
+      setBrowserTabs(nextTabs);
+      setBrowserStatus((prev) =>
+        prev
+          ? { ...prev, activeTabs: nextTabs.length, tabs: nextTabs }
+          : { available: true, executablePath: null, activeContexts: nextTabs.length > 0 ? 1 : 0, activeTabs: nextTabs.length, tabs: nextTabs }
+      );
+      if (nextTabs.length === 0) {
+        setActiveBrowserTabId(null);
+        setBrowserPanelMode("closed");
+      } else {
+        setActiveBrowserTabId((prev) => {
+          if (evt.activeTabId && nextTabs.some((t) => t.tabId === evt.activeTabId)) {
+            return evt.activeTabId;
+          }
+          if (prev && nextTabs.some((t) => t.tabId === prev)) {
+            return prev;
+          }
+          return nextTabs[0]!.tabId;
+        });
+        setBrowserPanelMode((cur) => (cur === "closed" ? "sidebar" : cur));
+      }
+    });
+
     const unsubTakeoverReq = ws.on("browser:takeover_requested", (evt) => {
       const agKey = evt.agenteId ?? "global";
       setTakeoverByAgent((prev) => ({ ...prev, [agKey]: evt }));
+      setActiveBrowserTabId(evt.tabId);
+      setBrowserPanelMode((cur) => (cur === "closed" ? "sidebar" : cur));
     });
 
     const unsubTakeoverRes = ws.on("browser:takeover_resolved", (evt) => {
@@ -1224,6 +1288,14 @@ export function App() {
         }
         return next;
       });
+      setBrowserTabs((prev) =>
+        prev.map((t) => (t.tabId === evt.tabId ? { ...t, userControl: false } : t))
+      );
+      setBrowserFramesByTab((prev) =>
+        prev[evt.tabId]
+          ? { ...prev, [evt.tabId]: { ...prev[evt.tabId]!, userControl: false } }
+          : prev
+      );
       setActiveTakeoverModal((prev) => (prev && prev.tabId === evt.tabId ? null : prev));
     });
 
@@ -1339,6 +1411,7 @@ export function App() {
       unsubSharedTableChanged();
       unsubAgentMessageQueued();
       unsubBrowserFrame();
+      unsubBrowserTabs();
       unsubTakeoverReq();
       unsubTakeoverRes();
       unsubTeachStatus();
@@ -1552,23 +1625,50 @@ export function App() {
     [agentes]
   );
 
-  const ensureAndActivateTab = useCallback((tab: StudioTabItem, mode: AgentCenterMode) => {
-    setOpenTabs((prev) => (prev.some((t) => t.id === tab.id) ? prev : [...prev, tab]));
-    setActiveTabId(tab.id);
-    setCenterMode(mode);
-    setActiveSection("agentes");
+  const navHistoryRef = useRef<AgentCenterMode[]>([{ type: "agent", agenteId: "estrategista" }]);
+  const navIndexRef = useRef<number>(0);
+
+  const pushNavHistory = useCallback((mode: AgentCenterMode) => {
+    const hist = navHistoryRef.current;
+    const cur = hist[navIndexRef.current];
+    const same =
+      cur &&
+      cur.type === mode.type &&
+      ("agenteId" in cur && "agenteId" in mode ? cur.agenteId === mode.agenteId : true) &&
+      ("threadId" in cur && "threadId" in mode ? cur.threadId === mode.threadId : true) &&
+      ("canalId" in cur && "canalId" in mode ? cur.canalId === mode.canalId : true);
+    if (same) return;
+    const nextHist = hist.slice(0, navIndexRef.current + 1);
+    nextHist.push(mode);
+    if (nextHist.length > 40) nextHist.shift();
+    navHistoryRef.current = nextHist;
+    navIndexRef.current = nextHist.length - 1;
   }, []);
 
-  const handleSelectAgent = (agenteId: string) => {
-    setActiveSideThreadId(null);
-    setActiveThreadIdByAgent((prev) => ({ ...prev, [agenteId]: null }));
-    const ag = agentes.find((a) => a.agente_id === agenteId);
-    const vis = getAgentAvatar(ag);
-    ensureAndActivateTab(
-      { id: `agent:${agenteId}`, titulo: ag?.nome ?? agenteId, shape: vis.shape, color: vis.color },
-      { type: "agent", agenteId }
-    );
-  };
+  const ensureAndActivateTab = useCallback(
+    (tab: StudioTabItem, mode: AgentCenterMode) => {
+      setOpenTabs((prev) => (prev.some((t) => t.id === tab.id) ? prev : [...prev, tab]));
+      setActiveTabId(tab.id);
+      setCenterMode(mode);
+      setActiveSection("agentes");
+      pushNavHistory(mode);
+    },
+    [pushNavHistory]
+  );
+
+  const handleSelectAgent = useCallback(
+    (agenteId: string) => {
+      setActiveSideThreadId(null);
+      setActiveThreadIdByAgent((prev) => ({ ...prev, [agenteId]: null }));
+      const ag = agentes.find((a) => a.agente_id === agenteId);
+      const vis = getAgentAvatar(ag);
+      ensureAndActivateTab(
+        { id: `agent:${agenteId}`, titulo: ag?.nome ?? agenteId, shape: vis.shape, color: vis.color },
+        { type: "agent", agenteId }
+      );
+    },
+    [agentes, ensureAndActivateTab]
+  );
 
   const handleSelectThreadInAgent = useCallback(
     (agenteId: string, threadId: string | null) => {
@@ -1656,12 +1756,31 @@ export function App() {
     );
   };
 
-  const handleOpenNewAgentTab = () => {
+  const handleOpenNewAgentTab = useCallback(() => {
     ensureAndActivateTab(
       { id: "new-agent", titulo: "Novo agente", shape: "rounded_square", color: "#38bdf8" },
       { type: "new_agent" }
     );
-  };
+  }, [ensureAndActivateTab]);
+
+  // Integração com janela flutuante Electron Always-on-Top
+  useEffect(() => {
+    const bridge = getCriativoDesktopBridge();
+    if (!bridge?.onMainNavigate) return;
+    return bridge.onMainNavigate((payload) => {
+      if (payload.action === "new-agent") {
+        handleOpenNewAgentTab();
+      } else if (payload.agenteId) {
+        handleSelectAgent(payload.agenteId);
+      }
+    });
+  }, [handleOpenNewAgentTab, handleSelectAgent]);
+
+  useEffect(() => {
+    const bridge = getCriativoDesktopBridge();
+    if (!bridge?.dockSetVisible) return;
+    void bridge.dockSetVisible(userSettings.comportamento.habilitar_drawer_rapido !== false);
+  }, [userSettings.comportamento.habilitar_drawer_rapido]);
 
   const handleCreateNewTopic = useCallback(async () => {
     const currentAgentId =
@@ -1704,8 +1823,11 @@ export function App() {
     setActiveSection("agentes");
     if (tabId === "new-agent") {
       setCenterMode({ type: "new_agent" });
+      pushNavHistory({ type: "new_agent" });
     } else if (tabId.startsWith("channel:")) {
-      setCenterMode({ type: "channel", canalId: tabId.slice("channel:".length) });
+      const canalId = tabId.slice("channel:".length);
+      setCenterMode({ type: "channel", canalId });
+      pushNavHistory({ type: "channel", canalId });
     } else if (tabId.startsWith("thread:")) {
       const rest = tabId.slice("thread:".length);
       const sep = rest.indexOf(":");
@@ -1714,15 +1836,27 @@ export function App() {
         const threadId = rest.slice(sep + 1);
         setActiveThreadIdByAgent((prev) => ({ ...prev, [agenteId]: threadId }));
         setCenterMode({ type: "thread", agenteId, threadId });
+        pushNavHistory({ type: "thread", agenteId, threadId });
       }
     } else if (tabId.startsWith("agent:")) {
       const agenteId = tabId.slice("agent:".length);
       setActiveThreadIdByAgent((prev) => ({ ...prev, [agenteId]: null }));
       setCenterMode({ type: "agent", agenteId });
+      pushNavHistory({ type: "agent", agenteId });
     }
   };
 
   const handleCloseTab = (tabId: string) => {
+    if (tabId.startsWith("thread:")) {
+      const rest = tabId.slice("thread:".length);
+      const sep = rest.indexOf(":");
+      if (sep > 0) {
+        const agenteId = rest.slice(0, sep);
+        const threadId = rest.slice(sep + 1);
+        void handleDismissThreadTab(agenteId, threadId);
+        return;
+      }
+    }
     setOpenTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
       if (activeTabId === tabId && next.length > 0) {
@@ -1734,10 +1868,26 @@ export function App() {
   };
 
   const stepHistoryTab = (delta: number) => {
-    if (openTabs.length <= 1) return;
-    const idx = openTabs.findIndex((t) => t.id === activeTabId);
-    const nextIdx = (idx + delta + openTabs.length) % openTabs.length;
-    handleSelectTab(openTabs[nextIdx].id);
+    const hist = navHistoryRef.current;
+    const nextIdx = navIndexRef.current + delta;
+    if (nextIdx >= 0 && nextIdx < hist.length) {
+      navIndexRef.current = nextIdx;
+      const mode = hist[nextIdx]!;
+      setActiveSection("agentes");
+      setCenterMode(mode);
+      if (mode.type === "thread") {
+        setActiveThreadIdByAgent((prev) => ({ ...prev, [mode.agenteId]: mode.threadId }));
+        setActiveTabId(`thread:${mode.agenteId}:${mode.threadId}`);
+      } else if (mode.type === "agent") {
+        setActiveThreadIdByAgent((prev) => ({ ...prev, [mode.agenteId]: null }));
+        setActiveTabId(`agent:${mode.agenteId}`);
+      } else if (mode.type === "channel") {
+        setActiveTabId(`channel:${mode.canalId}`);
+      } else if (mode.type === "new_agent") {
+        setActiveTabId("new-agent");
+      }
+      return;
+    }
   };
 
   const activeAgent = useMemo(() => {
@@ -1792,28 +1942,94 @@ export function App() {
   }, [agentes, allThreads, liveRunByChat, liveRunByThread]);
 
   const dynamicIslandTabs = useMemo<StudioTabItem[]>(() => {
-    return openTabs.map((tab) => {
-      if (tab.id.startsWith("thread:")) {
-        const rest = tab.id.slice("thread:".length);
-        const sep = rest.indexOf(":");
-        const thId = sep > 0 ? rest.slice(sep + 1) : "";
-        return {
-          ...tab,
-          kind: "topic",
-          working: thId ? Boolean(liveRunByThread[thId]) : false,
-        };
-      }
-      if (tab.id.startsWith("agent:")) {
-        const agId = tab.id.slice("agent:".length);
-        return {
-          ...tab,
-          kind: tab.kind ?? "agent",
-          working: workingAgentIds.has(agId),
-        };
-      }
-      return tab;
+    if (centerMode.type === "channel") {
+      const ch = activeChannel;
+      return [
+        {
+          id: `channel:${centerMode.canalId}`,
+          titulo: ch?.nome ?? centerMode.canalId,
+          kind: "agent",
+          closable: false,
+          shape: "rounded_square",
+          color: "#31cf76",
+        },
+      ];
+    }
+
+    if (centerMode.type === "new_agent") {
+      return [
+        {
+          id: "new-agent",
+          titulo: "Novo agente",
+          kind: "agent",
+          closable: false,
+          shape: "rounded_square",
+          color: "#38bdf8",
+        },
+      ];
+    }
+
+    const ag = activeAgent;
+    if (!ag) return [];
+    const vis = getAgentAvatar(ag);
+    const agentTab: StudioTabItem = {
+      id: `agent:${ag.agente_id}`,
+      titulo: ag.nome,
+      kind: "agent",
+      closable: false,
+      shape: vis.shape,
+      color: vis.color,
+      working: workingAgentIds.has(ag.agente_id),
+    };
+
+    const agentThreads = (threadsByAgent[ag.agente_id]?.threads ?? allThreads.filter((t) => t.agente_id === ag.agente_id)).filter(
+      (t) => !t.arquivada_em
+    );
+
+    const topicTabs: StudioTabItem[] = agentThreads.map((th) => {
+      const customTab = openTabs.find((o) => o.id === `thread:${ag.agente_id}:${th.thread_id}`);
+      const isWorking =
+        Boolean(liveRunByThread[th.thread_id]) ||
+        th.estado === "executando" ||
+        th.turno_ativo_id !== null;
+      return {
+        id: `thread:${ag.agente_id}:${th.thread_id}`,
+        titulo: customTab?.titulo || th.titulo || "Novo tópico",
+        kind: "topic",
+        closable: true,
+        shape: vis.shape,
+        color: vis.color,
+        working: isWorking,
+      };
     });
-  }, [liveRunByThread, openTabs, workingAgentIds]);
+
+    return [agentTab, ...topicTabs];
+  }, [
+    activeAgent,
+    activeChannel,
+    allThreads,
+    centerMode,
+    liveRunByThread,
+    openTabs,
+    threadsByAgent,
+    workingAgentIds,
+  ]);
+
+  const headerActiveTabId = useMemo(() => {
+    if (centerMode.type === "thread") {
+      return `thread:${centerMode.agenteId}:${centerMode.threadId}`;
+    }
+    if (centerMode.type === "agent") {
+      return `agent:${activeAgent?.agente_id ?? centerMode.agenteId}`;
+    }
+    if (centerMode.type === "channel") {
+      return `channel:${centerMode.canalId}`;
+    }
+    if (centerMode.type === "new_agent") {
+      return "new-agent";
+    }
+    return activeTabId;
+  }, [activeAgent, activeTabId, centerMode]);
 
   const activeChatKey =
     activeSideThreadId && activeSideThreadId.startsWith("rotina:")
@@ -2028,6 +2244,22 @@ export function App() {
               : tab
           )
         );
+        setAllThreads((prev) =>
+          prev.map((t) => (t.thread_id === threadId ? { ...t, titulo: nextTitle } : t))
+        );
+        setThreadsByAgent((prev) => {
+          const snap = prev[activeAgent.agente_id];
+          if (!snap) return prev;
+          return {
+            ...prev,
+            [activeAgent.agente_id]: {
+              ...snap,
+              threads: snap.threads.map((t) =>
+                t.thread_id === threadId ? { ...t, titulo: nextTitle } : t
+              ),
+            },
+          };
+        });
       }
       try {
         const res = await daemonApi.sendThreadMessage(threadId, payloadContent, anexos);
@@ -2650,7 +2882,7 @@ export function App() {
             onOpenWhatsAppModal={() => setWhatsappModalOpen(true)}
             onOpenVaultModal={() => setActiveSection("conexoes")}
             tabs={dynamicIslandTabs}
-            activeTabId={activeTabId}
+            activeTabId={headerActiveTabId}
             onSelectTab={handleSelectTab}
             onCloseTab={handleCloseTab}
             onNewTopic={() => void handleCreateNewTopic()}
@@ -2904,7 +3136,8 @@ export function App() {
                           if (!activeAgent) return;
                           handleSelectThreadInAgent(activeAgent.agente_id, threadId);
                         }}
-                        onCreateQuickThread={() => setActiveSection("tarefas")}
+                        onCreateQuickThread={() => void handleCreateNewTopic()}
+                        hideInlineThreadTabs={true}
                         onDismissThreadTab={(threadId) => {
                           if (!activeAgent) return;
                           void handleDismissThreadTab(activeAgent.agente_id, threadId);
@@ -2966,22 +3199,14 @@ export function App() {
                         liveVoiceEnabled={userSettings.voz.live_voice_habilitada}
                         liveVoiceActive={liveVoiceActive}
                         onOpenTakeover={(tabId) => {
-                          const existing =
-                            (activeAgent && takeoverByAgent[activeAgent.agente_id]) ||
-                            Object.values(takeoverByAgent).find((s) => s.tabId === tabId);
-                          setActiveTakeoverModal(
-                            existing ?? {
-                              takeoverId: `tk_${tabId}`,
-                              tabId,
+                          setActiveBrowserTabId(tabId);
+                          setBrowserPanelMode("expanded");
+                          void daemonApi
+                            .startBrowserTakeover(tabId, {
                               agenteId: activeAgent?.agente_id ?? null,
                               reason: "manual",
-                              url: activeTakeoverFrame?.url ?? "about:blank",
-                              title: activeTakeoverFrame?.title ?? "Navegador Assistido",
-                              status: "active",
-                              previewDataUrl: activeTakeoverFrame?.dataUrl ?? null,
-                              criadoEm: new Date().toISOString(),
-                            }
-                          );
+                            })
+                            .catch(() => {});
                         }}
                         onCancelTakeover={async (tabId) => {
                           await daemonApi.respondBrowserTakeover(tabId, "cancel");
@@ -3091,7 +3316,7 @@ export function App() {
                     </div>
                   )}
 
-                  {inspectorOpen && (
+                  {(inspectorOpen || (browserPanelMode === "sidebar" && browserTabs.length > 0)) && (
                     <SplitResizeHandle
                       ariaLabel="Redimensionar inspetor direito"
                       currentWidth={inspectorWidth}
@@ -3103,8 +3328,12 @@ export function App() {
                         writeStoredWidth(INSPECTOR_WIDTH_KEY, nextW);
                       }}
                       onCollapse={() => {
-                        setInspectorOpen(false);
-                        persistLayoutWidths({ inspector_open: false });
+                        if (browserPanelMode === "sidebar" && browserTabs.length > 0) {
+                          setBrowserPanelMode("closed");
+                        } else {
+                          setInspectorOpen(false);
+                          persistLayoutWidths({ inspector_open: false });
+                        }
                       }}
                       onReset={() => {
                         setInspectorWidth(DEFAULT_INSPECTOR_WIDTH);
@@ -3114,7 +3343,98 @@ export function App() {
                       onResizeEnd={(finalW) => persistLayoutWidths({ inspector_width: finalW })}
                     />
                   )}
-                  <RightInspectorPanel
+                  {browserPanelMode === "sidebar" && browserTabs.length > 0 ? (
+                    <div
+                      style={{ width: `${inspectorWidth}px` }}
+                      className="shrink-0 h-full overflow-hidden flex flex-col"
+                    >
+                      <InAppBrowserPanel
+                        mode="sidebar"
+                        tabs={browserTabs}
+                        activeTabId={activeBrowserTabId}
+                        framesByTab={browserFramesByTab}
+                        agentName={activeAgent?.nome ?? "Agente"}
+                        agentAvatarShape={getAgentAvatar(activeAgent).shape}
+                        agentAvatarColor={getAgentAvatar(activeAgent).color}
+                        agentWorking={activeAgent ? workingAgentIds.has(activeAgent.agente_id) : false}
+                        takeoverPending={Boolean(
+                          (activeAgent && takeoverByAgent[activeAgent.agente_id]) ||
+                            browserTabs.some((t) => t.tabId === activeBrowserTabId && t.userControl)
+                        )}
+                        profileLabel={
+                          browserProfiles.find(
+                            (p) =>
+                              p.perfil_id ===
+                              browserTabs.find((t) => t.tabId === activeBrowserTabId)?.perfilId
+                          )?.nome ?? "Perfil Compartilhado"
+                        }
+                        teachRecording={Boolean(
+                          activeBrowserTabId && teachStatusByTab[activeBrowserTabId]?.recording
+                        )}
+                        teachStartedAt={
+                          activeBrowserTabId
+                            ? teachStatusByTab[activeBrowserTabId]?.startedAt ?? null
+                            : null
+                        }
+                        teachStepsCount={
+                          activeBrowserTabId
+                            ? teachStatusByTab[activeBrowserTabId]?.stepsCount ?? 0
+                            : 0
+                        }
+                        onSelectTab={(tId) => setActiveBrowserTabId(tId)}
+                        onNewTab={async () => {
+                          const res = (await daemonApi.runBrowserSessionAction({
+                            action: "open",
+                            agenteId: activeAgent?.agente_id ?? undefined,
+                            url: "https://www.google.com",
+                          })) as { tabId?: string; result?: { tabId?: string } };
+                          const newId = res?.result?.tabId ?? res?.tabId;
+                          if (newId) setActiveBrowserTabId(newId);
+                        }}
+                        onCloseTab={async (tId) => {
+                          await daemonApi.runBrowserSessionAction({ action: "close_tab", tabId: tId });
+                        }}
+                        onNavigate={async (tId, url) => {
+                          await daemonApi.runBrowserSessionAction({
+                            action: "navigate",
+                            tabId: tId,
+                            url,
+                          });
+                        }}
+                        onGoBack={async (tId) => {
+                          await daemonApi.runBrowserSessionAction({ action: "go_back", tabId: tId });
+                        }}
+                        onGoForward={async (tId) => {
+                          await daemonApi.runBrowserSessionAction({
+                            action: "go_forward",
+                            tabId: tId,
+                          });
+                        }}
+                        onReload={async (tId) => {
+                          await daemonApi.runBrowserSessionAction({ action: "reload", tabId: tId });
+                        }}
+                        onExpand={() => setBrowserPanelMode("expanded")}
+                        onCollapseToChat={() => setBrowserPanelMode("sidebar")}
+                        onClosePanel={() => setBrowserPanelMode("closed")}
+                        onAssumeControl={async (tId) => {
+                          await daemonApi.startBrowserTakeover(tId, {
+                            agenteId: activeAgent?.agente_id ?? null,
+                            reason: "manual",
+                          });
+                        }}
+                        onCompleteControl={async (tId) => {
+                          await daemonApi.respondBrowserTakeover(tId, "complete");
+                        }}
+                        onSendInput={async (tId, input, autoAssume) => {
+                          await daemonApi.sendBrowserInput(tId, { ...input, autoAssume });
+                        }}
+                        onSendQuickChat={async (text) => {
+                          await handleSendChatMessage(text, []);
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <RightInspectorPanel
                     open={inspectorOpen}
                     widthPx={inspectorWidth}
                     agente={activeAgent}
@@ -3165,12 +3485,14 @@ export function App() {
                       }}
                       onOpenAgentBrowserTakeover={async (agenteId) => {
                         let tabId =
-                          browserStatus?.tabs.find((t) => t.agenteId === agenteId)?.tabId ?? null;
+                          browserTabs.find((t) => t.agenteId === agenteId)?.tabId ??
+                          browserStatus?.tabs.find((t) => t.agenteId === agenteId)?.tabId ??
+                          null;
                         if (!tabId) {
                           const openRes = (await daemonApi.runBrowserSessionAction({
                             action: "open",
                             agenteId,
-                            url: "about:blank",
+                            url: "https://web.whatsapp.com",
                           })) as {
                             tabId?: string;
                             tab?: { tabId?: string };
@@ -3184,11 +3506,12 @@ export function App() {
                             null;
                         }
                         if (!tabId) return;
-                        const tkRes = await daemonApi.startBrowserTakeover(tabId, {
+                        setActiveBrowserTabId(tabId);
+                        setBrowserPanelMode("expanded");
+                        await daemonApi.startBrowserTakeover(tabId, {
                           agenteId,
                           reason: "manual",
                         });
-                        setActiveTakeoverModal(tkRes.session);
                       }}
                       onInspectAgentBrowsingLog={async (agenteId) => {
                         const data = await daemonApi.listUserBrowsingLog(agenteId);
@@ -3245,6 +3568,7 @@ export function App() {
                         setTarefas(await daemonApi.listTasks());
                       }}
                     />
+                  )}
                 </>
               )}
             </>
@@ -4145,17 +4469,134 @@ export function App() {
         </div>
       )}
 
-      <QuickAgentDrawer
-        enabled={userSettings.comportamento.habilitar_drawer_rapido}
-        agentes={agentes}
-        pinnedIds={sidebarLayout?.pins ?? []}
-        selectedAgentId={activeAgent?.agente_id ?? null}
-        workingAgentIds={workingAgentIds}
-        pinned={agentDockPinned}
-        onTogglePinned={handleToggleAgentDockPinned}
-        onCreateAgent={handleOpenNewAgentTab}
-        onSelectAgent={handleSelectAgent}
-      />
+      {!getCriativoDesktopBridge()?.dockSetVisible && (
+        <QuickAgentDrawer
+          enabled={userSettings.comportamento.habilitar_drawer_rapido}
+          agentes={agentes}
+          pinnedIds={sidebarLayout?.pins ?? []}
+          selectedAgentId={activeAgent?.agente_id ?? null}
+          workingAgentIds={workingAgentIds}
+          pinned={agentDockPinned}
+          onTogglePinned={handleToggleAgentDockPinned}
+          onCreateAgent={handleOpenNewAgentTab}
+          onSelectAgent={handleSelectAgent}
+        />
+      )}
+
+      {browserPanelMode === "expanded" && browserTabs.length > 0 && (
+        <InAppBrowserPanel
+          mode="expanded"
+          tabs={browserTabs}
+          activeTabId={activeBrowserTabId}
+          framesByTab={browserFramesByTab}
+          agentName={activeAgent?.nome ?? "Agente"}
+          agentAvatarShape={getAgentAvatar(activeAgent).shape}
+          agentAvatarColor={getAgentAvatar(activeAgent).color}
+          agentWorking={activeAgent ? workingAgentIds.has(activeAgent.agente_id) : false}
+          takeoverPending={Boolean(
+            (activeAgent && takeoverByAgent[activeAgent.agente_id]) ||
+              browserTabs.some((t) => t.tabId === activeBrowserTabId && t.userControl)
+          )}
+          profileLabel={
+            browserProfiles.find(
+              (p) =>
+                p.perfil_id ===
+                browserTabs.find((t) => t.tabId === activeBrowserTabId)?.perfilId
+            )?.nome ?? "Perfil Compartilhado"
+          }
+          teachRecording={Boolean(
+            activeBrowserTabId && teachStatusByTab[activeBrowserTabId]?.recording
+          )}
+          teachStartedAt={
+            activeBrowserTabId ? teachStatusByTab[activeBrowserTabId]?.startedAt ?? null : null
+          }
+          teachStepsCount={
+            activeBrowserTabId ? teachStatusByTab[activeBrowserTabId]?.stepsCount ?? 0 : 0
+          }
+          onSelectTab={(tId) => setActiveBrowserTabId(tId)}
+          onNewTab={async () => {
+            const res = (await daemonApi.runBrowserSessionAction({
+              action: "open",
+              agenteId: activeAgent?.agente_id ?? undefined,
+              url: "https://www.google.com",
+            })) as { tabId?: string; result?: { tabId?: string } };
+            const newId = res?.result?.tabId ?? res?.tabId;
+            if (newId) setActiveBrowserTabId(newId);
+          }}
+          onCloseTab={async (tId) => {
+            await daemonApi.runBrowserSessionAction({ action: "close_tab", tabId: tId });
+          }}
+          onNavigate={async (tId, url) => {
+            await daemonApi.runBrowserSessionAction({
+              action: "navigate",
+              tabId: tId,
+              url,
+            });
+          }}
+          onGoBack={async (tId) => {
+            await daemonApi.runBrowserSessionAction({ action: "go_back", tabId: tId });
+          }}
+          onGoForward={async (tId) => {
+            await daemonApi.runBrowserSessionAction({ action: "go_forward", tabId: tId });
+          }}
+          onReload={async (tId) => {
+            await daemonApi.runBrowserSessionAction({ action: "reload", tabId: tId });
+          }}
+          onExpand={() => setBrowserPanelMode("expanded")}
+          onCollapseToChat={() => setBrowserPanelMode("sidebar")}
+          onClosePanel={() => setBrowserPanelMode("closed")}
+          onAssumeControl={async (tId) => {
+            await daemonApi.startBrowserTakeover(tId, {
+              agenteId: activeAgent?.agente_id ?? null,
+              reason: "manual",
+            });
+          }}
+          onCompleteControl={async (tId) => {
+            await daemonApi.respondBrowserTakeover(tId, "complete");
+          }}
+          onSendInput={async (tId, input, autoAssume) => {
+            await daemonApi.sendBrowserInput(tId, { ...input, autoAssume });
+          }}
+          onSendQuickChat={async (text) => {
+            await handleSendChatMessage(text, []);
+          }}
+          onStartTeach={async () => {
+            if (!activeBrowserTabId) return;
+            const started = await daemonApi.startTeachRecording(
+              activeBrowserTabId,
+              activeAgent?.agente_id ?? null
+            );
+            setTeachStatusByTab((prev) => ({
+              ...prev,
+              [activeBrowserTabId]: {
+                recording: true,
+                startedAt: started.startedAt,
+                stepsCount: 0,
+              },
+            }));
+          }}
+          onStopTeach={async (action) => {
+            if (!activeBrowserTabId) return;
+            const stopped = await daemonApi.stopTeachRecording(activeBrowserTabId, action);
+            setTeachStatusByTab((prev) => ({
+              ...prev,
+              [activeBrowserTabId]: {
+                recording: false,
+                startedAt: null,
+                stepsCount: stopped.steps.length,
+              },
+            }));
+            if (action === "save" && stopped.recordedTaskText && activeAgent) {
+              setBrowsingLogInspector({
+                agenteId: activeAgent.agente_id,
+                agentName: activeAgent.nome,
+                steps: stopped.steps,
+                recordedTaskText: stopped.recordedTaskText,
+              });
+            }
+          }}
+        />
+      )}
 
       {activeTakeoverModal && (
         <BrowserTakeoverModal

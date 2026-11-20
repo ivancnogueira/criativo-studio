@@ -20,6 +20,7 @@ import {
   type SocketFactory,
 } from "@criativo/whatsapp";
 import { CronScheduler } from "../routines/cron-scheduler.ts";
+import { formatMarkdownForWhatsApp } from "../whatsapp/whatsapp-formatter.ts";
 import { RoutineStore } from "../routines/routine-store.ts";
 import { RoutineFlowStore } from "../routines/routine-flow-store.ts";
 import { RoutineTimer } from "../routines/routine-timer.ts";
@@ -1100,6 +1101,71 @@ export async function createDaemonServer(
           ]
         : [];
 
+    const turnoId = `wpp-${randomUUID().slice(0, 8)}`;
+    const mainThreadId = `main:${agente.agente_id}`;
+    const canalId = `agente:${agente.agente_id}`;
+    const whatsappUserText = rawPrompt || "📎 Mídia enviada pelo WhatsApp";
+    const whatsappMeta = {
+      origem: "whatsapp",
+      chat_jid: event.msg.remoteJid,
+      conta_id: event.contaId,
+      self_chat: Boolean(event.msg.fromMe),
+    };
+
+    const maxOrdRow = db.connection
+      .prepare("SELECT COALESCE(MAX(ordinal), 0) AS max_ord FROM projecao_conversas_chat WHERE thread_id = ?;")
+      .get(mainThreadId) as { max_ord: number } | undefined;
+    const userOrdinal = (maxOrdRow?.max_ord ?? 0) + 1;
+    const incomingMsgId = `msg-${randomUUID()}`;
+    const incomingCreatedAt = new Date().toISOString();
+
+    db.connection
+      .prepare(
+        `INSERT INTO projecao_conversas_chat (
+          mensagem_id, canal_id, agente_id, autor, autor_nome, conteudo_markdown,
+          anexos_json, steps_json, tarefa_id, lida, criado_em,
+          thread_id, turno_id, item_type, status, resposta_para_mensagem_id,
+          ordinal, branch_origem_mensagem_id, metadados_json
+        ) VALUES (?, ?, ?, 'usuario', ?, ?, ?, '[]', NULL, 1, ?, ?, ?, 'mensagem', 'completed', NULL, ?, NULL, ?);`,
+      )
+      .run(
+        incomingMsgId,
+        canalId,
+        agente.agente_id,
+        event.msg.pushName?.trim() || "Você",
+        whatsappUserText,
+        JSON.stringify(incomingAnexos),
+        incomingCreatedAt,
+        mainThreadId,
+        turnoId,
+        userOrdinal,
+        JSON.stringify(whatsappMeta),
+      );
+
+    wsHub.broadcast("chat:message", {
+      canal_id: canalId,
+      agente_id: agente.agente_id,
+      mensagem: {
+        mensagem_id: incomingMsgId,
+        canal_id: canalId,
+        agente_id: agente.agente_id,
+        autor: "usuario",
+        autor_nome: event.msg.pushName?.trim() || "Você",
+        conteudo_markdown: whatsappUserText,
+        anexos: incomingAnexos,
+        steps: [],
+        tarefa_id: null,
+        thread_id: mainThreadId,
+        turno_id: turnoId,
+        item_type: "mensagem",
+        status: "completed",
+        ordinal: userOrdinal,
+        metadados: whatsappMeta,
+        lida: true,
+        criado_em: incomingCreatedAt,
+      },
+    });
+
     try {
       const { agentMsg } = await executeAgentConversationTurn({
         deps: {
@@ -1120,32 +1186,38 @@ export async function createDaemonServer(
         agente,
         userPrompt: rawPrompt || "Analise este arquivo enviado pelo WhatsApp.",
         anexos: incomingAnexos,
-        turnoId: `wpp-${randomUUID().slice(0, 8)}`,
+        turnoId,
         originalUserPrompt: rawPrompt,
+        respostaParaMensagemId: incomingMsgId,
+        channelOrigin: "whatsapp",
+        extraMetadados: whatsappMeta,
       });
 
       const replyText = agentMsg.conteudo_markdown?.trim();
       if (replyText) {
-        const sent = await event.client.sendMessage(event.msg.remoteJid, {
-          text: replyText.slice(0, 8000),
-        });
-        const recordedReply = whatsappArchiveService.recordMessage({
-          mensagemId: sent.messageId,
-          contaId: event.contaId,
-          chatJid: event.msg.remoteJid,
-          remetenteJid: event.msg.remoteJid,
-          remetenteNome: agente.nome,
-          direcao: "saida",
-          tipoConteudo: "texto",
-          texto: replyText.slice(0, 8000),
-          ehGrupo: Boolean(event.msg.isGroup),
-          ackStatus: sent.ackStatus === "ack" ? "entregue" : "enviado",
-          metadados: { agente_id: agente.agente_id, self_chat: true },
-        });
-        wsHub.broadcast("whatsapp.mensagem_recebida", {
-          conta_id: event.contaId,
-          mensagem: recordedReply,
-        });
+        const chunks = formatMarkdownForWhatsApp(replyText, { maxChunkLength: 1600, maxChunks: 4 });
+        for (const chunk of chunks) {
+          const sent = await event.client.sendMessage(event.msg.remoteJid, {
+            text: chunk,
+          });
+          const recordedReply = whatsappArchiveService.recordMessage({
+            mensagemId: sent.messageId,
+            contaId: event.contaId,
+            chatJid: event.msg.remoteJid,
+            remetenteJid: event.msg.remoteJid,
+            remetenteNome: agente.nome,
+            direcao: "saida",
+            tipoConteudo: "texto",
+            texto: chunk,
+            ehGrupo: Boolean(event.msg.isGroup),
+            ackStatus: sent.ackStatus === "ack" ? "entregue" : "enviado",
+            metadados: { agente_id: agente.agente_id, self_chat: true },
+          });
+          wsHub.broadcast("whatsapp.mensagem_recebida", {
+            conta_id: event.contaId,
+            mensagem: recordedReply,
+          });
+        }
       }
 
       for (const anexo of agentMsg.anexos ?? []) {

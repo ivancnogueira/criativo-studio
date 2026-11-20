@@ -308,6 +308,8 @@ export const QuickAgentDrawer: React.FC<QuickAgentDrawerProps> = ({
     }
   });
   const [hoveredOrOpen, setHoveredOrOpen] = useState(false);
+  const [customTopPx, setCustomTopPx] = useState<number | null>(null);
+  const dragTopStartRef = useRef<{ clientY: number; baseTop: number } | null>(null);
 
   const isPinned = pinned ?? localPinned;
   const handleTogglePin = () => {
@@ -358,6 +360,7 @@ export const QuickAgentDrawer: React.FC<QuickAgentDrawerProps> = ({
       onMouseLeave={() => {
         if (!isPinned) setHoveredOrOpen(false);
       }}
+      style={customTopPx !== null ? { top: `${customTopPx}px`, transform: "none" } : undefined}
       className="fixed right-0 top-1/2 -translate-y-1/2 z-40 flex items-center"
     >
       {!isVisible && (
@@ -374,6 +377,34 @@ export const QuickAgentDrawer: React.FC<QuickAgentDrawerProps> = ({
 
       {isVisible && (
         <div className="rounded-l-[24px] border border-r-0 border-[var(--studio-border)] bg-[#1B1B1E]/95 backdrop-blur-xl shadow-2xl px-2 py-2.5 flex flex-col items-center gap-2">
+          <div
+            onPointerDown={(e) => {
+              const rect = e.currentTarget.parentElement?.getBoundingClientRect();
+              dragTopStartRef.current = {
+                clientY: e.clientY,
+                baseTop: customTopPx ?? rect?.top ?? Math.round(window.innerHeight * 0.35),
+              };
+              e.currentTarget.setPointerCapture?.(e.pointerId);
+            }}
+            onPointerMove={(e) => {
+              if (!dragTopStartRef.current) return;
+              const nextTop = Math.max(
+                56,
+                Math.min(
+                  window.innerHeight - 240,
+                  dragTopStartRef.current.baseTop + (e.clientY - dragTopStartRef.current.clientY)
+                )
+              );
+              setCustomTopPx(Math.round(nextTop));
+            }}
+            onPointerUp={() => {
+              dragTopStartRef.current = null;
+            }}
+            title="Arrastar posição vertical da ilha"
+            className="w-8 h-2.5 flex items-center justify-center cursor-ns-resize"
+          >
+            <span className="h-1 w-5 rounded-full bg-white/20" />
+          </div>
           <button
             type="button"
             onClick={handleTogglePin}

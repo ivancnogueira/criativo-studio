@@ -7,6 +7,7 @@ export interface TrayManagerOptions {
   productRoot: string;
   userDataDir: string;
   onShowWindow: () => void;
+  onToggleFloatingDock?: () => void;
   onCheckUpdates: () => void;
   onQuit: () => void;
 }
@@ -39,6 +40,14 @@ export function createStudioTray(options: TrayManagerOptions): Tray {
       label: "Abrir Criativo AI Studio",
       click: () => options.onShowWindow(),
     },
+    ...(options.onToggleFloatingDock
+      ? [
+          {
+            label: "Mostrar / Ocultar Ilha Flutuante",
+            click: () => options.onToggleFloatingDock?.(),
+          },
+        ]
+      : []),
     {
       label: `Motor ativo em loopback :${options.port}`,
       enabled: false,

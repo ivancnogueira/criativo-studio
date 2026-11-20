@@ -168,7 +168,7 @@ function bundleEntrySync(entryFile, outFile, repoRoot, outDir) {
     outfile: outFile,
     minify: false,
     sourcemap: false,
-    keepNames: true,
+    keepNames: false,
     nodePaths: [
       join(repoRoot, "node_modules"),
       join(repoRoot, "apps/daemon/node_modules"),

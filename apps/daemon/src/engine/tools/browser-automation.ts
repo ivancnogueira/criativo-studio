@@ -72,6 +72,9 @@ export type BrowserCdpActionName =
   | "list_tabs"
   | "status"
   | "navigate"
+  | "go_back"
+  | "go_forward"
+  | "reload"
   | "click"
   | "type"
   | "fill_fields"
@@ -90,6 +93,7 @@ export type BrowserCdpActionName =
   | "set_environment"
   | "close_tab"
   | "request_takeover"
+  | "release_takeover"
   | "submit_secret";
 
 export interface BrowserExecuteActionInput {
@@ -799,6 +803,43 @@ export class BrowserAutomationService {
     return entry;
   }
 
+  private ensureTabPreviewStream(tab: ManagedTabEntry): void {
+    const emitFrame = (frame: {
+      tabId: string;
+      dataUrl: string;
+      width: number;
+      height: number;
+      url: string;
+      title: string;
+      userControl: boolean;
+    }) => {
+      this.wsHub?.broadcast("browser:frame", {
+        ...frame,
+        agenteId: tab.agenteId,
+        perfilId: tab.perfilId,
+      });
+    };
+
+    if (!tab.screencastActive) {
+      void this.sessionManager
+        .startScreencast(tab.tabId, emitFrame, tab.userControl ? 125 : 320)
+        .catch(() => {});
+    } else {
+      void this.sessionManager.captureAndEmitFrame(tab.tabId, emitFrame).catch(() => {});
+    }
+  }
+
+  private broadcastTabsAndFrame(tab?: ManagedTabEntry | null): void {
+    this.wsHub?.broadcast("browser:tabs_updated", {
+      tabs: this.sessionManager.listTabSummaries(),
+      activeTabId: tab?.tabId ?? null,
+      agenteId: tab?.agenteId ?? null,
+    });
+    if (tab && tab.page) {
+      this.ensureTabPreviewStream(tab);
+    }
+  }
+
   private async captureTabSnapshot(
     entry: ManagedTabEntry,
     includeImage = false,
@@ -858,6 +899,7 @@ export class BrowserAutomationService {
               });
               this.broadcastTeachStatus(t);
             }
+            this.broadcastTabsAndFrame(t);
           },
         });
 
@@ -865,7 +907,9 @@ export class BrowserAutomationService {
           .prepare("UPDATE projecao_perfis_navegador SET ultimo_uso_em = ? WHERE perfil_id = ?;")
           .run(new Date().toISOString(), profile.perfil_id);
 
-        return await this.captureTabSnapshot(tab, Boolean(input.image));
+        const snap = await this.captureTabSnapshot(tab, Boolean(input.image));
+        this.broadcastTabsAndFrame(tab);
+        return snap;
       }
 
       case "navigate": {
@@ -876,7 +920,57 @@ export class BrowserAutomationService {
           timeout: Math.min(Math.max(input.timeoutMs ?? 25_000, 1000), 60_000),
         });
         entry.revision += 1;
-        return await this.captureTabSnapshot(entry, Boolean(input.image));
+        const snap = await this.captureTabSnapshot(entry, Boolean(input.image));
+        this.broadcastTabsAndFrame(entry);
+        return snap;
+      }
+
+      case "go_back": {
+        const entry = this.requireRealTab(input.tabId);
+        const pageAny = entry.page as unknown as { goBack?: () => Promise<unknown> };
+        if (typeof pageAny.goBack === "function") {
+          await pageAny.goBack().catch(() => {});
+        } else {
+          await entry.page!.evaluate(() => {
+            (globalThis as unknown as { history?: { back?: () => void } }).history?.back?.();
+          });
+        }
+        entry.revision += 1;
+        const snap = await this.captureTabSnapshot(entry, Boolean(input.image));
+        this.broadcastTabsAndFrame(entry);
+        return snap;
+      }
+
+      case "go_forward": {
+        const entry = this.requireRealTab(input.tabId);
+        const pageAny = entry.page as unknown as { goForward?: () => Promise<unknown> };
+        if (typeof pageAny.goForward === "function") {
+          await pageAny.goForward().catch(() => {});
+        } else {
+          await entry.page!.evaluate(() => {
+            (globalThis as unknown as { history?: { forward?: () => void } }).history?.forward?.();
+          });
+        }
+        entry.revision += 1;
+        const snap = await this.captureTabSnapshot(entry, Boolean(input.image));
+        this.broadcastTabsAndFrame(entry);
+        return snap;
+      }
+
+      case "reload": {
+        const entry = this.requireRealTab(input.tabId);
+        const pageAny = entry.page as unknown as { reload?: () => Promise<unknown> };
+        if (typeof pageAny.reload === "function") {
+          await pageAny.reload().catch(() => {});
+        } else {
+          await entry.page!.evaluate(() => {
+            (globalThis as unknown as { location?: { reload?: () => void } }).location?.reload?.();
+          });
+        }
+        entry.revision += 1;
+        const snap = await this.captureTabSnapshot(entry, Boolean(input.image));
+        this.broadcastTabsAndFrame(entry);
+        return snap;
       }
 
       case "snapshot": {
@@ -902,7 +996,9 @@ export class BrowserAutomationService {
           await resolved.locator.click({ timeout: 10_000 });
         }
         entry.revision += 1;
-        return await this.captureTabSnapshot(entry, false);
+        const snap = await this.captureTabSnapshot(entry, false);
+        this.broadcastTabsAndFrame(entry);
+        return snap;
       }
 
       case "type": {
@@ -931,7 +1027,9 @@ export class BrowserAutomationService {
           }
         }
         entry.revision += 1;
-        return await this.captureTabSnapshot(entry, false);
+        const snap = await this.captureTabSnapshot(entry, false);
+        this.broadcastTabsAndFrame(entry);
+        return snap;
       }
 
       case "fill_fields": {
@@ -1006,7 +1104,9 @@ export class BrowserAutomationService {
           await entry.page!.keyboard.press(key);
         }
         entry.revision += 1;
-        return await this.captureTabSnapshot(entry, false);
+        const snap = await this.captureTabSnapshot(entry, false);
+        this.broadcastTabsAndFrame(entry);
+        return snap;
       }
 
       case "hover": {
@@ -1040,7 +1140,9 @@ export class BrowserAutomationService {
           await entry.page!.mouse.wheel(input.deltaX ?? 0, input.deltaY ?? 480);
         }
         entry.revision += 1;
-        return await this.captureTabSnapshot(entry, false);
+        const snap = await this.captureTabSnapshot(entry, false);
+        this.broadcastTabsAndFrame(entry);
+        return snap;
       }
 
       case "select_option": {
@@ -1220,6 +1322,8 @@ export class BrowserAutomationService {
       case "close_tab": {
         if (!input.tabId) throw new Error("Informe 'tabId' em close_tab.");
         const closed = await this.sessionManager.closeTab(input.tabId);
+        this.activeTakeovers.delete(input.tabId);
+        this.broadcastTabsAndFrame(null);
         return { ok: closed, tabId: input.tabId };
       }
 
@@ -1231,7 +1335,13 @@ export class BrowserAutomationService {
           canalId: input.canalId ?? null,
           reason: input.reason ?? "manual",
           waitForResolution: Boolean(input.waitForTakeover),
+          timeoutMs: input.timeoutMs,
         });
+      }
+
+      case "release_takeover": {
+        if (!input.tabId) throw new Error("Informe 'tabId' em release_takeover.");
+        return await this.resolveTakeover(input.tabId, "complete");
       }
 
       default:
@@ -1264,9 +1374,16 @@ export class BrowserAutomationService {
     canalId?: string | null;
     reason: BrowserTakeoverReason;
     waitForResolution?: boolean;
+    timeoutMs?: number;
   }): Promise<
     | BrowserTakeoverSession
-    | { decision: "complete" | "cancel"; takeoverId: string; tabId: string; snapshot?: BrowserSnapshotResult }
+    | {
+        decision: "complete" | "cancel" | "timeout";
+        takeoverId: string;
+        tabId: string;
+        snapshot?: BrowserSnapshotResult;
+        note?: string;
+      }
   > {
     const tab = this.sessionManager.getTab(params.tabId);
     if (!tab) {
@@ -1304,29 +1421,48 @@ export class BrowserAutomationService {
     const pendingEntry: PendingTakeoverEntry = existing ?? { session, resolvers: [] };
     this.activeTakeovers.set(params.tabId, pendingEntry);
 
-    await this.sessionManager.startScreencast(params.tabId, (frame) => {
-      this.wsHub?.broadcast("browser:frame", {
-        ...frame,
-        agenteId: session.agenteId,
-        perfilId: tab.perfilId,
-      });
+    this.ensureTabPreviewStream(tab);
+    this.wsHub?.broadcast("browser:tabs_updated", {
+      tabs: this.sessionManager.listTabSummaries(),
+      activeTabId: tab.tabId,
+      agenteId: session.agenteId,
     });
-
     this.wsHub?.broadcast("browser:takeover_requested", session);
 
     if (!params.waitForResolution) {
       return session;
     }
 
+    const waitTimeoutMs = Math.min(Math.max(1_000, params.timeoutMs ?? 60_000), 120_000);
+
     return await new Promise((resolvePromise) => {
-      pendingEntry.resolvers.push((res) => {
+      let settled = false;
+      const onResolved = (res: { decision: "complete" | "cancel"; snapshot?: BrowserSnapshotResult }) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         resolvePromise({
           decision: res.decision,
           takeoverId: session.takeoverId,
           tabId: tab.tabId,
           snapshot: res.snapshot,
         });
-      });
+      };
+
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        pendingEntry.resolvers = pendingEntry.resolvers.filter((fn) => fn !== onResolved);
+        resolvePromise({
+          decision: "timeout",
+          takeoverId: session.takeoverId,
+          tabId: tab.tabId,
+          note: "O usuário ainda está interagindo no navegador integrado. Aguarde a confirmação do usuário ou que ele clique em 'Terminei'.",
+        });
+      }, waitTimeoutMs);
+      timer.unref?.();
+
+      pendingEntry.resolvers.push(onResolved);
     });
   }
 
@@ -1346,7 +1482,6 @@ export class BrowserAutomationService {
     }
 
     tab.userControl = false;
-    await this.sessionManager.stopScreencast(tabId);
     if (tab.teachRecording) {
       this.stopTeachRecording(tabId, "save");
     }
@@ -1373,6 +1508,7 @@ export class BrowserAutomationService {
       url: snapshot.url,
       title: snapshot.title,
     });
+    this.broadcastTabsAndFrame(tab);
 
     return {
       ok: true,
@@ -1383,18 +1519,34 @@ export class BrowserAutomationService {
     };
   }
 
-  public async dispatchTakeoverInput(tabId: string, event: HumanCdpInputEvent): Promise<{ ok: boolean }> {
+  public async dispatchTakeoverInput(
+    tabId: string,
+    event: HumanCdpInputEvent,
+    options?: { autoAssume?: boolean },
+  ): Promise<{ ok: boolean }> {
     const tab = this.sessionManager.getTab(tabId);
     if (!tab) {
       throw new Error(`Aba '${tabId}' não encontrada.`);
     }
     if (!tab.userControl) {
-      throw new Error(
-        `Input humano recusado: a aba '${tabId}' não está em modo de controle humano ativo (BrowserTakeover).`,
-      );
+      if (options?.autoAssume) {
+        await this.requestTakeover({
+          tabId,
+          agenteId: tab.agenteId,
+          reason: "manual",
+          waitForResolution: false,
+        });
+      } else {
+        throw new Error(
+          `Input humano recusado: a aba '${tabId}' não está em modo de controle humano ativo (BrowserTakeover).`,
+        );
+      }
     }
 
     await this.sessionManager.dispatchHumanInput(tabId, event);
+    if (event.type === "mousePressed" || event.type === "wheel" || event.type === "insertText") {
+      this.ensureTabPreviewStream(tab);
+    }
 
     // Durante gravação BrowserTeachBar, registra cliques resolvendo role/name sem gravar teclas digitadas
     if (tab.teachRecording && tab.agenteId && event.type === "mousePressed") {

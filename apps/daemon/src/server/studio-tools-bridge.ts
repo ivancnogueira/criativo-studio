@@ -3703,6 +3703,9 @@ export const BROWSER_DIRECT_ALIASES = [
   "browser_list_tabs",
   "browser_status",
   "browser_navigate",
+  "browser_go_back",
+  "browser_go_forward",
+  "browser_reload",
   "browser_snapshot",
   "browser_click",
   "browser_type",
@@ -3720,6 +3723,7 @@ export const BROWSER_DIRECT_ALIASES = [
   "browser_set_environment",
   "browser_handle_dialog",
   "browser_request_takeover",
+  "browser_release_takeover",
   "browser_submit_secret",
   "browser_close_tab",
 ] as const;
@@ -3730,7 +3734,7 @@ export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
   {
     name: "criativo_browser",
     description:
-      "Controla o navegador real Chromium via Chrome DevTools Protocol (open, list_tabs, status, navigate, snapshot, click, type, fill_fields, press, hover, scroll, select_option, set_checked, drag, upload_files, wait_for, evaluate, screenshot, set_environment, handle_dialog, request_takeover, submit_secret, close_tab).",
+      "Controla o navegador real Chromium embutido via Chrome DevTools Protocol (open, list_tabs, status, navigate, go_back, go_forward, reload, snapshot, click, type, fill_fields, press, hover, scroll, select_option, set_checked, drag, upload_files, wait_for, evaluate, screenshot, set_environment, handle_dialog, request_takeover, release_takeover, submit_secret, close_tab).",
     parameters: {
       type: "object",
       properties: {
@@ -3741,6 +3745,9 @@ export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
             "list_tabs",
             "status",
             "navigate",
+            "go_back",
+            "go_forward",
+            "reload",
             "snapshot",
             "click",
             "type",
@@ -3758,6 +3765,7 @@ export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
             "set_environment",
             "handle_dialog",
             "request_takeover",
+            "release_takeover",
             "submit_secret",
             "close_tab",
           ],

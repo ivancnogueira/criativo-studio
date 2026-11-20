@@ -19,6 +19,10 @@ import { AntigravityLiveService } from "./antigravity-live-service.ts";
 import { CliOAuthAccountsService, resolveCliBinaryForProvider } from "./cli-oauth-accounts-service.ts";
 import { OpenCodeLiveService } from "./opencode-live-service.ts";
 import { buildUsageWindowsFromGroups } from "./provider-quota-utils.ts";
+import {
+  resolveManagedProviderRuntime,
+  type ManagedRuntimeFolder,
+} from "./provider-runtime-resolver.ts";
 
 interface ProviderCatalogMeta {
   provedor: ProviderName;
@@ -320,6 +324,34 @@ async function detectLocalBinary(
 ): Promise<{ found: boolean; version: string | null; executable: string | null }> {
   if (process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1") {
     return { found: false, version: null, executable: null };
+  }
+
+  const knownFolders: ReadonlySet<string> = new Set([
+    "claude",
+    "codex",
+    "opencode",
+    "antigravity",
+  ]);
+  if (managedFolder && knownFolders.has(managedFolder)) {
+    const binNames =
+      process.platform === "win32"
+        ? Array.from(new Set(bins.flatMap((b) => [`${b}.exe`, `${b}.cmd`])))
+        : bins;
+    const resolved = resolveManagedProviderRuntime(managedFolder as ManagedRuntimeFolder, {
+      binNames,
+    });
+    if (resolved.executable) {
+      let version = resolved.version;
+      if (!version || version === "PATH" || version === "managed-npm") {
+        const verOut = await runShortCommand(resolved.executable, ["--version"], 800);
+        version = verOut ? verOut.split(/\r?\n/)[0].slice(0, 48) : "CLI ativo";
+      }
+      return {
+        found: true,
+        version,
+        executable: resolved.executable,
+      };
+    }
   }
 
   const appDataDir = process.env.APPDATA ?? join(homedir(), "AppData", "Roaming");

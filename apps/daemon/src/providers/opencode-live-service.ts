@@ -5,10 +5,11 @@ import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import type { ModeloProvedorInfo } from "@criativo/contracts";
 import type { VaultService } from "../vault/vault-service.ts";
+import { resolveManagedProviderRuntime } from "./provider-runtime-resolver.ts";
 
 const execFileAsync = promisify(execFile);
 const MODELS_CACHE_TTL_MS = 120_000;
-const EXEC_TIMEOUT_MS = 90_000;
+const EXEC_TIMEOUT_MS = 180_000;
 
 interface PendingRpc {
   resolve: (result: unknown) => void;
@@ -41,56 +42,7 @@ export function resolveOpenCodeCliExecutable(appDataDir?: string): {
   executable: string | null;
   version: string | null;
 } {
-  if (process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1") {
-    return { executable: null, version: null };
-  }
-
-  // 1. Prioriza binário nativo gerenciado ou instalado sem depender de wrapper .cmd
-  const resolvedAppData = appDataDir ?? process.env.APPDATA ?? "";
-  if (resolvedAppData) {
-    const baseRuntime = join(resolvedAppData, "CriativoStudio", "provider-runtimes", "opencode");
-    try {
-      if (existsSync(baseRuntime)) {
-        const archDirs = readdirSync(baseRuntime);
-        for (const arch of archDirs) {
-          const versionsDir = join(baseRuntime, arch);
-          try {
-            const versions = readdirSync(versionsDir).sort().reverse();
-            for (const ver of versions) {
-              const exe = join(
-                versionsDir,
-                ver,
-                "bin",
-                process.platform === "win32" ? "opencode.exe" : "opencode"
-              );
-              if (existsSync(exe)) {
-                return { executable: exe, version: ver };
-              }
-            }
-          } catch {
-            // ignora leitura inválida
-          }
-        }
-      }
-    } catch {
-      // ignora erro
-    }
-  }
-
-  // 2. Procura no PATH do sistema
-  const pathEntries = (process.env.PATH ?? "").split(process.platform === "win32" ? ";" : ":");
-  const names = process.platform === "win32" ? ["opencode.exe", "opencode.cmd"] : ["opencode"];
-  for (const dir of pathEntries) {
-    if (!dir) continue;
-    for (const name of names) {
-      const candidate = join(dir, name);
-      if (existsSync(candidate)) {
-        return { executable: candidate, version: "PATH" };
-      }
-    }
-  }
-
-  return { executable: null, version: null };
+  return resolveManagedProviderRuntime("opencode", { appDataDir });
 }
 
 class OpenCodeAcpConnection {

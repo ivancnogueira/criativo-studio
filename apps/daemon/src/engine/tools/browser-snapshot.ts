@@ -253,8 +253,9 @@ export async function buildSemanticSnapshot(
     }
 
     const g = globalThis as unknown as BrowserGlobalLike;
-    const cssEscape = (val: string): string =>
-      g.CSS?.escape ? g.CSS.escape(val) : val.replace(/["\\#.:[\]()]/g, "\\$&");
+    function escapeCssIdent(val: string): string {
+      return g.CSS?.escape ? g.CSS.escape(val) : val.replace(/["\\#.:[\]()]/g, "\\$&");
+    }
 
     const interactiveSelector = [
       "a[href]",
@@ -329,7 +330,7 @@ export async function buildSemanticSnapshot(
 
       let labelText = "";
       if (idAttr) {
-        const lbl = g.document.querySelector(`label[for="${cssEscape(idAttr)}"]`);
+        const lbl = g.document.querySelector(`label[for="${escapeCssIdent(idAttr)}"]`);
         if (lbl) labelText = (lbl.textContent || "").trim();
       }
       if (!labelText) {
@@ -353,13 +354,13 @@ export async function buildSemanticSnapshot(
 
       let baseSelector = tag;
       if (idAttr) {
-        baseSelector = `#${cssEscape(idAttr)}`;
+        baseSelector = `#${escapeCssIdent(idAttr)}`;
       } else if (nameAttr) {
-        baseSelector = `${tag}[name="${cssEscape(nameAttr)}"]`;
+        baseSelector = `${tag}[name="${escapeCssIdent(nameAttr)}"]`;
       } else if (ariaLabel) {
-        baseSelector = `${tag}[aria-label="${cssEscape(ariaLabel)}"]`;
+        baseSelector = `${tag}[aria-label="${escapeCssIdent(ariaLabel)}"]`;
       } else if (explicitRole) {
-        baseSelector = `${tag}[role="${cssEscape(explicitRole)}"]`;
+        baseSelector = `${tag}[role="${escapeCssIdent(explicitRole)}"]`;
       }
 
       const nth = selectorCounter.get(baseSelector) ?? 0;

@@ -428,6 +428,11 @@ export type WebSocketEventMap = {
     agenteId?: string | null;
     perfilId?: string | null;
   };
+  "browser:tabs_updated": {
+    tabs: BrowserTabSummary[];
+    activeTabId?: string | null;
+    agenteId?: string | null;
+  };
   "browser:takeover_requested": BrowserTakeoverSession;
   "browser:takeover_resolved": {
     takeoverId: string;
