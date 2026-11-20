@@ -69,10 +69,27 @@ const INITIAL_VISUAL_STATES: MascotVisualState[] = SPLASH_SQUAD.map((m) => ({
 }));
 
 export const SPLASH_REVEAL_TIMINGS = {
-  burstMs: 160,
-  openMs: 350,
-  completeMs: 920,
-  reducedCompleteMs: 240,
+  burstMs: 340,
+  openMs: 920,
+  completeMs: 1820,
+  reducedCompleteMs: 320,
+} as const;
+
+export const SPLASH_TIMINGS = {
+  // Ato 1: Batedor grandão espiando completo (~3,4s)
+  scoutRiseMs: 140,
+  scoutLookLeftMs: 1180,
+  scoutLookRightMs: 1940,
+  scoutWinkMs: 2680,
+  expandStartMs: 3420,
+  // Ato 2: Batedor diminui e os 6 colegas entram par a par (~2,2s)
+  expandRestFaceMs: 720,
+  expandPair1Ms: 360,
+  expandPair2Ms: 840,
+  expandPair3Ms: 1320,
+  expandDurationMs: 2200,
+  // Ato 3: Tempo mínimo com todos os 7 pulando antes de liberar o Reveal
+  minJumpingMs: 2600,
 } as const;
 
 /**
@@ -100,17 +117,11 @@ export function computeSplashStageScale(
 }
 
 /**
- * Decide em qual ato o preloader do React deve iniciar para dar continuidade exata
- * ao splash nativo do Electron sem reiniciar a espiada.
+ * Inicia sempre pelo Ato 1 ("scout") para garantir que a animação completa do batedor
+ * seja exibida por inteiro do começo ao fim na entrada do app, sem cortes.
  */
-export function resolveInitialSplashStageFromSearch(search: string): SplashInitialStage {
-  const params = new URLSearchParams(search);
-  if (params.get("fromSplash") !== "1") return "scout";
-  const splashElapsed = Number(params.get("splashElapsed") || "0");
-  if (Number.isFinite(splashElapsed) && splashElapsed >= 1900) {
-    return "jumping";
-  }
-  return "expand";
+export function resolveInitialSplashStageFromSearch(_search: string): SplashInitialStage {
+  return "scout";
 }
 
 interface SplashMascotSvgProps {
@@ -239,6 +250,7 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
   );
 
   const [stageScale, setStageScale] = useState<number>(() => computeSplashStageScale());
+  const [minJumpDone, setMinJumpDone] = useState(false);
   const revealStartedRef = useRef(false);
   const revealTimersRef = useRef<number[]>([]);
   const onRevealCompleteRef = useRef(onRevealComplete);
@@ -293,22 +305,22 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
 
     if (stage === "scout") {
       // Ato 1: Batedor central sobe pela metade e confere os dois lados com calma
-      schedule(() => setPeekRaised(true), 100);
+      schedule(() => setPeekRaised(true), SPLASH_TIMINGS.scoutRiseMs);
       schedule(() => {
-        setScoutTiltDeg(-5);
-        setMemberVisual(3, { face: "curieux", gx: -4.4, gy: -1.4 });
-      }, 820);
+        setScoutTiltDeg(-6);
+        setMemberVisual(3, { face: "curieux", gx: -4.8, gy: -1.4 });
+      }, SPLASH_TIMINGS.scoutLookLeftMs);
       schedule(() => {
-        setScoutTiltDeg(5);
-        setMemberVisual(3, { face: "curieux", gx: 4.4, gy: -1.4 });
-      }, 1260);
+        setScoutTiltDeg(6);
+        setMemberVisual(3, { face: "curieux", gx: 4.8, gy: -1.4 });
+      }, SPLASH_TIMINGS.scoutLookRightMs);
       schedule(() => {
         setScoutTiltDeg(0);
         setMemberVisual(3, { face: "wink", gx: 0, gy: -0.4 });
-      }, 1640);
+      }, SPLASH_TIMINGS.scoutWinkMs);
       schedule(() => {
         setStage("expand");
-      }, 1900);
+      }, SPLASH_TIMINGS.expandStartMs);
     } else if (stage === "expand") {
       // Ato 2: Central diminui revelando por inteiro enquanto 6 colegas saem (3 esq + 3 dir)
       setPeekRaised(true);
@@ -316,15 +328,36 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
       setLineWide(true);
       setMemberVisual(3, { face: "excite", gx: 0, gy: 0 });
 
-      schedule(() => setMemberVisual(3, { face: "resting", gx: 0, gy: 0 }), 440);
-      schedule(() => setPairsVisible([true, false, false]), 110);
-      schedule(() => setPairsVisible([true, true, false]), 250);
-      schedule(() => setPairsVisible([true, true, true]), 390);
-      schedule(() => setStage("jumping"), 1050);
+      schedule(
+        () => setMemberVisual(3, { face: "resting", gx: 0, gy: 0 }),
+        SPLASH_TIMINGS.expandRestFaceMs
+      );
+      schedule(() => setPairsVisible([true, false, false]), SPLASH_TIMINGS.expandPair1Ms);
+      schedule(() => setPairsVisible([true, true, false]), SPLASH_TIMINGS.expandPair2Ms);
+      schedule(() => setPairsVisible([true, true, true]), SPLASH_TIMINGS.expandPair3Ms);
+      schedule(() => setStage("jumping"), SPLASH_TIMINGS.expandDurationMs);
     }
 
     return () => {
       timers.forEach((id) => window.clearTimeout(id));
+    };
+  }, [stage, reducedMotion]);
+
+  // Garante tempo mínimo com todos os 7 mascotes pulando juntos antes de liberar o Reveal
+  useEffect(() => {
+    if (stage === "scout" || stage === "expand") {
+      setMinJumpDone(false);
+      return;
+    }
+    if (stage !== "jumping") return;
+    if (reducedMotion) {
+      setMinJumpDone(true);
+      return;
+    }
+    setMinJumpDone(false);
+    const id = window.setTimeout(() => setMinJumpDone(true), SPLASH_TIMINGS.minJumpingMs);
+    return () => {
+      window.clearTimeout(id);
     };
   }, [stage, reducedMotion]);
 
@@ -350,11 +383,11 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
       const resetId = window.setTimeout(() => {
         if (cancelled) return;
         setMemberVisual(idx, { face: "resting", gx: 0, gy: 0, spark: false });
-      }, mood === "blink" ? 150 : 340);
+      }, mood === "blink" ? 160 : 380);
       timers.push(resetId);
 
       beat += 1;
-      const nextId = window.setTimeout(tick, 440);
+      const nextId = window.setTimeout(tick, 520);
       timers.push(nextId);
     };
 
@@ -367,11 +400,11 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
     };
   }, [stage, reducedMotion]);
 
-  // Ato 4: Dispara o Reveal somente após loading=false E entrada já no estágio jumping.
+  // Ato 4: Dispara o Reveal somente após loading=false E entrada já no estágio jumping com tempo mínimo de pulos.
   // Os timers ficam em revealTimersRef (limpos apenas no unmount) para que a transição
   // jumping -> reveal-squash nunca cancele reveal-burst / reveal-open / onRevealComplete.
   useEffect(() => {
-    if (loading || stage !== "jumping" || revealStartedRef.current) return;
+    if (loading || stage !== "jumping" || !minJumpDone || revealStartedRef.current) return;
     revealStartedRef.current = true;
 
     const scheduleReveal = (fn: () => void, ms: number) => {
@@ -406,7 +439,7 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
     scheduleReveal(() => {
       onRevealCompleteRef.current?.();
     }, SPLASH_REVEAL_TIMINGS.completeMs);
-  }, [loading, stage, reducedMotion]);
+  }, [loading, stage, minJumpDone, reducedMotion]);
 
   const isRevealing =
     stage === "reveal-squash" || stage === "reveal-burst" || stage === "reveal-open";
@@ -430,12 +463,14 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
       className="fixed inset-0 z-[9999] flex items-center justify-center overflow-hidden select-none"
       style={{
         background: "radial-gradient(circle at 50% 54%, #181615 0%, #0D0D0D 76%)",
-        clipPath: stage === "reveal-open" ? "circle(0% at 50% 50%)" : "circle(100% at 50% 50%)",
+        clipPath: stage === "reveal-open" ? "circle(0% at 50% 50%)" : "circle(85% at 50% 50%)",
+        WebkitClipPath:
+          stage === "reveal-open" ? "circle(0% at 50% 50%)" : "circle(85% at 50% 50%)",
         opacity: stage === "reveal-open" ? 0 : 1,
         pointerEvents: stage === "reveal-open" ? "none" : "auto",
         transition: reducedMotion
-          ? "opacity 220ms ease"
-          : "clip-path 560ms cubic-bezier(0.76, 0, 0.24, 1), opacity 340ms ease",
+          ? "opacity 300ms ease"
+          : "clip-path 780ms cubic-bezier(0.65, 0, 0.25, 1), -webkit-clip-path 780ms cubic-bezier(0.65, 0, 0.25, 1), opacity 180ms ease 600ms",
       }}
     >
       {/* Palco fixo centralizado com escala responsiva (~70% da tela, mesmas coordenadas do splash Electron) */}
@@ -462,20 +497,22 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
               "radial-gradient(ellipse at center, rgba(249, 115, 22, 0.22) 0%, rgba(56, 189, 248, 0.09) 48%, transparent 74%)",
             filter: "blur(36px)",
             opacity: stage === "reveal-burst" || stage === "reveal-open" ? 0 : 1,
-            transition: "opacity 380ms ease",
+            transition: "opacity 420ms ease",
           }}
         />
 
         {/* Anel laranja de impacto no Reveal */}
         <div
           aria-hidden="true"
-          className={`pointer-events-none absolute left-1/2 top-1/2 rounded-full border-[3px] border-[#FF6B00] ${
+          className={`pointer-events-none absolute left-1/2 rounded-full border-[4px] border-[#FF6B00] ${
             stage === "reveal-burst" || stage === "reveal-open" ? "studio-splash-ring-pop" : ""
           }`}
           style={{
-            width: 180,
-            height: 180,
+            top: SPLASH_HORIZON_TOP - 40,
+            width: 220,
+            height: 220,
             transform: "translate(-50%, -50%) scale(0.35)",
+            boxShadow: "0 0 36px rgba(255, 107, 0, 0.55)",
             opacity: stage === "reveal-burst" || stage === "reveal-open" ? undefined : 0,
           }}
         />
@@ -496,20 +533,20 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
 
             let slotTransform = "";
             let slotOpacity = 1;
-            let slotTransition = "transform 500ms cubic-bezier(0.34, 1.56, 0.64, 1), opacity 280ms ease";
+            let slotTransition = "transform 760ms cubic-bezier(0.34, 1.4, 0.64, 1), opacity 360ms ease";
 
             if (stage === "reveal-burst" || stage === "reveal-open") {
-              const fanX = m.x * 1.48;
-              const fanY = -240 - Math.abs(m.slot) * 18;
-              slotTransform = `translate(calc(-50% + ${fanX}px), ${fanY}px) scale(0.86)`;
+              const fanX = m.x * 1.45;
+              const fanY = -280 - Math.abs(m.slot) * 24;
+              slotTransform = `translate(calc(-50% + ${fanX}px), ${fanY}px) scale(1.06)`;
               slotOpacity = 0;
-              slotTransition = "transform 340ms cubic-bezier(0.22, 1, 0.36, 1), opacity 280ms ease";
+              slotTransition = "transform 580ms cubic-bezier(0.22, 1, 0.36, 1), opacity 400ms ease 180ms";
             } else if (stage === "scout" && isScout) {
               slotTransform = peekRaised
                 ? `translate(-50%, 100px) scale(${SPLASH_SCOUT_SCALE})`
                 : `translate(-50%, 290px) scale(${SPLASH_SCOUT_SCALE})`;
               slotOpacity = 1;
-              slotTransition = "transform 620ms cubic-bezier(0.22, 1, 0.36, 1), opacity 260ms ease";
+              slotTransition = "transform 950ms cubic-bezier(0.22, 1, 0.36, 1), opacity 320ms ease";
             } else if (visible) {
               slotTransform = `translate(calc(-50% + ${m.x}px), ${m.yEnd}px) scale(1)`;
               slotOpacity = 1;
@@ -525,9 +562,9 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
 
             const jumperTransform =
               stage === "reveal-squash"
-                ? "translateY(14px) scale(1.16, 0.82)"
+                ? "translateY(18px) scale(1.18, 0.78)"
                 : stage === "reveal-burst" || stage === "reveal-open"
-                  ? "translateY(-18px) scale(0.95, 1.08)"
+                  ? "translateY(-22px) scale(0.94, 1.1)"
                   : isScout && stage === "scout"
                     ? `rotate(${scoutTiltDeg}deg)`
                     : undefined;
@@ -554,12 +591,12 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
                     width: SPLASH_MASCOT_SIZE,
                     height: SPLASH_MASCOT_SIZE,
                     transformOrigin: "center bottom",
-                    animationDelay: stage === "jumping" ? `${i * 115}ms` : undefined,
+                    animationDelay: stage === "jumping" ? `${i * 140}ms` : undefined,
                     transform: jumperTransform,
                     transition:
                       stage === "reveal-squash"
-                        ? "transform 140ms cubic-bezier(0.22, 1, 0.36, 1)"
-                        : "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)",
+                        ? "transform 260ms cubic-bezier(0.22, 1, 0.36, 1)"
+                        : "transform 320ms cubic-bezier(0.22, 1, 0.36, 1)",
                     willChange: "transform",
                   }}
                 >
@@ -629,7 +666,7 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
             background:
               "linear-gradient(90deg, transparent, rgba(255, 107, 0, 0.52), rgba(255, 255, 255, 0.34), rgba(255, 107, 0, 0.52), transparent)",
             boxShadow: "0 0 22px rgba(255, 107, 0, 0.36)",
-            transition: "width 540ms cubic-bezier(0.22, 1, 0.36, 1), opacity 320ms ease",
+            transition: "width 900ms cubic-bezier(0.22, 1, 0.36, 1), opacity 360ms ease",
           }}
         />
       </div>

@@ -311,14 +311,19 @@ describe("Fase 22 — Navegador Integrado, Dock Flutuante Desktop, WhatsApp Sync
   it("5. (SPLASH22-01) StudioSplashPreloader renderiza os 7 mascotes sem texto de boot e sincroniza com splash Electron", async () => {
     const {
       SPLASH_REVEAL_TIMINGS,
+      SPLASH_TIMINGS,
       StudioSplashPreloader,
       computeSplashStageScale,
       resolveInitialSplashStageFromSearch,
     } = await vite.ssrLoadModule("/src/components/StudioSplashPreloader.tsx");
 
     assert.equal(resolveInitialSplashStageFromSearch(""), "scout");
-    assert.equal(resolveInitialSplashStageFromSearch("?fromSplash=1&splashElapsed=800"), "expand");
-    assert.equal(resolveInitialSplashStageFromSearch("?fromSplash=1&splashElapsed=2400"), "jumping");
+    assert.equal(resolveInitialSplashStageFromSearch("?fromSplash=1&splashElapsed=800"), "scout");
+    assert.equal(resolveInitialSplashStageFromSearch("?fromSplash=1&splashElapsed=2400"), "scout");
+
+    assert.ok(SPLASH_TIMINGS.expandStartMs >= 3000);
+    assert.ok(SPLASH_TIMINGS.expandDurationMs >= 2000);
+    assert.ok(SPLASH_TIMINGS.minJumpingMs >= 2500);
 
     const scaleFullHd = computeSplashStageScale(1920, 1040);
     assert.ok(scaleFullHd > 1.35 && scaleFullHd <= 1.5, `Escala esperada ~1.44 em Full HD, obtida ${scaleFullHd}`);
@@ -328,6 +333,9 @@ describe("Fase 22 — Navegador Integrado, Dock Flutuante Desktop, WhatsApp Sync
 
     assert.ok(SPLASH_REVEAL_TIMINGS.burstMs < SPLASH_REVEAL_TIMINGS.openMs);
     assert.ok(SPLASH_REVEAL_TIMINGS.openMs < SPLASH_REVEAL_TIMINGS.completeMs);
+    assert.ok(SPLASH_REVEAL_TIMINGS.burstMs >= 300);
+    assert.ok(SPLASH_REVEAL_TIMINGS.openMs - SPLASH_REVEAL_TIMINGS.burstMs >= 500);
+    assert.ok(SPLASH_REVEAL_TIMINGS.completeMs - SPLASH_REVEAL_TIMINGS.openMs >= 800);
 
     const html = renderToStaticMarkup(
       React.createElement(StudioSplashPreloader, {
@@ -350,11 +358,13 @@ describe("Fase 22 — Navegador Integrado, Dock Flutuante Desktop, WhatsApp Sync
       join(webRoot, "src", "components", "StudioSplashPreloader.tsx"),
       "utf8"
     );
+    assert.match(splashSrc, /SPLASH_SCOUT_SCALE = 2\.65/);
     assert.match(splashSrc, /revealTimersRef\.current/);
     const act4Match = splashSrc.match(
-      /\/\/ Ato 4:[\s\S]*?useEffect\(\(\) => \{([\s\S]*?)\}, \[loading, stage, reducedMotion\]\);/
+      /\/\/ Ato 4:[\s\S]*?useEffect\(\(\) => \{([\s\S]*?)\}, \[loading, stage, minJumpDone, reducedMotion\]\);/
     );
     assert.ok(act4Match, "Bloco do Ato 4 em StudioSplashPreloader.tsx não encontrado");
+    assert.match(act4Match[1], /minJumpDone/);
     assert.match(act4Match[1], /scheduleReveal\(/);
     assert.doesNotMatch(
       act4Match[1],
@@ -378,7 +388,6 @@ describe("Fase 22 — Navegador Integrado, Dock Flutuante Desktop, WhatsApp Sync
     );
     assert.match(desktopMainSrc, /fromSplash=1&splashElapsed=/);
     assert.match(desktopMainSrc, /applyStageScale/);
-    assert.match(desktopMainSrc, /scale\(2\.65\)/);
     assert.match(desktopMainSrc, /win\.maximize\(\)/);
     assert.doesNotMatch(desktopMainSrc, /Iniciando sua equipe de Agentes Especialistas/);
   });
