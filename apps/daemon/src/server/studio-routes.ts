@@ -133,6 +133,8 @@ import type { TelegramNotificationBot } from "../messaging/telegram-bot.ts";
 import type { WorkflowEngine } from "../workflows/workflow-engine.ts";
 import { WorkflowStore, WorkflowValidationError } from "../workflows/workflow-store.ts";
 import type { WorkflowTriggers } from "../workflows/workflow-triggers.ts";
+import { resolveAgentRecord } from "./agent-resolver.ts";
+import { planTurnContext, toolBelongsToScopes } from "./turn-context-planner.ts";
 import type { WebSocketHub } from "./websocket-hub.ts";
 
 export interface StudioRoutesDeps {
@@ -464,6 +466,9 @@ async function runTextModelWorkflowToolLoop(params: {
   pedidoTexto?: string;
   isRoutine?: boolean;
   isResumingWait?: boolean;
+  channelOrigin?: "web" | "whatsapp";
+  whatsappContaId?: string | null;
+  whatsappChatJid?: string | null;
   signal?: AbortSignal;
   steps: PassoChat[];
   anexosGerados?: AnexoChat[];
@@ -609,8 +614,14 @@ async function runTextModelWorkflowToolLoop(params: {
               pedidoTexto: params.pedidoTexto ?? "",
               isRoutine: params.isRoutine,
               isResumingWait: params.isResumingWait,
+              channelOrigin: params.channelOrigin,
+              whatsappContaId: params.whatsappContaId ?? null,
+              whatsappChatJid: params.whatsappChatJid ?? null,
             },
-            params.deps.phase13,
+            {
+              ...params.deps.phase13,
+              db: params.deps.db,
+            },
           );
           out = p13.result;
         } else if (params.deps.mcpGateway && toolName.startsWith("mcp_")) {
@@ -647,28 +658,52 @@ async function runTextModelWorkflowToolLoop(params: {
   return currentText;
 }
 
-function extractMentionedAgentIds(text: string, excludeId?: string): string[] {
-  const found = new Set<string>();
-  const validIds = new Set(ROSTER_15_AGENTES.map((a) => a.agente_id));
-
-  // Detecta [HANDOFF:agente_id] ou @agente_id no texto do usuário
-  for (const m of text.matchAll(/\[HANDOFF:([a-z0-9_]+)\]/gi)) {
-    const id = m[1].toLowerCase();
-    if (validIds.has(id) && id !== excludeId) found.add(id);
+function loadResolvableAgentsForRouting(
+  db?: CriativoDatabase,
+): readonly { agente_id: string; nome?: string | null }[] {
+  if (db) {
+    try {
+      const rows = db.connection
+        .prepare("SELECT agente_id, nome FROM projecao_agentes ORDER BY ordem_exibicao ASC;")
+        .all() as Array<{ agente_id: string; nome: string }>;
+      if (rows.length > 0) return rows;
+    } catch {
+      // Fallback caso tabela ainda não exista
+    }
   }
-  for (const m of text.matchAll(/@([a-z0-9_]+)/gi)) {
-    const id = m[1].toLowerCase();
-    if (validIds.has(id) && id !== excludeId) found.add(id);
+  return ROSTER_15_AGENTES;
+}
+
+export function extractMentionedAgentIds(
+  text: string,
+  excludeId?: string,
+  db?: CriativoDatabase,
+): string[] {
+  const found = new Set<string>();
+  const agentsList = loadResolvableAgentsForRouting(db);
+
+  // Detecta [HANDOFF:agente_id_ou_apelido] ou @agente_id_ou_apelido no texto
+  for (const m of text.matchAll(/\[HANDOFF:([a-z0-9_-]+)\]/gi)) {
+    const resolved = resolveAgentRecord(agentsList, m[1]);
+    if (resolved && resolved.agente_id !== excludeId) found.add(resolved.agente_id);
+  }
+  for (const m of text.matchAll(/@([a-z0-9_-]+)/gi)) {
+    const resolved = resolveAgentRecord(agentsList, m[1]);
+    if (resolved && resolved.agente_id !== excludeId) found.add(resolved.agente_id);
   }
   return Array.from(found);
 }
 
-function extractExplicitAgentHandoffTags(text: string, excludeId?: string): string[] {
+export function extractExplicitAgentHandoffTags(
+  text: string,
+  excludeId?: string,
+  db?: CriativoDatabase,
+): string[] {
   const found = new Set<string>();
-  const validIds = new Set(ROSTER_15_AGENTES.map((a) => a.agente_id));
-  for (const m of text.matchAll(/\[HANDOFF:([a-z0-9_]+)\]/gi)) {
-    const id = m[1].toLowerCase();
-    if (validIds.has(id) && id !== excludeId) found.add(id);
+  const agentsList = loadResolvableAgentsForRouting(db);
+  for (const m of text.matchAll(/\[HANDOFF:([a-z0-9_-]+)\]/gi)) {
+    const resolved = resolveAgentRecord(agentsList, m[1]);
+    if (resolved && resolved.agente_id !== excludeId) found.add(resolved.agente_id);
   }
   return Array.from(found);
 }
@@ -914,6 +949,8 @@ export async function generateAgentChatReply(
     overrideModel?: string;
     overrideAccountId?: string | null;
     channelOrigin?: "web" | "whatsapp";
+    whatsappContaId?: string | null;
+    whatsappChatJid?: string | null;
   }
 ): Promise<{
   markdown: string;
@@ -924,23 +961,56 @@ export async function generateAgentChatReply(
 }> {
   onProgress?.({
     fase: "iniciado",
-    mensagem_status: `Carregando habilidade e memórias de ${agente.nome}...`,
+    mensagem_status: `Preparando contexto para ${agente.nome}...`,
   });
   const workspaceRoot = deps.workspaceRoot ?? process.cwd();
   const config = safeJsonParse<Record<string, unknown>>(agente.config_json, {});
   const onboarding = deps.providerConnection.getOnboardingState();
   const skillSlug = typeof config.skill_slug === "string" ? config.skill_slug : agente.agente_id;
+  const intentSourcePrompt = options?.originalUserPrompt ?? userPrompt;
+  const greetingOrCapability = isGreetingOrCapabilityQuestion(intentSourcePrompt);
+
+  const mcpTools = deps.mcpGateway
+    ? await deps.mcpGateway.getToolsForAgent(agente.agente_id).catch(() => [])
+    : [];
+  const hasOpenBrowserTabs =
+    (deps.browserService?.sessionManager?.listTabSummaries(agente.agente_id)?.length ?? 0) > 0;
+  const hasActiveWakeups = Boolean(deps.phase13?.wakeupService?.hasActiveWakeups(agente.agente_id));
+  const recentHistoryText = history
+    .slice(-3)
+    .map((m) => m.conteudo_markdown ?? "")
+    .join("\n");
+
+  const turnPlan = planTurnContext({
+    userPrompt: intentSourcePrompt,
+    agenteId: agente.agente_id,
+    isGreetingOrCapability: greetingOrCapability,
+    anexosCount: anexos.length,
+    hasOpenBrowserTabs,
+    hasActiveWakeups,
+    hasWokenWaits: Boolean(options?.wokenWaitsBlock),
+    isHandoff: Boolean(options?.isHandoff),
+    isRoutine: Boolean(options?.isRoutine),
+    channelOrigin: options?.channelOrigin,
+    recentHistoryText,
+    hasExternalMcps: mcpTools.length > 0,
+  });
+
   const loadedSkill =
-    process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1"
+    !turnPlan.loadFullSkill || process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1"
       ? null
       : loadSkillPromptBySlug(skillSlug, undefined, workspaceRoot);
-  const chatSkillLoader = new SkillLoader([], workspaceRoot);
-  const linkedSkills = chatSkillLoader.loadLinkedAgentSkills(deps.db, agente.agente_id);
+  const linkedSkills = turnPlan.loadFullSkill
+    ? new SkillLoader([], workspaceRoot).loadLinkedAgentSkills(deps.db, agente.agente_id)
+    : [];
 
-  // Carrega memórias persistidas do agente para contextualizar respostas reais
-  const memories = deps.db.connection
-    .prepare(`SELECT texto FROM projecao_agente_memorias WHERE agente_id = ? ORDER BY criado_em DESC LIMIT 8;`)
-    .all(agente.agente_id) as Array<{ texto: string }>;
+  // Em modo light, pula leitura de memórias e snippets pesados para evitar inchaço de tokens
+  const memories =
+    turnPlan.mode === "light"
+      ? []
+      : (deps.db.connection
+          .prepare(`SELECT texto FROM projecao_agente_memorias WHERE agente_id = ? ORDER BY criado_em DESC LIMIT 8;`)
+          .all(agente.agente_id) as Array<{ texto: string }>);
 
   const liveStudioContext = buildStudioLiveContext({
     db: deps.db,
@@ -950,6 +1020,7 @@ export async function generateAgentChatReply(
     agenteId: agente.agente_id,
     memoryManager: deps.memoryManager,
     userPrompt,
+    compact: turnPlan.compactLiveContext,
   });
 
   const promptBaseParts = [
@@ -1029,12 +1100,21 @@ export async function generateAgentChatReply(
     );
   }
 
-  if (deps.workflowStore && deps.workflowEngine) {
+  if (
+    deps.workflowStore &&
+    deps.workflowEngine &&
+    turnPlan.mode === "action" &&
+    turnPlan.mcpScopes.includes("workflows")
+  ) {
     promptBaseParts.push(
       `## Ferramentas de Workflow em Grafo Disponíveis\nVocê pode inspecionar, criar/editar, executar (completo ou parcial a partir de um nó) e consultar histórico de workflows pelas ferramentas: list_workflows, read_workflow, edit_workflow, delete_workflow, run_workflow e read_workflow_runs. Regra crítica de segurança: JAMAIS execute delete_workflow sem confirmação humana explícita prévia (confirmed_by_human: true).`
     );
   }
-  if (deps.phase13 || options?.wokenWaitsBlock) {
+  if (
+    (deps.phase13 || options?.wokenWaitsBlock) &&
+    turnPlan.mode === "action" &&
+    (turnPlan.mcpScopes.includes("schedule") || Boolean(options?.wokenWaitsBlock))
+  ) {
     promptBaseParts.push(
       buildPhase13SystemGuidance({
         allowStartTask:
@@ -1050,47 +1130,77 @@ export async function generateAgentChatReply(
   }
 
   const promptBase = promptBaseParts.join("\n\n");
-  const mcpTools = deps.mcpGateway
-    ? await deps.mcpGateway.getToolsForAgent(agente.agente_id).catch(() => [])
-    : [];
+  const activeScopeSet = new Set(turnPlan.mcpScopes);
+  const effectiveMcpTools = turnPlan.includeExternalMcps ? mcpTools : [];
   const availableChatToolsMap = new Map<string, ToolDefinition>();
-  const studioRoutineTools = deps.routineToolsDeps ? ROUTINE_AGENT_TOOLS_SCHEMA : [];
-  const studioWorkflowTools =
-    deps.workflowStore && deps.workflowEngine ? getChatWorkflowToolCatalog() : [];
-  const studioPhase13Tools = deps.phase13 ? PHASE13_TOOLS_SCHEMA : [];
-  const studioPhase14Tools = deps.phase14 ? PHASE14_TOOLS_SCHEMA : [];
-  const studioPhase15Tools =
-    deps.browserService || deps.screenCapture || deps.showcaseService
-      ? PHASE15_TOOLS_SCHEMA
-      : [];
-  for (const t of [
-    ...PHASE10_TOOL_DEFINITIONS,
-    ...studioRoutineTools,
-    ...studioWorkflowTools,
-    ...studioPhase13Tools,
-    ...studioPhase14Tools,
-    ...studioPhase15Tools,
-    ...mcpTools,
-  ]) {
-    if (HIDDEN_CATALOG_TOOL_NAMES.has(t.name)) {
-      continue;
-    }
-    if (
-      !isAgentAuthorizedForStudioTool(t.name, agente.agente_id, {
-        db: deps.db,
-        vault: deps.vault,
-        catalogService: deps.catalogService,
-      })
-    ) {
-      continue;
-    }
-    if (!availableChatToolsMap.has(t.name)) {
-      availableChatToolsMap.set(t.name, t);
+  if (turnPlan.mode === "action") {
+    const studioRoutineTools = deps.routineToolsDeps ? ROUTINE_AGENT_TOOLS_SCHEMA : [];
+    const studioWorkflowTools =
+      deps.workflowStore && deps.workflowEngine ? getChatWorkflowToolCatalog() : [];
+    const studioPhase13Tools = deps.phase13 ? PHASE13_TOOLS_SCHEMA : [];
+    const studioPhase14Tools = deps.phase14 ? PHASE14_TOOLS_SCHEMA : [];
+    const studioPhase15Tools =
+      deps.browserService || deps.screenCapture || deps.showcaseService
+        ? PHASE15_TOOLS_SCHEMA
+        : [];
+    for (const t of [
+      ...PHASE10_TOOL_DEFINITIONS,
+      ...studioRoutineTools,
+      ...studioWorkflowTools,
+      ...studioPhase13Tools,
+      ...studioPhase14Tools,
+      ...studioPhase15Tools,
+      ...effectiveMcpTools,
+    ]) {
+      if (HIDDEN_CATALOG_TOOL_NAMES.has(t.name)) {
+        continue;
+      }
+      if (!toolBelongsToScopes(t.name, activeScopeSet)) {
+        continue;
+      }
+      if (
+        !isAgentAuthorizedForStudioTool(t.name, agente.agente_id, {
+          db: deps.db,
+          vault: deps.vault,
+          catalogService: deps.catalogService,
+        })
+      ) {
+        continue;
+      }
+      if (!availableChatToolsMap.has(t.name)) {
+        availableChatToolsMap.set(t.name, t);
+      }
     }
   }
   const availableChatTools = Array.from(availableChatToolsMap.values());
   const toolFallbackNames = availableChatTools.map((t) => t.name);
-  const studioToolsPromptGuidance = `\n\n## Ferramentas Nativas & MCP (${toolFallbackNames.length})\nFerramentas autorizadas: ${toolFallbackNames.join(", ")}.\nPrefira chamar diretamente via MCP \`criativo_studio\` quando expostas no runtime; se apenas texto estiver ativo, emita \`<tool_call>{"name":"nome","arguments":{...}}</tool_call>\`. Nunca invente dados ou negue acesso a uma ferramenta listada acima.`;
+  const studioToolsPromptGuidance =
+    availableChatTools.length > 0
+      ? `\n\n## Ferramentas Nativas & MCP (${toolFallbackNames.length})\nFerramentas autorizadas: ${toolFallbackNames.join(", ")}.\nPrefira chamar diretamente via MCP \`criativo_studio\` quando expostas no runtime; se apenas texto estiver ativo, emita \`<tool_call>{"name":"nome","arguments":{...}}</tool_call>\`. Nunca invente dados ou negue acesso a uma ferramenta listada acima.`
+      : "";
+
+  const turnMcpEndpointOpts = {
+    scopes: turnPlan.mcpScopes,
+    includeExternalMcps: turnPlan.includeExternalMcps,
+    threadId: options?.threadId ?? `main:${agente.agente_id}`,
+    channelOrigin: options?.channelOrigin,
+    whatsappContaId: options?.whatsappContaId ?? null,
+    whatsappChatJid: options?.whatsappChatJid ?? null,
+  };
+  const turnAcpMcpServers =
+    turnPlan.mode === "light"
+      ? []
+      : deps.providerConnection.buildCombinedAcpMcpServers(
+          agente.agente_id,
+          turnMcpEndpointOpts,
+        );
+  const turnCliMcpConfig =
+    turnPlan.mode === "light"
+      ? null
+      : deps.providerConnection.buildClaudeMcpConfig(
+          agente.agente_id,
+          turnMcpEndpointOpts,
+        );
 
   const governance = readAgentGovernance(deps.db, agente.agente_id);
   const initialModel = options?.overrideModel?.trim() || agente.modelo_padrao;
@@ -1111,9 +1221,12 @@ export async function generateAgentChatReply(
   const skillStep: PassoChat = {
     id: `step-${randomUUID().slice(0, 8)}`,
     ferramenta: `skill:${skillSlug}`,
-    titulo: loadedSkill
-      ? `Habilidade ${skillSlug} carregada de SKILL.md (${loadedSkill.tokensEst} tokens)`
-      : `Contexto do especialista ${agente.nome} carregado (${agente.modelo_padrao})`,
+    titulo:
+      turnPlan.mode === "light"
+        ? "Contexto leve carregado — skills e MCPs sob demanda"
+        : loadedSkill
+          ? `Habilidade ${skillSlug} carregada de SKILL.md (${loadedSkill.tokensEst} tokens)`
+          : `Contexto do especialista ${agente.nome} carregado (${agente.modelo_padrao})`,
     status: "concluido",
     duracao_ms: 45,
   };
@@ -1132,9 +1245,12 @@ export async function generateAgentChatReply(
   }
   onProgress?.({
     fase: "etapa",
-    mensagem_status: loadedSkill
-      ? `Habilidade ${skillSlug} carregada — preparando execução...`
-      : `Contexto de ${agente.nome} carregado...`,
+    mensagem_status:
+      turnPlan.mode === "light"
+        ? "Contexto leve carregado — preparando resposta..."
+        : loadedSkill
+          ? `Habilidade ${skillSlug} carregada — preparando execução...`
+          : `Contexto de ${agente.nome} carregado...`,
     step: skillStep,
   });
 
@@ -1173,8 +1289,6 @@ export async function generateAgentChatReply(
   }
 
   // Verifica intenção explícita de produção / geração visual sem disparar em saudações ou dúvidas
-  const intentSourcePrompt = options?.originalUserPrompt ?? userPrompt;
-  const greetingOrCapability = isGreetingOrCapabilityQuestion(intentSourcePrompt);
   const lower = intentSourcePrompt.toLowerCase();
   let tarefaCriadaId: string | null = null;
 
@@ -1230,10 +1344,8 @@ export async function generateAgentChatReply(
 
   const anexosGerados: AnexoChat[] = [];
   let labeledVisualAssets: LabeledVisualAsset[] = [];
-  const isVisualRoleAgent =
-    agente.agente_id.startsWith("designer_") || agente.agente_id === "consistencia_visual";
 
-  if (asksVisualAsset || isVisualRoleAgent || anexos.length > 0) {
+  if (asksVisualAsset || anexos.length > 0) {
     labeledVisualAssets = selectBalancedVisualAssets(deps.db, workspaceRoot, {
       explicitAttachments: anexos,
       maxFotos: 3,
@@ -1470,6 +1582,7 @@ export async function generateAgentChatReply(
           messages: cliMsgs,
           agentId: agente.agente_id,
           preferredAccountId: effAccountId,
+          mcpConfig: turnCliMcpConfig,
         });
 
         const cliFinalText = await runTextModelWorkflowToolLoop({
@@ -1486,6 +1599,7 @@ export async function generateAgentChatReply(
               ],
               agentId: agente.agente_id,
               preferredAccountId: effAccountId,
+              mcpConfig: turnCliMcpConfig,
             });
             return next.text;
           },
@@ -1497,6 +1611,9 @@ export async function generateAgentChatReply(
           pedidoTexto: userPrompt,
           isRoutine: options?.isRoutine,
           isResumingWait: Boolean(options?.wokenWaitsBlock),
+          channelOrigin: options?.channelOrigin,
+          whatsappContaId: options?.whatsappContaId ?? null,
+          whatsappChatJid: options?.whatsappChatJid ?? null,
           signal: options?.signal,
           steps,
           anexosGerados,
@@ -1568,6 +1685,8 @@ export async function generateAgentChatReply(
           systemPrompt: ocSystemPrompt,
           messages: ocMsgs,
           agentId: agente.agente_id,
+          channelOrigin: options?.channelOrigin,
+          mcpServers: turnAcpMcpServers,
           onDelta: (delta) => {
             onProgress?.({
               fase: "chunk",
@@ -1590,6 +1709,8 @@ export async function generateAgentChatReply(
                   { role: "user", text: followUpPrompt },
                 ],
                 agentId: agente.agente_id,
+                channelOrigin: options?.channelOrigin,
+                mcpServers: turnAcpMcpServers,
               });
               return next.text;
             },
@@ -1601,6 +1722,9 @@ export async function generateAgentChatReply(
             pedidoTexto: userPrompt,
             isRoutine: options?.isRoutine,
             isResumingWait: Boolean(options?.wokenWaitsBlock),
+            channelOrigin: options?.channelOrigin,
+            whatsappContaId: options?.whatsappContaId ?? null,
+            whatsappChatJid: options?.whatsappChatJid ?? null,
             signal: options?.signal,
             steps,
             anexosGerados,
@@ -1804,8 +1928,14 @@ export async function generateAgentChatReply(
                     pedidoTexto: userPrompt,
                     isRoutine: options?.isRoutine,
                     isResumingWait: Boolean(options?.wokenWaitsBlock),
+                    channelOrigin: options?.channelOrigin,
+                    whatsappContaId: options?.whatsappContaId ?? null,
+                    whatsappChatJid: options?.whatsappChatJid ?? null,
                   },
-                  deps.phase13,
+                  {
+                    ...deps.phase13,
+                    db: deps.db,
+                  },
                 );
                 toolOutput = p13.result;
               } else if (deps.mcpGateway && call.name.startsWith("mcp_")) {
@@ -2000,6 +2130,7 @@ export async function generateAgentChatReply(
           labeledImages: skipExtraImagesOnFollowUp ? [] : labeledVisualAssets,
           agentId: agente.agente_id,
           preferredAccountId: preferredAccId,
+          mcpServers: turnAcpMcpServers,
           onDelta: (delta) => {
             onProgress?.({
               fase: "chunk",
@@ -2026,6 +2157,7 @@ export async function generateAgentChatReply(
                 labeledImages: [],
                 agentId: agente.agente_id,
                 preferredAccountId: preferredAccId,
+                mcpServers: turnAcpMcpServers,
               });
               return next.text;
             },
@@ -2037,6 +2169,9 @@ export async function generateAgentChatReply(
             pedidoTexto: userPrompt,
             isRoutine: options?.isRoutine,
             isResumingWait: Boolean(options?.wokenWaitsBlock),
+            channelOrigin: options?.channelOrigin,
+            whatsappContaId: options?.whatsappContaId ?? null,
+            whatsappChatJid: options?.whatsappChatJid ?? null,
             signal: options?.signal,
             steps,
             anexosGerados,
@@ -2195,6 +2330,18 @@ export async function generateAgentChatReply(
   }
 
   // 5. Resposta honesta: diferencia erro técnico em provedor conectado vs ausência real de conexão
+  if (options?.channelOrigin === "whatsapp") {
+    const cleanErr = execState.hadConnectedRoute
+      ? `Não consegui concluir a chamada em *${agente.modelo_padrao}* (${providerName}): ${(execState.lastExecutionError ?? "sem resposta do servidor").slice(0, 140)}. Tente novamente em instantes ou revise a conta em Conexões.`
+      : `O modelo *${agente.modelo_padrao}* (${providerName}) ainda não está conectado no Criativo Studio. Conecte uma conta em Conexões e tente novamente.`;
+    return {
+      markdown: `*${agente.nome}*: ${cleanErr}`,
+      steps,
+      tarefaCriadaId,
+      anexosGerados,
+    };
+  }
+
   const statusLabel = execState.hadConnectedRoute ? "Falha na chamada" : "Não conectado";
   const detailLine = execState.hadConnectedRoute
     ? `Erro técnico ao executar **${agente.modelo_padrao}** (${providerName}): \`${execState.lastExecutionError ?? "sem resposta do servidor"}\`. Tente novamente ou reautentique sua conta em **Conexões**.`
@@ -2238,6 +2385,8 @@ export async function executeAgentConversationTurn(params: {
   originalUserPrompt?: string;
   respostaParaMensagemId?: string | null;
   channelOrigin?: "web" | "whatsapp";
+  whatsappContaId?: string | null;
+  whatsappChatJid?: string | null;
   extraMetadados?: Record<string, unknown>;
   onProgress?: (prog: ChatProgressReport) => void;
 }): Promise<{
@@ -2318,6 +2467,8 @@ export async function executeAgentConversationTurn(params: {
         entregaOrigemId: params.entregaOrigemId,
         isRoutine: params.isRoutine,
         channelOrigin: params.channelOrigin,
+        whatsappContaId: params.whatsappContaId,
+        whatsappChatJid: params.whatsappChatJid,
       },
     );
   } catch (err) {
@@ -3886,8 +4037,8 @@ export async function tryHandleStudioRoute(
       ? []
       : Array.from(
           new Set([
-            ...extractMentionedAgentIds(userMsg.conteudo_markdown, agenteId),
-            ...extractExplicitAgentHandoffTags(agentMsg.conteudo_markdown, agenteId),
+            ...extractMentionedAgentIds(userMsg.conteudo_markdown, agenteId, db),
+            ...extractExplicitAgentHandoffTags(agentMsg.conteudo_markdown, agenteId, db),
           ])
         ).slice(0, 2);
     const mensagensHandoff: MensagemChat[] = [];
@@ -4154,7 +4305,7 @@ export async function tryHandleStudioRoute(
     });
 
     const membrosConfig = safeJsonParse<string[]>(canal.membros_agentes_json, ["estrategista"]);
-    const mencionados = extractMentionedAgentIds(userMsg.conteudo_markdown);
+    const mencionados = extractMentionedAgentIds(userMsg.conteudo_markdown, undefined, db);
     const membrosAtivos =
       mencionados.length > 0
         ? Array.from(new Set([...mencionados, ...membrosConfig.filter((m) => mencionados.includes(m))]))

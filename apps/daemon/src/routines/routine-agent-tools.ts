@@ -13,6 +13,7 @@ import {
   type ToolDefinition,
 } from "@criativo/contracts";
 import type { CriativoDatabase } from "../database/client.ts";
+import { resolveAgentIdFromDb } from "../server/agent-resolver.ts";
 import type { WebSocketHub } from "../server/websocket-hub.ts";
 import type { RoutineExecutionService } from "./routine-execution-service.ts";
 import type { RoutineFlowsEngine } from "./routine-flows-engine.ts";
@@ -23,6 +24,76 @@ import {
 import type { RoutineStore } from "./routine-store.ts";
 import type { RoutineTimer } from "./routine-timer.ts";
 import type { WebhookRoutineService } from "./webhook-routine-service.ts";
+
+export const ROUTINE_SCHEDULE_SCHEMA = {
+  type: "object",
+  description:
+    "Objeto RoutineSchedule tipado ({ kind: 'daily'|'weekly'|'weekdays'|'monthly'|'hourly'|'interval'|'advanced'|'custom'|'once', ... }).",
+  properties: {
+    kind: {
+      type: "string",
+      enum: ["hourly", "daily", "weekdays", "weekly", "monthly", "interval", "advanced", "custom", "once"],
+      description: "Tipo/frequência da rotina.",
+    },
+    minute: {
+      type: "number",
+      description: "Minuto da hora (0–59) quando kind='hourly'.",
+    },
+    time: {
+      type: "string",
+      description: "Horário no formato HH:MM (ex.: '09:30') para daily, weekdays, weekly, monthly ou once.",
+    },
+    weekday: {
+      type: "number",
+      description: "Dia da semana (0=Domingo..6=Sábado) quando kind='weekly'.",
+    },
+    day: {
+      type: "number",
+      description: "Dia do mês (1–31) quando kind='monthly'.",
+    },
+    amount: {
+      type: "number",
+      description: "Quantidade de unidades quando kind='interval' (ex.: 5 para a cada 5 minutos).",
+    },
+    unit: {
+      type: "string",
+      enum: ["minutes", "hours", "days"],
+      description: "Unidade do intervalo quando kind='interval'.",
+    },
+    anchorAt: {
+      type: "string",
+      description: "Data/hora ISO âncora opcional para kind='interval' (preenchida automaticamente se omitida).",
+    },
+    expression: {
+      type: "string",
+      description: "Expressão cron 5 campos quando kind='custom'.",
+    },
+    date: {
+      type: "string",
+      description: "Data YYYY-MM-DD quando kind='once'.",
+    },
+    months: {
+      type: "array",
+      items: { type: "number" },
+      description: "Lista de meses (1–12) quando kind='advanced'.",
+    },
+    days: {
+      type: "object",
+      description: "Seleção de dias para kind='advanced'.",
+      properties: {
+        kind: {
+          type: "string",
+          enum: ["every-day", "days-of-week", "days-of-month"],
+        },
+        days: {
+          type: "array",
+          items: { type: "number" },
+        },
+      },
+    },
+  },
+  required: ["kind"],
+} as const;
 
 export const ROUTINE_AGENT_TOOLS_SCHEMA: ToolDefinition[] = [
   {
@@ -73,11 +144,7 @@ export const ROUTINE_AGENT_TOOLS_SCHEMA: ToolDefinition[] = [
         agentId: { type: "string" },
         name: { type: "string" },
         instruction: { type: "string" },
-        schedule: {
-          type: "object",
-          description:
-            "Objeto RoutineSchedule tipado ({ kind: 'daily'|'weekly'|'weekdays'|'monthly'|'hourly'|'interval'|'advanced'|'custom'|'once', ... }).",
-        },
+        schedule: ROUTINE_SCHEDULE_SCHEMA,
         active: { type: "boolean" },
         timezone: { type: "string" },
         limitPolicy: { type: "string", enum: ["wait", "skip"] },
@@ -98,7 +165,7 @@ export const ROUTINE_AGENT_TOOLS_SCHEMA: ToolDefinition[] = [
         agentId: { type: "string" },
         name: { type: "string" },
         instruction: { type: "string" },
-        schedule: { type: "object" },
+        schedule: ROUTINE_SCHEDULE_SCHEMA,
         active: { type: "boolean" },
         timezone: { type: "string" },
         limitPolicy: { type: "string", enum: ["wait", "skip"] },
@@ -305,10 +372,10 @@ export async function executeRoutineToolCall(
     }
 
     case "list_routines": {
-      const targetAgent =
-        typeof args.agentId === "string" && args.agentId.trim()
-          ? args.agentId.trim()
-          : context.agenteId;
+      const rawAgentId = typeof args.agentId === "string" && args.agentId.trim() ? args.agentId.trim() : "";
+      const targetAgent = rawAgentId
+        ? resolveAgentIdFromDb(deps.db, rawAgentId) ?? rawAgentId
+        : context.agenteId;
       const list = deps.routineStore.listByOwner("agente", targetAgent);
       return {
         agenteId: targetAgent,
@@ -318,18 +385,46 @@ export async function executeRoutineToolCall(
     }
 
     case "create_routine": {
-      const targetAgent =
-        typeof args.agentId === "string" && args.agentId.trim()
-          ? args.agentId.trim()
-          : context.agenteId;
+      const rawAgentId = typeof args.agentId === "string" && args.agentId.trim() ? args.agentId.trim() : "";
+      const targetAgent = rawAgentId
+        ? resolveAgentIdFromDb(deps.db, rawAgentId) ?? rawAgentId
+        : context.agenteId;
       const name = typeof args.name === "string" ? args.name.trim() : "";
       const instruction = typeof args.instruction === "string" ? args.instruction.trim() : "";
       if (!name || !instruction) {
         throw new Error("Informe 'name' e 'instruction' válidos para criar a rotina.");
       }
 
-      const scheduleRaw = args.schedule;
+      let scheduleRaw = args.schedule;
+      if (
+        scheduleRaw &&
+        typeof scheduleRaw === "object" &&
+        !Array.isArray(scheduleRaw) &&
+        (scheduleRaw as Record<string, unknown>).kind === "interval" &&
+        !(
+          typeof (scheduleRaw as Record<string, unknown>).anchorAt === "string" &&
+          String((scheduleRaw as Record<string, unknown>).anchorAt).trim()
+        )
+      ) {
+        scheduleRaw = {
+          ...(scheduleRaw as Record<string, unknown>),
+          anchorAt: new Date().toISOString(),
+        };
+      }
       if (!isRoutineSchedule(scheduleRaw)) {
+        if (
+          scheduleRaw &&
+          typeof scheduleRaw === "object" &&
+          !Array.isArray(scheduleRaw) &&
+          (scheduleRaw as Record<string, unknown>).kind === "interval" &&
+          (scheduleRaw as Record<string, unknown>).unit === "minutes" &&
+          typeof (scheduleRaw as Record<string, unknown>).amount === "number" &&
+          Number((scheduleRaw as Record<string, unknown>).amount) < 3
+        ) {
+          throw new Error(
+            "Intervalo mínimo para rotinas agendadas é de 3 minutos. Para ciclos curtos (< 3 min, de 10s a 179s) ou verificações no chat, utilize 'schedule_wakeup'.",
+          );
+        }
         throw new Error("Campo 'schedule' inválido.");
       }
 
@@ -342,6 +437,11 @@ export async function executeRoutineToolCall(
         requireFutureOnce: true,
       });
       if (validationErr) {
+        if (/3\s*min|m[ií]nimo/i.test(validationErr)) {
+          throw new Error(
+            `${validationErr} Para verificações curtas (< 3 minutos, de 10s a 179s) ou retomadas rápidas no chat, utilize 'schedule_wakeup'.`,
+          );
+        }
         throw new Error(validationErr);
       }
 
@@ -388,6 +488,9 @@ export async function executeRoutineToolCall(
       if (!routineId) {
         throw new Error("Informe 'routineId' da rotina a atualizar.");
       }
+      if (typeof args.agentId === "string" && args.agentId.trim()) {
+        void resolveAgentIdFromDb(deps.db, args.agentId.trim());
+      }
       const existing = deps.routineStore.getById(routineId);
       if (!existing) {
         throw new Error(`Rotina '${routineId}' não encontrada.`);
@@ -402,9 +505,37 @@ export async function executeRoutineToolCall(
         typeof args.timezone === "string" && isValidIanaTimeZone(args.timezone)
           ? args.timezone.trim()
           : existing.timezone;
-      const nextSchedule =
+      let nextSchedule =
         args.schedule !== undefined ? args.schedule : existing.schedule;
+      if (
+        nextSchedule &&
+        typeof nextSchedule === "object" &&
+        !Array.isArray(nextSchedule) &&
+        (nextSchedule as Record<string, unknown>).kind === "interval" &&
+        !(
+          typeof (nextSchedule as Record<string, unknown>).anchorAt === "string" &&
+          String((nextSchedule as Record<string, unknown>).anchorAt).trim()
+        )
+      ) {
+        nextSchedule = {
+          ...(nextSchedule as Record<string, unknown>),
+          anchorAt: new Date().toISOString(),
+        };
+      }
       if (!nextSchedule || !isRoutineSchedule(nextSchedule)) {
+        if (
+          nextSchedule &&
+          typeof nextSchedule === "object" &&
+          !Array.isArray(nextSchedule) &&
+          (nextSchedule as Record<string, unknown>).kind === "interval" &&
+          (nextSchedule as Record<string, unknown>).unit === "minutes" &&
+          typeof (nextSchedule as Record<string, unknown>).amount === "number" &&
+          Number((nextSchedule as Record<string, unknown>).amount) < 3
+        ) {
+          throw new Error(
+            "Intervalo mínimo para rotinas agendadas é de 3 minutos. Para ciclos curtos (< 3 min, de 10s a 179s) ou verificações no chat, utilize 'schedule_wakeup'.",
+          );
+        }
         throw new Error("Campo 'schedule' inválido.");
       }
 
@@ -416,6 +547,11 @@ export async function executeRoutineToolCall(
         requireFutureOnce: requiresFutureOnce,
       });
       if (validationErr) {
+        if (/3\s*min|m[ií]nimo/i.test(validationErr)) {
+          throw new Error(
+            `${validationErr} Para verificações curtas (< 3 minutos, de 10s a 179s) ou retomadas rápidas no chat, utilize 'schedule_wakeup'.`,
+          );
+        }
         throw new Error(validationErr);
       }
 
@@ -524,10 +660,10 @@ export async function executeRoutineToolCall(
           "Por segurança, rotinas de webhook só podem ser criadas quando solicitadas pelo usuário humano no chat."
         );
       }
-      const targetAgent =
-        typeof args.agentId === "string" && args.agentId.trim()
-          ? args.agentId.trim()
-          : context.agenteId;
+      const rawAgentId = typeof args.agentId === "string" && args.agentId.trim() ? args.agentId.trim() : "";
+      const targetAgent = rawAgentId
+        ? resolveAgentIdFromDb(deps.db, rawAgentId) ?? rawAgentId
+        : context.agenteId;
       const name = typeof args.name === "string" ? args.name.trim() : "";
       const instruction = typeof args.instruction === "string" ? args.instruction.trim() : "";
       if (!name || !instruction) {

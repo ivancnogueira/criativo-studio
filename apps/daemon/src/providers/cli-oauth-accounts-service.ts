@@ -48,6 +48,7 @@ export interface CliExecutionInput {
   messages: Array<{ role: "user" | "assistant"; text: string }>;
   agentId?: string | null;
   preferredAccountId?: string | null;
+  mcpConfig?: Record<string, unknown> | null;
   timeoutMs?: number;
 }
 
@@ -1340,7 +1341,10 @@ export class CliOAuthAccountsService {
         ? input.modelId
         : "claude-sonnet-4-6";
 
-      const mcpConfigObj = this.mcpConfigResolver?.(input.agentId ?? null) ?? null;
+      const mcpConfigObj =
+        input.mcpConfig !== undefined
+          ? input.mcpConfig
+          : (this.mcpConfigResolver?.(input.agentId ?? null) ?? null);
       let tempMcpDir: string | null = null;
       const claudeArgs = [
         "-p",
@@ -1426,6 +1430,51 @@ export class CliOAuthAccountsService {
         ? input.modelId
         : "gpt-5.4";
 
+    const mcpConfigObj =
+      input.mcpConfig !== undefined
+        ? input.mcpConfig
+        : (this.mcpConfigResolver?.(input.agentId ?? null) ?? null);
+    const codexMcpArgs: string[] = [];
+    const rawMcpServers =
+      mcpConfigObj &&
+      typeof mcpConfigObj === "object" &&
+      mcpConfigObj.mcpServers &&
+      typeof mcpConfigObj.mcpServers === "object"
+        ? (mcpConfigObj.mcpServers as Record<string, Record<string, unknown>>)
+        : null;
+
+    if (rawMcpServers) {
+      for (const [srvName, srvSpec] of Object.entries(rawMcpServers)) {
+        const safeKey = srvName.replace(/[^a-zA-Z0-9_]/g, "_");
+        if (!safeKey || !srvSpec || typeof srvSpec !== "object") continue;
+        if (typeof srvSpec.url === "string" && srvSpec.url.trim()) {
+          codexMcpArgs.push("-c", `mcp_servers.${safeKey}.url=${JSON.stringify(srvSpec.url.trim())}`);
+          if (srvSpec.headers && typeof srvSpec.headers === "object" && !Array.isArray(srvSpec.headers)) {
+            const entries = Object.entries(srvSpec.headers as Record<string, unknown>).filter(
+              ([k, v]) => k.trim().length > 0 && typeof v === "string",
+            );
+            if (entries.length > 0) {
+              const headerToml = entries
+                .map(([k, v]) => `${JSON.stringify(k)} = ${JSON.stringify(String(v))}`)
+                .join(", ");
+              codexMcpArgs.push("-c", `mcp_servers.${safeKey}.http_headers={ ${headerToml} }`);
+            }
+          }
+        } else if (typeof srvSpec.command === "string" && srvSpec.command.trim()) {
+          codexMcpArgs.push(
+            "-c",
+            `mcp_servers.${safeKey}.command=${JSON.stringify(srvSpec.command.trim())}`,
+          );
+          if (Array.isArray(srvSpec.args)) {
+            codexMcpArgs.push(
+              "-c",
+              `mcp_servers.${safeKey}.args=${JSON.stringify(srvSpec.args.map(String))}`,
+            );
+          }
+        }
+      }
+    }
+
     const res = await spawnCommandWithStdin({
       executable,
       args: [
@@ -1434,6 +1483,7 @@ export class CliOAuthAccountsService {
         "--skip-git-repo-check",
         "--sandbox",
         "read-only",
+        ...codexMcpArgs,
         "--model",
         targetModel,
         "-",

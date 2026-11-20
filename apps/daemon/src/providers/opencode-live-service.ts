@@ -1,11 +1,11 @@
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import type { ModeloProvedorInfo } from "@criativo/contracts";
 import type { VaultService } from "../vault/vault-service.ts";
-import { resolveManagedProviderRuntime } from "./provider-runtime-resolver.ts";
+import { resolveManagedProviderRuntime, spawnProviderProcess } from "./provider-runtime-resolver.ts";
 
 const execFileAsync = promisify(execFile);
 const MODELS_CACHE_TTL_MS = 120_000;
@@ -51,6 +51,7 @@ class OpenCodeAcpConnection {
   private nextId = 1;
   private closed = false;
   private initialized = false;
+  private stderrTail: string[] = [];
   private onChunk: ((txt: string) => void) | null = null;
   private onUsage: ((used: number) => void) | null = null;
 
@@ -59,25 +60,27 @@ class OpenCodeAcpConnection {
     cwd: string,
     extraEnv: Record<string, string | undefined>
   ) {
-    const isCmdWrapper = process.platform === "win32" && /\.(cmd|bat)$/i.test(executable);
-    this.child = spawn(
-      isCmdWrapper ? process.env.ComSpec || "cmd.exe" : executable,
-      isCmdWrapper ? ["/c", executable, "acp", "--pure"] : ["acp", "--pure"],
-      {
-        cwd,
-        env: {
-          ...process.env,
-          OPENCODE_DISABLE_AUTOUPDATE: "1",
-          ...extraEnv,
-        },
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: false,
-        windowsHide: true,
-      }
-    );
+    this.child = spawnProviderProcess(executable, ["acp"], {
+      cwd,
+      env: {
+        ...process.env,
+        OPENCODE_DISABLE_AUTOUPDATE: "1",
+        ...extraEnv,
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
 
     this.child.stdin.on("error", () => {
       this.closed = true;
+    });
+
+    // Drena stderr continuamente para evitar bloqueio de buffer no Windows e enriquecer erros
+    this.child.stderr.on("data", (chunk) => {
+      const txt = chunk.toString("utf8").trim();
+      if (!txt) return;
+      this.stderrTail.push(txt.slice(-260));
+      if (this.stderrTail.length > 6) this.stderrTail.shift();
     });
 
     const rl = createInterface({ input: this.child.stdout });
@@ -145,9 +148,13 @@ class OpenCodeAcpConnection {
 
     this.child.on("exit", (code) => {
       this.closed = true;
+      const errDetail = this.stderrTail.length > 0 ? this.stderrTail[this.stderrTail.length - 1] : "";
+      const errMessage = errDetail
+        ? `Servidor OpenCode ACP encerrou (código ${code ?? "null"}): ${errDetail}`
+        : `Servidor OpenCode ACP encerrou (código ${code ?? "null"}).`;
       for (const [id, wait] of this.pending.entries()) {
         clearTimeout(wait.timer);
-        wait.reject(new Error(`Servidor OpenCode ACP encerrou (código ${code ?? "null"}).`));
+        wait.reject(new Error(errMessage));
         this.pending.delete(id);
       }
       rl.close();
@@ -437,6 +444,7 @@ export class OpenCodeLiveService {
     messages: Array<{ role: "user" | "assistant"; text: string }>;
     timeoutMs?: number;
     agentId?: string | null;
+    channelOrigin?: "web" | "whatsapp";
     mcpServers?: unknown[];
     onDelta?: (chunk: string) => void;
   }): Promise<{
@@ -458,9 +466,11 @@ export class OpenCodeLiveService {
 
     const promptParts: string[] = [];
     if (input.systemPrompt) {
-      promptParts.push(
-        `${input.systemPrompt}\n\n[Diretriz de execução]: Responda diretamente ao pedido editorial/estratégico do usuário usando Markdown bem estruturado (títulos, listas, negrito, tabelas). Não inspecione arquivos internos do repositório nem cite diretórios de código como apps/daemon.`
-      );
+      const styleDirective =
+        input.channelOrigin === "whatsapp"
+          ? "[Diretriz de execução WhatsApp]: Responda diretamente de forma curta e amigável para celular (máximo 1 a 4 parágrafos curtos ou lista breve com •). Nunca use tabelas Markdown (|...|), nunca use cabeçalhos #, e não inspecione arquivos internos do repositório nem cite diretórios de código como apps/daemon."
+          : "[Diretriz de execução]: Responda diretamente ao pedido editorial/estratégico do usuário usando Markdown bem estruturado (títulos, listas, negrito, tabelas quando útil). Não inspecione arquivos internos do repositório nem cite diretórios de código como apps/daemon.";
+      promptParts.push(`${input.systemPrompt}\n\n${styleDirective}`);
     }
     if (input.messages.length > 1) {
       promptParts.push(

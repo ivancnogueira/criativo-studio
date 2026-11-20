@@ -101,6 +101,9 @@ import type { ScreenCaptureBridge } from "../engine/tools/screen-capture-bridge.
 import { parseBackupModelsJson } from "../engine/runner/backup-models-resolver.ts";
 import type { TranscriptionService } from "../voice/transcription-service.ts";
 import { executeSidebarTool, SIDEBAR_AGENT_TOOL_NAMES } from "./sidebar-service.ts";
+import type { AgentWakeupService } from "../waits/agent-wakeup-service.ts";
+import { listAgentsWithAliases, resolveAgentIdFromDb } from "./agent-resolver.ts";
+import { loadSkillPromptBySlug } from "./analytics-skills-service.ts";
 import {
   executeShowcaseTool,
   SHOWCASE_AGENT_TOOL_NAMES,
@@ -506,7 +509,29 @@ export function buildStudioLiveContext(deps: {
   agenteId?: string | null;
   memoryManager?: MemoryManager;
   userPrompt?: string;
+  compact?: boolean;
 }): string {
+  if (deps.compact) {
+    const onboarding = deps.providerConnection.getOnboardingState();
+    const marcaConfig = deps.providerConnection.getStudioConfig<Record<string, unknown>>(
+      "identidade_marca",
+      {}
+    );
+    const metaCreds = resolveMetaCredentials(deps.vault);
+    const compactLines: string[] = [
+      "## Contexto Enxuto do Criativo AI Studio Online",
+      `- Marca: ${String(marcaConfig.marca_nome ?? onboarding.marca_nome)} (${String(
+        marcaConfig.perfil_handle ?? onboarding.perfil_handle
+      )})`,
+      ...(typeof marcaConfig.nicho === "string" && marcaConfig.nicho
+        ? [`- Nicho: ${marcaConfig.nicho}`]
+        : []),
+      `- Meta/Instagram: ${metaCreds.configured ? "Conectado no Cofre" : "Não configurado"}`,
+      "- Recursos sob demanda: use `load_skill` quando precisar do guia completo de execução e `list_agents` para consultar especialistas/@apelidos.",
+    ];
+    return compactLines.join("\n");
+  }
+
   syncWorkspaceFilesToDatabase(deps.db, deps.workspaceRoot);
 
   const onboarding = deps.providerConnection.getOnboardingState();
@@ -620,13 +645,22 @@ export function buildStudioLiveContext(deps: {
     deps.agenteId === "orquestrador" ||
     Boolean(deps.userPrompt && /(@|handoff|equipe|time|especialista|delegar|quem faz)/i.test(deps.userPrompt));
 
+  const rosterWithAliases = listAgentsWithAliases(deps.db);
   lines.push(
     "",
     "### Equipe de Colegas para Handoff",
     ...(includeFullRoster
-      ? [ROSTER_15_AGENTES.map((a) => `- \`@${a.agente_id}\`: ${a.nome} — ${a.papel}`).join("\n")]
+      ? [
+          rosterWithAliases
+            .map((a) =>
+              a.apelido === a.agente_id
+                ? `- \`@${a.agente_id}\`: ${a.nome} — ${a.papel}`
+                : `- \`@${a.apelido}\` (ID \`${a.agente_id}\`): ${a.nome} — ${a.papel}`
+            )
+            .join("\n"),
+        ]
       : [
-          `- Especialistas disponíveis: ${ROSTER_15_AGENTES.map((a) => `@${a.agente_id}`).join(", ")}.`,
+          `- Especialistas disponíveis: ${rosterWithAliases.map((a) => `@${a.apelido}`).join(", ")}.`,
         ]),
     "IMPORTANTE SOBRE HANDOFF: Só emita `[HANDOFF:agente_id]` sob pedido prático explícito que exija outro especialista. Nunca emita handoff ao se apresentar ou tirar dúvidas simples."
   );
@@ -2012,6 +2046,9 @@ export const PHASE13_TOOL_NAMES = new Set([
   "interrupt_agent",
   "start_new_chat",
   "pin_message",
+  "schedule_wakeup",
+  "list_wakeups",
+  "cancel_wakeup",
 ]);
 
 export function isPhase13ToolName(name: string): boolean {
@@ -2119,11 +2156,81 @@ export const PHASE13_TOOLS_SCHEMA: ToolDefinition[] = [
       },
     },
   },
+  {
+    name: "schedule_wakeup",
+    description:
+      "Agenda um timer persistido no SQLite (10s a 86400s, único ou recorrente até 50 ciclos) para retomar este agente automaticamente na mesma conversa/tópico (ou WhatsApp). Use sempre que precisar checar respostas, aguardar intervalos curtos (< 3 min) ou executar follow-ups cronometrados.",
+    parameters: {
+      type: "object",
+      properties: {
+        agentId: {
+          type: "string",
+          description: "ID ou @apelido do agente (opcional; padrão é o agente atual).",
+        },
+        delaySeconds: {
+          type: "number",
+          description: "Intervalo em segundos até o disparo (10 a 86400; padrão 60).",
+        },
+        recurring: {
+          type: "boolean",
+          description: "Se true, reagenda automaticamente a cada ciclo até maxIterations ou cancel_wakeup.",
+        },
+        maxIterations: {
+          type: "number",
+          description: "Máximo de ciclos para wakeups recorrentes (1 a 50; padrão 10 quando recorrente).",
+        },
+        instruction: {
+          type: "string",
+          description: "Instrução clara do que verificar e fazer ao despertar neste timer.",
+        },
+      },
+      required: ["instruction"],
+    },
+  },
+  {
+    name: "list_wakeups",
+    description:
+      "Lista wakeups/timers agendados ou em execução do agente (ou de outro agente por ID/@apelido).",
+    parameters: {
+      type: "object",
+      properties: {
+        agentId: {
+          type: "string",
+          description: "ID ou @apelido do agente (opcional; padrão é o agente atual).",
+        },
+        includeInactive: {
+          type: "boolean",
+          description: "Se true, inclui também concluídos, cancelados e com falha.",
+        },
+      },
+    },
+  },
+  {
+    name: "cancel_wakeup",
+    description:
+      "Cancela um wakeup ativo previamente criado com schedule_wakeup (use ao encerrar um ciclo recorrente de checagem).",
+    parameters: {
+      type: "object",
+      properties: {
+        wakeupId: {
+          type: "string",
+          description: "Identificador do wakeup (ex.: 'wk_...').",
+        },
+        agentId: {
+          type: "string",
+          description: "ID ou @apelido do agente proprietário (opcional).",
+        },
+      },
+      required: ["wakeupId"],
+    },
+  },
 ];
 
 export interface Phase13ToolServices {
+  db?: CriativoDatabase;
   tasksService?: AgentTasksService;
   waitsService?: AgentWaitsService;
+  wakeupService?: AgentWakeupService;
   queueControls?: QueueControlsService;
   contextReset?: ContextResetService;
   pinsService?: MessagePinsService;
@@ -2139,6 +2246,9 @@ export interface Phase13ToolContext {
   pedidoTexto: string;
   isRoutine?: boolean;
   isResumingWait?: boolean;
+  channelOrigin?: "web" | "whatsapp";
+  whatsappContaId?: string | null;
+  whatsappChatJid?: string | null;
 }
 
 /**
@@ -2172,6 +2282,76 @@ export async function executePhase13Tool(
           },
           { title, brief },
         );
+        return { handled: true, result };
+      }
+
+      case "schedule_wakeup": {
+        if (!services.wakeupService) {
+          return { handled: true, result: { erro: "AgentWakeupService indisponível." } };
+        }
+        const instruction = readStringArg(args, "instruction", "instrucao", "prompt", "note") ?? "";
+        const agentId = readStringArg(args, "agentId", "agenteId", "agente_id") ?? undefined;
+        const delaySeconds =
+          typeof args.delaySeconds === "number"
+            ? args.delaySeconds
+            : typeof args.delay_seconds === "number"
+              ? args.delay_seconds
+              : undefined;
+        const recurring = typeof args.recurring === "boolean" ? args.recurring : undefined;
+        const maxIterations =
+          typeof args.maxIterations === "number"
+            ? args.maxIterations
+            : typeof args.max_iterations === "number"
+              ? args.max_iterations
+              : undefined;
+        const result = services.wakeupService.scheduleWakeup(
+          {
+            agenteId: context.agenteId,
+            canalId: context.canalId,
+            threadId: context.threadId,
+            channelOrigin: context.channelOrigin ?? "web",
+            whatsappContaId: context.whatsappContaId ?? null,
+            whatsappChatJid: context.whatsappChatJid ?? null,
+          },
+          {
+            agentId,
+            delaySeconds,
+            recurring,
+            maxIterations,
+            instruction,
+          },
+        );
+        return { handled: true, result };
+      }
+
+      case "list_wakeups": {
+        if (!services.wakeupService) {
+          return { handled: true, result: { erro: "AgentWakeupService indisponível." } };
+        }
+        const rawTargetAgent = readStringArg(args, "agentId", "agenteId", "agente_id") ?? context.agenteId;
+        const targetAgent =
+          (services.db ? resolveAgentIdFromDb(services.db, rawTargetAgent) : null) ?? rawTargetAgent;
+        const items = services.wakeupService.listWakeups(
+          targetAgent,
+          Boolean(args.includeInactive),
+        );
+        return {
+          handled: true,
+          result: {
+            agentId: targetAgent,
+            total: items.length,
+            wakeups: items,
+          },
+        };
+      }
+
+      case "cancel_wakeup": {
+        if (!services.wakeupService) {
+          return { handled: true, result: { erro: "AgentWakeupService indisponível." } };
+        }
+        const wakeupId = readStringArg(args, "wakeupId", "wakeup_id", "id") ?? "";
+        const agentId = readStringArg(args, "agentId", "agenteId", "agente_id") ?? undefined;
+        const result = services.wakeupService.cancelWakeup(wakeupId, agentId);
         return { handled: true, result };
       }
 
@@ -2222,7 +2402,10 @@ export async function executePhase13Tool(
         if (!services.queueControls) {
           return { handled: true, result: { erro: "QueueControlsService indisponível." } };
         }
-        const targetAgent = readStringArg(args, "agentId", "agenteId", "agente_id") ?? "";
+        const rawTargetAgent = readStringArg(args, "agentId", "agenteId", "agente_id") ?? "";
+        const targetAgent =
+          (services.db && rawTargetAgent ? resolveAgentIdFromDb(services.db, rawTargetAgent) : null) ??
+          rawTargetAgent;
         const reason = readStringArg(args, "reason", "motivo") ?? undefined;
         if (!targetAgent) {
           return { handled: true, result: { erro: "Informe 'agentId' do agente alvo." } };
@@ -2296,8 +2479,9 @@ export function buildPhase13SystemGuidance(options?: {
   wokenWaitsBlock?: string | null;
 }): string {
   const parts: string[] = [
-    "## Sub-tarefas, Esperas, Fila & Contexto (Ferramentas Nativas)",
+    "## Sub-tarefas, Wakeups/Timers, Esperas, Fila & Contexto (Ferramentas Nativas)",
     "- Use `start_task(title, brief)` quando uma solicitação envolver uma entrega pesada paralela ou múltiplos eixos que possam rodar sem travar o chat principal.",
+    "- Use `schedule_wakeup(delaySeconds, instruction, recurring?, maxIterations?)` (10s–86400s), `list_wakeups()` e `cancel_wakeup(wakeupId)` para timers curtos (< 3 min), checagens periódicas de resposta ou retomadas automáticas na mesma conversa/tópico. PROIBIDO afirmar que agendou timer/checagem sem ter executado `schedule_wakeup` com sucesso (`ok: true`).",
     "- Use `await_event(note, routineId?)` para processos externos longos (>15 min) ligados a uma rotina/webhook e `close_wait(waitId)` / `list_waits()` quando concluir.",
     "- Use `pin_message(quote?, pinned?)` para fixar decisões-chave desta conversa, e `start_new_chat()` quando a conversa mudar totalmente de tópico e precisar renovar o contexto.",
   ];
@@ -2771,6 +2955,29 @@ export const PHASE14_TOOLS_SCHEMA: ToolDefinition[] = [
         },
       },
       required: ["recipientAgentIds", "text"],
+    },
+  },
+  {
+    name: "load_skill",
+    description:
+      "Carrega sob demanda o manual SKILL.md completo de uma habilidade específica ou da habilidade principal do agente atual. Use apenas quando precisar das instruções técnicas detalhadas.",
+    parameters: {
+      type: "object",
+      properties: {
+        slug: {
+          type: "string",
+          description: "Slug da habilidade (ex.: 'criar-carrossel'). Se omitido, carrega a habilidade padrão do agente atual.",
+        },
+      },
+    },
+  },
+  {
+    name: "list_agents",
+    description:
+      "Lista todos os agentes e especialistas configurados no estúdio (incluindo customizados) com seus IDs canônicos e @apelidos.",
+    parameters: {
+      type: "object",
+      properties: {},
     },
   },
 ];
@@ -3565,6 +3772,95 @@ export async function executePhase14ToolCall(
       });
     }
 
+    case "load_skill": {
+      const requestedSlug = readStringArg(args, "slug", "skill", "habilidade");
+      let targetSlug = requestedSlug ? requestedSlug.trim() : "";
+      let candidatePaths: string[] = [];
+
+      if (!targetSlug) {
+        const agentRow = services.db.connection
+          .prepare("SELECT config_json, skills_paths_json FROM projecao_agentes WHERE agente_id = ? LIMIT 1;")
+          .get(ctx.agenteId) as { config_json?: string; skills_paths_json?: string } | undefined;
+        if (agentRow?.config_json) {
+          try {
+            const parsedCfg = JSON.parse(agentRow.config_json) as { skill_slug?: unknown };
+            if (typeof parsedCfg.skill_slug === "string" && parsedCfg.skill_slug.trim()) {
+              targetSlug = parsedCfg.skill_slug.trim();
+            }
+          } catch {
+            // ignora json inválido
+          }
+        }
+        if (agentRow?.skills_paths_json) {
+          try {
+            const parsedPaths = JSON.parse(agentRow.skills_paths_json) as unknown;
+            if (Array.isArray(parsedPaths)) {
+              candidatePaths = parsedPaths.filter((p): p is string => typeof p === "string" && p.trim().length > 0);
+            }
+          } catch {
+            // ignora json inválido
+          }
+        }
+        if (!targetSlug && candidatePaths.length > 0) {
+          const matchedSlug = candidatePaths[0]!.match(/([^/\\]+)[/\\]SKILL\.md$/i);
+          if (matchedSlug?.[1]) {
+            targetSlug = matchedSlug[1];
+          }
+        }
+        if (!targetSlug) {
+          const def = ROSTER_15_AGENTES.find((a) => a.agente_id === ctx.agenteId);
+          if (def?.skill_slug) targetSlug = def.skill_slug;
+        }
+      }
+
+      if (targetSlug) {
+        const loaded = loadSkillPromptBySlug(targetSlug);
+        if (loaded) {
+          return {
+            ok: true,
+            slug: targetSlug,
+            path: loaded.path,
+            tokensEst: loaded.tokensEst,
+            content: loaded.body,
+          };
+        }
+      }
+
+      for (const relPath of candidatePaths) {
+        const absPath = isAbsolute(relPath) ? relPath : resolve(process.cwd(), relPath);
+        if (existsSync(absPath)) {
+          try {
+            const body = readFileSync(absPath, "utf8");
+            return {
+              ok: true,
+              slug: targetSlug || ctx.agenteId,
+              path: absPath,
+              tokensEst: Math.max(80, Math.round(body.length / 4)),
+              content: body,
+            };
+          } catch {
+            // continua tentando outros caminhos
+          }
+        }
+      }
+
+      return {
+        ok: false,
+        slug: targetSlug || null,
+        erro: targetSlug
+          ? `SKILL.md da habilidade '${targetSlug}' não encontrado.`
+          : "Nenhuma habilidade configurada para este agente.",
+      };
+    }
+
+    case "list_agents": {
+      const agents = listAgentsWithAliases(services.db);
+      return {
+        total: agents.length,
+        agents,
+      };
+    }
+
     default:
       throw new Error(`Ferramenta da Fase 14 desconhecida: ${toolName}`);
   }
@@ -3730,6 +4026,153 @@ export const BROWSER_DIRECT_ALIASES = [
 
 export const HIDDEN_CATALOG_TOOL_NAMES: ReadonlySet<string> = new Set<string>(BROWSER_DIRECT_ALIASES);
 
+export const BROWSER_TARGET_SCHEMA = {
+  type: "object",
+  description:
+    "Seletor do elemento alvo no snapshot/DOM ({ ref: 'e12' }, { selector: '#btn' }, { role: 'button', name: 'Enviar' }, { text: 'Continuar' } ou { x, y }).",
+  properties: {
+    kind: {
+      type: "string",
+      enum: ["ref", "role", "text", "css", "point"],
+      description: "Tipo explícito do seletor (opcional; inferido automaticamente quando omitido).",
+    },
+    ref: {
+      type: "string",
+      description: "Referência curta obtida no snapshot (ex.: 'e12').",
+    },
+    revision: {
+      type: "number",
+      description: "Revisão do snapshot associada à ref.",
+    },
+    role: {
+      type: "string",
+      description: "Papel ARIA do elemento (ex.: 'button', 'textbox').",
+    },
+    name: {
+      type: "string",
+      description: "Nome acessível do elemento ARIA.",
+    },
+    text: {
+      type: "string",
+      description: "Texto visível do elemento.",
+    },
+    exact: {
+      type: "boolean",
+      description: "Exige correspondência exata de name/text.",
+    },
+    selector: {
+      type: "string",
+      description: "Seletor CSS para o elemento (ex.: '#campo-busca').",
+    },
+    nth: {
+      type: "number",
+      description: "Índice baseado em zero quando houver múltiplos elementos.",
+    },
+    x: {
+      type: "number",
+      description: "Coordenada X na viewport em pixels.",
+    },
+    y: {
+      type: "number",
+      description: "Coordenada Y na viewport em pixels.",
+    },
+  },
+} as const;
+
+export function normalizeBrowserTargetInput(raw: unknown): BrowserTargetSelector | undefined {
+  if (raw === null || raw === undefined) return undefined;
+
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return undefined;
+    if (/^e\d+$/i.test(trimmed)) {
+      return { kind: "ref", ref: trimmed };
+    }
+    return { kind: "css", selector: trimmed };
+  }
+
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const explicitKind = typeof obj.kind === "string" ? obj.kind.trim().toLowerCase() : "";
+  const nth = typeof obj.nth === "number" && Number.isFinite(obj.nth) ? obj.nth : undefined;
+  const exact = typeof obj.exact === "boolean" ? obj.exact : undefined;
+
+  if (explicitKind === "ref" || (!explicitKind && typeof obj.ref === "string" && obj.ref.trim())) {
+    const ref = typeof obj.ref === "string" ? obj.ref.trim() : "";
+    if (!ref) return undefined;
+    const revision =
+      typeof obj.revision === "number" && Number.isFinite(obj.revision) ? obj.revision : undefined;
+    return {
+      kind: "ref",
+      ref,
+      ...(revision !== undefined ? { revision } : {}),
+    };
+  }
+
+  const cssCandidate =
+    typeof obj.selector === "string" && obj.selector.trim()
+      ? obj.selector.trim()
+      : typeof obj.css === "string" && obj.css.trim()
+        ? obj.css.trim()
+        : "";
+  if (explicitKind === "css" || (!explicitKind && cssCandidate)) {
+    if (!cssCandidate) return undefined;
+    return {
+      kind: "css",
+      selector: cssCandidate,
+      ...(nth !== undefined ? { nth } : {}),
+    };
+  }
+
+  if (
+    explicitKind === "point" ||
+    (!explicitKind && typeof obj.x === "number" && typeof obj.y === "number")
+  ) {
+    const x = Number(obj.x);
+    const y = Number(obj.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined;
+    return { kind: "point", x, y };
+  }
+
+  if (explicitKind === "role" || (!explicitKind && typeof obj.role === "string" && obj.role.trim())) {
+    const role = typeof obj.role === "string" ? obj.role.trim() : "";
+    if (!role) return undefined;
+    const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : undefined;
+    return {
+      kind: "role",
+      role,
+      ...(name !== undefined ? { name } : {}),
+      ...(exact !== undefined ? { exact } : {}),
+      ...(nth !== undefined ? { nth } : {}),
+    };
+  }
+
+  if (explicitKind === "text" || (!explicitKind && typeof obj.text === "string" && obj.text.trim())) {
+    const text = typeof obj.text === "string" ? obj.text.trim() : "";
+    if (!text) return undefined;
+    return {
+      kind: "text",
+      text,
+      ...(exact !== undefined ? { exact } : {}),
+      ...(nth !== undefined ? { nth } : {}),
+    };
+  }
+
+  if (typeof obj.name === "string" && obj.name.trim()) {
+    return {
+      kind: "text",
+      text: obj.name.trim(),
+      ...(exact !== undefined ? { exact } : {}),
+      ...(nth !== undefined ? { nth } : {}),
+    };
+  }
+
+  return undefined;
+}
+
 export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
   {
     name: "criativo_browser",
@@ -3773,13 +4216,23 @@ export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
         tabId: { type: "string" },
         perfilId: { type: "string" },
         url: { type: "string" },
-        target: { type: "object" },
-        toTarget: { type: "object" },
+        target: BROWSER_TARGET_SCHEMA,
+        toTarget: BROWSER_TARGET_SCHEMA,
         text: { type: "string" },
         clear: { type: "boolean" },
         pressEnter: { type: "boolean" },
         key: { type: "string" },
-        fields: { type: "array", items: { type: "object" } },
+        fields: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              target: BROWSER_TARGET_SCHEMA,
+              value: { type: "string" },
+            },
+            required: ["target", "value"],
+          },
+        },
         deltaX: { type: "number" },
         deltaY: { type: "number" },
         values: { type: "array", items: { type: "string" } },
@@ -3792,7 +4245,13 @@ export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
         expression: { type: "string" },
         accept: { type: "boolean" },
         promptText: { type: "string" },
-        viewport: { type: "object" },
+        viewport: {
+          type: "object",
+          properties: {
+            width: { type: "number" },
+            height: { type: "number" },
+          },
+        },
         userAgent: { type: "string" },
         locale: { type: "string" },
         timezoneId: { type: "string" },
@@ -3803,11 +4262,11 @@ export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
         },
         waitForTakeover: { type: "boolean" },
         method: { type: "string", enum: ["password", "otp", "authenticator"] },
-        targets: { type: "array", items: { type: "object" } },
+        targets: { type: "array", items: BROWSER_TARGET_SCHEMA },
         loginId: { type: "string" },
         username: { type: "string" },
         submission: { type: "string", enum: ["enter", "click", "none"] },
-        submitTarget: { type: "object" },
+        submitTarget: BROWSER_TARGET_SCHEMA,
       },
       required: ["action"],
     },
@@ -3821,10 +4280,20 @@ export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
         tabId: { type: "string" },
         perfilId: { type: "string" },
         url: { type: "string" },
-        target: { type: "object" },
-        toTarget: { type: "object" },
+        target: BROWSER_TARGET_SCHEMA,
+        toTarget: BROWSER_TARGET_SCHEMA,
         text: { type: "string" },
-        fields: { type: "array", items: { type: "object" } },
+        fields: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              target: BROWSER_TARGET_SCHEMA,
+              value: { type: "string" },
+            },
+            required: ["target", "value"],
+          },
+        },
         key: { type: "string" },
         paths: { type: "array", items: { type: "string" } },
         expression: { type: "string" },
@@ -4067,7 +4536,12 @@ export async function executePhase15ToolCall(
         throw new Error("Informe 'tabId' em submit_secret.");
       }
       const loginId = readStringArg(args, "loginId");
-      const targets = (Array.isArray(args.targets) ? args.targets : []) as BrowserTargetSelector[];
+      const targets = Array.isArray(args.targets)
+        ? args.targets
+            .map((raw) => normalizeBrowserTargetInput(raw))
+            .filter((item): item is BrowserTargetSelector => Boolean(item))
+        : [];
+      const normalizedSubmitTarget = normalizeBrowserTargetInput(args.submitTarget) ?? null;
       const method =
         args.method === "otp" || args.method === "authenticator" ? args.method : "password";
 
@@ -4080,7 +4554,7 @@ export async function executePhase15ToolCall(
           username: readStringArg(args, "username") ?? null,
           submission:
             args.submission === "click" || args.submission === "none" ? args.submission : "enter",
-          submitTarget: (args.submitTarget as BrowserTargetSelector | undefined) ?? null,
+          submitTarget: normalizedSubmitTarget,
         });
       }
 
@@ -4108,10 +4582,25 @@ export async function executePhase15ToolCall(
           username: readStringArg(args, "username") ?? null,
           submission:
             args.submission === "click" || args.submission === "none" ? args.submission : "enter",
-          submitTarget: (args.submitTarget as BrowserTargetSelector | undefined) ?? null,
+          submitTarget: normalizedSubmitTarget,
         },
       };
     }
+
+    const normalizedFields = Array.isArray(args.fields)
+      ? args.fields
+          .map((item) => {
+            if (!item || typeof item !== "object") return null;
+            const rec = item as Record<string, unknown>;
+            const target = normalizeBrowserTargetInput(rec.target);
+            if (!target) return null;
+            return {
+              target,
+              value: typeof rec.value === "string" ? rec.value : String(rec.value ?? ""),
+            };
+          })
+          .filter((entry): entry is { target: BrowserTargetSelector; value: string } => Boolean(entry))
+      : undefined;
 
     return await services.browserService.executeAction({
       action,
@@ -4121,15 +4610,13 @@ export async function executePhase15ToolCall(
       permissionLevel,
       tabId: readStringArg(args, "tabId"),
       url: readStringArg(args, "url"),
-      target: (args.target as BrowserTargetSelector | undefined) ?? undefined,
-      toTarget: (args.toTarget as BrowserTargetSelector | undefined) ?? undefined,
+      target: normalizeBrowserTargetInput(args.target),
+      toTarget: normalizeBrowserTargetInput(args.toTarget),
       text: typeof args.text === "string" ? args.text : undefined,
       clear: typeof args.clear === "boolean" ? args.clear : undefined,
       pressEnter: typeof args.pressEnter === "boolean" ? args.pressEnter : undefined,
       key: readStringArg(args, "key"),
-      fields: Array.isArray(args.fields)
-        ? (args.fields as Array<{ target: BrowserTargetSelector; value: string }>)
-        : undefined,
+      fields: normalizedFields,
       deltaX: typeof args.deltaX === "number" ? args.deltaX : undefined,
       deltaY: typeof args.deltaY === "number" ? args.deltaY : undefined,
       values: Array.isArray(args.values) ? args.values.map(String) : undefined,

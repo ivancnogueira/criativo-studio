@@ -361,6 +361,12 @@ export type WebSocketEventMap = {
     agente_id: string;
     esperas: AgenteEspera[];
   };
+  "wakeup:updated": {
+    agente_id: string;
+    wakeup_id: string;
+    status: "agendado" | "executando" | "concluido" | "cancelado" | "falha";
+    iteracao_atual: number;
+  };
   "chat_queue:changed": {
     agente_id: string;
     thread_id: string | null;

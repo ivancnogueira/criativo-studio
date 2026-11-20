@@ -6,6 +6,7 @@ import type {
   ModoMensagemOcupado,
 } from "@criativo/contracts";
 import type { CriativoDatabase } from "../database/client.ts";
+import { resolveAgentIdFromDb } from "../server/agent-resolver.ts";
 import type { WebSocketHub } from "../server/websocket-hub.ts";
 import type { AgentTasksService } from "../threads/agent-tasks-service.ts";
 import type { ChatQueueStore } from "./chat-queue-store.ts";
@@ -414,18 +415,21 @@ export class QueueControlsService {
     runningTasks: number;
     runningChannelTask: boolean;
   } {
-    if (callerAgentId === targetAgentId) {
+    const resolvedTargetId =
+      resolveAgentIdFromDb(this.db, targetAgentId) ?? targetAgentId.trim();
+    if (callerAgentId === resolvedTargetId) {
       throw new Error("Um agente não pode usar interrupt_agent contra si mesmo.");
     }
 
     const targetRow = this.db.connection
       .prepare("SELECT agente_id, nome FROM projecao_agentes WHERE agente_id = ?;")
-      .get(targetAgentId) as { agente_id: string; nome: string } | undefined;
+      .get(resolvedTargetId) as { agente_id: string; nome: string } | undefined;
     if (!targetRow) {
       throw new Error(`Agente alvo não encontrado: ${targetAgentId}`);
     }
 
-    const laneEntregas = this.queueStore.listLane(targetAgentId, null);
+    const canonicalTargetId = targetRow.agente_id;
+    const laneEntregas = this.queueStore.listLane(canonicalTargetId, null);
     let cancelledMessages = 0;
     for (const ent of laneEntregas) {
       if (
@@ -440,7 +444,7 @@ export class QueueControlsService {
       }
     }
 
-    const laneKey = QueueControlsService.buildLaneKey(targetAgentId, null);
+    const laneKey = QueueControlsService.buildLaneKey(canonicalTargetId, null);
     const activeTurn = this.activeTurnsByLane.get(laneKey);
     let interruptedTurnId: string | null = null;
 

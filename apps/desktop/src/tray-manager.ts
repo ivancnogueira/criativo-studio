@@ -8,6 +8,7 @@ export interface TrayManagerOptions {
   userDataDir: string;
   onShowWindow: () => void;
   onToggleFloatingDock?: () => void;
+  onToggleFloatingDockAutoHide?: () => boolean;
   onCheckUpdates: () => void;
   onQuit: () => void;
 }
@@ -45,6 +46,16 @@ export function createStudioTray(options: TrayManagerOptions): Tray {
           {
             label: "Mostrar / Ocultar Ilha Flutuante",
             click: () => options.onToggleFloatingDock?.(),
+          },
+        ]
+      : []),
+    ...(options.onToggleFloatingDockAutoHide
+      ? [
+          {
+            label: "Ilha Flutuante: Recolher na Borda",
+            click: () => {
+              options.onToggleFloatingDockAutoHide?.();
+            },
           },
         ]
       : []),

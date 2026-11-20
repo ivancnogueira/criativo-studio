@@ -3,7 +3,8 @@ import type { AgenteRegistro, AvatarShape, MensagemChat } from "@criativo/contra
 import {
   ArrowUp,
   ExternalLink,
-  GripHorizontal,
+  Pin,
+  PinOff,
   Plus,
   Smartphone,
   X,
@@ -70,19 +71,27 @@ export interface FloatingDesktopDockProps {
   initialAgentes?: AgenteRegistro[];
   initialMessagesByAgent?: Record<string, MensagemChat[]>;
   initialSelectedAgentId?: string | null;
+  initialPinned?: boolean;
+  initialPeeked?: boolean;
+  initialSide?: "left" | "right";
 }
 
 export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
   initialAgentes = [],
   initialMessagesByAgent = {},
   initialSelectedAgentId = null,
+  initialPinned = true,
+  initialPeeked = false,
+  initialSide = "right",
 }) => {
   const [agentes, setAgentes] = useState<AgenteRegistro[]>(initialAgentes);
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(initialSelectedAgentId);
-  const [side, setSide] = useState<"left" | "right">("right");
+  const [side, setSide] = useState<"left" | "right">(initialSide);
+  const [dockPinned, setDockPinned] = useState<boolean>(initialPinned);
+  const [dockPeeked, setDockPeeked] = useState<boolean>(initialPeeked);
   const [messagesByAgent, setMessagesByAgent] = useState<Record<string, MensagemChat[]>>(
-    initialMessagesByAgent
+    initialMessagesByAgent,
   );
   const [workingAgentIds, setWorkingAgentIds] = useState<Set<string>>(() => new Set());
   const [progressByAgent, setProgressByAgent] = useState<Record<string, string>>({});
@@ -92,6 +101,7 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
   const draggingRef = useRef(false);
   const movedDuringDragRef = useRef(false);
   const dragStartClientRef = useRef<{ x: number; y: number } | null>(null);
+  const hidePeekTimerRef = useRef<number | null>(null);
   const pillRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -127,6 +137,14 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
     const bridge = getCriativoDesktopBridge();
     void bridge?.dockGetState?.().then((st) => {
       if (st?.side) setSide(st.side);
+      if (typeof st?.pinned === "boolean") setDockPinned(st.pinned);
+      if (typeof st?.peeked === "boolean") setDockPeeked(st.peeked);
+    });
+
+    const unsubDock = bridge?.onDockStateChanged?.((st) => {
+      if (st?.side) setSide(st.side);
+      if (typeof st?.pinned === "boolean") setDockPinned(st.pinned);
+      if (typeof st?.peeked === "boolean") setDockPeeked(st.peeked);
     });
 
     const ws = new WebSocketClient();
@@ -174,6 +192,8 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
     });
 
     return () => {
+      if (hidePeekTimerRef.current) window.clearTimeout(hidePeekTimerRef.current);
+      unsubDock?.();
       unsubMsg();
       unsubProg();
       unsubSidebar();
@@ -200,27 +220,68 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
     return agentes.slice(0, 6);
   }, [agentes, pinnedIds]);
 
-  // Ajusta altura da pílula recolhida no Electron conforme número de agentes
+  const desiredHeight = useMemo(
+    () => Math.max(180, dockAgents.length * 48 + 76),
+    [dockAgents.length],
+  );
+
   useEffect(() => {
     const bridge = getCriativoDesktopBridge();
     if (!bridge?.dockSetExpanded || selectedAgentId !== null) return;
-    const desiredHeight = Math.max(200, dockAgents.length * 52 + 88);
     void bridge.dockSetExpanded(false, desiredHeight).then((res) => {
       if (res?.side) setSide(res.side);
     });
-  }, [dockAgents.length, selectedAgentId]);
+  }, [desiredHeight, selectedAgentId]);
+
+  const cancelScheduledCollapse = () => {
+    if (hidePeekTimerRef.current) {
+      window.clearTimeout(hidePeekTimerRef.current);
+      hidePeekTimerRef.current = null;
+    }
+  };
+
+  const handleExpandPeek = async () => {
+    cancelScheduledCollapse();
+    if (dockPinned || dockPeeked) return;
+    setDockPeeked(true);
+    const bridge = getCriativoDesktopBridge();
+    const res = await bridge?.dockSetPeeked?.(true, desiredHeight);
+    if (res?.side) setSide(res.side);
+  };
+
+  const handleLeaveDock = () => {
+    if (dockPinned || selectedAgentId !== null || draggingRef.current) return;
+    cancelScheduledCollapse();
+    hidePeekTimerRef.current = window.setTimeout(() => {
+      setDockPeeked(false);
+      void getCriativoDesktopBridge()?.dockSetPeeked?.(false, desiredHeight);
+    }, 180);
+  };
+
+  const handleToggleDockPin = async () => {
+    if (movedDuringDragRef.current) return;
+    const nextPinned = !dockPinned;
+    setDockPinned(nextPinned);
+    setDockPeeked(nextPinned);
+    const bridge = getCriativoDesktopBridge();
+    const res = await bridge?.dockSetPinned?.(nextPinned, desiredHeight);
+    if (res?.side) setSide(res.side);
+  };
 
   const handleToggleAgentChat = async (agenteId: string) => {
     if (movedDuringDragRef.current) return;
+    cancelScheduledCollapse();
     const bridge = getCriativoDesktopBridge();
     const isClosing = selectedAgentId === agenteId;
     const nextSelected = isClosing ? null : agenteId;
     setSelectedAgentId(nextSelected);
+    if (nextSelected !== null) setDockPeeked(true);
 
     if (bridge?.dockSetExpanded) {
-      const desiredHeight = Math.max(200, dockAgents.length * 52 + 88);
       const res = await bridge.dockSetExpanded(nextSelected !== null, desiredHeight);
       if (res?.side) setSide(res.side);
+      if (typeof res?.pinned === "boolean") setDockPinned(res.pinned);
+      if (typeof res?.peeked === "boolean") setDockPeeked(res.peeked);
     }
   };
 
@@ -228,9 +289,9 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
     setSelectedAgentId(null);
     const bridge = getCriativoDesktopBridge();
     if (bridge?.dockSetExpanded) {
-      const desiredHeight = Math.max(200, dockAgents.length * 52 + 88);
       const res = await bridge.dockSetExpanded(false, desiredHeight);
       if (res?.side) setSide(res.side);
+      if (typeof res?.peeked === "boolean") setDockPeeked(res.peeked);
     }
   };
 
@@ -266,7 +327,7 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
 
   const selectedAgent = useMemo(
     () => agentes.find((a) => a.agente_id === selectedAgentId) ?? null,
-    [agentes, selectedAgentId]
+    [agentes, selectedAgentId],
   );
 
   const selectedMessages = selectedAgent
@@ -305,7 +366,7 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
       setMessagesByAgent((prev) => {
         const cleaned = (prev[agId] ?? []).filter((m) => m.mensagem_id !== optimisticId);
         const extras = [res.mensagem_usuario, res.mensagem_agente].filter(
-          (x): x is MensagemChat => Boolean(x)
+          (x): x is MensagemChat => Boolean(x),
         );
         const byId = new Map(cleaned.map((m) => [m.mensagem_id, m]));
         for (const m of extras) byId.set(m.mensagem_id, m);
@@ -328,18 +389,24 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
     };
   }, [selectedAgent]);
 
+  const showExpandedPill = dockPinned || dockPeeked || selectedAgent !== null;
+  const edgeRoundedClass =
+    side === "right" ? "rounded-l-[22px] border-r-0" : "rounded-r-[22px] border-l-0";
+
   return (
     <div
       data-testid="floating-desktop-dock"
-      className={`h-screen w-screen bg-transparent flex items-center justify-end p-1.5 gap-2.5 select-none overflow-hidden ${
+      onMouseEnter={cancelScheduledCollapse}
+      onMouseLeave={handleLeaveDock}
+      className={`h-screen w-screen bg-transparent flex items-center justify-end p-0 gap-2 select-none overflow-hidden ${
         side === "left" ? "flex-row-reverse" : "flex-row"
       }`}
     >
-      {/* Card Flutuante de Chat Inline */}
+      {/* Card Flutuante de Chat Inline (limpo, sem halo de sombra DWM) */}
       {selectedAgent && (
         <div
           data-testid="floating-dock-chat-card"
-          className="w-[372px] h-[552px] rounded-[22px] border border-white/[0.1] bg-[#121214]/[0.97] backdrop-blur-2xl shadow-[0_20px_60px_rgba(0,0,0,0.75)] flex flex-col overflow-hidden text-[#F0F0F0]"
+          className="w-[370px] h-[556px] rounded-[20px] border border-white/[0.08] bg-[#0F1012] flex flex-col overflow-hidden text-[#F0F0F0]"
         >
           {/* Header do Card */}
           <div
@@ -373,8 +440,8 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
             >
               <button
                 type="button"
-                title="Abrir no Criativo Studio"
-                aria-label="Abrir no Criativo Studio"
+                title="Abrir na janela principal"
+                aria-label="Abrir na janela principal"
                 onClick={() =>
                   void getCriativoDesktopBridge()?.openMainWindow?.({
                     agenteId: selectedAgent.agente_id,
@@ -427,7 +494,7 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
                       className={`max-w-[86%] rounded-2xl px-3.5 py-2 text-[12.5px] leading-relaxed ${
                         isUser
                           ? "bg-[#262629] text-white border border-white/[0.08]"
-                          : "bg-[#1B1B1F] text-[#E8E8ED] border border-white/[0.05]"
+                          : "bg-[#1A1B1F] text-[#E8E8ED] border border-white/[0.05]"
                       }`}
                     >
                       {isWpp && (
@@ -462,7 +529,7 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
           {/* Input de envio rápido */}
           <form
             onSubmit={(e) => void handleSendMessage(e)}
-            className="shrink-0 p-3 pt-2 border-t border-white/[0.06] bg-[#141416]"
+            className="shrink-0 p-3 pt-2 border-t border-white/[0.06] bg-[#121316]"
           >
             <div className="flex items-center gap-2 rounded-full border border-white/[0.1] bg-[#1C1C20] px-3 py-1.5 focus-within:border-[#007CF7]">
               <input
@@ -485,74 +552,99 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
         </div>
       )}
 
-      {/* Pílula Vertical Flutuante Arrastável */}
-      <div
-        ref={pillRef}
-        data-testid="floating-dock-pill"
-        className="w-[72px] rounded-[28px] border border-white/[0.1] bg-[#161619]/[0.96] backdrop-blur-2xl shadow-[0_14px_40px_rgba(0,0,0,0.75)] py-2 px-1.5 flex flex-col items-center gap-1.5"
-      >
+      {/* Lingueta discreta colada à borda quando configurada para recolher */}
+      {!showExpandedPill ? (
+        <button
+          type="button"
+          data-testid="floating-dock-peek-handle"
+          aria-label="Expandir ilha de agentes"
+          title="Expandir ilha de agentes"
+          onMouseEnter={() => void handleExpandPeek()}
+          onClick={() => void handleExpandPeek()}
+          className={`h-24 w-4 ${edgeRoundedClass} border border-white/[0.07] bg-[#0E0F12] flex items-center justify-center hover:w-5 transition-all cursor-pointer`}
+        >
+          <span className="h-9 w-1 rounded-full bg-[#42A0FF]/70" />
+        </button>
+      ) : (
+        /* Aba Lateral Limpa colada à borda (sem barra de nome, sem grip ruidoso e sem sombra difusa) */
         <div
+          ref={pillRef}
+          data-testid="floating-dock-pill"
           onPointerDown={beginDrag}
           onPointerMove={moveDrag}
           onPointerUp={() => void endDrag()}
-          title="Arrastar ilha flutuante na tela"
-          aria-label="Arrastar ilha flutuante na tela"
-          className="w-full h-5 flex items-center justify-center text-[#7E7E85] hover:text-white cursor-grab active:cursor-grabbing"
+          className={`w-[62px] ${edgeRoundedClass} border border-white/[0.06] bg-[#0E0F12] py-2.5 px-1.5 flex flex-col items-center gap-2 cursor-grab active:cursor-grabbing`}
         >
-          <GripHorizontal className="h-4 w-4" />
+          <div className="flex flex-col items-center gap-1.5">
+            {dockAgents.map((ag) => {
+              const cfg = (ag.config ?? {}) as Record<string, unknown>;
+              const fb = getDefaultMascotForAgent(ag.agente_id);
+              const shape = (typeof cfg.avatar_shape === "string"
+                ? cfg.avatar_shape
+                : fb.shape) as AvatarShape;
+              const color = typeof cfg.avatar_color === "string" ? cfg.avatar_color : fb.color;
+              const working = workingAgentIds.has(ag.agente_id) || ag.status === "trabalhando";
+              const isSelected = selectedAgentId === ag.agente_id;
+
+              return (
+                <button
+                  key={ag.agente_id}
+                  type="button"
+                  title={ag.nome}
+                  aria-label={`Conversar com ${ag.nome}`}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    beginDrag(e);
+                  }}
+                  onPointerMove={moveDrag}
+                  onPointerUp={() => void endDrag()}
+                  onClick={() => void handleToggleAgentChat(ag.agente_id)}
+                  className={`relative rounded-xl p-1 transition-colors ${
+                    isSelected ? "bg-[#007CF7]/20 ring-1 ring-[#007CF7]" : "hover:bg-white/[0.06]"
+                  }`}
+                >
+                  <MascoteAvatar
+                    shape={shape}
+                    color={color}
+                    size={34}
+                    animated={working}
+                    mood={working ? "working" : "idle"}
+                  />
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            type="button"
+            title="Criar novo agente"
+            aria-label="Criar novo agente"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() =>
+              void getCriativoDesktopBridge()?.openMainWindow?.({ action: "new-agent" })
+            }
+            className="h-8 w-8 rounded-xl flex items-center justify-center text-[#9A9AA2] hover:bg-white/[0.06] hover:text-white transition-colors"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+
+          <button
+            type="button"
+            data-testid="floating-dock-pin-toggle"
+            title={dockPinned ? "Recolher ilha na borda" : "Manter ilha fixa na borda"}
+            aria-label={dockPinned ? "Recolher ilha na borda" : "Manter ilha fixa na borda"}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => void handleToggleDockPin()}
+            className="h-6 w-6 rounded-lg flex items-center justify-center text-[#7E7E85] hover:bg-white/[0.06] hover:text-white transition-colors"
+          >
+            {dockPinned ? (
+              <PinOff className="h-3 w-3" />
+            ) : (
+              <Pin className="h-3 w-3 text-[#42A0FF]" />
+            )}
+          </button>
         </div>
-
-        <div className="flex flex-col items-center gap-1.5">
-          {dockAgents.map((ag) => {
-            const cfg = (ag.config ?? {}) as Record<string, unknown>;
-            const fb = getDefaultMascotForAgent(ag.agente_id);
-            const shape = (typeof cfg.avatar_shape === "string"
-              ? cfg.avatar_shape
-              : fb.shape) as AvatarShape;
-            const color = typeof cfg.avatar_color === "string" ? cfg.avatar_color : fb.color;
-            const working = workingAgentIds.has(ag.agente_id) || ag.status === "trabalhando";
-            const isSelected = selectedAgentId === ag.agente_id;
-
-            return (
-              <button
-                key={ag.agente_id}
-                type="button"
-                title={ag.nome}
-                aria-label={`Conversar com ${ag.nome}`}
-                onPointerDown={beginDrag}
-                onPointerMove={moveDrag}
-                onPointerUp={() => void endDrag()}
-                onClick={() => void handleToggleAgentChat(ag.agente_id)}
-                className={`relative rounded-2xl p-1.5 transition-all ${
-                  isSelected
-                    ? "bg-[#007CF7]/25 ring-1 ring-[#007CF7]"
-                    : "hover:bg-[#26262C]"
-                }`}
-              >
-                <MascoteAvatar
-                  shape={shape}
-                  color={color}
-                  size={36}
-                  animated={working}
-                  mood={working ? "working" : "idle"}
-                />
-              </button>
-            );
-          })}
-        </div>
-
-        <button
-          type="button"
-          title="Criar novo agente"
-          aria-label="Criar novo agente"
-          onClick={() =>
-            void getCriativoDesktopBridge()?.openMainWindow?.({ action: "new-agent" })
-          }
-          className="mt-0.5 h-9 w-9 rounded-full border border-white/10 bg-[#1F1F24] hover:bg-[#007CF7]/20 hover:border-[#007CF7]/50 flex items-center justify-center text-[#979797] hover:text-white transition-colors"
-        >
-          <Plus className="h-4 w-4" />
-        </button>
-      </div>
+      )}
     </div>
   );
 };

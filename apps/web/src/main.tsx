@@ -9,8 +9,11 @@ const isFloatingDockMode =
   new URLSearchParams(window.location.search).get("mode") === "floating-dock";
 
 if (isFloatingDockMode && typeof document !== "undefined") {
+  document.title = "";
   document.documentElement.style.background = "transparent";
+  document.documentElement.style.overflow = "hidden";
   document.body.style.background = "transparent";
+  document.body.style.overflow = "hidden";
   const rootEl = document.getElementById("root");
   if (rootEl) rootEl.style.background = "transparent";
 }

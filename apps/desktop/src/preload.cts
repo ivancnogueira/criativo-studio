@@ -5,6 +5,14 @@ export interface CriativoMainNavigatePayload {
   action?: "new-agent";
 }
 
+export interface CriativoDockStatePayload {
+  visible: boolean;
+  expanded: boolean;
+  side: "left" | "right";
+  pinned: boolean;
+  peeked: boolean;
+}
+
 export interface CriativoDesktopBridge {
   isPackagedDesktop: boolean;
   platform: NodeJS.Platform;
@@ -14,12 +22,15 @@ export interface CriativoDesktopBridge {
   restartForUpdate: () => Promise<unknown>;
   openExternalSafe: (url: string) => Promise<boolean>;
   openUserDataFolder: () => Promise<void>;
-  dockGetState: () => Promise<{ visible: boolean; expanded: boolean; side: "left" | "right" }>;
-  dockSetExpanded: (expanded: boolean, pillHeight?: number) => Promise<{ side: "left" | "right" }>;
+  dockGetState: () => Promise<CriativoDockStatePayload>;
+  dockSetExpanded: (expanded: boolean, pillHeight?: number) => Promise<CriativoDockStatePayload>;
   dockSetVisible: (visible: boolean) => Promise<boolean>;
+  dockSetPinned: (pinned: boolean, pillHeight?: number) => Promise<CriativoDockStatePayload>;
+  dockSetPeeked: (peeked: boolean, pillHeight?: number) => Promise<CriativoDockStatePayload>;
   dockStartDrag: () => Promise<void>;
   dockMoveDrag: () => Promise<void>;
-  dockEndDrag: () => Promise<{ side: "left" | "right" }>;
+  dockEndDrag: () => Promise<CriativoDockStatePayload>;
+  onDockStateChanged: (listener: (state: CriativoDockStatePayload) => void) => () => void;
   openMainWindow: (opts?: CriativoMainNavigatePayload) => Promise<void>;
   onMainNavigate: (listener: (payload: CriativoMainNavigatePayload) => void) => () => void;
 }
@@ -38,9 +49,22 @@ const bridge: CriativoDesktopBridge = {
   dockSetExpanded: (expanded: boolean, pillHeight?: number) =>
     ipcRenderer.invoke("criativo:dock-set-expanded", { expanded, pillHeight }),
   dockSetVisible: (visible: boolean) => ipcRenderer.invoke("criativo:dock-set-visible", visible),
+  dockSetPinned: (pinned: boolean, pillHeight?: number) =>
+    ipcRenderer.invoke("criativo:dock-set-pinned", { pinned, pillHeight }),
+  dockSetPeeked: (peeked: boolean, pillHeight?: number) =>
+    ipcRenderer.invoke("criativo:dock-set-peeked", { peeked, pillHeight }),
   dockStartDrag: () => ipcRenderer.invoke("criativo:dock-start-drag"),
   dockMoveDrag: () => ipcRenderer.invoke("criativo:dock-move-drag"),
   dockEndDrag: () => ipcRenderer.invoke("criativo:dock-end-drag"),
+  onDockStateChanged: (listener: (state: CriativoDockStatePayload) => void) => {
+    const wrapped = (_event: unknown, payload: CriativoDockStatePayload) => {
+      listener(payload);
+    };
+    ipcRenderer.on("criativo:dock-state-changed", wrapped);
+    return () => {
+      ipcRenderer.removeListener("criativo:dock-state-changed", wrapped);
+    };
+  },
   openMainWindow: (opts?: CriativoMainNavigatePayload) =>
     ipcRenderer.invoke("criativo:open-main-window", opts ?? {}),
   onMainNavigate: (listener: (payload: CriativoMainNavigatePayload) => void) => {

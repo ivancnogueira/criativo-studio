@@ -1,7 +1,8 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import type { StudioUserSettings } from "@criativo/contracts";
 import { Check, LayoutTemplate, Palette, Sliders } from "lucide-react";
 import { CarbonSelect, type CarbonSelectOption } from "../../components/ui/CarbonControls";
+import { getCriativoDesktopBridge } from "../../types/desktop-bridge";
 
 const ACCENT_COLORS = [
   { hex: "#007CF7", label: "Azul Carbon" },
@@ -188,6 +189,24 @@ export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
   aparencia,
   onChange,
 }) => {
+  const [desktopDockState, setDesktopDockState] = useState<{
+    available: boolean;
+    visible: boolean;
+    pinned: boolean;
+  }>({ available: false, visible: true, pinned: true });
+
+  useEffect(() => {
+    const bridge = getCriativoDesktopBridge();
+    if (!bridge?.dockGetState) return;
+    void bridge.dockGetState().then((st) => {
+      setDesktopDockState({
+        available: true,
+        visible: Boolean(st?.visible),
+        pinned: st?.pinned !== false,
+      });
+    });
+  }, []);
+
   return (
     <div className="space-y-4">
       <div className="rounded-xl border border-white/[0.06] bg-[#212121] p-4 space-y-3">
@@ -300,6 +319,30 @@ export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
           />
         </div>
       </div>
+
+      {desktopDockState.available && (
+        <div className="space-y-3" data-testid="desktop-dock-settings-card">
+          <ToggleRow
+            label="Ilha flutuante de agentes na área de trabalho"
+            description="Mantém o acesso rápido aos agentes flutuando sobre outros aplicativos no Desktop."
+            checked={desktopDockState.visible}
+            onChange={(next) => {
+              setDesktopDockState((prev) => ({ ...prev, visible: next }));
+              void getCriativoDesktopBridge()?.dockSetVisible?.(next);
+            }}
+          />
+          <ToggleRow
+            label="Recolher ilha flutuante na borda da tela"
+            description="Quando ativa, a ilha recolhe para uma aba discreta na lateral e abre ao passar o mouse."
+            checked={!desktopDockState.pinned}
+            onChange={(autoHide) => {
+              const nextPinned = !autoHide;
+              setDesktopDockState((prev) => ({ ...prev, pinned: nextPinned }));
+              void getCriativoDesktopBridge()?.dockSetPinned?.(nextPinned);
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 };

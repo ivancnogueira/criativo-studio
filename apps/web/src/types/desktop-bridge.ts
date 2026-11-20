@@ -3,6 +3,14 @@ export interface CriativoMainNavigatePayload {
   action?: "new-agent";
 }
 
+export interface CriativoDockStatePayload {
+  visible: boolean;
+  expanded: boolean;
+  side: "left" | "right";
+  pinned?: boolean;
+  peeked?: boolean;
+}
+
 export interface CriativoDesktopWindowBridge {
   isPackagedDesktop: boolean;
   platform?: string;
@@ -12,12 +20,15 @@ export interface CriativoDesktopWindowBridge {
   restartForUpdate: () => Promise<unknown>;
   openExternalSafe: (url: string) => Promise<boolean>;
   openUserDataFolder: () => Promise<void>;
-  dockGetState?: () => Promise<{ visible: boolean; expanded: boolean; side: "left" | "right" }>;
-  dockSetExpanded?: (expanded: boolean, pillHeight?: number) => Promise<{ side: "left" | "right" }>;
+  dockGetState?: () => Promise<CriativoDockStatePayload>;
+  dockSetExpanded?: (expanded: boolean, pillHeight?: number) => Promise<CriativoDockStatePayload>;
   dockSetVisible?: (visible: boolean) => Promise<boolean>;
+  dockSetPinned?: (pinned: boolean, pillHeight?: number) => Promise<CriativoDockStatePayload>;
+  dockSetPeeked?: (peeked: boolean, pillHeight?: number) => Promise<CriativoDockStatePayload>;
   dockStartDrag?: () => Promise<void>;
   dockMoveDrag?: () => Promise<void>;
-  dockEndDrag?: () => Promise<{ side: "left" | "right" }>;
+  dockEndDrag?: () => Promise<CriativoDockStatePayload>;
+  onDockStateChanged?: (listener: (state: CriativoDockStatePayload) => void) => () => void;
   openMainWindow?: (opts?: CriativoMainNavigatePayload) => Promise<void>;
   onMainNavigate?: (listener: (payload: CriativoMainNavigatePayload) => void) => () => void;
 }

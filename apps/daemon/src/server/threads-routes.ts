@@ -9,12 +9,14 @@ import type { AgentTasksService } from "../threads/agent-tasks-service.ts";
 import type { AgentThreadStore } from "../threads/agent-thread-store.ts";
 import type { ConversationPaginationReader } from "../threads/conversation-pagination.ts";
 import type { AgentWaitsService } from "../waits/agent-waits-service.ts";
+import type { AgentWakeupService } from "../waits/agent-wakeup-service.ts";
 import type { StudioRoutesDeps } from "./studio-routes.ts";
 
 export interface Phase13ServicesBundle {
   threadStore: AgentThreadStore;
   tasksService: AgentTasksService;
   waitsService: AgentWaitsService;
+  wakeupService?: AgentWakeupService;
   queueControls: QueueControlsService;
   pagination: ConversationPaginationReader;
   sideQuestion: SideQuestionService;

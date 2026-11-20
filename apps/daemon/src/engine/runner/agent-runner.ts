@@ -27,6 +27,7 @@ import {
   PHASE13_TOOLS_SCHEMA,
   PHASE14_TOOLS_SCHEMA,
   PHASE15_TOOLS_SCHEMA,
+  readAgentContextCutoffAt,
   readAgentGovernance,
   type Phase13ToolServices,
   type Phase14ToolServices,
@@ -494,8 +495,13 @@ export class AgentRunner {
           pedidoTexto,
           isRoutine: context.routineCtx?.turnOrigin === "routine",
           isResumingWait: Boolean(context.wokenWaitsBlock),
+          channelOrigin:
+            context.tarefa.canal_origem === "whatsapp" ? "whatsapp" : "web",
         },
-        this.phase13Services,
+        {
+          ...this.phase13Services,
+          db: this.db,
+        },
       );
       if (res.handled) {
         return res.result;
@@ -766,6 +772,11 @@ export class AgentRunner {
     if (rotinaExecucaoId && !flowStepId && this.routineToolsDeps) {
       this.routineToolsDeps.executionService.markExecutionRunning(rotinaExecucaoId);
     }
+    if (rotinaExecucaoId) {
+      this.providerConnection
+        ?.getStudioMcpBridge()
+        ?.registerRoutineExecutionFlags(rotinaExecucaoId, routineCtx.flags);
+    }
 
     const generatedArtifacts: string[] = [];
     let stepIndex = 0;
@@ -828,10 +839,55 @@ export class AgentRunner {
       }
       const availableTools = Array.from(availableToolsMap.values());
 
+      let routineHistoryBlock = "";
+      if (rotinaExecucaoId) {
+        try {
+          const cutoffAt = readAgentContextCutoffAt(this.db, agenteId);
+          const recentRows = (cutoffAt
+            ? this.db.connection
+                .prepare(
+                  `SELECT autor_tipo, agente_id, texto, criado_em
+                   FROM projecao_conversas_chat
+                   WHERE canal_id = ? AND criado_em >= ?
+                   ORDER BY criado_em DESC
+                   LIMIT 6;`,
+                )
+                .all(`agente:${agenteId}`, cutoffAt)
+            : this.db.connection
+                .prepare(
+                  `SELECT autor_tipo, agente_id, texto, criado_em
+                   FROM projecao_conversas_chat
+                   WHERE canal_id = ?
+                   ORDER BY criado_em DESC
+                   LIMIT 6;`,
+                )
+                .all(`agente:${agenteId}`)) as Array<{
+            autor_tipo: string;
+            agente_id: string | null;
+            texto: string;
+            criado_em: string;
+          }>;
+
+          if (recentRows.length > 0) {
+            const formatted = recentRows
+              .reverse()
+              .map((m) => {
+                const who = m.autor_tipo === "usuario" ? "Usuário" : m.agente_id || "Agente";
+                const excerpt = String(m.texto ?? "").replace(/\s+/g, " ").trim().slice(0, 600);
+                return `- [${who} @ ${m.criado_em}]: ${excerpt}`;
+              })
+              .join("\n");
+            routineHistoryBlock = `\n\n[Histórico recente da conversa deste agente]\n${formatted}`;
+          }
+        } catch {
+          // Histórico opcional em rotinas
+        }
+      }
+
       const messages: ConversationMessage[] = [
         {
           role: "user",
-          content: `Tarefa #${tarefa.tarefa_id} (${tarefa.tipo} via ${tarefa.canal_origem}): ${tarefa.titulo}\nPayload:\n${JSON.stringify(tarefa.payload, null, 2)}`,
+          content: `Tarefa #${tarefa.tarefa_id} (${tarefa.tipo} via ${tarefa.canal_origem}): ${tarefa.titulo}\nPayload:\n${JSON.stringify(tarefa.payload, null, 2)}${routineHistoryBlock}`,
         },
       ];
 
@@ -895,12 +951,21 @@ export class AgentRunner {
             .catch(() => null);
           const effectiveAccId = preferredAccountId ?? poolAcc?.id ?? undefined;
 
+          const endpointOpts = {
+            ...(effectiveThreadId ? { threadId: effectiveThreadId } : {}),
+            ...(rotinaExecucaoId ? { execucaoId: rotinaExecucaoId } : {}),
+          };
+
           if (provName === "opencode") {
             const ocRes = await this.providerConnection.getOpenCodeService().executePrompt({
               modelId: targetModel,
               systemPrompt,
               messages: promptMessages,
               agentId: effectiveAgentId,
+              mcpServers: this.providerConnection.buildCombinedAcpMcpServers(
+                effectiveAgentId,
+                endpointOpts,
+              ),
             });
             return { mode: "cli", text: ocRes.text };
           }
@@ -912,6 +977,10 @@ export class AgentRunner {
               messages: promptMessages,
               agentId: effectiveAgentId,
               preferredAccountId: effectiveAccId,
+              mcpConfig: this.providerConnection.buildClaudeMcpConfig(
+                effectiveAgentId,
+                endpointOpts,
+              ),
             });
             return { mode: "cli", text: cliRes.text };
           }
@@ -922,6 +991,10 @@ export class AgentRunner {
               systemPrompt,
               messages: promptMessages,
               agentId: effectiveAgentId,
+              mcpServers: this.providerConnection.buildCombinedAcpMcpServers(
+                effectiveAgentId,
+                endpointOpts,
+              ),
             });
           return { mode: "cli", text: agRes.text };
         }
@@ -1179,6 +1252,11 @@ export class AgentRunner {
       }
       throw err;
     } finally {
+      if (rotinaExecucaoId) {
+        this.providerConnection
+          ?.getStudioMcpBridge()
+          ?.clearRoutineExecutionFlags(rotinaExecucaoId);
+      }
       this.setAgentStatus(agenteId, "ocioso");
     }
   }

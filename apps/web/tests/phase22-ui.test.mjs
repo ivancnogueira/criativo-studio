@@ -169,9 +169,46 @@ describe("Fase 22 — Navegador Integrado, Dock Flutuante Desktop, WhatsApp Sync
     assert.match(html, /data-testid="floating-desktop-dock"/);
     assert.match(html, /data-testid="floating-dock-pill"/);
     assert.match(html, /data-testid="floating-dock-chat-card"/);
+    assert.match(html, /data-testid="floating-dock-pin-toggle"/);
     assert.match(html, /Criar novo agente/);
     assert.match(html, /WhatsApp/);
     assert.match(html, /Mensagem para Estrategista Editorial/);
+
+    // Sem sombras difusas DWM nem título visível do app na ilha flutuante
+    assert.doesNotMatch(html, /shadow-\[/);
+    assert.doesNotMatch(html, /Criativo AI Studio/);
+
+    // Modo recolhido na borda exibindo a lingueta discreta
+    const peekHtml = renderToStaticMarkup(
+      React.createElement(FloatingDesktopDock, {
+        initialAgentes: [
+          {
+            agente_id: "estrategista",
+            nome: "Estrategista Editorial",
+            papel: "Planejamento",
+            pasta: "estrategista",
+            modelo_padrao: "gemini-4-argon",
+            ativo: true,
+            status: "ocioso",
+            config: { avatar_shape: "hex", avatar_color: "#31CF76" },
+            atualizado_em: "2026-11-19T23:00:00.000Z",
+          },
+        ],
+        initialPinned: false,
+        initialPeeked: false,
+      })
+    );
+    assert.match(peekHtml, /data-testid="floating-dock-peek-handle"/);
+    assert.doesNotMatch(peekHtml, /data-testid="floating-dock-pill"/);
+
+    // Presença dos controles da ilha retrátil nas configurações
+    const settingsGeneralSrc = readFileSync(
+      join(webRoot, "src", "features", "settings", "SettingsGeneralTabs.tsx"),
+      "utf8"
+    );
+    assert.match(settingsGeneralSrc, /desktop-dock-settings-card/);
+    assert.match(settingsGeneralSrc, /Recolher ilha flutuante na borda da tela/);
+    assert.match(settingsGeneralSrc, /dockSetPinned/);
   });
 
   it("4. (TABS22-01 & WPP22-02) DynamicIsland mantém aba do agente sem fechar, hideInlineThreadTabs remove barra duplicada e chat exibe badge WhatsApp", async () => {

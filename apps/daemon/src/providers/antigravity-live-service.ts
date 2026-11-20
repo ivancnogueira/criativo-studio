@@ -106,6 +106,7 @@ export interface CodeAssistGenerateInput {
   generateImage?: boolean;
   preferredAccountId?: string | null;
   agentId?: string | null;
+  mcpServers?: unknown[];
   onDelta?: (chunk: string) => void;
 }
 
@@ -1118,6 +1119,7 @@ export class AntigravityLiveService {
             imagePaths: input.imagePaths,
             labeledImages: input.labeledImages,
             agentId: input.agentId,
+            mcpServers: input.mcpServers,
             onDelta: attempt === 0 ? input.onDelta : undefined,
           });
 

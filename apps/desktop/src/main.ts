@@ -192,7 +192,15 @@ function registerIpcHandlers(userDataDir: string): void {
   });
 
   ipcMain.handle("criativo:dock-get-state", () => {
-    return floatingDock?.getState() ?? { visible: false, expanded: false, side: "right" };
+    return (
+      floatingDock?.getState() ?? {
+        visible: false,
+        expanded: false,
+        side: "right",
+        pinned: true,
+        peeked: false,
+      }
+    );
   });
 
   ipcMain.handle("criativo:dock-set-expanded", (_evt, rawPayload: unknown) => {
@@ -202,12 +210,56 @@ function registerIpcHandlers(userDataDir: string): void {
         : {};
     const expanded = Boolean(payload.expanded);
     const pillHeight = typeof payload.pillHeight === "number" ? payload.pillHeight : undefined;
-    return floatingDock?.setExpanded(expanded, pillHeight) ?? { side: "right" };
+    return (
+      floatingDock?.setExpanded(expanded, pillHeight) ?? {
+        visible: false,
+        expanded,
+        side: "right",
+        pinned: true,
+        peeked: false,
+      }
+    );
   });
 
   ipcMain.handle("criativo:dock-set-visible", async (_evt, visible: unknown) => {
     if (!floatingDock) return false;
     return await floatingDock.setVisible(Boolean(visible));
+  });
+
+  ipcMain.handle("criativo:dock-set-pinned", (_evt, rawPayload: unknown) => {
+    const payload =
+      rawPayload && typeof rawPayload === "object"
+        ? (rawPayload as { pinned?: unknown; pillHeight?: unknown })
+        : {};
+    const pinned = Boolean(payload.pinned);
+    const pillHeight = typeof payload.pillHeight === "number" ? payload.pillHeight : undefined;
+    return (
+      floatingDock?.setPinned(pinned, pillHeight) ?? {
+        visible: true,
+        expanded: false,
+        side: "right",
+        pinned,
+        peeked: false,
+      }
+    );
+  });
+
+  ipcMain.handle("criativo:dock-set-peeked", (_evt, rawPayload: unknown) => {
+    const payload =
+      rawPayload && typeof rawPayload === "object"
+        ? (rawPayload as { peeked?: unknown; pillHeight?: unknown })
+        : {};
+    const peeked = Boolean(payload.peeked);
+    const pillHeight = typeof payload.pillHeight === "number" ? payload.pillHeight : undefined;
+    return (
+      floatingDock?.setPeeked(peeked, pillHeight) ?? {
+        visible: true,
+        expanded: false,
+        side: "right",
+        pinned: false,
+        peeked,
+      }
+    );
   });
 
   ipcMain.handle("criativo:dock-start-drag", () => {
@@ -219,7 +271,15 @@ function registerIpcHandlers(userDataDir: string): void {
   });
 
   ipcMain.handle("criativo:dock-end-drag", () => {
-    return floatingDock?.endDrag() ?? { side: "right" };
+    return (
+      floatingDock?.endDrag() ?? {
+        visible: true,
+        expanded: false,
+        side: "right",
+        pinned: true,
+        peeked: false,
+      }
+    );
   });
 
   ipcMain.handle("criativo:open-main-window", (_evt, rawOpts: unknown) => {
@@ -414,6 +474,12 @@ async function bootstrapDesktop(): Promise<void> {
     onShowWindow: () => focusOrShowMainWindow(),
     onToggleFloatingDock: () => {
       void floatingDock?.toggleVisible();
+    },
+    onToggleFloatingDockAutoHide: () => {
+      if (!floatingDock) return false;
+      const nextPinned = !floatingDock.getState().pinned;
+      floatingDock.setPinned(nextPinned);
+      return !nextPinned;
     },
     onCheckUpdates: () => {
       void fetch(`${daemonHandle?.baseUrl}/api/studio/updates/check`, { method: "POST" }).catch(() => {});

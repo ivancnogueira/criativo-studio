@@ -1,5 +1,6 @@
 import type { AgenteEspera } from "@criativo/contracts";
 import type { CriativoDatabase } from "../database/client.ts";
+import { resolveAgentIdFromDb } from "../server/agent-resolver.ts";
 import type { WebSocketHub } from "../server/websocket-hub.ts";
 import {
   AgentWaitStore,
@@ -29,13 +30,19 @@ export class AgentWaitsService {
     this.wsHub = deps.wsHub;
   }
 
-  private verifyAgentExists(agenteId: string): void {
+  private resolveExistingAgentId(rawAgentId: string): string {
+    const resolved = resolveAgentIdFromDb(this.db, rawAgentId) ?? rawAgentId.trim();
     const row = this.db.connection
       .prepare("SELECT agente_id FROM projecao_agentes WHERE agente_id = ?;")
-      .get(agenteId) as { agente_id: string } | undefined;
+      .get(resolved) as { agente_id: string } | undefined;
     if (!row) {
-      throw new Error(`Agente não encontrado: ${agenteId}`);
+      throw new Error(`Agente não encontrado: ${rawAgentId}`);
     }
+    return row.agente_id;
+  }
+
+  private verifyAgentExists(agenteId: string): void {
+    this.resolveExistingAgentId(agenteId);
   }
 
   private findRoutineForAgent(agenteId: string, routineId?: string | null): {
@@ -122,10 +129,10 @@ export class AgentWaitsService {
       wokenAt: string | null;
     }>;
   } {
-    this.verifyAgentExists(agenteId);
-    const items = this.waitStore.listWaits(agenteId);
+    const canonicalAgentId = this.resolveExistingAgentId(agenteId);
+    const items = this.waitStore.listWaits(canonicalAgentId);
     return {
-      agentId: agenteId,
+      agentId: canonicalAgentId,
       limit: MAX_OPEN_WAITS_PER_AGENT,
       waits: items.map((w) => ({
         waitId: w.espera_id,
@@ -211,15 +218,13 @@ export class AgentWaitsService {
   }
 
   public closeWait(esperaId: string, agenteId?: string): { closed: string } {
-    if (agenteId) {
-      this.verifyAgentExists(agenteId);
-    }
+    const canonicalAgentId = agenteId ? this.resolveExistingAgentId(agenteId) : undefined;
     const existing = this.waitStore.getWait(esperaId);
-    const removed = this.waitStore.closeWait(esperaId, agenteId);
+    const removed = this.waitStore.closeWait(esperaId, canonicalAgentId);
     if (!removed) {
       throw new Error(`Espera '${esperaId}' não encontrada ou já encerrada anteriormente.`);
     }
-    const targetAgent = agenteId ?? existing?.agente_id;
+    const targetAgent = canonicalAgentId ?? existing?.agente_id;
     if (targetAgent) {
       this.resumingByAgent.get(targetAgent)?.delete(esperaId);
       this.emitWaitsChanged(targetAgent);

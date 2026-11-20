@@ -13,7 +13,10 @@ import type {
 } from "@criativo/contracts";
 import type { CriativoDatabase } from "../database/client.ts";
 import type { McpGateway } from "../mcp/mcp-gateway.ts";
-import type { CriativoStudioMcpBridge } from "../mcp/studio-mcp-bridge.ts";
+import type {
+  CriativoStudioMcpBridge,
+  McpBridgeEndpointOptions,
+} from "../mcp/studio-mcp-bridge.ts";
 import type { VaultService } from "../vault/vault-service.ts";
 import { AntigravityLiveService } from "./antigravity-live-service.ts";
 import { CliOAuthAccountsService, resolveCliBinaryForProvider } from "./cli-oauth-accounts-service.ts";
@@ -612,10 +615,37 @@ export class ProviderConnectionService {
     }
   }
 
-  private buildCombinedAcpMcpServers(agentId?: string | null): unknown[] {
-    const internalBridge = this.studioMcpBridge?.getAcpBridgeServerSpec(agentId);
-    const external = this.mcpGateway?.getAcpMcpServers(agentId) ?? [];
+  public buildCombinedAcpMcpServers(
+    agentId?: string | null,
+    endpointOpts?: McpBridgeEndpointOptions,
+  ): unknown[] {
+    if (
+      Array.isArray(endpointOpts?.scopes) &&
+      endpointOpts.scopes.length === 0 &&
+      endpointOpts.includeExternalMcps === false
+    ) {
+      return [];
+    }
+    const internalBridge =
+      Array.isArray(endpointOpts?.scopes) && endpointOpts.scopes.length === 0
+        ? null
+        : this.studioMcpBridge?.getAcpBridgeServerSpec(agentId, endpointOpts) ?? null;
+    const external =
+      endpointOpts?.includeExternalMcps === false
+        ? []
+        : this.mcpGateway?.getAcpMcpServers(agentId) ?? [];
     return internalBridge ? [internalBridge, ...external] : external;
+  }
+
+  public buildClaudeMcpConfig(
+    agentId?: string | null,
+    endpointOpts?: McpBridgeEndpointOptions,
+  ): Record<string, unknown> | null {
+    return this.studioMcpBridge?.getClaudeMcpConfigObject(agentId, endpointOpts) ?? null;
+  }
+
+  public getStudioMcpBridge(): CriativoStudioMcpBridge | undefined {
+    return this.studioMcpBridge;
   }
 
   public attachMcpGateway(gateway: McpGateway): void {

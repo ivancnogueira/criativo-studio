@@ -371,7 +371,7 @@ describe("Fase 21 — Fotos Reais, generate_image, ACP Effort, MCP 2025-11-25, W
     }
   });
 
-  it("4. (MCP21-01) MCP negocia 2025-11-25, oculta 23 aliases browser_*, OpenCode passa --pure e contexto/histórico são compactados", async () => {
+  it("4. (MCP21-01) MCP negocia 2025-11-25, oculta 23 aliases browser_*, OpenCode inicia acp sem --pure e contexto/histórico são compactados", async () => {
     const dir = makeTempDir("p21-mcp-");
     const rt = await createDaemonServer({
       workspaceRoot: dir,
@@ -462,7 +462,7 @@ describe("Fase 21 — Fotos Reais, generate_image, ACP Effort, MCP 2025-11-25, W
     });
     assert.ok(compactCtx.length < fullCtx.length, "Prompt simples deve carregar contexto mais enxuto");
 
-    // Stub OpenCode verificando que '--pure' é passado no spawn de acp
+    // Stub OpenCode verificando que 'acp' inicia sem '--pure' (OpenCode v2+)
     const binDir = makeTempDir("p21-oc-bin-");
     const stubPath = join(binDir, "opencode-p21-stub.mjs");
     writeFileSync(
@@ -472,13 +472,14 @@ describe("Fase 21 — Fotos Reais, generate_image, ACP Effort, MCP 2025-11-25, W
         "if (process.argv.includes('models')) { console.log('opencode/test-free'); process.exit(0); }",
         "const rl = readline.createInterface({ input: process.stdin });",
         "const hasPure = process.argv.includes('--pure');",
+        "const hasAcp = process.argv.includes('acp');",
         "rl.on('line', (line) => {",
         "  if (!line.trim()) return;",
         "  const msg = JSON.parse(line);",
         "  if (msg.method === 'initialize') console.log(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1 } }));",
         "  else if (msg.method === 'session/new') console.log(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { sessionId: 'sess-p21' } }));",
         "  else if (msg.method === 'session/prompt') {",
-        "    console.log(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'PURE:' + hasPure } } } }));",
+        "    console.log(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'ACP:' + hasAcp + ':PURE:' + hasPure } } } }));",
         "    console.log(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn' } }));",
         "  }",
         "});",
@@ -506,10 +507,10 @@ describe("Fase 21 — Fotos Reais, generate_image, ACP Effort, MCP 2025-11-25, W
       const ocRes = await ocSvc.executePrompt({
         modelId: "opencode/test-free",
         agentId: "estrategista",
-        messages: [{ role: "user", text: "Testar --pure" }],
+        messages: [{ role: "user", text: "Testar acp sem --pure" }],
         timeoutMs: 10_000,
       });
-      assert.equal(ocRes.text, "PURE:true");
+      assert.equal(ocRes.text, "ACP:true:PURE:false");
     } finally {
       ocSvc.close();
       if (prevSkip !== undefined) process.env.CRIATIVO_SKIP_LOCAL_PROBE = prevSkip;

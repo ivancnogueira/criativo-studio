@@ -270,6 +270,8 @@ class AcpProcessConnection {
       "acp",
       `--gemini-dir=${absGeminiDir}`,
       "--app-data-dir=antigravity-acp",
+      "--include-default-customizations=false",
+      "--disable-telemetry",
     ];
 
     this.child = spawn(this.executable, args, {
@@ -473,7 +475,21 @@ class AcpProcessConnection {
       {
         cwd: resolve(this.geminiDir),
         mcpServers: resolvedMcpServers,
-        _meta: { antigravity: { disabledTools: ["schedule", "run_workflow"] } },
+        _meta: {
+          antigravity: {
+            disabledTools: [
+              "schedule",
+              "run_workflow",
+              "swarm",
+              "search_marketplace",
+              "invoke_subagent",
+              "define_subagent",
+              "manage_subagents",
+              "list_plugin_accounts",
+              "manage_task",
+            ],
+          },
+        },
       },
       timeoutMs
     );
@@ -542,7 +558,21 @@ class AcpProcessConnection {
       {
         cwd: input.cwd,
         mcpServers: resolvedMcpServers,
-        _meta: { antigravity: { disabledTools: ["schedule", "run_workflow"] } },
+        _meta: {
+          antigravity: {
+            disabledTools: [
+              "schedule",
+              "run_workflow",
+              "swarm",
+              "search_marketplace",
+              "invoke_subagent",
+              "define_subagent",
+              "manage_subagents",
+              "list_plugin_accounts",
+              "manage_task",
+            ],
+          },
+        },
       },
       30_000
     );

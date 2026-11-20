@@ -14,6 +14,7 @@ import type {
 } from "@criativo/contracts";
 import type { CriativoDatabase } from "../database/client.ts";
 import { parseBackupModelsJson } from "../engine/runner/backup-models-resolver.ts";
+import { resolveAgentIdFromDb } from "./agent-resolver.ts";
 import type { WebSocketHub } from "./websocket-hub.ts";
 
 export const SIDEBAR_FOLDER_LEVELS = 3;
@@ -764,13 +765,17 @@ export function executeSidebarTool(
     }
 
     case "assign_agent_section": {
-      const agentId = String(args.agentId ?? args.agent_id ?? "").trim();
+      const rawAgentId = String(args.agentId ?? args.agent_id ?? "").trim();
+      const agentId = resolveAgentIdFromDb(db, rawAgentId) ?? rawAgentId;
       const sectionRaw = args.sectionId ?? args.section_id ?? null;
       const sectionId =
         typeof sectionRaw === "string" && sectionRaw.trim() ? sectionRaw.trim() : null;
       const beforeRaw = args.beforeAgentId ?? args.before_agent_id ?? null;
-      const beforeAgentId =
+      const beforeTrimmed =
         typeof beforeRaw === "string" && beforeRaw.trim() ? beforeRaw.trim() : null;
+      const beforeAgentId = beforeTrimmed
+        ? resolveAgentIdFromDb(db, beforeTrimmed) ?? beforeTrimmed
+        : null;
       const snapshot = mutateSidebarLayout(
         db,
         { op: "move_agent", agentId, sectionId, beforeAgentId },

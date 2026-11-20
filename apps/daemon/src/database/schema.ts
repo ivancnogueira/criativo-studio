@@ -1127,6 +1127,33 @@ export const SCHEMA_TABLES: readonly { nome: string; sql: string }[] = [
         ON projecao_apps_nativos_contas(app_slug, padrao DESC, atualizado_em DESC);
     `,
   },
+  {
+    nome: "projecao_agente_wakeups",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_agente_wakeups (
+        wakeup_id TEXT PRIMARY KEY,
+        agente_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        canal_id TEXT NOT NULL,
+        channel_origin TEXT NOT NULL DEFAULT 'web',
+        whatsapp_conta_id TEXT,
+        whatsapp_chat_jid TEXT,
+        instrucao TEXT NOT NULL,
+        intervalo_segundos INTEGER NOT NULL,
+        recorrente INTEGER NOT NULL DEFAULT 0 CHECK(recorrente IN (0, 1)),
+        max_iteracoes INTEGER NOT NULL DEFAULT 1,
+        iteracao_atual INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'agendado' CHECK(status IN ('agendado', 'executando', 'concluido', 'cancelado', 'falha')),
+        proximo_disparo_em TEXT NOT NULL,
+        ultimo_disparo_em TEXT,
+        ultimo_erro TEXT,
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_agente_wakeups_due
+        ON projecao_agente_wakeups(status, proximo_disparo_em);
+    `,
+  },
 ];
 
 export const SCHEMA_TABLE_NAMES = [
@@ -1185,4 +1212,5 @@ export const SCHEMA_TABLE_NAMES = [
   "projecao_showcase_sites",
   "projecao_servidores_conectados",
   "projecao_apps_nativos_contas",
+  "projecao_agente_wakeups",
 ] as const;

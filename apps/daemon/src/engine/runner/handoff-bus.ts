@@ -6,6 +6,7 @@ import type {
 } from "@criativo/contracts";
 import type { CriativoDatabase } from "../../database/client.ts";
 import type { FifoQueueManager } from "../../queue/fifo-queue.ts";
+import { resolveAgentIdFromDb } from "../../server/agent-resolver.ts";
 import type { WebSocketHub } from "../../server/websocket-hub.ts";
 import { ROSTER_15_AGENTES } from "./roster-defaults.ts";
 
@@ -137,10 +138,12 @@ export class HandoffBus {
     mensagem: CanalMensagemRow;
     proximaTarefaId: string | null;
   } {
+    const resolvedRecipient =
+      resolveAgentIdFromDb(this.db, input.para_agente_id) ?? input.para_agente_id;
     const mensagem = this.postChannelMessage({
       tarefa_id: input.tarefa_id ?? null,
       de_agente_id: input.de_agente_id,
-      para_agente_id: input.para_agente_id,
+      para_agente_id: resolvedRecipient,
       tipo_mensagem: "handoff",
       conteudo: input.instrucao,
       artefatos: input.artefatos ?? [],
@@ -161,7 +164,7 @@ export class HandoffBus {
         new Date().toISOString(),
         JSON.stringify({
           de: input.de_agente_id,
-          para: input.para_agente_id,
+          para: resolvedRecipient,
           artefatos: input.artefatos ?? [],
         }),
       );
@@ -169,9 +172,9 @@ export class HandoffBus {
     let proximaTarefaId: string | null = null;
     if (input.enfileirarNovaTarefa) {
       const nextTask = this.queue.enqueueTask({
-        agente_id: input.para_agente_id,
+        agente_id: resolvedRecipient,
         tipo: input.tipoProximaTarefa ?? "carrossel",
-        titulo: `Handoff [${input.de_agente_id} -> ${input.para_agente_id}]`,
+        titulo: `Handoff [${input.de_agente_id} -> ${resolvedRecipient}]`,
         prioridade: input.prioridade ?? 3,
         payload: {
           tarefa_origem_id: input.tarefa_id ?? null,
@@ -255,8 +258,9 @@ export class HandoffBus {
     const seen = new Set<string>();
     const cleanRecipients: string[] = [];
     for (const rawId of input.recipientAgentIds) {
-      const id = String(rawId ?? "").trim();
-      if (!id) continue;
+      const rawTrimmed = String(rawId ?? "").trim();
+      if (!rawTrimmed) continue;
+      const id = resolveAgentIdFromDb(this.db, rawTrimmed) ?? rawTrimmed;
       if (id === input.senderAgentId) {
         throw new Error("Um agente não pode enviar send_message para si mesmo.");
       }
@@ -264,7 +268,7 @@ export class HandoffBus {
         throw new Error(`Agente destinatário duplicado na chamada: '${id}'.`);
       }
       if (!this.agentExists(id)) {
-        throw new Error(`Agente destinatário inexistente: '${id}'.`);
+        throw new Error(`Agente destinatário inexistente: '${rawTrimmed}'.`);
       }
       seen.add(id);
       cleanRecipients.push(id);

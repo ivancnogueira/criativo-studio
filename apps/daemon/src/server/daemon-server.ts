@@ -60,6 +60,8 @@ import { AgentTasksService } from "../threads/agent-tasks-service.ts";
 import { ConversationPaginationReader } from "../threads/conversation-pagination.ts";
 import { AgentWaitStore } from "../waits/agent-wait-store.ts";
 import { AgentWaitsService } from "../waits/agent-waits-service.ts";
+import { AgentWakeupService } from "../waits/agent-wakeup-service.ts";
+import { resolveAgentRecord } from "./agent-resolver.ts";
 import { ChatQueueStore } from "../queue/chat-queue-store.ts";
 import { QueueControlsService } from "../queue/queue-controls-service.ts";
 import { SideQuestionService } from "../chat/side-question-service.ts";
@@ -170,6 +172,7 @@ export interface DaemonRuntime {
   threadStore: AgentThreadStore;
   tasksService: AgentTasksService;
   waitsService: AgentWaitsService;
+  wakeupService: AgentWakeupService;
   queueControls: QueueControlsService;
   pinsService: MessagePinsService;
   contextReset: ContextResetService;
@@ -653,11 +656,20 @@ export async function createDaemonServer(
   const queueStore = new ChatQueueStore(db);
   const tasksService = new AgentTasksService({ db, threadStore, queue, queueStore, wsHub });
   const waitsService = new AgentWaitsService({ db, waitStore, wsHub });
+  const wakeupService = new AgentWakeupService({ db, wsHub });
   const queueControls = new QueueControlsService({ db, queueStore, tasksService, wsHub });
   const sideQuestion = new SideQuestionService({ db, providers, providerConnection, wsHub });
   const contextReset = new ContextResetService({ db, wsHub, providers, providerConnection });
   const pinsService = new MessagePinsService({ db, wsHub });
-  runner.setPhase13Services({ tasksService, waitsService, queueControls, contextReset, pinsService });
+  runner.setPhase13Services({
+    db,
+    tasksService,
+    waitsService,
+    wakeupService,
+    queueControls,
+    contextReset,
+    pinsService,
+  });
 
   const activeExecutor: TaskExecutorHook = options.taskExecutor ?? {
     execute: async (tarefa) => {
@@ -1040,6 +1052,7 @@ export async function createDaemonServer(
     threadStore,
     tasksService,
     waitsService,
+    wakeupService,
     queueControls,
     pagination,
     sideQuestion,
@@ -1047,6 +1060,99 @@ export async function createDaemonServer(
     pinsService,
     onDrainLane: scheduleLaneDrain,
   };
+
+  wakeupService.setOnFire(async (wakeup) => {
+    const agente = db.connection
+      .prepare(
+        `SELECT agente_id, nome, papel, modelo_padrao, config_json, backup_models_json
+         FROM projecao_agentes
+         WHERE agente_id = ?
+         LIMIT 1;`,
+      )
+      .get(wakeup.agente_id) as
+      | {
+          agente_id: string;
+          nome: string;
+          papel: string;
+          modelo_padrao: string;
+          config_json: string;
+          backup_models_json?: string | null;
+        }
+      | undefined;
+    if (!agente) return;
+
+    const wakeupPrompt = `[WAKEUP AUTOMÁTICO #${wakeup.iteracao_atual}/${wakeup.max_iteracoes} — ID: ${wakeup.wakeup_id}]\n${wakeup.instrucao}\n(Se o objetivo do ciclo já foi concluído, invoque cancel_wakeup("${wakeup.wakeup_id}") antes de responder ao usuário.)`;
+
+    const { agentMsg } = await executeAgentConversationTurn({
+      deps: {
+        ...baseStudioDepsForLanes,
+        phase13: phase13Bundle,
+        sharedTables,
+        memoryManager,
+        memoryReview,
+        skillLearning,
+        historySearch,
+        libraryFolders,
+        handoffBus,
+        visualPreview,
+        uiBlockRegistry,
+        apiKeysBridge,
+        phase14: phase14Services,
+      },
+      agente,
+      userPrompt: wakeupPrompt,
+      threadId: wakeup.thread_id,
+      turnoId: `wk-${randomUUID().slice(0, 8)}`,
+      channelOrigin: wakeup.channel_origin,
+      whatsappContaId: wakeup.whatsapp_conta_id,
+      whatsappChatJid: wakeup.whatsapp_chat_jid,
+      extraMetadados: {
+        origem: "wakeup",
+        wakeup_id: wakeup.wakeup_id,
+        iteracao: wakeup.iteracao_atual,
+      },
+    });
+
+    const replyText = agentMsg.conteudo_markdown?.trim();
+    if (
+      wakeup.channel_origin === "whatsapp" &&
+      wakeup.whatsapp_chat_jid &&
+      replyText
+    ) {
+      const targetContaId = wakeup.whatsapp_conta_id || DEFAULT_WHATSAPP_ACCOUNT_ID;
+      const client = whatsappManager.getClient(targetContaId);
+      if (client) {
+        const chunks = formatMarkdownForWhatsApp(replyText, {
+          maxChunkLength: 1600,
+          maxChunks: 4,
+        });
+        for (const chunk of chunks) {
+          try {
+            const sent = await client.sendMessage(wakeup.whatsapp_chat_jid, { text: chunk });
+            const recorded = whatsappArchiveService.recordMessage({
+              mensagemId: sent.messageId,
+              contaId: targetContaId,
+              chatJid: wakeup.whatsapp_chat_jid,
+              remetenteJid: wakeup.whatsapp_chat_jid,
+              remetenteNome: agente.nome,
+              direcao: "saida",
+              tipoConteudo: "texto",
+              texto: chunk,
+              ehGrupo: wakeup.whatsapp_chat_jid.endsWith("@g.us"),
+              ackStatus: sent.ackStatus === "ack" ? "entregue" : "enviado",
+              metadados: { agente_id: agente.agente_id, wakeup_id: wakeup.wakeup_id },
+            });
+            wsHub.broadcast("whatsapp.mensagem_recebida", {
+              conta_id: targetContaId,
+              mensagem: recorded,
+            });
+          } catch {
+            // Falha isolada de envio no canal não interrompe loop de wakeup
+          }
+        }
+      }
+    }
+  });
 
   tasksService.setOnLaneWake(scheduleLaneDrain);
   queueControls.setOnLaneWake(scheduleLaneDrain);
@@ -1074,7 +1180,7 @@ export async function createDaemonServer(
 
     const mentionMatch = rawPrompt.match(/@([a-z0-9_-]+)/i);
     const mentionedAgent = mentionMatch
-      ? allAgents.find((a) => a.agente_id.toLowerCase() === mentionMatch[1].toLowerCase())
+      ? resolveAgentRecord(allAgents, mentionMatch[1]) ?? undefined
       : undefined;
     const defaultAgentId = accountRow?.agente_orquestrador_id || "estrategista";
     const agente =
@@ -1190,6 +1296,8 @@ export async function createDaemonServer(
         originalUserPrompt: rawPrompt,
         respostaParaMensagemId: incomingMsgId,
         channelOrigin: "whatsapp",
+        whatsappContaId: event.contaId,
+        whatsappChatJid: event.msg.remoteJid,
         extraMetadados: whatsappMeta,
       });
 
@@ -2174,6 +2282,7 @@ function tryServeWebStatic(
     cron.start(options.cronIntervalMs ?? 60_000);
     await routineExecutionService.skipMissed();
     routineTimer.arm();
+    wakeupService.start();
     await routineFlowsEngine.sweep();
     whatsappArchiveService.startPeriodicCleanup();
     workerTimer = setInterval(() => {
@@ -2229,6 +2338,7 @@ function tryServeWebStatic(
     threadStore,
     tasksService,
     waitsService,
+    wakeupService,
     queueControls,
     pinsService,
     contextReset,
@@ -2254,6 +2364,7 @@ function tryServeWebStatic(
       }
       cron.stop();
       routineTimer.dispose();
+      wakeupService.dispose();
       memoryReview.dispose();
       uiBlockRegistry.dispose();
       screenCapture.dispose();
