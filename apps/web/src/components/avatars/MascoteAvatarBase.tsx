@@ -70,8 +70,23 @@ function hashSeed(input: string): number {
   return h;
 }
 
+const EXPRESSIVE_HOVER_FACES: readonly AvatarExpression[] = [
+  "wink",
+  "sweet",
+  "cheeky",
+  "cool",
+  "wow",
+  "smug",
+  "love",
+];
+
 function pickDifferentHoverFace(prev: ClassicEyeFace | null): ClassicEyeFace {
   const candidates = HOVER_FACES.filter((f) => f !== prev);
+  return candidates[Math.floor(Math.random() * candidates.length)] ?? "wink";
+}
+
+function pickDifferentExpressiveHoverFace(prev: AvatarExpression | null): AvatarExpression {
+  const candidates = EXPRESSIVE_HOVER_FACES.filter((f) => f !== prev);
   return candidates[Math.floor(Math.random() * candidates.length)] ?? "wink";
 }
 
@@ -121,6 +136,7 @@ export const MascoteAvatar: React.FC<MascoteAvatarProps> = ({
   const uid = useId().replace(/:/g, "");
   const containerRef = useRef<SVGSVGElement | null>(null);
   const lastHoverFaceRef = useRef<ClassicEyeFace | null>(null);
+  const lastExpressiveHoverRef = useRef<AvatarExpression | null>(null);
 
   const resolvedStyle: AvatarStyle = normalizeAvatarStyle(
     style ?? avatar?.style ?? "classic"
@@ -135,6 +151,7 @@ export const MascoteAvatar: React.FC<MascoteAvatarProps> = ({
   const [eyeOffset, setEyeOffset] = useState({ x: 0, y: 0 });
   const [isHovered, setIsHovered] = useState(false);
   const [hoverFace, setHoverFace] = useState<ClassicEyeFace>("resting");
+  const [hoverExpressiveFace, setHoverExpressiveFace] = useState<AvatarExpression>("wink");
   const [workingIdx, setWorkingIdx] = useState(0);
   const [blinking, setBlinking] = useState(false);
   const [playlistIdx, setPlaylistIdx] = useState(0);
@@ -168,6 +185,9 @@ export const MascoteAvatar: React.FC<MascoteAvatarProps> = ({
       const next = pickDifferentHoverFace(lastHoverFaceRef.current);
       lastHoverFaceRef.current = next;
       setHoverFace(next);
+      const nextExp = pickDifferentExpressiveHoverFace(lastExpressiveHoverRef.current);
+      lastExpressiveHoverRef.current = nextExp;
+      setHoverExpressiveFace(nextExp);
       setIsHovered(true);
     };
 
@@ -254,9 +274,12 @@ export const MascoteAvatar: React.FC<MascoteAvatarProps> = ({
     const shouldCycle =
       resolvedStyle === "classic"
         ? isWorking
-        : size >= 24 && !expressionOverride;
+        : isWorking && size >= 24 && !expressionOverride;
 
-    if (!shouldCycle) return;
+    if (!shouldCycle) {
+      setPlaylistIdx(0);
+      return;
+    }
 
     let stepTimer: number | undefined;
     let blinkTimer: number | undefined;
@@ -303,10 +326,10 @@ export const MascoteAvatar: React.FC<MascoteAvatarProps> = ({
     seed,
   ]);
 
-  // Piscada orgânica no classic em cursor/hover
+  // Piscada orgânica apenas em hover ou rastreio de cursor em repouso (todos os estilos SVG)
   useEffect(() => {
     if (
-      resolvedStyle !== "classic" ||
+      resolvedStyle === "image" ||
       (!trackCursor && !isHovered) ||
       isWorking ||
       typeof window === "undefined"
@@ -340,9 +363,13 @@ export const MascoteAvatar: React.FC<MascoteAvatarProps> = ({
 
   const currentExpressiveExp: AvatarExpression =
     expressionOverride ??
-    (isHovered && !isWorking && taskContext === "idle"
-      ? "wink"
-      : playlist[playlistIdx % playlist.length] ?? "cute");
+    (isHovered && !isWorking
+      ? hoverExpressiveFace
+      : isWorking
+        ? (playlist[playlistIdx % playlist.length] ?? "cute")
+        : taskContext === "idle"
+          ? "cute"
+          : (playlist[0] ?? "cute"));
 
   // Articulação silábica rápida quando o avatar está falando ("talking")
   useEffect(() => {

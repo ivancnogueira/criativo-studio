@@ -1398,7 +1398,7 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                 avatar={agentAvatar}
                 agentKey={agente?.agente_id}
                 size={68}
-                animated
+                animated={isWorking}
                 trackCursor
                 mood={liveMood}
                 activity={liveActivity}

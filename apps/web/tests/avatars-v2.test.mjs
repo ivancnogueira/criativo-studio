@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -223,5 +224,39 @@ describe("Avatares V2 — 8 Estilos, 20 Modelos por Estilo, Z-Order de Óculos, 
     );
     assert.match(imagePickerHtml, /Enviar foto do computador/);
     assert.match(imagePickerHtml, /Gerar com IA/);
+  });
+
+  it("5. Animação automática ocorre apenas durante trabalho ou hover (sem loop em repouso)", async () => {
+    const baseSrc = readFileSync(
+      join(webRoot, "src", "components", "avatars", "MascoteAvatarBase.tsx"),
+      "utf8"
+    );
+    assert.match(baseSrc, /isWorking && size >= 24 && !expressionOverride/);
+    assert.match(baseSrc, /EXPRESSIVE_HOVER_FACES/);
+
+    const { MascoteAvatar } = await vite.ssrLoadModule("/src/components/MascoteAvatar.tsx");
+    const idleHtml = renderToStaticMarkup(
+      React.createElement(MascoteAvatar, {
+        style: "cartoon",
+        variant: "cart_squircle",
+        color: "#38bdf8",
+        size: 40,
+        mood: "idle",
+      })
+    );
+    assert.doesNotMatch(idleHtml, /mascote-working/);
+    assert.doesNotMatch(idleHtml, /mascote-idle/);
+
+    const workingHtml = renderToStaticMarkup(
+      React.createElement(MascoteAvatar, {
+        style: "cartoon",
+        variant: "cart_squircle",
+        color: "#38bdf8",
+        size: 40,
+        mood: "working",
+        activity: "ads",
+      })
+    );
+    assert.match(workingHtml, /mascote-working/);
   });
 });
