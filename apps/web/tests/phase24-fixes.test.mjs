@@ -348,4 +348,166 @@ describe("Fase 24 — UI: Logo Servidor Remoto, Cotas Auto, Dock Settings & Sele
     assert.match(appSrc, /desktopAssistedProviderRef\.current !== evt\.provedor/);
     assert.match(appSrc, /setUso\(null\)/);
   });
+
+  it("7. (QUOTA29-02) WorkspaceRail renderiza até 5 anéis concêntricos no Gemini, preserva todos os provedores conectados no trilho e exibe popover agrupado estilo Antigravity", async () => {
+    const {
+      WorkspaceRail,
+      summarizeRingPercentages,
+      formatUsageWindowLabel,
+    } = await vite.ssrLoadModule("/src/components/WorkspaceRail.tsx");
+
+    const geminiGroups = [
+      {
+        nome: "Gemini Models",
+        modelos: ["Gemini 3 Pro"],
+        janela_semanal: {
+          rotulo: "Limite semanal",
+          janela: "semanal",
+          duracao_minutos: 10080,
+          restante_percentual: 60,
+          usado_percentual: 40,
+          reseta_em: null,
+          reseta_em_texto: "6 d 14 h",
+        },
+        janela_5h: {
+          rotulo: "Limite de 5 horas",
+          janela: "5h",
+          duracao_minutos: 300,
+          restante_percentual: 17,
+          usado_percentual: 83,
+          reseta_em: null,
+          reseta_em_texto: "42 min",
+        },
+      },
+      {
+        nome: "Claude and GPT models",
+        modelos: ["Claude Sonnet 4.6"],
+        janela_semanal: {
+          rotulo: "Limite semanal",
+          janela: "semanal",
+          duracao_minutos: 10080,
+          restante_percentual: 100,
+          usado_percentual: 0,
+          reseta_em: null,
+          reseta_em_texto: "",
+        },
+        janela_5h: {
+          rotulo: "Limite de 5 horas",
+          janela: "5h",
+          duracao_minutos: 300,
+          restante_percentual: 100,
+          usado_percentual: 0,
+          reseta_em: null,
+          reseta_em_texto: "",
+        },
+      },
+      {
+        nome: "Gemini 4 Argon",
+        modelos: ["Gemini 4 Argon"],
+        janela_semanal: {
+          rotulo: "Limite semanal",
+          janela: "semanal",
+          duracao_minutos: 10080,
+          restante_percentual: 19,
+          usado_percentual: 81,
+          reseta_em: null,
+          reseta_em_texto: "6 d 14 h",
+        },
+        janela_5h: null,
+      },
+    ];
+
+    assert.deepEqual(summarizeRingPercentages(geminiGroups), [60, 17, 100, 100, 19]);
+    assert.equal(formatUsageWindowLabel("semanal"), "Limite semanal");
+    assert.equal(formatUsageWindowLabel("5h"), "Limite de 5h");
+
+    const html = renderToStaticMarkup(
+      React.createElement(WorkspaceRail, {
+        activeSection: "agentes",
+        onSelectSection: () => {},
+        uso: {
+          contas: [
+            {
+              id: "acc-openai",
+              provedor: "openai",
+              rotulo: "ChatGPT",
+              email: "codex29@exemplo.invalid",
+              estado: "conectado",
+              padrao: true,
+              grupos_cota: [
+                {
+                  nome: "ChatGPT",
+                  modelos: ["gpt-5.4"],
+                  janela_semanal: {
+                    rotulo: "Semanal",
+                    janela: "semanal",
+                    duracao_minutos: 10080,
+                    restante_percentual: 50,
+                    usado_percentual: 50,
+                    reseta_em: null,
+                    reseta_em_texto: "1 d 9 h",
+                  },
+                  janela_5h: {
+                    rotulo: "5 horas",
+                    janela: "5h",
+                    duracao_minutos: 300,
+                    restante_percentual: 100,
+                    usado_percentual: 0,
+                    reseta_em: null,
+                    reseta_em_texto: "4 h 59 min",
+                  },
+                },
+              ],
+            },
+            {
+              id: "acc-gemini",
+              provedor: "gemini",
+              rotulo: "Gemini",
+              email: "gemini29@exemplo.invalid",
+              estado: "conectado",
+              padrao: true,
+              grupos_cota: geminiGroups,
+            },
+            {
+              id: "acc-claude",
+              provedor: "claude",
+              rotulo: "Claude",
+              email: "claude29@exemplo.invalid",
+              estado: "conectado",
+              padrao: true,
+              grupos_cota: [],
+            },
+          ],
+          janelas: [],
+          sessoes_hoje: 0,
+          mensagens_hoje: 0,
+          tokens_entrada_hoje: 0,
+          tokens_saida_hoje: 0,
+          gasto_hoje_usd: 0,
+          gasto_mes_usd: 0,
+          atualizado_em: new Date().toISOString(),
+        },
+      }),
+    );
+
+    // Todos os provedores conectados aparecem no Rail (incluindo Claude mesmo com grupos_cota=[])
+    assert.match(html, /ChatGPT · codex29@exemplo\.invalid/);
+    assert.match(html, /Uso da conta gemini29@exemplo\.invalid: 17% restante/);
+    assert.match(html, /Conta Claude · claude29@exemplo\.invalid conectada/);
+    // Os 5 raios concêntricos do Gemini aparecem renderizados no SVG
+    for (const r of ["16.3", "14", "11.7", "9.4", "7.1"]) {
+      assert.ok(html.includes(`r="${r}"`), `Faltou anel concêntrico com raio r="${r}"`);
+    }
+
+    const railSrc = readFileSync(
+      join(webRoot, "src", "components", "WorkspaceRail.tsx"),
+      "utf8",
+    );
+    assert.match(railSrc, /MiniQuotaRing/);
+    assert.match(railSrc, /Limite semanal/);
+    assert.match(railSrc, /Limite de 5h/);
+    assert.match(railSrc, /Reinicia em \{win\.reseta_em_texto\}/);
+    assert.match(railSrc, /hasAnyMissingQuota/);
+    assert.doesNotMatch(railSrc, /w-\[108px\]/);
+  });
 });

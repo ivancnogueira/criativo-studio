@@ -108,23 +108,58 @@ function flattenAccountBars(
   return rows;
 }
 
-function summarizeRingPercentages(grupos: GrupoCotaConta[]): number[] {
+export function summarizeRingPercentages(grupos: GrupoCotaConta[]): number[] {
   if (!grupos || grupos.length === 0) return [100];
-  const weeklyPcts = grupos
-    .map((g) => g.janela_semanal?.restante_percentual)
-    .filter((v): v is number => typeof v === "number");
-  const fiveHourPcts = grupos
-    .map((g) => g.janela_5h?.restante_percentual)
-    .filter((v): v is number => typeof v === "number");
-
-  const outer = weeklyPcts.length > 0 ? Math.min(...weeklyPcts) : undefined;
-  const inner = fiveHourPcts.length > 0 ? Math.min(...fiveHourPcts) : undefined;
-
-  if (outer !== undefined && inner !== undefined) return [outer, inner];
-  if (outer !== undefined) return [outer];
-  if (inner !== undefined) return [inner];
-  return [100];
+  const out: number[] = [];
+  for (const g of grupos) {
+    if (typeof g.janela_semanal?.restante_percentual === "number") {
+      out.push(Math.max(0, Math.min(100, g.janela_semanal.restante_percentual)));
+    }
+    if (typeof g.janela_5h?.restante_percentual === "number") {
+      out.push(Math.max(0, Math.min(100, g.janela_5h.restante_percentual)));
+    }
+  }
+  return out.length > 0 ? out.slice(0, 5) : [100];
 }
+
+export function formatUsageWindowLabel(
+  janela: NonNullable<GrupoCotaConta["janela_5h"]>["janela"],
+  rotulo?: string | null
+): string {
+  if (janela === "semanal") return "Limite semanal";
+  if (janela === "5h") return "Limite de 5h";
+  if (janela === "mensal") return "Limite mensal";
+  return rotulo?.trim() || "Limite";
+}
+
+export function shouldShowGroupHeading(acc: ContaProvedorInfo, grupo: GrupoCotaConta): boolean {
+  if (acc.grupos_cota.length > 1) return true;
+  const lower = grupo.nome.trim().toLowerCase();
+  return lower !== "chatgpt" && lower !== "openai" && lower !== "padrão" && lower !== "default";
+}
+
+const MiniQuotaRing: React.FC<{ percentage: number }> = ({ percentage }) => {
+  const clamped = Math.max(4, Math.min(100, percentage));
+  const r = 6.6;
+  const circ = 2 * Math.PI * r;
+  const offset = circ - (clamped / 100) * circ;
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" className="-rotate-90 shrink-0" aria-hidden="true">
+      <circle cx="9" cy="9" r={r} fill="none" stroke="rgba(255,255,255,0.14)" strokeWidth="2.1" />
+      <circle
+        cx="9"
+        cy="9"
+        r={r}
+        fill="none"
+        stroke={ringStrokeColor(percentage)}
+        strokeWidth="2.1"
+        strokeDasharray={circ}
+        strokeDashoffset={offset}
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+};
 
 function providerDisplayTitle(acc: ContaProvedorInfo): string {
   if (acc.provedor === "openai") return acc.email ? `ChatGPT · ${acc.email}` : "ChatGPT";
@@ -137,35 +172,43 @@ const ConcentricQuotaRings: React.FC<{
   inactive?: boolean;
   provider?: ProviderName;
 }> = ({ percentages, inactive = false, provider }) => {
-  const safePercents = percentages.length > 0 ? percentages.slice(0, 2) : [100];
-  // Dois anéis externos (Semanal + 5h) mantendo miolo livre para o ProviderLogo centralizado
-  const radii = [14.5, 11.4];
+  const safePercents = percentages.length > 0 ? percentages.slice(0, 5) : [100];
+  const ringCount = safePercents.length;
+  // Anéis concêntricos escalonados (1 a 5 anéis, ex.: 2 janelas Gemini Models + 2 Claude/GPT + 1 Gemini 4 Argon)
+  const radiiByCount: Record<number, { radii: number[]; strokeWidth: number; logoSize: number }> = {
+    1: { radii: [15.2], strokeWidth: 2.1, logoSize: 11 },
+    2: { radii: [15.2, 11.9], strokeWidth: 2.1, logoSize: 11 },
+    3: { radii: [15.8, 12.9, 10.0], strokeWidth: 1.85, logoSize: 10 },
+    4: { radii: [16.0, 13.4, 10.8, 8.2], strokeWidth: 1.6, logoSize: 9 },
+    5: { radii: [16.3, 14.0, 11.7, 9.4, 7.1], strokeWidth: 1.45, logoSize: 8 },
+  };
+  const layout = radiiByCount[ringCount] ?? radiiByCount[5];
 
   return (
-    <span className="relative inline-flex items-center justify-center w-[34px] h-[34px]">
-      <svg width="34" height="34" viewBox="0 0 34 34" className="-rotate-90">
+    <span className="relative inline-flex items-center justify-center w-[36px] h-[36px]">
+      <svg width="36" height="36" viewBox="0 0 36 36" className="-rotate-90">
         {safePercents.map((pct, idx) => {
-          const r = radii[idx] ?? 11.4;
+          const r = layout.radii[idx] ?? 7.1;
           const clamped = Math.max(4, Math.min(100, pct));
           const circ = 2 * Math.PI * r;
           const offset = circ - (clamped / 100) * circ;
           return (
             <g key={`${r}-${idx}`}>
               <circle
-                cx="17"
-                cy="17"
+                cx="18"
+                cy="18"
                 r={r}
                 fill="none"
                 stroke="rgba(255,255,255,0.12)"
-                strokeWidth="2.1"
+                strokeWidth={layout.strokeWidth}
               />
               <circle
-                cx="17"
-                cy="17"
+                cx="18"
+                cy="18"
                 r={r}
                 fill="none"
                 stroke={inactive ? "rgba(255,255,255,0.28)" : ringStrokeColor(pct)}
-                strokeWidth="2.1"
+                strokeWidth={layout.strokeWidth}
                 strokeDasharray={circ}
                 strokeDashoffset={offset}
                 strokeLinecap="round"
@@ -176,7 +219,7 @@ const ConcentricQuotaRings: React.FC<{
       </svg>
       {provider && (
         <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <ProviderLogo provider={provider} size={11} />
+          <ProviderLogo provider={provider} size={layout.logoSize} />
         </span>
       )}
     </span>
@@ -219,16 +262,21 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
   );
 
   const allAccounts = uso?.contas ?? [];
+  const hasAnyMissingQuota = useMemo(
+    () => allAccounts.some((c) => !c.grupos_cota || c.grupos_cota.length === 0),
+    [allAccounts]
+  );
+
   const providerGroups = useMemo<
     Array<{
       provedor: ProviderName;
       primary: ContaProvedorInfo;
       accounts: ContaProvedorInfo[];
+      hasQuota: boolean;
     }>
   >(() => {
-    const withQuota = allAccounts.filter((c) => c.grupos_cota && c.grupos_cota.length > 0);
     const byProv = new Map<ProviderName, ContaProvedorInfo[]>();
-    for (const acc of withQuota) {
+    for (const acc of allAccounts) {
       const list = byProv.get(acc.provedor) ?? [];
       list.push(acc);
       byProv.set(acc.provedor, list);
@@ -238,8 +286,13 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
       .filter((p) => (byProv.get(p)?.length ?? 0) > 0)
       .map((provedor) => {
         const accounts = byProv.get(provedor)!;
-        const primary = accounts.find((a) => a.padrao) ?? accounts[0];
-        return { provedor, primary, accounts };
+        const withQuota = accounts.filter((c) => c.grupos_cota && c.grupos_cota.length > 0);
+        const primary =
+          withQuota.find((a) => a.padrao) ??
+          withQuota[0] ??
+          accounts.find((a) => a.padrao) ??
+          accounts[0];
+        return { provedor, primary, accounts, hasQuota: withQuota.length > 0 };
       });
   }, [allAccounts]);
 
@@ -266,21 +319,21 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
   }, [onRefreshUsage, refreshing]);
 
   const triggerFallbackUsageSync = useCallback(() => {
-    if (!onRefreshUsage || refreshing || allAccounts.length === 0 || providerGroups.length > 0) {
+    if (!onRefreshUsage || refreshing || allAccounts.length === 0 || !hasAnyMissingQuota) {
       return;
     }
     if (Date.now() - lastAutoSyncAtRef.current < 15_000) {
       return;
     }
     void handleRefresh();
-  }, [allAccounts.length, handleRefresh, onRefreshUsage, providerGroups.length, refreshing]);
+  }, [allAccounts.length, handleRefresh, hasAnyMissingQuota, onRefreshUsage, refreshing]);
 
   useEffect(() => {
-    if (!onRefreshUsage || allAccounts.length === 0 || providerGroups.length > 0) {
+    if (!onRefreshUsage || allAccounts.length === 0 || !hasAnyMissingQuota) {
       return;
     }
     const key = `${activeServerId}::${allAccounts
-      .map((acc) => `${acc.provedor}:${acc.id}`)
+      .map((acc) => `${acc.provedor}:${acc.id}:${acc.grupos_cota?.length ?? 0}`)
       .sort()
       .join("|")}`;
     if (autoSyncedAccountsKeyRef.current === key) {
@@ -288,7 +341,7 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
     }
     autoSyncedAccountsKeyRef.current = key;
     void handleRefresh();
-  }, [activeServerId, allAccounts, handleRefresh, onRefreshUsage, providerGroups.length]);
+  }, [activeServerId, allAccounts, handleRefresh, hasAnyMissingQuota, onRefreshUsage]);
 
   return (
     <aside
@@ -342,31 +395,47 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
           setFallbackPopoverOpen(false);
         }}
       >
-        {/* Anéis concêntricos reais: 1 anel por provedor com logo centralizado; hover exibe só aquele provedor */}
+        {/* Anéis concêntricos reais: todos os anéis de cota com logo centralizado; hover exibe só aquele provedor */}
         <div className="flex flex-col items-center gap-1.5">
           {providerGroups.length > 0 ? (
-            providerGroups.map(({ provedor, primary }) => {
+            providerGroups.map(({ provedor, primary, hasQuota }) => {
               const bars = flattenAccountBars(primary.grupos_cota);
               const percents = bars.map((b) => b.restante);
-              const ringPercents = summarizeRingPercentages(primary.grupos_cota);
+              const ringPercents = hasQuota ? summarizeRingPercentages(primary.grupos_cota) : [fallbackPercent];
               const minPct = percents.length > 0 ? Math.min(...percents) : 100;
               const isSelectedRing = activeProvider === provedor;
               return (
                 <button
                   key={provedor}
                   type="button"
-                  onMouseEnter={() => setActiveProvider(provedor)}
-                  onClick={() =>
-                    setActiveProvider((prev) => (prev === provedor ? null : provedor))
-                  }
+                  onMouseEnter={() => {
+                    setActiveProvider(provedor);
+                    if (!hasQuota) triggerFallbackUsageSync();
+                  }}
+                  onClick={() => {
+                    setActiveProvider((prev) => (prev === provedor ? null : provedor));
+                    if (!hasQuota) triggerFallbackUsageSync();
+                  }}
                   onDoubleClick={() => onSelectSection("uso")}
-                  title={`${providerDisplayTitle(primary)} — mínimo ${minPct}% restante`}
-                  aria-label={`Uso da conta ${providerDisplayTitle(primary)}: ${minPct}% restante`}
+                  title={
+                    hasQuota
+                      ? `${providerDisplayTitle(primary)} — mínimo ${minPct}% restante`
+                      : `${providerDisplayTitle(primary)} — conectada (clique para sincronizar)`
+                  }
+                  aria-label={
+                    hasQuota
+                      ? `Uso da conta ${providerDisplayTitle(primary)}: ${minPct}% restante`
+                      : `Conta ${providerDisplayTitle(primary)} conectada`
+                  }
                   className={`h-9 w-9 rounded-xl flex items-center justify-center transition-colors ${
                     isSelectedRing ? "bg-[#1A1A1A]" : "hover:bg-[#1A1A1A]"
                   }`}
                 >
-                  <ConcentricQuotaRings percentages={ringPercents} provider={provedor} />
+                  <ConcentricQuotaRings
+                    percentages={ringPercents}
+                    inactive={!hasQuota}
+                    provider={provedor}
+                  />
                 </button>
               );
             })
@@ -403,12 +472,12 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
           )}
         </div>
 
-        {/* Popover flutuante 'Uso' mostrando exclusivamente o provedor do anel em hover */}
+        {/* Popover flutuante 'Uso' agrupado no estilo Antigravity mostrando exclusivamente o provedor em hover */}
         {popoverOpen && (
           <div
             role="dialog"
             aria-label="Resumo de uso e cotas do provedor"
-            className="absolute left-[54px] bottom-14 w-[315px] rounded-2xl bg-[#1C1C1C]/98 backdrop-blur-xl border border-white/[0.11] shadow-2xl p-3.5 z-50 text-left"
+            className="absolute left-[54px] bottom-14 w-[332px] rounded-2xl bg-[#1C1C1C]/98 backdrop-blur-xl border border-white/[0.11] shadow-2xl p-3.5 z-50 text-left"
           >
             <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-white/[0.06]">
               <button
@@ -448,12 +517,12 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
               </div>
             </div>
 
-            <div className="mt-2.5 space-y-3 max-h-[340px] overflow-y-auto pr-0.5">
+            <div className="mt-2.5 space-y-3 max-h-[380px] overflow-y-auto pr-0.5">
               {popoverAccounts.length > 0 ? (
                 popoverAccounts.map((acc) => {
-                  const bars = flattenAccountBars(acc.grupos_cota);
+                  const hasAccountQuotas = acc.grupos_cota && acc.grupos_cota.length > 0;
                   return (
-                    <div key={acc.id} className="space-y-1.5">
+                    <div key={acc.id} className="space-y-2.5">
                       <div className="flex items-center justify-between gap-2 text-[12px] font-medium text-white">
                         <span className="flex items-center gap-1.5 min-w-0">
                           <ProviderLogo provider={acc.provedor} size={13} />
@@ -466,51 +535,83 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
                           </span>
                         </span>
                         {acc.email && (
-                          <span className="text-[10.5px] font-normal text-[#787878] truncate max-w-[175px]">
+                          <span className="text-[10.5px] font-normal text-[#787878] truncate max-w-[185px]">
                             {acc.email}
                           </span>
                         )}
                       </div>
-                      <div className="space-y-1.5">
-                        {bars.map((bar) => (
-                          <div
-                            key={bar.key}
-                            className="flex items-center justify-between gap-2 text-[11px]"
-                          >
-                            <span className="text-[#979797] truncate w-[108px]">{bar.rotulo}</span>
-                            <div className="flex-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
-                              <div
-                                className="h-full rounded-full transition-all"
-                                style={{
-                                  width: `${bar.restante}%`,
-                                  backgroundColor:
-                                    bar.restante >= 50
-                                      ? "#DCDCDC"
-                                      : bar.restante >= 20
-                                        ? "#FDCB6E"
-                                        : "#FF7675",
-                                }}
-                              />
-                            </div>
-                            <span
-                              className={`font-semibold shrink-0 tabular-nums ${
-                                bar.restante >= 50
-                                  ? "text-white"
-                                  : bar.restante >= 20
-                                    ? "text-[#FDCB6E]"
-                                    : "text-[#FF7675]"
-                              }`}
-                            >
-                              {bar.restante}% restante
-                            </span>
-                            {bar.resetaTexto && (
-                              <span className="text-[#787878] text-[10px] shrink-0 tabular-nums">
-                                {bar.resetaTexto}
-                              </span>
-                            )}
+
+                      {hasAccountQuotas ? (
+                        <div className="space-y-3">
+                          {acc.grupos_cota.map((grupo) => {
+                            const showHeading = shouldShowGroupHeading(acc, grupo);
+                            const windows = [grupo.janela_semanal, grupo.janela_5h].filter(
+                              (w): w is NonNullable<typeof w> => Boolean(w)
+                            );
+                            return (
+                              <div key={grupo.nome} className="space-y-1.5">
+                                {showHeading && (
+                                  <div className="text-[12px] font-semibold text-white leading-tight">
+                                    {grupo.nome}
+                                  </div>
+                                )}
+                                <div className="space-y-2">
+                                  {windows.map((win) => {
+                                    const pct = Math.max(0, Math.min(100, win.restante_percentual));
+                                    return (
+                                      <div
+                                        key={`${grupo.nome}-${win.janela}`}
+                                        className="flex items-center justify-between gap-3"
+                                      >
+                                        <div className="min-w-0">
+                                          <div className="text-[11.5px] text-[#979797] leading-snug">
+                                            {formatUsageWindowLabel(win.janela, win.rotulo)}
+                                          </div>
+                                          {win.reseta_em_texto && (
+                                            <div className="text-[10.5px] text-[#787878] leading-snug">
+                                              Reinicia em {win.reseta_em_texto}
+                                            </div>
+                                          )}
+                                        </div>
+                                        <div className="flex items-center gap-2 shrink-0">
+                                          <span
+                                            className={`text-[11.5px] font-semibold tabular-nums ${
+                                              pct >= 50
+                                                ? "text-[#DCDCDC]"
+                                                : pct >= 20
+                                                  ? "text-[#FDCB6E]"
+                                                  : "text-[#FF7675]"
+                                            }`}
+                                          >
+                                            {pct}% restante
+                                          </span>
+                                          <MiniQuotaRing percentage={pct} />
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between text-[11.5px]">
+                            <span className="text-[#979797]">Status</span>
+                            <span className="text-[#31CF76]">Conectada</span>
                           </div>
-                        ))}
-                      </div>
+                          <p className="text-[11px] text-[#787878]">
+                            {refreshing ? (
+                              "Sincronizando janelas de cota..."
+                            ) : (
+                              <>
+                                Clique em <strong>↻</strong> acima para sincronizar as janelas de cota.
+                              </>
+                            )}
+                          </p>
+                        </div>
+                      )}
                     </div>
                   );
                 })

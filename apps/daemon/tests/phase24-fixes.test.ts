@@ -1061,4 +1061,158 @@ describe("Fase 24 — Hotfixes RemoteClaim HTML Fallback, Auto-Refresh de Cotas 
       await desktopRt.close().catch(() => {});
     }
   });
+
+  it("14. (QUOTA29-01) AntigravityLiveService suporta response.groups, duration protobuf (604800s/18000s), resetsAt, isExhausted, weeklyQuotaInfo e separa Gemini 4 Argon", async () => {
+    const {
+      classifyQuotaWindowKind,
+      extractRemainingPercentage,
+      extractQuotaGroupsFromResponse,
+      mergeAndSortQuotaGroups,
+      resolveQuotaGroupName,
+      synthesizeQuotaGroupsFromModels,
+    } = await import("../src/providers/antigravity-live-service.ts");
+
+    assert.equal(classifyQuotaWindowKind("", null, "604800s"), "semanal");
+    assert.equal(classifyQuotaWindowKind("", null, "18000s"), "5h");
+    assert.equal(extractRemainingPercentage({ isExhausted: true }), 0);
+    assert.equal(
+      resolveQuotaGroupName("gemini-4-argon", "MODEL_PROVIDER_GOOGLE", "Gemini 4 Argon"),
+      "Gemini 4 Argon",
+    );
+    assert.equal(
+      extractQuotaGroupsFromResponse({
+        response: { groups: [{ displayName: "Gemini Models", buckets: [] }] },
+      }).length,
+      1,
+    );
+
+    const accountsRoot = join(tempDir, "gemini-accounts-29");
+    mkdirSync(accountsRoot, { recursive: true });
+    const sixDaysLater = new Date(Date.now() + (6 * 24 + 14) * 3_600_000).toISOString();
+    const fortyTwoMinsLater = new Date(Date.now() + 42 * 60_000).toISOString();
+
+    const mockFetch29: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith(":loadCodeAssist")) {
+        return new Response(JSON.stringify({ cloudaicompanionProject: "proj-q29" }), { status: 200 });
+      }
+      if (url.endsWith(":retrieveUserQuotaSummary")) {
+        return new Response(
+          JSON.stringify({
+            response: {
+              groups: [
+                {
+                  displayName: "Claude and GPT models",
+                  description: "Models within this group: Claude Sonnet 4.6",
+                  quotaBuckets: [
+                    { duration: "604800s", remainingFraction: 1.0 },
+                    { duration: "18000s", remainingFraction: 1.0 },
+                  ],
+                },
+                {
+                  displayName: "Gemini Models",
+                  description: "Models within this group: Gemini 3 Pro",
+                  buckets: [
+                    { duration: "604800s", remainingFraction: 0.6, resetsAt: sixDaysLater },
+                    { duration: "18000s", remainingFraction: 0.17, resetsAt: fortyTwoMinsLater },
+                  ],
+                },
+              ],
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith(":retrieveUserQuota")) {
+        return new Response(
+          JSON.stringify({
+            buckets: [
+              {
+                modelId: "gemini-4-argon",
+                displayName: "Gemini 4 Argon",
+                duration: "604800s",
+                remainingFraction: 0.19,
+                resetsAt: sixDaysLater,
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith(":fetchAvailableModels")) {
+        return new Response(
+          JSON.stringify({
+            defaultAgentModelId: "gemini-3-pro",
+            models: {
+              "gemini-3-pro": {
+                displayName: "Gemini 3 Pro",
+                modelProvider: "MODEL_PROVIDER_GOOGLE",
+                quotaInfo: { remainingFraction: 0.17, resetsAt: fortyTwoMinsLater },
+              },
+              "gemini-4-argon": {
+                displayName: "Gemini 4 Argon",
+                modelProvider: "MODEL_PROVIDER_GOOGLE",
+                weeklyQuotaInfo: { remainingFraction: 0.19, resetsAt: sixDaysLater },
+              },
+              "claude-sonnet-4-6": {
+                displayName: "Claude Sonnet 4.6",
+                modelProvider: "MODEL_PROVIDER_ANTHROPIC",
+                quotaInfo: { remainingFraction: 1.0 },
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response("{}", { status: 404 });
+    };
+
+    const dbQ29 = new CriativoDatabase({ dbPath: join(tempDir, "criativo-q29.db") });
+    dbQ29.initializeDatabase();
+    try {
+      const agSvc = new AntigravityLiveService({
+        db: dbQ29,
+        accountsRootDir: accountsRoot,
+        workspaceCwd: tempDir,
+        fetchImpl: mockFetch29,
+      });
+      agSvc.addManualTokenAccount({
+        email: "quota-argon29@exemplo.invalid",
+        accessToken: "ya29.q29-token",
+        refreshToken: "",
+        expiry: new Date(Date.now() + 50 * 60_000).toISOString(),
+      });
+
+      const snap = await agSvc.getLiveSnapshot(true);
+      assert.equal(snap.contas.length, 1);
+      const grupos = snap.contas[0]!.grupos_cota;
+      assert.deepEqual(
+        grupos.map((g) => g.nome),
+        ["Gemini Models", "Claude and GPT models", "Gemini 4 Argon"],
+      );
+      assert.equal(grupos[0]!.janela_semanal?.restante_percentual, 60);
+      assert.equal(grupos[0]!.janela_5h?.restante_percentual, 17);
+      assert.equal(grupos[1]!.janela_semanal?.restante_percentual, 100);
+      assert.equal(grupos[1]!.janela_5h?.restante_percentual, 100);
+      assert.equal(grupos[2]!.janela_semanal?.restante_percentual, 19);
+
+      const argonModel = snap.modelos.find((m) => m.id === "gemini-4-argon");
+      assert.equal(argonModel?.grupo_cota, "Gemini 4 Argon");
+
+      // Testa também síntese com weeklyQuotaInfo + isExhausted sem resetTime
+      const synthExhausted = synthesizeQuotaGroupsFromModels({
+        "gemini-4-argon": {
+          displayName: "Gemini 4 Argon",
+          modelProvider: "MODEL_PROVIDER_GOOGLE",
+          weeklyQuotaInfo: { isExhausted: true, resetsAt: sixDaysLater },
+        },
+      });
+      const merged = mergeAndSortQuotaGroups([], synthExhausted);
+      assert.equal(merged.length, 1);
+      assert.equal(merged[0]!.nome, "Gemini 4 Argon");
+      assert.equal(merged[0]!.janela_semanal?.restante_percentual, 0);
+    } finally {
+      dbQ29.close();
+    }
+  });
 });
