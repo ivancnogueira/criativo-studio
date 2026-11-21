@@ -22,6 +22,7 @@ import { resolveMachineFingerprint, type MachineFingerprint } from "./machine-id
 
 const VAULT_KEY_CERTIFICATE = "license_certificate_json";
 const VAULT_KEY_DEVICES_CACHE = "license_devices_cache_json";
+const VAULT_KEY_PEER_DELEGATED = "license_peer_delegated";
 const DEFAULT_HUB_URL = "https://painel.criativoaistudio.com.br";
 const HEARTBEAT_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -248,9 +249,12 @@ export class LicenseClientService {
       };
     }
 
-    const check = verifyLicenseCertificate(cert, this.#publicKeyPem, {
-      expectedMachineId: this.#fingerprint.machineId,
-    });
+    const isPeerDelegated = this.#vault.getSecret(VAULT_KEY_PEER_DELEGATED) === "1";
+    const check = verifyLicenseCertificate(
+      cert,
+      this.#publicKeyPem,
+      isPeerDelegated ? undefined : { expectedMachineId: this.#fingerprint.machineId },
+    );
     const limits = getPlanLimits(cert.payload.plan_tier);
 
     return {
@@ -278,6 +282,48 @@ export class LicenseClientService {
   assertOperational(): { ok: true; status: LicenseActivationStatus } | { ok: false; status: LicenseActivationStatus } {
     const status = this.getStatus();
     return status.valid ? { ok: true, status } : { ok: false, status };
+  }
+
+  /** Exporta o certificado Ed25519 ativo em Base64 para sincronizar automaticamente com servidores locais/VPS do mesmo proprietário. */
+  exportCertificateForPeerSync(): string | null {
+    const cert = this.readStoredCertificate();
+    if (!cert) return null;
+    const status = this.getStatus();
+    if (!status.valid) return null;
+    try {
+      return Buffer.from(JSON.stringify(cert), "utf8").toString("base64");
+    } catch {
+      return null;
+    }
+  }
+
+  /** Importa um certificado Ed25519 sincronizado pelo Desktop proprietário no Cofre do servidor remoto/filho. */
+  importPeerSyncedCertificateBase64(encoded: string): boolean {
+    const clean = String(encoded || "").trim();
+    if (!clean) return false;
+    try {
+      const jsonStr = Buffer.from(clean, "base64").toString("utf8");
+      const cert = JSON.parse(jsonStr) as LicenseCertificate;
+      if (!cert?.payload || !cert?.signature) return false;
+
+      const check = verifyLicenseCertificate(cert, this.#publicKeyPem);
+      if (!check.valid) return false;
+
+      const existingRaw = this.#vault.getSecret(VAULT_KEY_CERTIFICATE);
+      const isAlreadyDelegated = this.#vault.getSecret(VAULT_KEY_PEER_DELEGATED) === "1";
+      if (existingRaw === jsonStr && isAlreadyDelegated) {
+        return true;
+      }
+
+      this.#remoteRevokeCode = null;
+      this.#remoteRevokeMessage = null;
+      this.#vault.setSecret(VAULT_KEY_CERTIFICATE, jsonStr);
+      this.#vault.setSecret(VAULT_KEY_PEER_DELEGATED, "1");
+      this.#wsHub?.broadcast("license:updated", this.getStatus());
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Retorna a chave bruta e machineId exclusivamente para chamadas autenticadas do sistema (claims/updates). */
@@ -376,6 +422,7 @@ export class LicenseClientService {
 
     this.#remoteRevokeCode = null;
     this.#remoteRevokeMessage = null;
+    this.#vault.deleteSecret(VAULT_KEY_PEER_DELEGATED);
     this.#vault.setSecret(VAULT_KEY_CERTIFICATE, JSON.stringify(data.certificate));
     this.#vault.setSecret(VAULT_KEY_DEVICES_CACHE, JSON.stringify(data.devices ?? []));
 
@@ -388,6 +435,9 @@ export class LicenseClientService {
   async heartbeat(): Promise<LicenseActivationStatus> {
     const cert = this.readStoredCertificate();
     if (!cert) {
+      return this.getStatus();
+    }
+    if (this.#vault.getSecret(VAULT_KEY_PEER_DELEGATED) === "1") {
       return this.getStatus();
     }
 

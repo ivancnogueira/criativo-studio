@@ -337,6 +337,7 @@ export async function createDaemonServer(
   const serverProxyRouter = localServerManager
     ? new ServerProxyRouter({
         localServerManager,
+        licenseService,
         fetchImpl: options.fetchImpl,
       })
     : null;
@@ -391,6 +392,15 @@ export async function createDaemonServer(
     workspaceRoot: resolvedWorkspaceRoot,
     sharedAuthDir: options.sharedAuthDir ?? null,
   });
+  if (configuredAccessToken) {
+    const currentOnboarding = providerConnection.getOnboardingState();
+    if (!currentOnboarding.onboarding_concluido) {
+      providerConnection.updateOnboardingState({
+        onboarding_concluido: true,
+        setup_assistant_dismissed: true,
+      });
+    }
+  }
   syncBrandPlaceholdersInDatabase(db, getBrandIdentity(providerConnection));
   const mcpGateway = new McpGateway({
     db,
@@ -1700,7 +1710,8 @@ export async function createDaemonServer(
         res.writeHead(204, {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Criativo-Server-Id,X-Criativo-Mcp-Token",
+          "Access-Control-Allow-Headers":
+            "Content-Type,Authorization,X-Criativo-Server-Id,X-Criativo-Mcp-Token,X-Criativo-Synced-License",
         });
         res.end();
         return;
@@ -1715,17 +1726,30 @@ export async function createDaemonServer(
         return;
       }
 
+      const hasValidServerToken = Boolean(
+        configuredAccessToken && isAuthorizedByAccessToken(req, url),
+      );
+
       if (
         configuredAccessToken &&
         !(method === "GET" && (path === "/health" || path === "/api/health")) &&
         path.startsWith("/api/") &&
-        !isAuthorizedByAccessToken(req, url)
+        !hasValidServerToken
       ) {
         sendJson(res, 401, { erro: "Token de acesso do servidor ausente ou inválido." });
         return;
       }
 
+      if (hasValidServerToken) {
+        const syncedHeader = req.headers["x-criativo-synced-license"];
+        const encodedCert = Array.isArray(syncedHeader) ? syncedHeader[0] : syncedHeader;
+        if (typeof encodedCert === "string" && encodedCert.trim()) {
+          licenseService.importPeerSyncedCertificateBase64(encodedCert.trim());
+        }
+      }
+
       const isLicenseExemptRoute =
+        hasValidServerToken ||
         (method === "GET" && (path === "/health" || path === "/api/health")) ||
         path.startsWith("/api/studio/license/") ||
         (method === "GET" && !path.startsWith("/api/") && path !== "/ws");

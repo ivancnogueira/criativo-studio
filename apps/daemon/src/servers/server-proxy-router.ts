@@ -2,10 +2,12 @@ import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import https from "node:https";
 import type { Duplex } from "node:stream";
 import type { FetchLike } from "../engine/providers/provider-interface.ts";
+import type { LicenseClientService } from "../license/license-service.ts";
 import type { LocalServerManager } from "./local-server-manager.ts";
 
 export interface ServerProxyRouterOptions {
   localServerManager: LocalServerManager;
+  licenseService?: LicenseClientService;
   fetchImpl?: FetchLike;
 }
 
@@ -33,10 +35,12 @@ function isManagerOwnedRoute(path: string): boolean {
 
 export class ServerProxyRouter {
   readonly #manager: LocalServerManager;
+  readonly #licenseService?: LicenseClientService;
   readonly #fetchImpl: FetchLike;
 
   constructor(options: ServerProxyRouterOptions) {
     this.#manager = options.localServerManager;
+    this.#licenseService = options.licenseService;
     this.#fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
   }
 
@@ -126,6 +130,11 @@ export class ServerProxyRouter {
 
     if (accessToken) {
       forwardHeaders.authorization = `Bearer ${accessToken}`;
+    }
+
+    const syncedCertB64 = this.#licenseService?.exportCertificateForPeerSync();
+    if (syncedCertB64) {
+      forwardHeaders["x-criativo-synced-license"] = syncedCertB64;
     }
 
     const hasBody = method !== "GET" && method !== "HEAD";

@@ -48,11 +48,13 @@ async function bootLocalChild(): Promise<void> {
   ensureChildWorkspaceScaffold(resolvedRoot);
 
   const accessToken = process.env.CRIATIVO_SERVER_ACCESS_TOKEN || "";
-  const sharedAuthDir = process.env.CRIATIVO_SHARED_AUTH_DIR || null;
   const vaultMasterKey = process.env.CRIATIVO_VAULT_KEY;
+  const syncedLicenseB64 = process.env.CRIATIVO_SYNCED_LICENSE_B64?.trim() || "";
 
-  // Limpa o token do ambiente após leitura antes que agentes ou subprocessos iniciem
+  // Limpa tokens sensíveis do ambiente após leitura antes que agentes ou subprocessos iniciem
   delete process.env.CRIATIVO_SERVER_ACCESS_TOKEN;
+  delete process.env.CRIATIVO_SYNCED_LICENSE_B64;
+  delete process.env.CRIATIVO_CHILD_SHARED_AI_KEYS;
 
   const runtime = await createDaemonServer({
     port: 0,
@@ -62,7 +64,7 @@ async function bootLocalChild(): Promise<void> {
     vaultMasterKey,
     accessToken,
     isChildServer: true,
-    sharedAuthDir,
+    sharedAuthDir: null,
     autoStartLoops: process.env.CRIATIVO_CHILD_AUTO_LOOPS === "1",
     autoBootWhatsApp: false,
     controlSocketPath: null,
@@ -72,20 +74,24 @@ async function bootLocalChild(): Promise<void> {
     licensePublicKeyPem: process.env.CRIATIVO_LICENSE_PUBLIC_KEY_PEM,
   });
 
-  // Copia chaves compartilhadas de provedores de IA (se fornecidas apenas via startup JSON seguro)
-  const sharedAiRaw = process.env.CRIATIVO_CHILD_SHARED_AI_KEYS;
-  delete process.env.CRIATIVO_CHILD_SHARED_AI_KEYS;
-  if (sharedAiRaw) {
-    try {
-      const pairs = JSON.parse(sharedAiRaw) as Record<string, string>;
-      for (const [k, v] of Object.entries(pairs)) {
-        if (typeof v === "string" && v && !runtime.vault.getSecret(k)) {
-          runtime.vault.setSecret(k, v);
-        }
-      }
-    } catch {
-      // ignora payload inválido
-    }
+  if (syncedLicenseB64) {
+    runtime.licenseService.importPeerSyncedCertificateBase64(syncedLicenseB64);
+  }
+
+  const curOnboarding = runtime.providerConnection.getOnboardingState();
+  if (!curOnboarding.onboarding_concluido) {
+    runtime.providerConnection.updateOnboardingState({
+      onboarding_concluido: true,
+      setup_assistant_dismissed: true,
+    });
+  }
+
+  if (
+    process.env.NODE_ENV !== "test" &&
+    process.env.CRIATIVO_SKIP_LOCAL_PROBE !== "1" &&
+    process.env.CRIATIVO_DISABLE_AUTO_INSTALL !== "1"
+  ) {
+    void runtime.providerConnection.ensureOpenCodeRuntimeInBackground().catch(() => {});
   }
 
   const readyPayload = {

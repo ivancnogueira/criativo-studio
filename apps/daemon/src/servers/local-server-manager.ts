@@ -34,17 +34,6 @@ interface ServerDbRow {
   last_error: string | null;
 }
 
-const SHARED_PROVIDER_VAULT_KEYS = [
-  "gemini_api_key",
-  "google_api_key",
-  "anthropic_api_key",
-  "claude_api_key",
-  "openai_api_key",
-  "xai_api_key",
-  "grok_api_key",
-  "opencode_api_key",
-];
-
 function slugifyServerName(name: string): string {
   const base = name
     .toLowerCase()
@@ -207,23 +196,6 @@ export class LocalServerManager {
     return candidate;
   }
 
-  private resolveSharedAuthDir(): string {
-    const appsContas = join(this.#workspaceRoot, "apps", "daemon", "dados", "contas");
-    if (existsSync(appsContas) || existsSync(join(this.#workspaceRoot, "apps", "daemon", "dados"))) {
-      return appsContas;
-    }
-    return join(this.#workspaceRoot, "dados", "contas");
-  }
-
-  private collectSharedAiKeys(): Record<string, string> {
-    const out: Record<string, string> = {};
-    for (const key of SHARED_PROVIDER_VAULT_KEYS) {
-      const val = this.#vault.getSecret(key);
-      if (val) out[key] = val;
-    }
-    return out;
-  }
-
   /** Cria e inicia um novo servidor local isolado neste computador (Print 3). */
   async createLocalServer(input: { nome: string; cor_hex?: string }): Promise<StudioServerRecord> {
     const nome = String(input.nome || "").trim();
@@ -350,7 +322,7 @@ export class LocalServerManager {
 
     const entryFile = resolveChildEntryFile();
     const childVaultKey = randomBytes(32).toString("hex");
-    const sharedAiKeys = this.collectSharedAiKeys();
+    const syncedLicenseB64 = this.#licenseService.exportCertificateForPeerSync() ?? "";
 
     const proc = spawn(process.execPath, [entryFile], {
       cwd: this.#workspaceRoot,
@@ -361,14 +333,14 @@ export class LocalServerManager {
         ...(process.env.CRIATIVO_DESKTOP_PACKAGED === "1" ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
         CRIATIVO_USER_DATA_DIR: row.workspace_path,
         CRIATIVO_LOCAL_CHILD: "1",
+        CRIATIVO_ISOLATED_SERVER: "1",
         CRIATIVO_CHILD_SERVER_ID: serverId,
         CRIATIVO_CHILD_SERVER_NAME: record.nome,
         CRIATIVO_CHILD_ROOT_DIR: row.workspace_path,
         CRIATIVO_SERVER_ACCESS_TOKEN: accessToken,
         CRIATIVO_VAULT_KEY: childVaultKey,
-        CRIATIVO_SHARED_AUTH_DIR: this.resolveSharedAuthDir(),
-        CRIATIVO_CHILD_SHARED_AI_KEYS: JSON.stringify(sharedAiKeys),
-        CRIATIVO_CHILD_BYPASS_LICENSE: this.#licenseService.isBypassedForTests() ? "1" : "1",
+        CRIATIVO_SYNCED_LICENSE_B64: syncedLicenseB64,
+        CRIATIVO_CHILD_BYPASS_LICENSE: "1",
       },
     });
 

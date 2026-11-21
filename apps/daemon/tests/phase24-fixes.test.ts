@@ -8,8 +8,10 @@ import { AntigravityLiveService } from "../src/providers/antigravity-live-servic
 import { RemoteClaimService } from "../src/servers/remote-claim-service.ts";
 import { getUserSettings, updateUserSettings } from "../src/server/settings-storage-service.ts";
 import { createDaemonServer, type DaemonRuntime } from "../src/server/daemon-server.ts";
+import { generateLicenseKeyPair } from "@criativo/contracts/license-crypto-node";
 
 const daemonRoot = resolve(fileURLToPath(import.meta.url), "../..");
+const landingServerUrl = new URL("../../../../criativo-ai-studio-landing/server.js", import.meta.url).href;
 
 describe("Fase 24 — Hotfixes RemoteClaim HTML Fallback, Auto-Refresh de Cotas e Configurações do Dock", () => {
   let tempDir: string;
@@ -255,5 +257,163 @@ describe("Fase 24 — Hotfixes RemoteClaim HTML Fallback, Auto-Refresh de Cotas 
       jsonAfterDismiss.agentes.some((a) => a.agente_id === "assistente_servidor_vps"),
       false,
     );
+  });
+
+  it("6. (VPS26-01) install-server.sh usa porta exclusiva padrão 3777, detecta porta livre 3777..3799 e valida assinatura criativo-daemon no /health", () => {
+    const repoScript = readFileSync(resolve(daemonRoot, "../../scripts/install-server.sh"), "utf8");
+    assert.match(repoScript, /SERVER_PORT="\$\{CRIATIVO_SERVER_PORT:-3777\}"/);
+    assert.match(repoScript, /is_port_in_use/);
+    assert.match(repoScript, /seq 3777 3799/);
+    assert.match(repoScript, /"criativo-daemon"/);
+    assert.match(repoScript, /CRIATIVO_ISOLATED_SERVER=1/);
+  });
+
+  it("7. (VPS26-02) Desktop sincroniza certificado de licença para VPS com enforceLicense, libera 15 agentes + Loja >=253 apps e isola provedores", async () => {
+    const { createLandingApp } = (await import(landingServerUrl)) as {
+      createLandingApp: (options?: Record<string, unknown>) => {
+        app: { listen: (port: number, host: string, cb: () => void) => import("node:http").Server };
+        licenseHub: {
+          issueOrUpdateLicenseFromSale: (input: Record<string, unknown>) => { license_key: string; id: string };
+          close: () => void;
+        };
+      };
+    };
+
+    const keys = generateLicenseKeyPair();
+    const hubDir = join(tempDir, "hub-vps26");
+    mkdirSync(hubDir, { recursive: true });
+    const { app, licenseHub } = createLandingApp({
+      distDir: join(hubDir, "dist-empty"),
+      bonusDir: join(hubDir, "bonus-empty"),
+      licenseHub: {
+        dbPath: join(hubDir, "licencas.db"),
+        releasesDir: join(hubDir, "releases"),
+        privateKeyPem: keys.privateKeyPem,
+        publicKeyPem: keys.publicKeyPem,
+      },
+    });
+    const hubServer = await new Promise<import("node:http").Server>((r) => {
+      const s = app.listen(0, "127.0.0.1", () => r(s));
+    });
+    const hubPort = (hubServer.address() as { port: number }).port;
+    const hubUrl = `http://127.0.0.1:${hubPort}`;
+
+    const licIssued = licenseHub.issueOrUpdateLicenseFromSale({
+      email: "agencia-sync@exemplo.invalid",
+      customerName: "Agencia Sync VPS",
+      planTier: "agencia_ilimitada",
+      addUpgrades: ["bonus", "video"],
+      provider: "manual",
+    });
+
+    const desktopDir = join(tempDir, "desktop-p26");
+    const vpsDir = join(tempDir, "vps-p26");
+    mkdirSync(desktopDir, { recursive: true });
+    mkdirSync(vpsDir, { recursive: true });
+
+    const desktopRt = await createDaemonServer({
+      port: 0,
+      host: "127.0.0.1",
+      dbPath: join(desktopDir, "criativo.db"),
+      workspaceRoot: desktopDir,
+      autoStartLoops: false,
+      autoBootWhatsApp: false,
+      controlSocketPath: null,
+      enforceLicense: true,
+      licenseHubUrl: hubUrl,
+      licensePublicKeyPem: keys.publicKeyPem,
+      machineSeedOverride: "desktop-sync-seed-p26",
+    });
+
+    const vpsAccessToken = "vps-token-sync-p26-secret";
+    const vpsRt = await createDaemonServer({
+      port: 0,
+      host: "127.0.0.1",
+      dbPath: join(vpsDir, "criativo.db"),
+      workspaceRoot: vpsDir,
+      autoStartLoops: false,
+      autoBootWhatsApp: false,
+      controlSocketPath: null,
+      enforceLicense: true,
+      accessToken: vpsAccessToken,
+      licenseHubUrl: hubUrl,
+      licensePublicKeyPem: keys.publicKeyPem,
+      machineSeedOverride: "vps-remote-seed-p26",
+    });
+
+    try {
+      // Ativa licença no Desktop e conecta uma API key somente no Desktop
+      const actRes = await fetch(`http://127.0.0.1:${desktopRt.port}/api/studio/license/activate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          license_key: licIssued.license_key,
+          email: "agencia-sync@exemplo.invalid",
+        }),
+      });
+      assert.equal(actRes.status, 200);
+      desktopRt.vault.setSecret("openai_api_key", "sk-desktop-only-secret-test");
+
+      // Registra a VPS no Desktop
+      const vpsRec = desktopRt.localServerManager!.registerRemoteServer({
+        nome: "VPS Isolada Sync",
+        kind: "remote_vps",
+        base_url: `http://127.0.0.1:${vpsRt.port}`,
+        access_token: vpsAccessToken,
+        remote_ip: "203.0.113.55",
+      });
+
+      // 1. Consulta /api/onboarding na VPS -> já concluído automaticamente no boot
+      const onbRes = await fetch(`http://127.0.0.1:${desktopRt.port}/api/onboarding`, {
+        headers: { "X-Criativo-Server-Id": vpsRec.server_id },
+      });
+      assert.equal(onbRes.status, 200);
+      const onbJson = (await onbRes.json()) as { onboarding: { onboarding_concluido: boolean } };
+      assert.equal(onbJson.onboarding.onboarding_concluido, true);
+
+      // 2. Consulta /api/agentes na VPS -> Desktop sincroniza o certificado e VPS desbloqueia os 15 agentes
+      const agRes = await fetch(`http://127.0.0.1:${desktopRt.port}/api/agentes?apenas_desbloqueados=1`, {
+        headers: { "X-Criativo-Server-Id": vpsRec.server_id },
+      });
+      assert.equal(agRes.status, 200);
+      const agJson = (await agRes.json()) as {
+        agentes: Array<{ agente_id: string }>;
+        unlocked_agents_count: number;
+      };
+      assert.equal(agJson.unlocked_agents_count, 15);
+      assert.equal(agJson.agentes.length, 15);
+
+      // 3. Catálogo completo da Loja acessível na VPS
+      const lojaRes = await fetch(`http://127.0.0.1:${desktopRt.port}/api/loja/catalogo`, {
+        headers: { "X-Criativo-Server-Id": vpsRec.server_id },
+      });
+      assert.equal(lojaRes.status, 200);
+      const lojaJson = (await lojaRes.json()) as { apps: unknown[] };
+      assert.ok((lojaJson.apps ?? []).length >= 253);
+
+      // 4. Licença delegada validada na própria VPS com agência ilimitada + upgrades bonus/video
+      const vpsLic = vpsRt.licenseService.getStatus();
+      assert.equal(vpsLic.valid, true);
+      assert.equal(vpsLic.plan_tier, "agencia_ilimitada");
+      assert.equal(vpsLic.upgrades.includes("bonus"), true);
+      assert.equal(vpsLic.upgrades.includes("video"), true);
+
+      // 5. Provedores permanecem isolados (chave OpenAI do Desktop NÃO vazou para a VPS)
+      assert.equal(vpsRt.vault.getSecret("openai_api_key"), null);
+      const provRes = await fetch(`http://127.0.0.1:${desktopRt.port}/api/provedores/status`, {
+        headers: { "X-Criativo-Server-Id": vpsRec.server_id },
+      });
+      assert.equal(provRes.status, 200);
+      const provJson = (await provRes.json()) as {
+        provedores: Array<{ provedor: string; conectado: boolean }>;
+      };
+      const openaiOnVps = provJson.provedores.find((p) => p.provedor === "openai");
+      assert.equal(openaiOnVps?.conectado, false);
+    } finally {
+      await vpsRt.close().catch(() => {});
+      await desktopRt.close().catch(() => {});
+      licenseHub.close();
+      await new Promise<void>((r) => hubServer.close(() => r()));
+    }
   });
 });
