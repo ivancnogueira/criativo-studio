@@ -1068,12 +1068,30 @@ export interface SendMessageInterAgenteResult {
   };
 }
 
+export type CanalNavegadorModo = "all" | "leader" | "none";
+
+export interface CanalMemoria {
+  memoria_id: string;
+  canal_id: string;
+  texto: string;
+  origem: "automatica" | "manual";
+  criado_em: string;
+}
+
 export interface CanalEquipe {
   canal_id: string;
   nome: string;
   descricao: string;
+  instrucoes?: string;
   pasta: string;
   membros_agentes: string[];
+  lider_agente_id?: string | null;
+  navegador_modo?: CanalNavegadorModo;
+  manter_memorias?: boolean;
+  context_cutoff_at?: string | null;
+  context_summary?: string | null;
+  memorias_count?: number;
+  rotinas_count?: number;
   nao_lidas?: number;
   ultima_mensagem?: string | null;
   criado_em: string;

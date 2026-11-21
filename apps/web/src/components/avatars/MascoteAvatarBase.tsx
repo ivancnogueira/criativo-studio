@@ -609,33 +609,47 @@ export interface ChannelMascoteClusterProps {
 }
 
 /**
- * Mosaico compacto 2x2 de avatares para Canais em Equipe.
+ * Cluster horizontal sobreposto de avatares para Canais em Equipe (estilo OpenBot).
  */
 export const ChannelMascoteCluster: React.FC<ChannelMascoteClusterProps> = ({
   members,
   size = 38,
 }) => {
-  const top4 = members.slice(0, 4);
-  const subSize = Math.max(13, Math.round(size * 0.42));
+  const top3 = members.slice(0, 3);
+  const avatarSize =
+    top3.length <= 1
+      ? size
+      : top3.length === 2
+        ? Math.max(20, Math.round(size * 0.68))
+        : Math.max(18, Math.round(size * 0.56));
+  const overlapPx = top3.length <= 1 ? 0 : Math.max(6, Math.round(avatarSize * 0.34));
 
   return (
     <div
-      style={{ width: size, height: size }}
-      className="grid grid-cols-2 gap-0.5 rounded-[10px] bg-[#242424] border border-white/10 p-1 place-items-center shrink-0"
+      style={{ minWidth: size, height: size }}
+      className="inline-flex items-center justify-center shrink-0"
       aria-label="Avatar do canal em equipe"
     >
-      {top4.map((m, idx) => {
+      {top3.map((m, idx) => {
         const def = getDefaultMascotForAgent(m.agente_id || `m${idx}`);
         return (
-          <MascoteAvatar
+          <div
             key={`${m.agente_id}-${idx}`}
-            style={m.style ?? "classic"}
-            shape={m.shape ?? def.shape}
-            variant={m.variant}
-            color={m.color ?? def.color}
-            imageUrl={m.imageUrl}
-            size={subSize}
-          />
+            style={{
+              marginLeft: idx === 0 ? 0 : -overlapPx,
+              zIndex: idx + 1,
+            }}
+            className="relative rounded-full ring-2 ring-[#1A1A1A] bg-[#1A1A1A] flex items-center justify-center"
+          >
+            <MascoteAvatar
+              style={m.style ?? "classic"}
+              shape={m.shape ?? def.shape}
+              variant={m.variant}
+              color={m.color ?? def.color}
+              imageUrl={m.imageUrl}
+              size={avatarSize}
+            />
+          </div>
         );
       })}
     </div>

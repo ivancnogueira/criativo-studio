@@ -57,6 +57,7 @@ import type {
   WorkflowVisual,
 } from "@criativo/contracts";
 import {
+  Crown,
   MessageSquare,
   PanelLeft,
   PanelRightClose,
@@ -311,11 +312,13 @@ export function App() {
 
   const [newChannelName, setNewChannelName] = useState("");
   const [newChannelDesc, setNewChannelDesc] = useState("");
+  const [newChannelInst, setNewChannelInst] = useState("");
   const [newChannelMembers, setNewChannelMembers] = useState<string[]>([
     "estrategista",
     "copywriter",
     "designer_carrossel",
   ]);
+  const [newChannelLeader, setNewChannelLeader] = useState<string>("estrategista");
 
   const [chatByKey, setChatByKey] = useState<Record<string, MensagemChat[]>>({});
   const [liveRunByChat, setLiveRunByChat] = useState<
@@ -972,34 +975,44 @@ export function App() {
           delete copy[evt.canal_id];
           return copy;
         }
-        const existing = prev[evt.canal_id] ?? {
+        const matchedAgentName =
+          agentes.find((a) => a.agente_id === evt.agente_id)?.nome ?? "Agente";
+        const prevRun = prev[evt.canal_id];
+        const agentChanged = Boolean(
+          prevRun && evt.agente_id && prevRun.agenteId && prevRun.agenteId !== evt.agente_id
+        );
+        const existing = prevRun ?? {
           agenteId: evt.agente_id,
-          agenteNome:
-            agentes.find((a) => a.agente_id === evt.agente_id)?.nome ?? "Agente",
+          agenteNome: matchedAgentName,
           startedAt: Date.now(),
           statusText: evt.mensagem_status ?? "Processando...",
           steps: [],
           streamingText: "",
         };
-        let nextSteps = existing.steps;
+        const baseSteps = agentChanged ? [] : existing.steps;
+        let nextSteps = baseSteps;
         if (evt.step) {
           const step = evt.step;
-          const idx = existing.steps.findIndex((s) => s.id === step.id);
+          const idx = baseSteps.findIndex((s) => s.id === step.id);
           if (idx >= 0) {
-            nextSteps = existing.steps.map((s, sIdx) => (sIdx === idx ? step : s));
+            nextSteps = baseSteps.map((s, sIdx) => (sIdx === idx ? step : s));
           } else {
-            nextSteps = [...existing.steps, step];
+            nextSteps = [...baseSteps, step];
           }
         }
         return {
           ...prev,
           [evt.canal_id]: {
             ...existing,
+            agenteId: evt.agente_id ?? existing.agenteId,
+            agenteNome: evt.agente_id ? matchedAgentName : existing.agenteNome,
             statusText: evt.mensagem_status ?? existing.statusText,
             steps: nextSteps,
-            streamingText: evt.delta
-              ? existing.streamingText + evt.delta
-              : existing.streamingText,
+            streamingText: agentChanged
+              ? evt.delta ?? ""
+              : evt.delta
+                ? existing.streamingText + evt.delta
+                : existing.streamingText,
           },
         };
       });
@@ -1420,6 +1433,7 @@ export function App() {
     const unsubSidebarUpdated = ws.on("sidebar:updated", () => {
       void daemonApi.getSidebarLayout().then(setSidebarLayout).catch(() => {});
       void daemonApi.listAgents().then(setAgentes).catch(() => {});
+      void daemonApi.listChannels().then(setCanais).catch(() => {});
       void daemonApi.listDeletedNativeAgents().then(setDeletedNativeAgents).catch(() => {});
     });
 
@@ -3038,17 +3052,32 @@ export function App() {
   const handleCreateChannelSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newChannelName.trim()) return;
+    const membros =
+      newChannelMembers.length > 0 ? newChannelMembers : ["estrategista", "copywriter"];
+    const lider = membros.includes(newChannelLeader) ? newChannelLeader : membros[0];
     const canal = await daemonApi.createChannel({
       nome: newChannelName.trim(),
-      descricao: newChannelDesc.trim() || "Canal colaborativo de criação",
-      membros_agentes:
-        newChannelMembers.length > 0 ? newChannelMembers : ["estrategista", "copywriter"],
+      descricao: newChannelDesc.trim(),
+      instrucoes: newChannelInst.trim(),
+      membros_agentes: membros,
+      lider_agente_id: lider,
     });
     setCanais((prev) => [canal, ...prev]);
     setNewChannelName("");
     setNewChannelDesc("");
+    setNewChannelInst("");
     setChannelModalOpen(false);
     handleSelectChannel(canal.canal_id);
+  };
+
+  const handleDeleteChannel = async (canalId: string) => {
+    await daemonApi.deleteChannel(canalId);
+    setCanais((prev) => prev.filter((c) => c.canal_id !== canalId));
+    setOpenTabs((prev) => prev.filter((t) => t.id !== `channel:${canalId}`));
+    if (centerMode.type === "channel" && centerMode.canalId === canalId) {
+      const fallbackId = agentes[0]?.agente_id ?? "estrategista";
+      handleSelectAgent(fallbackId);
+    }
   };
 
   const handleConnectViaBrowser = useCallback(
@@ -3415,6 +3444,12 @@ export function App() {
                     setRoutineInspectorSignal({ subView: "config", nonce: Date.now() });
                   }}
                   onDeleteAgent={handleDeleteAgent}
+                  onEditChannel={(canalId) => {
+                    handleSelectChannel(canalId);
+                    setInspectorOpen(true);
+                    setRoutineInspectorSignal({ subView: "channel_config", nonce: Date.now() });
+                  }}
+                  onDeleteChannel={handleDeleteChannel}
                     updateStatus={updateStatus}
                     onApplyUpdate={() => void handleApplyUpdate()}
                     onOpenUpdateSettings={() => openSettings("atualizacoes")}
@@ -3518,6 +3553,13 @@ export function App() {
                         liveRun={activeLiveRun}
                         inspectorOpen={inspectorOpen}
                         onToggleInspector={() => setInspectorOpen((o) => !o)}
+                        onOpenChannelSettings={() => {
+                          setInspectorOpen(true);
+                          setRoutineInspectorSignal({
+                            subView: "channel_config",
+                            nonce: Date.now(),
+                          });
+                        }}
                         onSendMessage={async (conteudo, anexos, pageContext) => {
                           setPrefilledChatPrompt(null);
                           await handleSendChatMessage(conteudo, anexos, pageContext);
@@ -3923,11 +3965,14 @@ export function App() {
                     </div>
                   ) : (
                     <RightInspectorPanel
-                    open={inspectorOpen}
-                    widthPx={inspectorWidth}
-                    agente={activeAgent}
+                      open={inspectorOpen}
+                      widthPx={inspectorWidth}
+                      agente={activeAgent}
+                      canal={activeChannel}
+                      allAgentes={agentes}
                       arquivos={arquivos}
                       canais={canais}
+                      channelRoutineCount={activeChannel?.rotinas_count ?? 0}
                       threads={
                         activeAgent
                           ? (
@@ -4092,6 +4137,83 @@ export function App() {
                           payload: { revisao_de: tarefa.tarefa_id },
                         });
                         setTarefas(await daemonApi.listTasks());
+                      }}
+                      onSaveChannelSettings={async (canalId, patch) => {
+                        const updated = await daemonApi.updateChannel(canalId, patch);
+                        setCanais((prev) =>
+                          prev.map((c) => (c.canal_id === updated.canal_id ? updated : c))
+                        );
+                        setOpenTabs((prev) =>
+                          prev.map((t) =>
+                            t.id === `channel:${updated.canal_id}`
+                              ? { ...t, titulo: updated.nome }
+                              : t
+                          )
+                        );
+                      }}
+                      onDeleteChannel={handleDeleteChannel}
+                      onNewChannelConversation={async (canalId) => {
+                        const res = await daemonApi.startNewChannelConversation(canalId);
+                        if (res.canal) {
+                          setCanais((prev) =>
+                            prev.map((c) => (c.canal_id === res.canal!.canal_id ? res.canal! : c))
+                          );
+                        }
+                        if (res.mensagem_divisor) {
+                          setChatByKey((prev) => ({
+                            ...prev,
+                            [canalId]: mergeUniqueMessages(prev[canalId] ?? [], [
+                              res.mensagem_divisor,
+                            ]),
+                          }));
+                        }
+                      }}
+                      onCompactChannelContext={async (canalId) => {
+                        const res = await daemonApi.compactChannelContext(canalId);
+                        if (res.canal) {
+                          setCanais((prev) =>
+                            prev.map((c) => (c.canal_id === res.canal!.canal_id ? res.canal! : c))
+                          );
+                        }
+                        if (res.mensagem_divisor) {
+                          setChatByKey((prev) => ({
+                            ...prev,
+                            [canalId]: mergeUniqueMessages(prev[canalId] ?? [], [
+                              res.mensagem_divisor,
+                            ]),
+                          }));
+                        }
+                      }}
+                      onClearChannelHistory={async (canalId) => {
+                        await daemonApi.clearChannelHistory(canalId);
+                        setChatByKey((prev) => ({ ...prev, [canalId]: [] }));
+                        setCanais((prev) =>
+                          prev.map((c) =>
+                            c.canal_id === canalId
+                              ? { ...c, ultima_mensagem: null, nao_lidas: 0 }
+                              : c
+                          )
+                        );
+                      }}
+                      onLoadChannelMemories={daemonApi.listChannelMemories}
+                      onAddChannelMemory={async (canalId, texto) => {
+                        const list = await daemonApi.addChannelMemory(canalId, texto);
+                        setCanais((prev) =>
+                          prev.map((c) =>
+                            c.canal_id === canalId ? { ...c, memorias_count: list.length } : c
+                          )
+                        );
+                        return list;
+                      }}
+                      onDeleteChannelMemory={async (canalId, memId) => {
+                        await daemonApi.deleteChannelMemory(canalId, memId);
+                        setCanais((prev) =>
+                          prev.map((c) =>
+                            c.canal_id === canalId
+                              ? { ...c, memorias_count: Math.max(0, (c.memorias_count ?? 1) - 1) }
+                              : c
+                          )
+                        );
                       }}
                     />
                   )}
@@ -4853,14 +4975,14 @@ export function App() {
                 type="text"
                 value={newChannelName}
                 onChange={(e) => setNewChannelName(e.target.value)}
-                placeholder="#lancamento-semanal"
+                placeholder="Equipe de Lançamento Semanal"
                 className="w-full rounded-xl bg-[#141414] border border-white/10 px-3 py-2 text-[13px] text-white"
               />
             </div>
 
             <div>
               <label htmlFor="new-channel-desc" className="block text-[11.5px] text-[#979797] mb-1">
-                Objetivo
+                Título / Objetivo
               </label>
               <input
                 id="new-channel-desc"
@@ -4869,43 +4991,97 @@ export function App() {
                 type="text"
                 value={newChannelDesc}
                 onChange={(e) => setNewChannelDesc(e.target.value)}
-                placeholder="Coordenar pauta, copy e carrosséis da semana"
+                placeholder="Descreva o que esta equipe faz"
                 className="w-full rounded-xl bg-[#141414] border border-white/10 px-3 py-2 text-[13px] text-white"
               />
             </div>
 
             <div>
-              <span className="block text-[11.5px] text-[#979797] mb-1.5">
-                Agentes participantes ({newChannelMembers.length})
-              </span>
-              <div className="max-h-40 overflow-y-auto grid grid-cols-1 gap-1 pr-1">
-                {agentes.map((ag) => {
-                  const checked = newChannelMembers.includes(ag.agente_id);
-                  return (
-                    <label
-                      key={ag.agente_id}
-                      htmlFor={`ch-member-${ag.agente_id}`}
-                      className="flex items-center gap-2 rounded-lg bg-[#1A1A1A] px-2.5 py-1.5 text-[12px] text-white cursor-pointer"
-                    >
-                      <input
-                        id={`ch-member-${ag.agente_id}`}
-                        name={`member_${ag.agente_id}`}
-                        aria-label={`Incluir ${ag.nome}`}
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() =>
-                          setNewChannelMembers((prev) =>
-                            checked
-                              ? prev.filter((id) => id !== ag.agente_id)
-                              : [...prev, ag.agente_id]
-                          )
-                        }
-                        className="accent-[#31CF76]"
-                      />
-                      <span className="truncate">{ag.nome}</span>
-                    </label>
-                  );
-                })}
+              <label htmlFor="new-channel-inst" className="block text-[11.5px] text-[#979797] mb-1">
+                Instruções (opcional)
+              </label>
+              <textarea
+                id="new-channel-inst"
+                name="new_channel_inst"
+                aria-label="Instruções da equipe"
+                rows={2}
+                value={newChannelInst}
+                onChange={(e) => setNewChannelInst(e.target.value)}
+                placeholder="Em que esta equipe vai trabalhar?"
+                className="w-full rounded-xl bg-[#141414] border border-white/10 px-3 py-2 text-[12.5px] text-white resize-none"
+              />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[11.5px] text-[#979797]">
+                  Membros ({newChannelMembers.length}) · cada agente usa seu próprio provedor
+                </span>
+              </div>
+              <div className="max-h-44 overflow-y-auto grid grid-cols-1 gap-1 pr-1">
+                {agentes
+                  .filter(
+                    (ag) =>
+                      ag.agente_id !== "assistente_setup" &&
+                      ag.agente_id !== "assistente_servidor_vps" &&
+                      (ag.config as Record<string, unknown>)?.upgrade_desbloqueado !== false
+                  )
+                  .map((ag) => {
+                    const checked = newChannelMembers.includes(ag.agente_id);
+                    const isLeader = checked && newChannelLeader === ag.agente_id;
+                    return (
+                      <div
+                        key={ag.agente_id}
+                        className="flex items-center justify-between gap-2 rounded-lg bg-[#1A1A1A] px-2.5 py-1.5 text-[12px] text-white"
+                      >
+                        <label
+                          htmlFor={`ch-member-${ag.agente_id}`}
+                          className="flex items-center gap-2 min-w-0 flex-1 cursor-pointer"
+                        >
+                          <input
+                            id={`ch-member-${ag.agente_id}`}
+                            name={`member_${ag.agente_id}`}
+                            aria-label={`Incluir ${ag.nome}`}
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {
+                              setNewChannelMembers((prev) => {
+                                const next = checked
+                                  ? prev.filter((id) => id !== ag.agente_id)
+                                  : [...prev, ag.agente_id];
+                                if (!next.includes(newChannelLeader)) {
+                                  setNewChannelLeader(next[0] ?? "");
+                                } else if (!checked && !newChannelLeader) {
+                                  setNewChannelLeader(ag.agente_id);
+                                }
+                                return next;
+                              });
+                            }}
+                            className="accent-[#31CF76]"
+                          />
+                          <span className="truncate">{ag.nome}</span>
+                          <span className="text-[10.5px] text-[#787878] truncate ml-auto">
+                            {ag.modelo_padrao}
+                          </span>
+                        </label>
+                        {checked && (
+                          <button
+                            type="button"
+                            title={isLeader ? "Líder da equipe" : "Definir como líder"}
+                            aria-label={`Definir ${ag.nome} como líder`}
+                            onClick={() => setNewChannelLeader(ag.agente_id)}
+                            className={`h-6 w-6 rounded-md flex items-center justify-center shrink-0 transition-colors ${
+                              isLeader
+                                ? "text-[#FDCB6E] bg-[#FDCB6E]/15"
+                                : "text-[#6A6A6A] hover:text-white"
+                            }`}
+                          >
+                            <Crown className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
               </div>
             </div>
 

@@ -12,6 +12,8 @@ import type {
   BrowserProfileProxyPayload,
   BrowserProxyConfig,
   CanalEquipe,
+  CanalMemoria,
+  CanalNavegadorModo,
   NivelEsforco,
   PermissionLevel,
   ProvedorStatusInfo,
@@ -28,6 +30,7 @@ import {
   Check,
   ChevronRight,
   Cpu,
+  Crown,
   Database,
   FileText,
   FolderOpen,
@@ -65,6 +68,9 @@ import { BackupModelsEditor } from "./BackupModelsEditor";
 export type InspectorSubView =
   | "hub"
   | "config"
+  | "channel_config"
+  | "channel_memories"
+  | "channel_routines"
   | "preview"
   | "files"
   | "routines"
@@ -81,6 +87,8 @@ export interface RightInspectorPanelProps {
   widthPx?: number;
   initialSubView?: InspectorSubView;
   agente: AgenteRegistro | null;
+  canal?: CanalEquipe | null;
+  allAgentes?: AgenteRegistro[];
   arquivos: ArquivoStudio[];
   canais?: CanalEquipe[];
   threads?: AgenteThreadRegistro[];
@@ -88,6 +96,7 @@ export interface RightInspectorPanelProps {
   skillsCount?: number;
   tablesCount?: number;
   routineCount?: number;
+  channelRoutineCount?: number;
   routineFocusSignal?: {
     subView?: InspectorSubView;
     rotinaId?: string | null;
@@ -157,7 +166,44 @@ export interface RightInspectorPanelProps {
   onDeleteBrowserProxy?: (proxyId: string) => Promise<void>;
   onOpenAgentBrowserTakeover?: (agenteId: string) => void | Promise<void>;
   onInspectAgentBrowsingLog?: (agenteId: string) => void | Promise<void>;
+  onSaveChannelSettings?: (
+    canalId: string,
+    patch: {
+      nome?: string;
+      descricao?: string;
+      instrucoes?: string;
+      membros_agentes?: string[];
+      lider_agente_id?: string | null;
+      navegador_modo?: CanalNavegadorModo;
+      manter_memorias?: boolean;
+    }
+  ) => Promise<void>;
+  onDeleteChannel?: (canalId: string) => Promise<void>;
+  onNewChannelConversation?: (canalId: string) => Promise<void>;
+  onCompactChannelContext?: (canalId: string) => Promise<void>;
+  onClearChannelHistory?: (canalId: string) => Promise<void>;
+  onLoadChannelMemories?: (canalId: string) => Promise<CanalMemoria[]>;
+  onAddChannelMemory?: (canalId: string, texto: string) => Promise<CanalMemoria[]>;
+  onDeleteChannelMemory?: (canalId: string, memoriaId: string) => Promise<void>;
 }
+
+const CHANNEL_BROWSER_OPTIONS: readonly CarbonSelectOption<CanalNavegadorModo>[] = [
+  {
+    value: "all",
+    label: "Todos os membros",
+    description: "Qualquer especialista da equipe pode usar o navegador",
+  },
+  {
+    value: "leader",
+    label: "Apenas o líder",
+    description: "Somente o líder/coordenador da equipe aciona o navegador",
+  },
+  {
+    value: "none",
+    label: "Desativado",
+    description: "Nenhum membro usa o navegador neste canal",
+  },
+];
 
 const PERMISSION_RANK: Record<PermissionLevel, number> = {
   workspace: 0,
@@ -208,6 +254,8 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   widthPx,
   initialSubView = "hub",
   agente,
+  canal = null,
+  allAgentes = [],
   arquivos,
   canais = [],
   threads = [],
@@ -215,6 +263,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   skillsCount,
   tablesCount = 0,
   routineCount = 0,
+  channelRoutineCount = 0,
   routineFocusSignal = null,
   previewTarefa,
   provedores = [],
@@ -248,6 +297,14 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   onDeleteBrowserProxy,
   onOpenAgentBrowserTakeover,
   onInspectAgentBrowsingLog,
+  onSaveChannelSettings,
+  onDeleteChannel,
+  onNewChannelConversation,
+  onCompactChannelContext,
+  onClearChannelHistory,
+  onLoadChannelMemories,
+  onAddChannelMemory,
+  onDeleteChannelMemory,
 }) => {
   const [subView, setSubView] = useState<InspectorSubView>(
     routineFocusSignal?.subView ?? initialSubView
@@ -302,11 +359,81 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
   const [deleteFileError, setDeleteFileError] = useState<string | null>(null);
 
+  // Estados de Configurações da Equipe (Canal)
+  const [channelNomeDraft, setChannelNomeDraft] = useState(canal?.nome ?? "");
+  const [channelDescDraft, setChannelDescDraft] = useState(canal?.descricao ?? "");
+  const [channelInstDraft, setChannelInstDraft] = useState(canal?.instrucoes ?? "");
+  const [channelMembersDraft, setChannelMembersDraft] = useState<string[]>(
+    canal?.membros_agentes ?? []
+  );
+  const [channelLeaderDraft, setChannelLeaderDraft] = useState<string | null>(
+    canal?.lider_agente_id ?? canal?.membros_agentes?.[0] ?? null
+  );
+  const [channelBrowserDraft, setChannelBrowserDraft] = useState<CanalNavegadorModo>(
+    canal?.navegador_modo ?? "all"
+  );
+  const [channelKeepMemDraft, setChannelKeepMemDraft] = useState<boolean>(
+    Boolean(canal?.manter_memorias)
+  );
+  const [channelMemories, setChannelMemories] = useState<CanalMemoria[]>([]);
+  const [channelMemoryDraft, setChannelMemoryDraft] = useState("");
+  const [channelAddMemberOpen, setChannelAddMemberOpen] = useState(false);
+  const [channelActionBusy, setChannelActionBusy] = useState<string | null>(null);
+  const [confirmClearChannelHist, setConfirmClearChannelHist] = useState(false);
+  const [confirmDeleteChannelModal, setConfirmDeleteChannelModal] = useState(false);
+
   useEffect(() => {
     if (routineFocusSignal?.subView) {
       setSubView(routineFocusSignal.subView);
     }
   }, [routineFocusSignal?.nonce, routineFocusSignal?.subView]);
+
+  useEffect(() => {
+    if (!canal) return;
+    setChannelNomeDraft(canal.nome);
+    setChannelDescDraft(canal.descricao ?? "");
+    setChannelInstDraft(canal.instrucoes ?? "");
+    setChannelMembersDraft(canal.membros_agentes ?? []);
+    setChannelLeaderDraft(canal.lider_agente_id ?? canal.membros_agentes?.[0] ?? null);
+    setChannelBrowserDraft(canal.navegador_modo ?? "all");
+    setChannelKeepMemDraft(Boolean(canal.manter_memorias));
+    setConfirmClearChannelHist(false);
+    setConfirmDeleteChannelModal(false);
+    setChannelAddMemberOpen(false);
+  }, [canal]);
+
+  useEffect(() => {
+    if (
+      (subView === "channel_config" || subView === "channel_memories") &&
+      canal &&
+      onLoadChannelMemories
+    ) {
+      void onLoadChannelMemories(canal.canal_id).then(setChannelMemories).catch(() => {});
+    }
+  }, [subView, canal, onLoadChannelMemories]);
+
+  useEffect(() => {
+    if (canal && !agente) {
+      setSubView((prev) =>
+        prev === "config" ||
+        prev === "subconversations" ||
+        prev === "routines" ||
+        prev === "instructions" ||
+        prev === "memories" ||
+        prev === "folders" ||
+        prev === "advanced" ||
+        prev === "backup_models"
+          ? "channel_config"
+          : prev
+      );
+    } else if (agente && !canal) {
+      setSubView((prev) =>
+        prev === "channel_config" || prev === "channel_memories" || prev === "channel_routines"
+          ? "hub"
+          : prev
+      );
+    }
+  }, [agente, canal]);
 
   useEffect(() => {
     if (!agente) return;
@@ -515,25 +642,31 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
       ? `Biblioteca (${arquivos.length})`
       : subView === "config"
         ? "Configurações do agente"
-        : subView === "routines"
-          ? "Rotinas do agente"
-          : subView === "subconversations"
-            ? `Subconversas (${threads.length})`
-            : subView === "folders"
-              ? authorizedFoldersLabel
-              : subView === "instructions"
-                ? "Instruções"
-                : subView === "memories"
-                  ? `Memórias (${memories.length})`
-                  : subView === "advanced"
-                    ? "Controle Avançado"
-                    : subView === "preview"
-                      ? "Preview Instagram"
-                      : subView === "backup_models"
-                        ? "Modelo Reserva"
-                        : subView === "browser_profiles"
-                          ? "Perfis de Navegador"
-                          : "";
+        : subView === "channel_config"
+          ? "Configurações da equipe"
+          : subView === "channel_memories"
+            ? `Memórias da equipe (${channelMemories.length})`
+            : subView === "channel_routines"
+              ? "Rotinas da equipe"
+              : subView === "routines"
+                ? "Rotinas do agente"
+                : subView === "subconversations"
+                  ? `Subconversas (${threads.length})`
+                  : subView === "folders"
+                    ? authorizedFoldersLabel
+                    : subView === "instructions"
+                      ? "Instruções"
+                      : subView === "memories"
+                        ? `Memórias (${memories.length})`
+                        : subView === "advanced"
+                          ? "Controle Avançado"
+                          : subView === "preview"
+                            ? "Preview Instagram"
+                            : subView === "backup_models"
+                              ? "Modelo Reserva"
+                              : subView === "browser_profiles"
+                                ? "Perfis de Navegador"
+                                : "";
 
   const backTarget: InspectorSubView =
     subView === "backup_models" ||
@@ -542,9 +675,11 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
     subView === "memories" ||
     subView === "advanced"
       ? "config"
-      : subView === "browser_profiles"
-        ? "advanced"
-        : "hub";
+      : subView === "channel_memories" || subView === "channel_routines"
+        ? "channel_config"
+        : subView === "browser_profiles"
+          ? "advanced"
+          : "hub";
 
   const backupSummary = backupModelsDraft.automatic
     ? `Automático · ${backupModelsDraft.order.length} modelo(s)`
@@ -557,13 +692,15 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
 
   return (
     <aside
-      aria-label="Inspetor contextual do agente"
+      aria-label={canal && !agente ? "Inspetor contextual da equipe" : "Inspetor contextual do agente"}
       style={widthPx ? { width: `${widthPx}px` } : { width: "330px" }}
       className="relative shrink-0 bg-[#1A1A1A] border-l border-white/[0.06] flex flex-col h-full overflow-hidden"
     >
       <div className="h-[48px] shrink-0 px-3.5 flex items-center justify-between gap-2 border-b border-white/[0.06]">
         {subView === "hub" ? (
-          <span className="text-[12px] font-medium text-[#787878]">Painel do agente</span>
+          <span className="text-[12px] font-medium text-[#787878]">
+            {canal && !agente ? "Painel da equipe" : "Painel do agente"}
+          </span>
         ) : (
           <button
             type="button"
@@ -589,66 +726,121 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
         {subView === "hub" && (
           <div className="h-full flex flex-col justify-between gap-4">
             <div className="my-auto space-y-2.5 py-4">
-              <button
-                type="button"
-                onClick={() => setSubView("files")}
-                className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors"
-              >
-                <FolderOpen className="h-4 w-4 text-[#979797]" />
-                <span>Abrir Biblioteca ({arquivos.length})</span>
-              </button>
+              {canal && !agente ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setSubView("channel_config")}
+                    className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors"
+                  >
+                    <Settings className="h-4 w-4 text-[#42A0FF]" />
+                    <span>Configurações da equipe</span>
+                  </button>
 
-              <button
-                type="button"
-                disabled={!agente}
-                onClick={() => setSubView("subconversations")}
-                className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors disabled:opacity-40"
-              >
-                <GitFork className="h-4 w-4 text-[#42A0FF]" />
-                <span>
-                  {threads.length > 0 ? `Subconversas (${threads.length})` : "Subconversas"}
-                </span>
-              </button>
+                  <button
+                    type="button"
+                    onClick={() => setSubView("channel_routines")}
+                    className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors"
+                  >
+                    <CalendarClock className="h-4 w-4 text-[#42A0FF]" />
+                    <span>
+                      {channelRoutineCount > 0
+                        ? `Gerenciar rotinas (${channelRoutineCount})`
+                        : "Gerenciar rotinas"}
+                    </span>
+                  </button>
 
-              <button
-                type="button"
-                disabled={!agente}
-                onClick={() => setSubView("config")}
-                className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors disabled:opacity-40"
-              >
-                <Settings className="h-4 w-4 text-[#979797]" />
-                <span>Abrir Configurações do agente</span>
-              </button>
+                  <button
+                    type="button"
+                    onClick={() => setSubView("files")}
+                    className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors"
+                  >
+                    <FolderOpen className="h-4 w-4 text-[#979797]" />
+                    <span>Abrir Biblioteca ({arquivos.length})</span>
+                  </button>
 
-              <button
-                type="button"
-                disabled={!agente}
-                onClick={() => setSubView("routines")}
-                className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors disabled:opacity-40"
-              >
-                <CalendarClock className="h-4 w-4 text-[#42A0FF]" />
-                <span>
-                  {routineCount > 0 ? `Gerenciar rotinas (${routineCount})` : "Gerenciar rotinas"}
-                </span>
-              </button>
+                  <button
+                    type="button"
+                    onClick={() => setSubView("preview")}
+                    className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors"
+                  >
+                    <Smartphone className="h-4 w-4 text-[#42A0FF]" />
+                    <span>Abrir Preview Instagram</span>
+                  </button>
 
-              <button
-                type="button"
-                onClick={() => setSubView("preview")}
-                className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors"
-              >
-                <Smartphone className="h-4 w-4 text-[#42A0FF]" />
-                <span>Abrir Preview Instagram</span>
-              </button>
+                  <button
+                    type="button"
+                    onClick={onOpenWhatsAppModal}
+                    className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors"
+                  >
+                    <AudioLines className="h-4 w-4 text-[#31CF76]" />
+                    <span>Abrir Voz &amp; WhatsApp</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setSubView("files")}
+                    className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors"
+                  >
+                    <FolderOpen className="h-4 w-4 text-[#979797]" />
+                    <span>Abrir Biblioteca ({arquivos.length})</span>
+                  </button>
 
-              <button
-                type="button"
-                onClick={onOpenWhatsAppModal}
-                className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors"
-              >
-                <AudioLines className="h-4 w-4 text-[#31CF76]" />
-                <span>Abrir Voz &amp; WhatsApp</span>
-              </button>
+                  <button
+                    type="button"
+                    disabled={!agente}
+                    onClick={() => setSubView("subconversations")}
+                    className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors disabled:opacity-40"
+                  >
+                    <GitFork className="h-4 w-4 text-[#42A0FF]" />
+                    <span>
+                      {threads.length > 0 ? `Subconversas (${threads.length})` : "Subconversas"}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={!agente}
+                    onClick={() => setSubView("config")}
+                    className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors disabled:opacity-40"
+                  >
+                    <Settings className="h-4 w-4 text-[#979797]" />
+                    <span>Abrir Configurações do agente</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={!agente}
+                    onClick={() => setSubView("routines")}
+                    className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors disabled:opacity-40"
+                  >
+                    <CalendarClock className="h-4 w-4 text-[#42A0FF]" />
+                    <span>
+                      {routineCount > 0 ? `Gerenciar rotinas (${routineCount})` : "Gerenciar rotinas"}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSubView("preview")}
+                    className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors"
+                  >
+                    <Smartphone className="h-4 w-4 text-[#42A0FF]" />
+                    <span>Abrir Preview Instagram</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={onOpenWhatsAppModal}
+                    className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors"
+                  >
+                    <AudioLines className="h-4 w-4 text-[#31CF76]" />
+                    <span>Abrir Voz &amp; WhatsApp</span>
+                  </button>
+                </>
+              )}
             </div>
 
             {previewTarefa && (
@@ -1717,6 +1909,501 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
             >
               {saving ? "Aplicando..." : "Salvar identidade do agente"}
             </button>
+          </form>
+        )}
+
+        {subView === "channel_routines" && canal && (
+          <AgentRoutinesSettings
+            ownerKind="canal"
+            ownerId={canal.canal_id}
+            ownerName={canal.nome}
+            canais={canais}
+            initialSelectedRoutineId={routineFocusSignal?.rotinaId ?? null}
+            onBackToHub={() => setSubView("channel_config")}
+            onOpenThreadOrChat={onOpenRoutineThread}
+            onRoutinesChanged={onRoutinesChanged}
+          />
+        )}
+
+        {subView === "channel_memories" && canal && (
+          <div className="space-y-4">
+            <p className="rounded-xl bg-[#212121] border border-white/[0.06] p-3 text-[11.5px] text-[#979797] leading-relaxed">
+              Memórias salvas aqui pertencem exclusivamente à equipe <strong className="text-white">{canal.nome}</strong>. Outras conversas individuais dos agentes não as enxergam.
+            </p>
+            <div className="flex gap-1.5">
+              <input
+                type="text"
+                value={channelMemoryDraft}
+                onChange={(e) => setChannelMemoryDraft(e.target.value)}
+                placeholder="Ex.: Aprovar copy antes de gerar arte..."
+                aria-label="Adicionar memória da equipe"
+                className="flex-1 rounded-xl bg-[#212121] border border-white/10 px-3 py-1.5 text-[12px] text-white placeholder-[#6A6A6A] focus:outline-none"
+              />
+              <button
+                type="button"
+                disabled={!channelMemoryDraft.trim() || !onAddChannelMemory}
+                onClick={async () => {
+                  if (!onAddChannelMemory || !channelMemoryDraft.trim()) return;
+                  const txt = channelMemoryDraft.trim();
+                  setChannelMemoryDraft("");
+                  const next = await onAddChannelMemory(canal.canal_id, txt);
+                  setChannelMemories(next);
+                }}
+                className="rounded-xl bg-[#2A2A2A] hover:bg-[#333336] disabled:opacity-40 px-3 py-1.5 text-[12px] font-medium text-white"
+              >
+                Fixar
+              </button>
+            </div>
+            <div className="space-y-1.5 max-h-72 overflow-y-auto">
+              {channelMemories.length === 0 ? (
+                <p className="rounded-xl border border-white/[0.06] bg-[#212121] p-3.5 text-[11.5px] text-[#8E8E93]">
+                  Nenhuma memória salva para esta equipe ainda.
+                </p>
+              ) : (
+                channelMemories.map((m) => (
+                  <div
+                    key={m.memoria_id}
+                    className="flex items-start justify-between gap-2 rounded-lg bg-[#212121] border border-white/[0.05] px-3 py-2 text-[11.5px] text-[#DCDCDC]"
+                  >
+                    <span className="min-w-0 flex-1 break-words">{m.texto}</span>
+                    {onDeleteChannelMemory && (
+                      <button
+                        type="button"
+                        aria-label="Remover memória da equipe"
+                        onClick={async () => {
+                          await onDeleteChannelMemory(canal.canal_id, m.memoria_id);
+                          setChannelMemories((prev) =>
+                            prev.filter((item) => item.memoria_id !== m.memoria_id)
+                          );
+                        }}
+                        className="text-[#787878] hover:text-[#FF7675] shrink-0"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {subView === "channel_config" && canal && (
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!onSaveChannelSettings) return;
+              setSaving(true);
+              try {
+                await onSaveChannelSettings(canal.canal_id, {
+                  nome: channelNomeDraft.trim() || canal.nome,
+                  descricao: channelDescDraft.trim(),
+                  instrucoes: channelInstDraft.trim(),
+                  membros_agentes: channelMembersDraft,
+                  lider_agente_id: channelLeaderDraft,
+                  navegador_modo: channelBrowserDraft,
+                  manter_memorias: channelKeepMemDraft,
+                });
+              } finally {
+                setSaving(false);
+              }
+            }}
+            className="space-y-4"
+          >
+            <div>
+              <label htmlFor="ch-cfg-name" className="block text-[11.5px] font-medium text-[#A8A8A8] mb-1">
+                Nome
+              </label>
+              <input
+                id="ch-cfg-name"
+                type="text"
+                required
+                value={channelNomeDraft}
+                onChange={(e) => setChannelNomeDraft(e.target.value)}
+                className="w-full rounded-xl bg-[#212121] border border-white/[0.08] px-3 py-2 text-[13px] text-white focus:outline-none focus:border-white/25"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="ch-cfg-desc" className="block text-[11.5px] font-medium text-[#A8A8A8] mb-1">
+                Título
+              </label>
+              <input
+                id="ch-cfg-desc"
+                type="text"
+                value={channelDescDraft}
+                onChange={(e) => setChannelDescDraft(e.target.value)}
+                placeholder="Descreva o que esta equipe faz"
+                className="w-full rounded-xl bg-[#212121] border border-white/[0.08] px-3 py-2 text-[12.5px] text-white placeholder-[#6A6A6A] focus:outline-none focus:border-white/25"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="ch-cfg-inst" className="block text-[11.5px] font-medium text-[#A8A8A8] mb-1">
+                Instruções
+              </label>
+              <textarea
+                id="ch-cfg-inst"
+                rows={4}
+                value={channelInstDraft}
+                onChange={(e) => setChannelInstDraft(e.target.value)}
+                placeholder="Em que esta equipe vai trabalhar?"
+                className="w-full rounded-xl bg-[#212121] border border-white/[0.08] px-3 py-2 text-[12.5px] text-white placeholder-[#6A6A6A] focus:outline-none focus:border-white/25 resize-y"
+              />
+            </div>
+
+            <div>
+              <span className="block text-[11.5px] font-medium text-[#A8A8A8] mb-1">
+                Navegador
+              </span>
+              <CarbonSelect
+                ariaLabel="Navegador da equipe"
+                value={channelBrowserDraft}
+                options={CHANNEL_BROWSER_OPTIONS}
+                onChange={(val) => {
+                  setChannelBrowserDraft(val);
+                  void onSaveChannelSettings?.(canal.canal_id, { navegador_modo: val });
+                }}
+              />
+            </div>
+
+            <div className="rounded-xl bg-[#212121] border border-white/[0.06] divide-y divide-white/[0.05] overflow-hidden">
+              <div className="px-3.5 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[12.5px] font-semibold text-white">
+                    Manter as memórias neste canal
+                  </div>
+                  <p className="text-[11px] text-[#8E8E93] mt-0.5 leading-snug">
+                    Os agentes guardam o que aprendem aqui como memórias do canal. As outras conversas deles não as veem.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={channelKeepMemDraft}
+                  aria-label="Manter as memórias neste canal"
+                  onClick={() => {
+                    const next = !channelKeepMemDraft;
+                    setChannelKeepMemDraft(next);
+                    void onSaveChannelSettings?.(canal.canal_id, { manter_memorias: next });
+                  }}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors ${
+                    channelKeepMemDraft ? "bg-[#007CF7]" : "bg-[#2A2A2A]"
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                      channelKeepMemDraft ? "translate-x-4.5" : "translate-x-1"
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSubView("channel_memories")}
+                className="w-full px-3.5 py-2.5 flex items-center justify-between gap-2 text-[12.5px] hover:bg-[#262626] transition-colors"
+              >
+                <span className="font-medium text-white">Memórias</span>
+                <span className="flex items-center gap-1.5 text-[11.5px] text-[#A8A8A8]">
+                  <span>
+                    {(canal.memorias_count ?? channelMemories.length) === 1
+                      ? "1 salva"
+                      : `${Math.max(canal.memorias_count ?? 0, channelMemories.length)} salvas`}
+                  </span>
+                  <ChevronRight className="h-3.5 w-3.5 text-[#6A6A6A]" />
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSubView("channel_routines")}
+                className="w-full px-3.5 py-2.5 flex items-center justify-between gap-2 text-[12.5px] hover:bg-[#262626] transition-colors"
+              >
+                <span className="font-medium text-white">Rotinas</span>
+                <span className="flex items-center gap-1.5 text-[11.5px] text-[#A8A8A8]">
+                  <span>
+                    {(channelRoutineCount || canal.rotinas_count || 0) === 1
+                      ? "1 configurada"
+                      : `${channelRoutineCount || canal.rotinas_count || 0} configuradas`}
+                  </span>
+                  <ChevronRight className="h-3.5 w-3.5 text-[#6A6A6A]" />
+                </span>
+              </button>
+            </div>
+
+            {/* Ações de conversa e contexto (Nova conversa, Compactar contexto, Excluir histórico) */}
+            <div className="rounded-xl bg-[#212121] border border-white/[0.06] divide-y divide-white/[0.05] overflow-hidden">
+              <div className="px-3.5 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[12.5px] font-semibold text-white">Nova conversa</div>
+                  <p className="text-[11px] text-[#8E8E93] leading-snug">
+                    Os membros esquecem as mensagens anteriores. A configuração do canal permanece.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={!onNewChannelConversation || channelActionBusy !== null}
+                  onClick={async () => {
+                    if (!onNewChannelConversation) return;
+                    setChannelActionBusy("new");
+                    try {
+                      await onNewChannelConversation(canal.canal_id);
+                    } finally {
+                      setChannelActionBusy(null);
+                    }
+                  }}
+                  className="rounded-lg bg-[#2A2A2E] hover:bg-[#34343A] px-3 py-1.5 text-[11.5px] font-semibold text-white shrink-0 disabled:opacity-50"
+                >
+                  {channelActionBusy === "new" ? "Iniciando..." : "Iniciar"}
+                </button>
+              </div>
+
+              <div className="px-3.5 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[12.5px] font-semibold text-white">Compactar contexto</div>
+                  <p className="text-[11px] text-[#8E8E93] leading-snug">
+                    Os membros mantêm um resumo curto da sessão do canal e usam menos tokens.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={!onCompactChannelContext || channelActionBusy !== null}
+                  onClick={async () => {
+                    if (!onCompactChannelContext) return;
+                    setChannelActionBusy("compact");
+                    try {
+                      await onCompactChannelContext(canal.canal_id);
+                    } finally {
+                      setChannelActionBusy(null);
+                    }
+                  }}
+                  className="rounded-lg bg-[#2A2A2E] hover:bg-[#34343A] px-3 py-1.5 text-[11.5px] font-semibold text-white shrink-0 disabled:opacity-50"
+                >
+                  {channelActionBusy === "compact" ? "Compactando..." : "Compactar agora"}
+                </button>
+              </div>
+
+              <div className="px-3.5 py-3 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[12.5px] font-semibold text-white">Excluir histórico</div>
+                    <p className="text-[11px] text-[#8E8E93] leading-snug">
+                      As mensagens são excluídas e os membros as esquecem. A configuração do canal continua.
+                    </p>
+                  </div>
+                  {!confirmClearChannelHist && (
+                    <button
+                      type="button"
+                      disabled={!onClearChannelHistory || channelActionBusy !== null}
+                      onClick={() => setConfirmClearChannelHist(true)}
+                      className="rounded-lg bg-[#FD2F3B]/15 hover:bg-[#FD2F3B]/25 border border-[#FD2F3B]/30 px-3 py-1.5 text-[11.5px] font-semibold text-[#FF7675] shrink-0"
+                    >
+                      Excluir
+                    </button>
+                  )}
+                </div>
+                {confirmClearChannelHist && (
+                  <div className="flex items-center justify-end gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmClearChannelHist(false)}
+                      className="rounded-lg bg-[#2A2A2E] px-2.5 py-1 text-[11px] text-[#DCDCDC]"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      disabled={channelActionBusy !== null}
+                      onClick={async () => {
+                        if (!onClearChannelHistory) return;
+                        setChannelActionBusy("clear");
+                        try {
+                          await onClearChannelHistory(canal.canal_id);
+                          setConfirmClearChannelHist(false);
+                        } finally {
+                          setChannelActionBusy(null);
+                        }
+                      }}
+                      className="rounded-lg bg-[#FD2F3B] px-3 py-1 text-[11px] font-semibold text-white"
+                    >
+                      {channelActionBusy === "clear" ? "Excluindo..." : "Confirmar"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Membros da equipe (com Coroa de líder e provedor próprio de cada agente) */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[11.5px] font-medium text-[#8E8E93]">
+                  {`Membros (${channelMembersDraft.length})`}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setChannelAddMemberOpen((v) => !v)}
+                  className="inline-flex items-center gap-1 text-[11.5px] font-semibold text-[#42A0FF] hover:underline"
+                >
+                  <Plus className="h-3 w-3" />
+                  <span>Adicionar membro</span>
+                </button>
+              </div>
+
+              {channelAddMemberOpen && (
+                <div className="rounded-xl bg-[#18181A] border border-white/[0.08] p-2 space-y-1 max-h-40 overflow-y-auto">
+                  {allAgentes
+                    .filter(
+                      (ag) =>
+                        ag.agente_id !== "assistente_setup" &&
+                        ag.agente_id !== "assistente_servidor_vps" &&
+                        (ag.config as Record<string, unknown>)?.upgrade_desbloqueado !== false &&
+                        !channelMembersDraft.includes(ag.agente_id)
+                    )
+                    .map((ag) => (
+                      <button
+                        key={ag.agente_id}
+                        type="button"
+                        onClick={() => {
+                          const next = [...channelMembersDraft, ag.agente_id];
+                          setChannelMembersDraft(next);
+                          void onSaveChannelSettings?.(canal.canal_id, {
+                            membros_agentes: next,
+                          });
+                        }}
+                        className="w-full flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] text-[#DCDCDC] hover:bg-[#242428] hover:text-white"
+                      >
+                        <span className="flex items-center gap-2 min-w-0">
+                          <MascoteAvatar
+                            avatar={resolveAgentAvatarConfig(ag, ag.agente_id)}
+                            agentKey={ag.agente_id}
+                            size={20}
+                          />
+                          <span className="truncate">{ag.nome}</span>
+                        </span>
+                        <span className="text-[10px] text-[#787878] shrink-0">
+                          {ag.modelo_padrao}
+                        </span>
+                      </button>
+                    ))}
+                </div>
+              )}
+
+              <div className="rounded-xl bg-[#212121] border border-white/[0.06] divide-y divide-white/[0.05] overflow-hidden">
+                {channelMembersDraft.map((mId) => {
+                  const ag = allAgentes.find((a) => a.agente_id === mId);
+                  const vis = resolveAgentAvatarConfig(ag, mId);
+                  const isLeader = (channelLeaderDraft ?? channelMembersDraft[0]) === mId;
+                  return (
+                    <div
+                      key={mId}
+                      className="px-3 py-2 flex items-center justify-between gap-2"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <MascoteAvatar avatar={vis} agentKey={mId} size={26} />
+                        <div className="min-w-0">
+                          <div className="text-[12.5px] font-medium text-white truncate">
+                            {ag?.nome ?? mId}
+                          </div>
+                          {ag?.modelo_padrao && (
+                            <div className="text-[10.5px] text-[#787878] truncate">
+                              {ag.modelo_padrao}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          title={isLeader ? "Líder da equipe" : "Definir como líder da equipe"}
+                          aria-label={`Definir ${ag?.nome ?? mId} como líder`}
+                          onClick={() => {
+                            setChannelLeaderDraft(mId);
+                            void onSaveChannelSettings?.(canal.canal_id, {
+                              lider_agente_id: mId,
+                            });
+                          }}
+                          className={`h-7 w-7 rounded-lg flex items-center justify-center transition-colors ${
+                            isLeader
+                              ? "text-[#FDCB6E] bg-[#FDCB6E]/10"
+                              : "text-[#6A6A6A] hover:text-white hover:bg-white/[0.06]"
+                          }`}
+                        >
+                          <Crown className="h-3.5 w-3.5" />
+                        </button>
+                        {channelMembersDraft.length > 1 && (
+                          <button
+                            type="button"
+                            title="Remover membro da equipe"
+                            aria-label={`Remover ${ag?.nome ?? mId} da equipe`}
+                            onClick={() => {
+                              const next = channelMembersDraft.filter((id) => id !== mId);
+                              const nextLeader =
+                                channelLeaderDraft === mId ? next[0] ?? null : channelLeaderDraft;
+                              setChannelMembersDraft(next);
+                              setChannelLeaderDraft(nextLeader);
+                              void onSaveChannelSettings?.(canal.canal_id, {
+                                membros_agentes: next,
+                                lider_agente_id: nextLeader,
+                              });
+                            }}
+                            className="h-7 w-7 rounded-lg flex items-center justify-center text-[#787878] hover:text-[#FF7675] hover:bg-[#FD2F3B]/10"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={saving}
+              className="studio-btn-primary w-full py-2 text-[12.5px]"
+            >
+              {saving ? "Salvando..." : "Salvar configurações da equipe"}
+            </button>
+
+            {onDeleteChannel && (
+              confirmDeleteChannelModal ? (
+                <div className="rounded-xl border border-[#FD2F3B]/40 bg-[#141414] p-3 space-y-2">
+                  <p className="text-[11.5px] text-[#FF7675] font-medium">
+                    Excluir a equipe {canal.nome} permanentemente?
+                  </p>
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteChannelModal(false)}
+                      className="rounded-lg bg-[#2A2A2A] px-2.5 py-1 text-[11.5px] text-[#DCDCDC]"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await onDeleteChannel(canal.canal_id);
+                        setConfirmDeleteChannelModal(false);
+                      }}
+                      className="rounded-lg bg-[#FD2F3B] px-3 py-1 text-[11.5px] font-semibold text-white"
+                    >
+                      Excluir equipe
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDeleteChannelModal(true)}
+                  className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl border border-[#FD2F3B]/30 bg-[#FD2F3B]/10 hover:bg-[#FD2F3B]/20 px-3 py-2 text-[12px] font-semibold text-[#FF7675] transition-colors"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span>Excluir equipe</span>
+                </button>
+              )
+            )}
           </form>
         )}
       </div>

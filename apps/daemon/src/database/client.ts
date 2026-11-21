@@ -87,6 +87,7 @@ export class CriativoDatabase {
       this.applyPhase14Migrations();
       this.applyPhase15Migrations();
       this.applyPhase17Migrations();
+      this.applyChannelSettingsMigrations();
     });
   }
 
@@ -154,6 +155,20 @@ export class CriativoDatabase {
         name: "notification_level",
         definition: "TEXT NOT NULL DEFAULT 'all' CHECK(notification_level IN ('all', 'mentions', 'muted'))",
       },
+    ]);
+  }
+
+  private applyChannelSettingsMigrations(): void {
+    this.ensureColumns("projecao_grupos_equipe", [
+      { name: "instrucoes", definition: "TEXT NOT NULL DEFAULT ''" },
+      { name: "lider_agente_id", definition: "TEXT" },
+      { name: "navegador_modo", definition: "TEXT NOT NULL DEFAULT 'all'" },
+      {
+        name: "manter_memorias",
+        definition: "INTEGER NOT NULL DEFAULT 0 CHECK(manter_memorias IN (0, 1))",
+      },
+      { name: "context_cutoff_at", definition: "TEXT" },
+      { name: "context_summary", definition: "TEXT" },
     ]);
   }
 

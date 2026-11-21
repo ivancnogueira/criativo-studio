@@ -45,6 +45,7 @@ import {
   Radio,
   RotateCcw,
   Send,
+  Settings,
   Smartphone,
   Sparkles,
   Square,
@@ -238,6 +239,7 @@ interface AgentConversationViewProps {
   liveRun?: ChatLiveRunState | null;
   inspectorOpen: boolean;
   onToggleInspector: () => void;
+  onOpenChannelSettings?: () => void;
   onSendMessage: (conteudo: string, anexos: AnexoChat[], pageContext?: string | null) => Promise<void>;
   onUploadFile: (file: File) => Promise<AnexoChat>;
   onUpdateModelAndEffort: (modelo: string, effort: NivelEsforco) => Promise<void>;
@@ -674,6 +676,7 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
   liveRun,
   inspectorOpen,
   onToggleInspector,
+  onOpenChannelSettings,
   onSendMessage,
   onUploadFile,
   onUpdateModelAndEffort,
@@ -1320,27 +1323,44 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
               </div>
               <div className="text-[11px] text-[#6A6A6A] truncate">
                 {mode === "channel"
-                  ? `${canal?.membros_agentes.length ?? 0} agentes coordenados`
+                  ? canal?.descricao?.trim() ||
+                    `${canal?.membros_agentes.length ?? 0} agentes coordenados`
                   : agente?.papel}
               </div>
             </div>
           </div>
 
-          {/* Botão central estilo '[Icon] Modelo · Esforço ⌄' */}
-          <button
-            type="button"
-            onClick={() => setPopoverOpen(true)}
-            aria-label="Trocar provedor, modelo e esforço"
-            className="inline-flex items-center gap-2 rounded-full bg-[#212121] hover:bg-[#2A2A2A] border border-white/10 px-3.5 py-1.5 text-[12px] font-medium text-white transition-colors shrink-0"
-          >
-            <ProviderLogo provider={currentProvider} size={14} />
-            <span className="max-w-[150px] truncate">{currentModel}</span>
-            <span className="text-[#6A6A6A]">·</span>
-            <span className="text-[#979797]">{EFFORT_LABELS[currentEffort]}</span>
-            <ChevronDown className="h-3.5 w-3.5 text-[#979797]" />
-          </button>
+          {/* Botão central de Modelo + Esforço: exibido apenas em conversa individual (em equipes cada agente usa seu próprio provedor/modelo) */}
+          {mode === "agent" && (
+            <button
+              type="button"
+              onClick={() => setPopoverOpen(true)}
+              aria-label="Trocar provedor, modelo e esforço"
+              className="inline-flex items-center gap-2 rounded-full bg-[#212121] hover:bg-[#2A2A2A] border border-white/10 px-3.5 py-1.5 text-[12px] font-medium text-white transition-colors shrink-0"
+            >
+              <ProviderLogo provider={currentProvider} size={14} />
+              <span className="max-w-[150px] truncate">{currentModel}</span>
+              <span className="text-[#6A6A6A]">·</span>
+              <span className="text-[#979797]">{EFFORT_LABELS[currentEffort]}</span>
+              <ChevronDown className="h-3.5 w-3.5 text-[#979797]" />
+            </button>
+          )}
 
           <div className={`flex items-center shrink-0 ${compactActions ? "gap-1" : "gap-2"}`}>
+            {mode === "channel" && onOpenChannelSettings && (
+              <button
+                type="button"
+                onClick={onOpenChannelSettings}
+                aria-label="Configurações da equipe"
+                title="Configurações da equipe"
+                className={`inline-flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-[#212121] font-semibold text-[#DCDCDC] transition hover:bg-[#242424] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7] ${
+                  compactActions ? "h-7 px-2 text-[11px]" : "h-8 px-2.5 text-[12px]"
+                }`}
+              >
+                <Settings className="h-3.5 w-3.5 text-[#979797]" />
+                <span>Configurações</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => onOpenSharedTables?.()}
@@ -1523,7 +1543,8 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                 >
                   <div className="h-px flex-1 bg-white/[0.06]" />
                   <span className="rounded-full border border-white/[0.06] bg-[#212121] px-4 py-1 text-[12px] font-normal text-[#979797]">
-                    Novo chat iniciado — contexto do modelo reiniciado · histórico visual preservado
+                    {msg.conteudo_markdown?.trim() ||
+                      "Novo chat iniciado — contexto do modelo reiniciado · histórico visual preservado"}
                   </span>
                   <div className="h-px flex-1 bg-white/[0.06]" />
                 </div>
@@ -2087,6 +2108,13 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
 
         {/* Feedback ao vivo estilo Criativo Studio enquanto o agente executa */}
         {isWorking && (() => {
+          const liveSenderAgent =
+            mode === "channel" && liveRun?.agenteId
+              ? allAgentes.find((a) => a.agente_id === liveRun.agenteId) ?? null
+              : null;
+          const liveMascotAvatar = liveSenderAgent
+            ? resolveAgentAvatarConfig(liveSenderAgent, liveSenderAgent.agente_id)
+            : agentAvatar;
           const activeImageStep = liveRun?.steps.find(
             (st) => st.ferramenta?.includes("generate_image") && st.status === "executando"
           );
@@ -2107,8 +2135,8 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                 <span className="h-1 w-1 rounded-full bg-[#A855F7] animate-bounce" />
               </div>
               <MascoteAvatar
-                avatar={agentAvatar}
-                agentKey={agente?.agente_id}
+                avatar={liveMascotAvatar}
+                agentKey={liveSenderAgent?.agente_id ?? agente?.agente_id}
                 size={44}
                 animated
                 mood="working"
@@ -2119,7 +2147,10 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
             <div className="flex-1 min-w-0 space-y-2.5">
               <div className="flex items-center gap-2.5 text-[12.5px]">
                 <span className="text-[#DCDCDC] font-medium truncate">
-                  {liveRun?.statusText || `Executando ${currentModel}...`}
+                  {liveRun?.statusText ||
+                    (mode === "channel"
+                      ? `Coordenando ${liveSenderAgent?.nome ?? "equipe"}...`
+                      : `Executando ${currentModel}...`)}
                 </span>
                 <span className="text-[11.5px] text-[#7A7A7A] tabular-nums shrink-0">
                   {formatElapsedClock(elapsedSec)}
@@ -2736,17 +2767,19 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
         </div>
       </div>
 
-        <ModelProviderPopover
-          open={popoverOpen}
-          onClose={() => setPopoverOpen(false)}
-          provedores={provedores}
-          selectedModel={currentModel}
-          selectedEffort={currentEffort}
-          onSelectModelAndEffort={(m, eff) => {
-            void onUpdateModelAndEffort(m, eff);
-          }}
-          onOpenConnectors={onOpenConnectors}
-        />
+        {mode === "agent" && (
+          <ModelProviderPopover
+            open={popoverOpen}
+            onClose={() => setPopoverOpen(false)}
+            provedores={provedores}
+            selectedModel={currentModel}
+            selectedEffort={currentEffort}
+            onSelectModelAndEffort={(m, eff) => {
+              void onUpdateModelAndEffort(m, eff);
+            }}
+            onOpenConnectors={onOpenConnectors}
+          />
+        )}
       </div>
 
       {mode === "agent" && onAskSideQuestion && (

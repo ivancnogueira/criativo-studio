@@ -68,7 +68,7 @@ describe("Fase 24 — UI: Logo Servidor Remoto, Cotas Auto, Dock Settings & Sele
       "utf8",
     );
     assert.match(railSrc, /autoSyncedAccountsKeyRef/);
-    assert.match(railSrc, /providerGroups\.length > 0/);
+    assert.match(railSrc, /visibleAccounts\.length > 0/);
   });
 
   it("3. (DOCK24-01 & DOCK24-02) Aba 'Dock de agentes' em SettingsModal e botão '+' adiciona agentes existentes", async () => {

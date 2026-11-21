@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type {
   AgenteRegistro,
   AvatarShape,
@@ -82,6 +83,8 @@ export interface SidebarProps {
   onOpenAgentNewWindow?: (agentId: string) => Promise<void> | void;
   onEditAgent?: (agentId: string) => void;
   onDeleteAgent?: (agentId: string) => Promise<void> | void;
+  onEditChannel?: (canalId: string) => void;
+  onDeleteChannel?: (canalId: string) => Promise<void> | void;
   updateStatus?: UpdateStatusSnapshot | null;
   onApplyUpdate?: () => void;
   onOpenUpdateSettings?: () => void;
@@ -160,6 +163,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenAgentNewWindow,
   onEditAgent,
   onDeleteAgent,
+  onEditChannel,
+  onDeleteChannel,
   updateStatus = null,
   onApplyUpdate,
   onOpenUpdateSettings,
@@ -183,6 +188,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [renamingSectionName, setRenamingSectionName] = useState("");
   const [sectionMenuId, setSectionMenuId] = useState<string | null>(null);
   const [agentMenuKey, setAgentMenuKey] = useState<string | null>(null);
+  const [channelMenuId, setChannelMenuId] = useState<string | null>(null);
+  const [confirmDeleteChannel, setConfirmDeleteChannel] = useState<CanalEquipe | null>(null);
+  const [deletingChannelId, setDeletingChannelId] = useState<string | null>(null);
+  const [pinnedTooltip, setPinnedTooltip] = useState<{
+    agentId: string;
+    nome: string;
+    left: number;
+    top: number;
+  } | null>(null);
+  const pinnedTooltipRef = useRef<HTMLDivElement | null>(null);
+  const [pinnedTooltipPos, setPinnedTooltipPos] = useState<{ left: number; top: number } | null>(
+    null
+  );
+
+  useEffect(() => {
+    if (!pinnedTooltip || typeof window === "undefined") {
+      setPinnedTooltipPos(null);
+      return;
+    }
+    const el = pinnedTooltipRef.current;
+    const width = el ? el.offsetWidth : Math.min(240, pinnedTooltip.nome.length * 7 + 20);
+    const clampedLeft = Math.max(
+      10,
+      Math.min(window.innerWidth - width - 10, pinnedTooltip.left - width / 2)
+    );
+    setPinnedTooltipPos({
+      left: clampedLeft,
+      top: Math.max(10, pinnedTooltip.top - 8),
+    });
+  }, [pinnedTooltip]);
   const [agentMoveSubmenuOpen, setAgentMoveSubmenuOpen] = useState(false);
   const [hiddenExpanded, setHiddenExpanded] = useState(false);
   const [confirmDeleteAgent, setConfirmDeleteAgent] = useState<AgenteRegistro | null>(null);
@@ -701,9 +736,35 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <button
           type="button"
           data-testid={`pinned-agent-tile-${ag.agente_id}`}
-          title={ag.nome}
           aria-label={ag.nome}
-          onClick={() => onSelectAgent(ag.agente_id)}
+          onMouseEnter={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            setPinnedTooltip({
+              agentId: ag.agente_id,
+              nome: ag.nome,
+              left: rect.left + rect.width / 2,
+              top: rect.top,
+            });
+          }}
+          onMouseLeave={() =>
+            setPinnedTooltip((prev) => (prev?.agentId === ag.agente_id ? null : prev))
+          }
+          onFocus={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            setPinnedTooltip({
+              agentId: ag.agente_id,
+              nome: ag.nome,
+              left: rect.left + rect.width / 2,
+              top: rect.top,
+            });
+          }}
+          onBlur={() =>
+            setPinnedTooltip((prev) => (prev?.agentId === ag.agente_id ? null : prev))
+          }
+          onClick={() => {
+            setPinnedTooltip(null);
+            onSelectAgent(ag.agente_id);
+          }}
           className={`relative h-[48px] w-[48px] rounded-2xl flex items-center justify-center transition-colors border ${
             selected
               ? "bg-[#252527] border-[#007CF7]/70 ring-1 ring-[#007CF7]/40"
@@ -734,12 +795,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             />
           ) : null}
         </button>
-        <span
-          role="tooltip"
-          className="pointer-events-none absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 z-40 whitespace-nowrap rounded-lg bg-[#101012] border border-white/10 px-2 py-1 text-[11px] font-medium text-white shadow-lg opacity-0 group-hover/pin:opacity-100 group-focus-within/pin:opacity-100 transition-opacity"
-        >
-          {ag.nome}
-        </span>
         {showMenu && renderAgentContextMenu(ag, true, isHidden, true)}
       </div>
     );
@@ -1463,30 +1518,105 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     const vis = resolveAgentAvatarConfig(match, id);
                     return { agente_id: id, ...vis };
                   });
+                  const canManageChannel = Boolean(onEditChannel || onDeleteChannel);
+                  const isChMenuOpen = channelMenuId === canal.canal_id;
                   return (
-                    <button
+                    <div
                       key={canal.canal_id}
-                      type="button"
-                      onClick={() => onSelectChannel?.(canal.canal_id)}
-                      className={`w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-left transition-colors ${
-                        selected ? "bg-[#252527]" : "hover:bg-[#202022]"
-                      }`}
+                      onContextMenu={(e) => {
+                        if (!canManageChannel) return;
+                        e.preventDefault();
+                        setAgentMenuKey(null);
+                        setSectionMenuId(null);
+                        setChannelMenuId((prev) =>
+                          prev === canal.canal_id ? null : canal.canal_id
+                        );
+                      }}
+                      className="group relative flex items-center"
                     >
-                      <ChannelMascoteCluster members={members} size={38} />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[13.5px] font-medium text-white truncate">
-                            {canal.nome}
-                          </span>
-                          <span className="text-[11px] text-[#737378] tabular-nums shrink-0">
-                            {canal.membros_agentes.length} agentes
-                          </span>
+                      <button
+                        type="button"
+                        onClick={() => onSelectChannel?.(canal.canal_id)}
+                        className={`w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-left transition-colors ${
+                          canManageChannel ? "pr-8" : ""
+                        } ${selected ? "bg-[#252527]" : "hover:bg-[#202022]"}`}
+                      >
+                        <ChannelMascoteCluster members={members} size={38} />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[13.5px] font-medium text-white truncate">
+                              {canal.nome}
+                            </span>
+                            <span className="text-[11px] text-[#737378] tabular-nums shrink-0">
+                              {canal.membros_agentes.length} agentes
+                            </span>
+                          </div>
+                          <p className="text-[12px] text-[#8E8E93] truncate mt-0.5">
+                            {stripMarkdownPreview(canal.ultima_mensagem) || canal.descricao || "Canal colaborativo de criação"}
+                          </p>
                         </div>
-                        <p className="text-[12px] text-[#8E8E93] truncate mt-0.5">
-                          {stripMarkdownPreview(canal.ultima_mensagem) || canal.descricao}
-                        </p>
-                      </div>
-                    </button>
+                      </button>
+
+                      {canManageChannel && (
+                        <button
+                          type="button"
+                          aria-label={`Ações para ${canal.nome}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAgentMenuKey(null);
+                            setSectionMenuId(null);
+                            setChannelMenuId((prev) =>
+                              prev === canal.canal_id ? null : canal.canal_id
+                            );
+                          }}
+                          className={`absolute right-1.5 top-1/2 -translate-y-1/2 h-6 w-6 rounded-lg flex items-center justify-center text-[#8E8E93] hover:text-white hover:bg-[#303033] transition-opacity ${
+                            isChMenuOpen
+                              ? "opacity-100"
+                              : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                          }`}
+                        >
+                          <MoreVertical className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+
+                      {isChMenuOpen && canManageChannel && (
+                        <div
+                          role="menu"
+                          aria-label={`Opções de ${canal.nome}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="absolute right-1 top-full mt-1 z-50 w-52 rounded-xl bg-[#242424] border border-white/10 shadow-[0_14px_35px_rgba(0,0,0,0.75)] p-1 space-y-0.5"
+                        >
+                          {onEditChannel && (
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => {
+                                setChannelMenuId(null);
+                                onEditChannel(canal.canal_id);
+                              }}
+                              className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center gap-2"
+                            >
+                              <Pencil className="h-3.5 w-3.5 text-[#42A0FF]" />
+                              <span>Configurações da equipe</span>
+                            </button>
+                          )}
+                          {onDeleteChannel && (
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => {
+                                setChannelMenuId(null);
+                                setConfirmDeleteChannel(canal);
+                              }}
+                              className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#FF7675] hover:bg-[#FD2F3B]/15 flex items-center gap-2"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              <span>Excluir equipe</span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -1721,6 +1851,73 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
       )}
+      {confirmDeleteChannel && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirmar exclusão de equipe"
+          className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4"
+        >
+          <div className="w-full max-w-sm rounded-2xl bg-[#212121] border border-white/10 p-5 space-y-4 shadow-2xl">
+            <div className="space-y-1.5">
+              <h3 className="text-[15px] font-semibold text-white">
+                Excluir equipe {confirmDeleteChannel.nome}?
+              </h3>
+              <p className="text-[12.5px] text-[#A0A0A8] leading-relaxed">
+                O canal, o histórico de mensagens, memórias e rotinas exclusivas desta equipe serão removidos. Os agentes continuam disponíveis individualmente.
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteChannel(null)}
+                disabled={deletingChannelId !== null}
+                className="rounded-lg bg-[#2A2A2E] hover:bg-[#34343A] px-3.5 py-1.5 text-[12px] font-medium text-[#E0E0E4]"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={deletingChannelId !== null}
+                onClick={async () => {
+                  const target = confirmDeleteChannel;
+                  if (!target || !onDeleteChannel) return;
+                  setDeletingChannelId(target.canal_id);
+                  try {
+                    await onDeleteChannel(target.canal_id);
+                    setConfirmDeleteChannel(null);
+                  } finally {
+                    setDeletingChannelId(null);
+                  }
+                }}
+                className="rounded-lg bg-[#FD2F3B] hover:bg-[#E12530] px-4 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
+              >
+                {deletingChannelId === confirmDeleteChannel.canal_id ? "Excluindo..." : "Excluir equipe"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pinnedTooltip &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            ref={pinnedTooltipRef}
+            role="tooltip"
+            style={{
+              position: "fixed",
+              left: pinnedTooltipPos?.left ?? Math.max(10, pinnedTooltip.left - 60),
+              top: pinnedTooltipPos?.top ?? Math.max(10, pinnedTooltip.top - 8),
+              transform: "translateY(-100%)",
+              zIndex: 9999,
+            }}
+            className="pointer-events-none whitespace-nowrap rounded-lg bg-[#101012] border border-white/10 px-2.5 py-1 text-[11.5px] font-medium text-white shadow-[0_8px_24px_rgba(0,0,0,0.75)]"
+          >
+            {pinnedTooltip.nome}
+          </div>,
+          document.body
+        )}
     </aside>
   );
 };

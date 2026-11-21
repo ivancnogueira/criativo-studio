@@ -6,6 +6,7 @@ import {
   FolderOpen,
   GitBranch,
   HelpCircle,
+  MoreHorizontal,
   Plug,
   RefreshCw,
   Settings,
@@ -230,6 +231,25 @@ const ConcentricQuotaRings: React.FC<{
  * Trilho de navegação vertical estreito à esquerda (52px) espelhando o Criativo Studio Desktop,
  * com anéis concêntricos reais por conta conectada e popover de cotas ao vivo.
  */
+const MAX_VISIBLE_ACCOUNT_RINGS = 5;
+const PROVIDER_DISPLAY_ORDER: Record<ProviderName, number> = {
+  openai: 0,
+  claude: 1,
+  gemini: 2,
+  grok: 3,
+  opencode: 4,
+  ollama: 5,
+};
+
+function providerShortName(provedor: ProviderName): string {
+  if (provedor === "openai") return "ChatGPT";
+  if (provedor === "claude") return "Claude";
+  if (provedor === "gemini") return "Gemini";
+  if (provedor === "grok") return "Grok";
+  if (provedor === "opencode") return "OpenCode";
+  return "Ollama";
+}
+
 export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
   activeSection,
   onSelectSection,
@@ -251,7 +271,8 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
   onOpenServerSettings,
   onOpenDisplaySettings,
 }) => {
-  const [activeProvider, setActiveProvider] = useState<ProviderName | null>(null);
+  const [activeAccountId, setActiveAccountId] = useState<string | null>(null);
+  const [moreRingsMenuOpen, setMoreRingsMenuOpen] = useState(false);
   const [fallbackPopoverOpen, setFallbackPopoverOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [serverPopoverOpen, setServerPopoverOpen] = useState(false);
@@ -267,40 +288,38 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
     [allAccounts]
   );
 
-  const providerGroups = useMemo<
-    Array<{
-      provedor: ProviderName;
-      primary: ContaProvedorInfo;
-      accounts: ContaProvedorInfo[];
-      hasQuota: boolean;
-    }>
-  >(() => {
-    const byProv = new Map<ProviderName, ContaProvedorInfo[]>();
-    for (const acc of allAccounts) {
-      const list = byProv.get(acc.provedor) ?? [];
-      list.push(acc);
-      byProv.set(acc.provedor, list);
-    }
-    const order: ProviderName[] = ["openai", "claude", "gemini", "grok", "opencode", "ollama"];
-    return order
-      .filter((p) => (byProv.get(p)?.length ?? 0) > 0)
-      .map((provedor) => {
-        const accounts = byProv.get(provedor)!;
-        const withQuota = accounts.filter((c) => c.grupos_cota && c.grupos_cota.length > 0);
-        const primary =
-          withQuota.find((a) => a.padrao) ??
-          withQuota[0] ??
-          accounts.find((a) => a.padrao) ??
-          accounts[0];
-        return { provedor, primary, accounts, hasQuota: withQuota.length > 0 };
-      });
+  const orderedAccounts = useMemo<ContaProvedorInfo[]>(() => {
+    return [...allAccounts].sort((a, b) => {
+      const pa = PROVIDER_DISPLAY_ORDER[a.provedor] ?? 99;
+      const pb = PROVIDER_DISPLAY_ORDER[b.provedor] ?? 99;
+      if (pa !== pb) return pa - pb;
+      if (Boolean(a.padrao) !== Boolean(b.padrao)) return a.padrao ? -1 : 1;
+      const la = (a.email ?? a.rotulo ?? a.id).toLowerCase();
+      const lb = (b.email ?? b.rotulo ?? b.id).toLowerCase();
+      return la.localeCompare(lb, "pt-BR");
+    });
   }, [allAccounts]);
 
-  const popoverOpen = activeProvider !== null || (providerGroups.length === 0 && fallbackPopoverOpen);
-  const popoverAccounts = useMemo<ContaProvedorInfo[]>(() => {
-    if (!activeProvider) return [];
-    return providerGroups.find((g) => g.provedor === activeProvider)?.accounts ?? [];
-  }, [providerGroups, activeProvider]);
+  const visibleAccounts = useMemo(
+    () => orderedAccounts.slice(0, MAX_VISIBLE_ACCOUNT_RINGS),
+    [orderedAccounts]
+  );
+  const hasOverflowAccounts = orderedAccounts.length > MAX_VISIBLE_ACCOUNT_RINGS;
+
+  const activeAccount = useMemo(
+    () =>
+      activeAccountId
+        ? orderedAccounts.find((acc) => acc.id === activeAccountId) ?? null
+        : null,
+    [orderedAccounts, activeAccountId]
+  );
+
+  const popoverOpen =
+    activeAccount !== null || (orderedAccounts.length === 0 && fallbackPopoverOpen);
+  const popoverAccounts = useMemo<ContaProvedorInfo[]>(
+    () => (activeAccount ? [activeAccount] : []),
+    [activeAccount]
+  );
 
   const fallbackPercent = Math.max(5, Math.min(100, quotaPercent));
   const hasAnyConnectedAccount = allAccounts.length > 0;
@@ -387,58 +406,94 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
         })}
       </div>
 
-      {/* Rodapé: anéis concêntricos de cota + WhatsApp móvel + Ajuda + Configurações */}
+      {/* Rodapé: anéis concêntricos de cota (1 por conta, limite 5 + ver mais) + WhatsApp móvel + Ajuda + Configurações */}
       <div
         className="relative flex flex-col items-center gap-1.5 w-full px-1.5"
         onMouseLeave={() => {
-          setActiveProvider(null);
+          setActiveAccountId(null);
+          setMoreRingsMenuOpen(false);
           setFallbackPopoverOpen(false);
         }}
       >
-        {/* Anéis concêntricos reais: todos os anéis de cota com logo centralizado; hover exibe só aquele provedor */}
+        {/* Anéis concêntricos reais: 1 anel por conta (até 5 no trilho); botão ver mais abre todas as contas */}
         <div className="flex flex-col items-center gap-1.5">
-          {providerGroups.length > 0 ? (
-            providerGroups.map(({ provedor, primary, hasQuota }) => {
-              const bars = flattenAccountBars(primary.grupos_cota);
-              const percents = bars.map((b) => b.restante);
-              const ringPercents = hasQuota ? summarizeRingPercentages(primary.grupos_cota) : [fallbackPercent];
-              const minPct = percents.length > 0 ? Math.min(...percents) : 100;
-              const isSelectedRing = activeProvider === provedor;
-              return (
+          {visibleAccounts.length > 0 ? (
+            <>
+              {visibleAccounts.map((acc) => {
+                const hasQuota = Boolean(acc.grupos_cota && acc.grupos_cota.length > 0);
+                const bars = flattenAccountBars(acc.grupos_cota);
+                const percents = bars.map((b) => b.restante);
+                const ringPercents = hasQuota
+                  ? summarizeRingPercentages(acc.grupos_cota)
+                  : [fallbackPercent];
+                const minPct = percents.length > 0 ? Math.min(...percents) : 100;
+                const isSelectedRing = activeAccountId === acc.id;
+                return (
+                  <button
+                    key={acc.id}
+                    type="button"
+                    onMouseEnter={() => {
+                      setMoreRingsMenuOpen(false);
+                      setActiveAccountId(acc.id);
+                      if (!hasQuota) triggerFallbackUsageSync();
+                    }}
+                    onClick={() => {
+                      setMoreRingsMenuOpen(false);
+                      setActiveAccountId((prev) => (prev === acc.id ? null : acc.id));
+                      if (!hasQuota) triggerFallbackUsageSync();
+                    }}
+                    onDoubleClick={() => onSelectSection("uso")}
+                    title={
+                      hasQuota
+                        ? `${providerDisplayTitle(acc)} — mínimo ${minPct}% restante`
+                        : `${providerDisplayTitle(acc)} — conectada (clique para sincronizar)`
+                    }
+                    aria-label={
+                      hasQuota
+                        ? `Uso da conta ${providerDisplayTitle(acc)}: ${minPct}% restante`
+                        : `Conta ${providerDisplayTitle(acc)} conectada`
+                    }
+                    className={`h-9 w-9 rounded-xl flex items-center justify-center transition-colors ${
+                      isSelectedRing ? "bg-[#1A1A1A]" : "hover:bg-[#1A1A1A]"
+                    }`}
+                  >
+                    <ConcentricQuotaRings
+                      percentages={ringPercents}
+                      inactive={!hasQuota}
+                      provider={acc.provedor}
+                    />
+                  </button>
+                );
+              })}
+
+              {hasOverflowAccounts && (
                 <button
-                  key={provedor}
                   type="button"
+                  data-testid="rail-more-accounts-btn"
                   onMouseEnter={() => {
-                    setActiveProvider(provedor);
-                    if (!hasQuota) triggerFallbackUsageSync();
+                    setActiveAccountId(null);
+                    setMoreRingsMenuOpen(true);
                   }}
                   onClick={() => {
-                    setActiveProvider((prev) => (prev === provedor ? null : provedor));
-                    if (!hasQuota) triggerFallbackUsageSync();
+                    setActiveAccountId(null);
+                    setMoreRingsMenuOpen((v) => !v);
                   }}
-                  onDoubleClick={() => onSelectSection("uso")}
-                  title={
-                    hasQuota
-                      ? `${providerDisplayTitle(primary)} — mínimo ${minPct}% restante`
-                      : `${providerDisplayTitle(primary)} — conectada (clique para sincronizar)`
-                  }
-                  aria-label={
-                    hasQuota
-                      ? `Uso da conta ${providerDisplayTitle(primary)}: ${minPct}% restante`
-                      : `Conta ${providerDisplayTitle(primary)} conectada`
-                  }
-                  className={`h-9 w-9 rounded-xl flex items-center justify-center transition-colors ${
-                    isSelectedRing ? "bg-[#1A1A1A]" : "hover:bg-[#1A1A1A]"
+                  title={`Ver todas as ${orderedAccounts.length} contas conectadas`}
+                  aria-label={`Ver mais ${orderedAccounts.length - MAX_VISIBLE_ACCOUNT_RINGS} contas conectadas`}
+                  aria-expanded={moreRingsMenuOpen}
+                  className={`relative h-8 w-9 rounded-xl flex items-center justify-center transition-colors border ${
+                    moreRingsMenuOpen
+                      ? "bg-[#242424] border-white/15 text-white"
+                      : "border-white/[0.06] bg-[#161618] text-[#979797] hover:text-white hover:bg-[#1E1E22]"
                   }`}
                 >
-                  <ConcentricQuotaRings
-                    percentages={ringPercents}
-                    inactive={!hasQuota}
-                    provider={provedor}
-                  />
+                  <MoreHorizontal className="h-4 w-4" />
+                  <span className="absolute -top-1 -right-1 h-4 min-w-[16px] px-1 rounded-full bg-[#2A2A2E] border border-white/15 text-[9.5px] font-semibold text-[#DCDCDC] flex items-center justify-center tabular-nums">
+                    +{orderedAccounts.length - MAX_VISIBLE_ACCOUNT_RINGS}
+                  </span>
                 </button>
-              );
-            })
+              )}
+            </>
           ) : (
             <button
               type="button"
@@ -472,18 +527,98 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
           )}
         </div>
 
-        {/* Popover flutuante 'Uso' agrupado no estilo Antigravity mostrando exclusivamente o provedor em hover */}
+        {/* Menu lateral com todos os anéis de cada conta quando houver mais de 5 contas */}
+        {moreRingsMenuOpen && hasOverflowAccounts && (
+          <div
+            role="dialog"
+            aria-label="Todas as contas conectadas"
+            data-testid="rail-all-accounts-menu"
+            className="absolute left-[54px] bottom-14 w-[312px] rounded-2xl bg-[#1C1C1C]/98 backdrop-blur-xl border border-white/[0.11] shadow-2xl p-3 z-50 text-left space-y-2"
+          >
+            <div className="flex items-center justify-between gap-2 pb-2 border-b border-white/[0.06]">
+              <span className="flex items-center gap-1.5 text-[12px] font-semibold text-white">
+                <Activity className="h-3.5 w-3.5 text-[#31CF76]" />
+                <span>Contas conectadas ({orderedAccounts.length})</span>
+              </span>
+              {onRefreshUsage && (
+                <button
+                  type="button"
+                  onClick={() => void handleRefresh()}
+                  title="Atualizar cotas ao vivo"
+                  className="h-6 w-6 rounded-lg flex items-center justify-center text-[#979797] hover:text-white hover:bg-white/[0.06]"
+                >
+                  <RefreshCw className={`h-3 w-3 ${refreshing ? "animate-spin" : ""}`} />
+                </button>
+              )}
+            </div>
+            <div className="space-y-1 max-h-[320px] overflow-y-auto pr-0.5">
+              {orderedAccounts.map((acc) => {
+                const hasQuota = Boolean(acc.grupos_cota && acc.grupos_cota.length > 0);
+                const bars = flattenAccountBars(acc.grupos_cota);
+                const percents = bars.map((b) => b.restante);
+                const ringPercents = hasQuota
+                  ? summarizeRingPercentages(acc.grupos_cota)
+                  : [fallbackPercent];
+                const minPct = percents.length > 0 ? Math.min(...percents) : null;
+                return (
+                  <button
+                    key={acc.id}
+                    type="button"
+                    onClick={() => {
+                      setMoreRingsMenuOpen(false);
+                      setActiveAccountId(acc.id);
+                      if (!hasQuota) triggerFallbackUsageSync();
+                    }}
+                    className="w-full flex items-center gap-2.5 rounded-xl px-2 py-1.5 hover:bg-white/[0.06] transition-colors text-left"
+                  >
+                    <ConcentricQuotaRings
+                      percentages={ringPercents}
+                      inactive={!hasQuota}
+                      provider={acc.provedor}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[12px] font-medium text-white truncate">
+                          {providerShortName(acc.provedor)}
+                        </span>
+                        <span
+                          className={`text-[11px] font-semibold tabular-nums shrink-0 ${
+                            minPct === null
+                              ? "text-[#31CF76]"
+                              : minPct >= 50
+                                ? "text-[#DCDCDC]"
+                                : minPct >= 20
+                                  ? "text-[#FDCB6E]"
+                                  : "text-[#FF7675]"
+                          }`}
+                        >
+                          {minPct !== null ? `${minPct}%` : "Conectada"}
+                        </span>
+                      </div>
+                      <p className="text-[10.5px] text-[#8E8E93] truncate">
+                        {acc.email ?? acc.rotulo ?? acc.id}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Popover flutuante 'Uso' exibindo exclusivamente a conta selecionada */}
         {popoverOpen && (
           <div
             role="dialog"
-            aria-label="Resumo de uso e cotas do provedor"
-            className="absolute left-[54px] bottom-14 w-[332px] rounded-2xl bg-[#1C1C1C]/98 backdrop-blur-xl border border-white/[0.11] shadow-2xl p-3.5 z-50 text-left"
+            aria-label="Resumo de uso e cotas da conta"
+            className="absolute left-[54px] bottom-14 w-[320px] rounded-2xl bg-[#1C1C1C]/98 backdrop-blur-xl border border-white/[0.11] shadow-2xl p-3.5 z-50 text-left"
           >
             <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-white/[0.06]">
               <button
                 type="button"
                 onClick={() => {
-                  setActiveProvider(null);
+                  setActiveAccountId(null);
+                  setMoreRingsMenuOpen(false);
                   setFallbackPopoverOpen(false);
                   onSelectSection("uso");
                 }}
@@ -506,7 +641,8 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    setActiveProvider(null);
+                    setActiveAccountId(null);
+                    setMoreRingsMenuOpen(false);
                     setFallbackPopoverOpen(false);
                     onSelectSection("uso");
                   }}
@@ -526,13 +662,7 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
                       <div className="flex items-center justify-between gap-2 text-[12px] font-medium text-white">
                         <span className="flex items-center gap-1.5 min-w-0">
                           <ProviderLogo provider={acc.provedor} size={13} />
-                          <span className="truncate">
-                            {acc.provedor === "openai"
-                              ? "ChatGPT"
-                              : acc.provedor === "claude"
-                                ? "Claude"
-                                : "Gemini"}
-                          </span>
+                          <span className="truncate">{providerShortName(acc.provedor)}</span>
                         </span>
                         {acc.email && (
                           <span className="text-[10.5px] font-normal text-[#787878] truncate max-w-[185px]">
@@ -644,7 +774,8 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      setActiveProvider(null);
+                      setActiveAccountId(null);
+                      setMoreRingsMenuOpen(false);
                       setFallbackPopoverOpen(false);
                       onSelectSection("conexoes");
                     }}

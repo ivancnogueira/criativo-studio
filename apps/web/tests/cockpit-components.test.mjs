@@ -835,13 +835,13 @@ describe("Fase 5 — Componentes React do Cockpit Web & Mobile", () => {
       })
     );
 
-    // Ordem: ChatGPT antes de Claude e Gemini + logo interno em cada anel + apenas 1 anel por provedor
+    // Ordem: ChatGPT antes de Claude e Gemini + logo interno em cada anel + 1 anel por conta (incluindo múltiplas contas do mesmo provedor)
     const chatGptPos = railHtml.indexOf("Uso da conta ChatGPT");
     const claudePos = railHtml.indexOf("Uso da conta Claude");
     const geminiPos = railHtml.indexOf("Uso da conta gemini@exemplo.local");
-    assert.ok(chatGptPos >= 0 && claudePos > chatGptPos && geminiPos > claudePos);
-    assert.equal(railHtml.includes("gemini2@exemplo.local"), false);
-    assert.equal(railHtml.includes("Resumo de uso e cotas do provedor"), false);
+    const gemini2Pos = railHtml.indexOf("Uso da conta gemini2@exemplo.local");
+    assert.ok(chatGptPos >= 0 && claudePos > chatGptPos && geminiPos > claudePos && gemini2Pos > geminiPos);
+    assert.equal(railHtml.includes("Resumo de uso e cotas da conta"), false);
 
     const onboardingHtml = renderToStaticMarkup(
       React.createElement(OnboardingFlow, {

@@ -27,6 +27,8 @@ import type {
   BrowserTakeoverSession,
   BrowserTargetSelector,
   CanalEquipe,
+  CanalMemoria,
+  CanalNavegadorModo,
   ConectorIntegracaoInfo,
   ContaProvedorInfo,
   ConversationUiBlock,
@@ -1027,15 +1029,92 @@ export const daemonApi = {
   async createChannel(input: {
     nome: string;
     descricao: string;
+    instrucoes?: string;
     membros_agentes: string[];
+    lider_agente_id?: string | null;
+    navegador_modo?: CanalNavegadorModo;
+    manter_memorias?: boolean;
   }): Promise<CanalEquipe> {
-    const res = await fetch("/api/canais", {
+    const json = await requestJson<{ canal: CanalEquipe }>("/api/canais", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
     });
-    const json = (await res.json()) as { canal: CanalEquipe };
     return json.canal;
+  },
+
+  async updateChannel(
+    canalId: string,
+    patch: {
+      nome?: string;
+      descricao?: string;
+      instrucoes?: string;
+      membros_agentes?: string[];
+      lider_agente_id?: string | null;
+      navegador_modo?: CanalNavegadorModo;
+      manter_memorias?: boolean;
+    }
+  ): Promise<CanalEquipe> {
+    const json = await requestJson<{ canal: CanalEquipe }>(
+      `/api/canais/${encodeURIComponent(canalId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      }
+    );
+    return json.canal;
+  },
+
+  async deleteChannel(canalId: string): Promise<{ ok: boolean }> {
+    return await requestJson<{ ok: boolean }>(
+      `/api/canais/${encodeURIComponent(canalId)}`,
+      { method: "DELETE" }
+    );
+  },
+
+  async listChannelMemories(canalId: string): Promise<CanalMemoria[]> {
+    const json = await requestJson<{ memorias: CanalMemoria[] }>(
+      `/api/canais/${encodeURIComponent(canalId)}/memorias`
+    );
+    return json.memorias ?? [];
+  },
+
+  async addChannelMemory(canalId: string, texto: string): Promise<CanalMemoria[]> {
+    const json = await requestJson<{ memorias: CanalMemoria[] }>(
+      `/api/canais/${encodeURIComponent(canalId)}/memorias`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ texto }),
+      }
+    );
+    return json.memorias ?? [];
+  },
+
+  async deleteChannelMemory(canalId: string, memoriaId: string): Promise<{ ok: boolean }> {
+    return await requestJson<{ ok: boolean }>(
+      `/api/canais/${encodeURIComponent(canalId)}/memorias/${encodeURIComponent(memoriaId)}`,
+      { method: "DELETE" }
+    );
+  },
+
+  async startNewChannelConversation(
+    canalId: string
+  ): Promise<{ ok: boolean; canal?: CanalEquipe; mensagem_divisor: MensagemChat }> {
+    return await requestJson(
+      `/api/canais/${encodeURIComponent(canalId)}/nova-conversa`,
+      { method: "POST" }
+    );
+  },
+
+  async compactChannelContext(
+    canalId: string
+  ): Promise<{ ok: boolean; canal?: CanalEquipe; mensagem_divisor: MensagemChat; resumo: string }> {
+    return await requestJson(
+      `/api/canais/${encodeURIComponent(canalId)}/compactar-contexto`,
+      { method: "POST" }
+    );
   },
 
   async listChannelMessages(canalId: string): Promise<MensagemChat[]> {

@@ -214,11 +214,32 @@ export const SCHEMA_TABLES: readonly { nome: string; sql: string; requiresFts5?:
         canal_id TEXT PRIMARY KEY,
         nome TEXT NOT NULL,
         descricao TEXT,
+        instrucoes TEXT NOT NULL DEFAULT '',
         pasta TEXT NOT NULL DEFAULT 'Canais em Equipe',
         membros_agentes_json TEXT NOT NULL,
+        lider_agente_id TEXT,
+        navegador_modo TEXT NOT NULL DEFAULT 'all',
+        manter_memorias INTEGER NOT NULL DEFAULT 0 CHECK(manter_memorias IN (0, 1)),
+        context_cutoff_at TEXT,
+        context_summary TEXT,
         criado_em TEXT NOT NULL,
         atualizado_em TEXT NOT NULL
       );
+    `,
+  },
+  {
+    nome: "projecao_canal_memorias",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_canal_memorias (
+        memoria_id TEXT PRIMARY KEY,
+        canal_id TEXT NOT NULL REFERENCES projecao_grupos_equipe(canal_id) ON DELETE CASCADE,
+        texto TEXT NOT NULL,
+        origem TEXT NOT NULL CHECK(origem IN ('automatica', 'manual')),
+        criado_em TEXT NOT NULL,
+        UNIQUE(canal_id, texto)
+      );
+      CREATE INDEX IF NOT EXISTS idx_canal_memorias_canal
+        ON projecao_canal_memorias(canal_id, criado_em DESC);
     `,
   },
   {
@@ -1171,6 +1192,7 @@ export const SCHEMA_TABLE_NAMES = [
   "projecao_perfis_navegador",
   "projecao_studio_config",
   "projecao_grupos_equipe",
+  "projecao_canal_memorias",
   "projecao_conversas_chat",
   "projecao_workflows",
   "projecao_arquivos",
