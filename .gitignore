@@ -35,7 +35,9 @@ recursos/uploads/
 recursos/avatares/
 
 # Pacotes de Upgrade instalados em etapas (entregues separadamente do produto base)
-video/
+/video/
+!.agents/skills-upgrades/video/
+!.agents/skills-upgrades/video/**
 .agents/skills/gerador-de-entregaveis/
 .agents/skills/engenharia-reversa-concorrentes/
 .agents/skills/consistencia-personagem/
