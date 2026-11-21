@@ -17,9 +17,15 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
+safe_apt_update() {
+  apt-get -o Acquire::AllowReleaseInfoChange=true -o Acquire::AllowReleaseInfoChange::Label=true update -y \
+    || apt-get --allow-releaseinfo-change update -y \
+    || true
+}
+
 echo "==> [1/6] Atualizando pacotes base do sistema (FFmpeg, Chromium, SQLite, Build Tools)..."
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
+safe_apt_update
 apt-get install -y --no-install-recommends \
   ca-certificates \
   curl \
@@ -33,9 +39,9 @@ apt-get install -y --no-install-recommends \
 echo "==> [2/6] Verificando/instalando Node.js 22 LTS..."
 if ! command -v node >/dev/null 2>&1 || [[ "$(node -v | sed 's/v//' | cut -d. -f1)" -lt 22 ]]; then
   mkdir -p /etc/apt/keyrings
-  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/nodesource.gpg
   echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
-  apt-get update -y
+  apt-get -o Dir::Etc::sourcelist="sources.list.d/nodesource.list" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0" update -y || safe_apt_update
   apt-get install -y nodejs
 fi
 

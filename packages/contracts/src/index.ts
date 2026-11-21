@@ -297,6 +297,9 @@ export type WebSocketEventMap = {
     onboarding: OnboardingEstado;
     setup_assistant_visible: boolean;
   };
+  "vps_assistant:updated": {
+    vps_assistant_visible: boolean;
+  };
   "routine:updated": {
     owner_kind: RoutineOwnerKind;
     owner_id: string;

@@ -78,9 +78,11 @@ import {
   importBrandPdfFromBuffer,
   interpolateBrandPlaceholders,
   isSetupAssistantVisible,
+  isVpsAssistantVisible,
   listUpgradePackages,
   saveBrandIdentity,
   setSetupAssistantState,
+  setVpsAssistantState,
   syncBrandPlaceholdersInDatabase,
 } from "./brand-onboarding-service.ts";
 import { tryHandleWhatsAppMcpStoreRoute } from "./routes-whatsapp-mcp-store.ts";
@@ -1211,7 +1213,7 @@ export async function generateAgentChatReply(
     const studioPhase13Tools = deps.phase13 ? PHASE13_TOOLS_SCHEMA : [];
     const studioPhase14Tools = deps.phase14 ? PHASE14_TOOLS_SCHEMA : [];
     const studioPhase15Tools =
-      deps.browserService || deps.screenCapture || deps.showcaseService
+      deps.browserService || deps.screenCapture || deps.showcaseService || deps.remoteClaimService
         ? PHASE15_TOOLS_SCHEMA
         : [];
     for (const t of [
@@ -3099,6 +3101,15 @@ export async function tryHandleStudioRoute(
     return true;
   }
 
+  if (method === "POST" && path === "/api/servers/vps-assistant") {
+    const body = await readJsonBody(req);
+    const action = body.action === "reopen" ? "reopen" : "dismiss";
+    const result = setVpsAssistantState(db, providerConnection, action);
+    wsHub.broadcast("vps_assistant:updated", result);
+    sendJson(res, 200, { ok: true, ...result });
+    return true;
+  }
+
   // 2. Provedores, CLIs & Uso
   if (method === "GET" && path === "/api/provedores/status") {
     const force = url.searchParams.get("refresh") === "1";
@@ -3448,13 +3459,16 @@ export async function tryHandleStudioRoute(
       url.searchParams.get("apenas_desbloqueados") === "1" ||
       url.searchParams.get("onlyUnlocked") === "1";
     const includeSetupExplicit = url.searchParams.get("incluir_setup") === "1";
+    const includeVpsExplicit = url.searchParams.get("incluir_vps") === "1";
     const setupVisible = includeSetupExplicit || isSetupAssistantVisible(db, providerConnection);
+    const vpsVisible = includeVpsExplicit || isVpsAssistantVisible(db);
     const rows = db.connection
       .prepare(`SELECT * FROM projecao_agentes ORDER BY ordem_exibicao ASC;`)
       .all() as Array<Parameters<typeof enrichAgentRow>[1]>;
     const currentBrand = getBrandIdentity(providerConnection);
     const enriched = rows
       .filter((row) => row.agente_id !== SETUP_ASSISTANT_AGENT_DEF.agente_id || setupVisible)
+      .filter((row) => row.agente_id !== "assistente_servidor_vps" || vpsVisible)
       .map((row) => enrichAgentRow(db, row, workspaceRoot, deps.licenseService, currentBrand));
     const filtered = apenasDesbloqueados
       ? enriched.filter((a) => a.config.upgrade_desbloqueado !== false)
@@ -3464,6 +3478,7 @@ export async function tryHandleStudioRoute(
       agentes: filtered,
       unlocked_agents_count: unlockedSummary.unlocked_agents_count,
       setup_assistant_visible: isSetupAssistantVisible(db, providerConnection),
+      vps_assistant_visible: isVpsAssistantVisible(db),
     });
     return true;
   }

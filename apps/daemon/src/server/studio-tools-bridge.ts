@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { promisify } from "node:util";
 import {
   mcpConfigErrors,
   normalizeMcpConfig,
@@ -44,6 +46,7 @@ import { metaPublishTool, type MetaPublishParams } from "../engine/tools/meta-pu
 import {
   saveBrandIdentity,
   setSetupAssistantState,
+  setVpsAssistantState,
 } from "./brand-onboarding-service.ts";
 import type { McpGateway } from "../mcp/mcp-gateway.ts";
 import {
@@ -1143,6 +1146,17 @@ export const PHASE10_TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: "concluir_conexao_vps",
+    description:
+      "Marca o fluxo guiado de conexão de servidor VPS como concluído/encerrado (vps_assistant_visible = false) e oculta o Especialista em Servidor VPS da Sidebar.",
+    parameters: {
+      type: "object",
+      properties: {
+        motivo: { type: "string", description: "Resumo curto da conexão concluída ou motivo do encerramento." },
+      },
+    },
+  },
+  {
     name: "generate_image",
     description:
       "Gera uma imagem ou arte visual real via Gemini Nano Banana 2.1 (até 14 referências), OpenAI GPT Image 2.6/2.5 (até 16 referências via /images/edits), Flux ou Antigravity. Você decide quantas e quais referências enviar via `imagens_referencia` (ou `fotos_especificas`/`referencias_especificas`).",
@@ -1996,6 +2010,19 @@ export async function executeStudioExtensionTool(
         motivo: readStringArg(args, "motivo") ?? "Setup inicial concluído.",
         setup_assistant_visible: false,
         onboarding: state.onboarding,
+      };
+    }
+
+    case "concluir_conexao_vps": {
+      if (!deps.providerConnection) {
+        throw new Error("Serviço de estado indisponível para ocultar o especialista VPS.");
+      }
+      const state = setVpsAssistantState(deps.db, deps.providerConnection, "dismiss");
+      deps.wsHub?.broadcast("vps_assistant:updated", state);
+      return {
+        ok: true,
+        motivo: readStringArg(args, "motivo") ?? "Fluxo VPS concluído.",
+        vps_assistant_visible: false,
       };
     }
 
@@ -5094,6 +5121,39 @@ export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
       required: ["server_name"],
     },
   },
+  {
+    name: "gerar_comando_claim_vps",
+    description:
+      "Gera um novo comando shell único (CRIATIVO_CLAIM válido por 15 minutos) para instalar e conectar uma VPS Linux ao Criativo AI Studio Online.",
+    parameters: {
+      type: "object",
+      properties: {
+        server_name: { type: "string", description: "Nome amigável opcional do servidor VPS." },
+      },
+    },
+  },
+  {
+    name: "instalar_parear_servidor_vps",
+    description:
+      "Instala via SSH (quando host e chave SSH são fornecidos) ou verifica saúde HTTP (/health) de um servidor VPS Linux para conectá-lo ao Criativo AI Studio Online.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["install", "health_check"],
+          description: "Ação desejada: 'install' executa o instalador via SSH; 'health_check' verifica http://host:port/health.",
+        },
+        host: { type: "string", description: "IP público ou domínio SSH/HTTP da VPS Linux." },
+        port: { type: "number", description: "Porta SSH (padrão 22)." },
+        username: { type: "string", description: "Usuário SSH (padrão 'root')." },
+        private_key_path: { type: "string", description: "Caminho local opcional para chave privada SSH." },
+        claim_secret: { type: "string", description: "Token CRIATIVO_CLAIM opcional; se omitido em 'install', gera um novo automaticamente." },
+        server_name: { type: "string", description: "Nome amigável do servidor VPS." },
+        server_port: { type: "number", description: "Porta do daemon do Criativo na VPS (padrão 3000)." },
+      },
+    },
+  },
 ];
 
 export const PHASE15_TOOL_NAMES: ReadonlySet<string> = new Set(
@@ -5371,6 +5431,162 @@ export async function executePhase15ToolCall(
       aviso_seguranca:
         "Comando de uso único (15 minutos). Não salve o token CRIATIVO_CLAIM em arquivos permanentes ou memórias.",
     };
+  }
+
+  if (toolName === "gerar_comando_claim_vps") {
+    if (!services.remoteClaimService) {
+      throw new Error("RemoteClaimService não inicializado neste daemon.");
+    }
+    const serverName = readStringArg(args, "server_name", "nome") ?? "Servidor VPS";
+    const claim = await services.remoteClaimService.createRemoteClaim(serverName);
+    return {
+      ok: true,
+      claim,
+    };
+  }
+
+  if (toolName === "instalar_parear_servidor_vps") {
+    const action = readStringArg(args, "action") === "health_check" ? "health_check" : "install";
+    const host = readStringArg(args, "host")?.trim() ?? "";
+    const sshPort = typeof args.port === "number" && args.port > 0 ? Math.floor(args.port) : 22;
+    const username = readStringArg(args, "username")?.trim() || "root";
+    const privateKeyPath = readStringArg(args, "private_key_path")?.trim() || "";
+    const serverName = readStringArg(args, "server_name", "nome") ?? "Servidor VPS";
+    const serverPort =
+      typeof args.server_port === "number" && args.server_port > 0 ? Math.floor(args.server_port) : 3000;
+
+    if (!host) {
+      const claim = services.remoteClaimService
+        ? await services.remoteClaimService.createRemoteClaim(serverName).catch(() => null)
+        : null;
+      return {
+        ok: false,
+        requires_manual_ssh_or_key: true,
+        diagnostico:
+          "Nenhum host/IP da VPS foi informado ainda. Peça ao usuário o IP/domínio e chave SSH (ou peça para colar o comando seguro diretamente no console SSH da VPS).",
+        command_bash: claim?.command_bash ?? null,
+        claim_id: claim?.claim_id ?? null,
+      };
+    }
+
+    const checkVpsHealth = async () => {
+      const healthUrl = `http://${host}:${serverPort}/health`;
+      try {
+        const res = await fetch(healthUrl, { signal: AbortSignal.timeout(5000) });
+        const bodyText = await res.text().catch(() => "");
+        return {
+          reachable: res.ok,
+          status: res.status,
+          url: healthUrl,
+          body: bodyText.slice(0, 300),
+        };
+      } catch (err) {
+        return {
+          reachable: false,
+          status: 0,
+          url: healthUrl,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    };
+
+    if (action === "health_check") {
+      const health = await checkVpsHealth();
+      return {
+        ok: health.reachable,
+        action: "health_check",
+        host,
+        server_port: serverPort,
+        health,
+      };
+    }
+
+    if (!privateKeyPath) {
+      const claim = services.remoteClaimService
+        ? await services.remoteClaimService.createRemoteClaim(serverName).catch(() => null)
+        : null;
+      const health = await checkVpsHealth();
+      return {
+        ok: false,
+        requires_manual_ssh_or_key: true,
+        diagnostico:
+          "Para executar instalação remota automática a partir deste computador, informe `private_key_path` (caminho da chave SSH sem senha interativa) ou execute o comando abaixo diretamente na VPS via SSH/console do provedor.",
+        command_bash: claim?.command_bash ?? null,
+        claim_id: claim?.claim_id ?? null,
+        health,
+      };
+    }
+
+    if (!existsSync(privateKeyPath)) {
+      return {
+        ok: false,
+        error: `Arquivo de chave privada SSH não encontrado em '${privateKeyPath}'.`,
+      };
+    }
+
+    let commandToRun = "";
+    let claimSecret = readStringArg(args, "claim_secret")?.trim() || "";
+    let claimId: string | null = null;
+    if (services.remoteClaimService) {
+      const ticket = await services.remoteClaimService.createRemoteClaim(serverName);
+      claimId = ticket.claim_id;
+      if (claimSecret) {
+        commandToRun = ticket.command_bash.replace(/CRIATIVO_CLAIM=[^; ]+/, `CRIATIVO_CLAIM=${claimSecret}`);
+      } else {
+        commandToRun = ticket.command_bash;
+      }
+    } else if (claimSecret) {
+      commandToRun = `{ echo CRIATIVO_CLAIM=${claimSecret}; curl -fsSL https://painel.criativoaistudio.com.br/api/releases/install-server.sh; } | sudo bash -s -- --name "${serverName.replace(/[^a-zA-Z0-9 _.-]/g, "") || "Servidor VPS"}"`;
+    } else {
+      throw new Error("RemoteClaimService indisponível e nenhum claim_secret informado.");
+    }
+
+    const execFileAsync = promisify(execFile);
+    const sshArgs = [
+      "-i",
+      privateKeyPath,
+      "-p",
+      String(sshPort),
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "ConnectTimeout=10",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      `${username}@${host}`,
+      commandToRun,
+    ];
+
+    try {
+      const { stdout, stderr } = await execFileAsync("ssh", sshArgs, {
+        timeout: 180_000,
+        windowsHide: true,
+      });
+      const health = await checkVpsHealth();
+      return {
+        ok: true,
+        action: "install",
+        host,
+        claim_id: claimId,
+        health,
+        stdout_tail: String(stdout || "").slice(-1500),
+        stderr_tail: String(stderr || "").slice(-800),
+      };
+    } catch (err) {
+      const e = err as { message?: string; stdout?: string; stderr?: string };
+      return {
+        ok: false,
+        action: "install",
+        host,
+        claim_id: claimId,
+        error: e?.message || String(err),
+        diagnostico:
+          "Falha ao executar SSH não-interativo. Verifique IP, usuário, porta, permissões da chave SSH ou execute o comando diretamente na VPS.",
+        command_bash: commandToRun,
+        stdout_tail: String(e?.stdout || "").slice(-1000),
+        stderr_tail: String(e?.stderr || "").slice(-1000),
+      };
+    }
   }
 
   throw new Error(`Ferramenta da Fase 15 desconhecida: ${toolName}`);

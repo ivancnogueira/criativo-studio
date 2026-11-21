@@ -334,7 +334,10 @@ export class CriativoStudioMcpBridge {
       ...(this.deps.workflowStore && this.deps.workflowEngine ? getChatWorkflowToolCatalog() : []),
       ...(this.deps.phase13 ? PHASE13_TOOLS_SCHEMA : []),
       ...(this.deps.phase14 ? PHASE14_TOOLS_SCHEMA : []),
-      ...(this.deps.browserService || this.deps.screenCapture || this.deps.showcaseService
+      ...(this.deps.browserService ||
+      this.deps.screenCapture ||
+      this.deps.showcaseService ||
+      this.deps.remoteClaimService
         ? PHASE15_TOOLS_SCHEMA
         : []),
     ];

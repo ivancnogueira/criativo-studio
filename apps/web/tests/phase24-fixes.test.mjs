@@ -222,4 +222,95 @@ describe("Fase 24 — UI: Logo Servidor Remoto, Cotas Auto, Dock Settings & Sele
     assert.match(html, /width="88"[^>]*height="88"/);
     assert.match(html, /width="54"[^>]*height="54"/);
   });
+
+  it("5. (CLR25-01 & VPS25-02) StudioColorPicker (HSV/HEX/12 cores), fallback de copiar em ServerModals e card VPS oculto na Sidebar", async () => {
+    const { StudioColorPicker, DEFAULT_STUDIO_COLOR_SWATCHES } = await vite.ssrLoadModule(
+      "/src/components/StudioColorPicker.tsx",
+    );
+    const { SERVER_ACCENT_COLORS, ServerSettingsModal } = await vite.ssrLoadModule(
+      "/src/features/servers/ServerModals.tsx",
+    );
+    const { Sidebar } = await vite.ssrLoadModule("/src/components/Sidebar.tsx");
+
+    assert.equal(DEFAULT_STUDIO_COLOR_SWATCHES.length, 12);
+    assert.equal(SERVER_ACCENT_COLORS.length, 12);
+
+    const pickerHtml = renderToStaticMarkup(
+      React.createElement(StudioColorPicker, {
+        value: "#0BFF5C",
+        onChange: () => {},
+        allowDefaultReset: true,
+        isDefaultSelected: false,
+        onResetDefault: () => {},
+        ariaLabelPrefix: "Teste",
+      }),
+    );
+    assert.match(pickerHtml, /data-testid="studio-color-picker"/);
+    assert.match(pickerHtml, /HEX/);
+    assert.match(pickerHtml, /value="0BFF5C"/);
+    assert.match(pickerHtml, /Conta-gotas de cor/);
+
+    const settingsSrvHtml = renderToStaticMarkup(
+      React.createElement(ServerSettingsModal, {
+        open: true,
+        server: {
+          server_id: "srv-vps-1",
+          nome: "VPS Produção",
+          kind: "remote_vps",
+          base_url: "http://203.0.113.10:3000",
+          cor_hex: "#0BFF5C",
+          port: 3000,
+          criado_em: "2026-11-21T00:00:00.000Z",
+          atualizado_em: "2026-11-21T00:00:00.000Z",
+        },
+        onClose: () => {},
+        onUpdated: async () => {},
+        onRemoved: async () => {},
+      }),
+    );
+    assert.match(settingsSrvHtml, /#0BFF5C/);
+    assert.match(settingsSrvHtml, /Mais cores/);
+
+    const serverModalsSrc = readFileSync(
+      join(webRoot, "src", "features", "servers", "ServerModals.tsx"),
+      "utf8",
+    );
+    assert.match(serverModalsSrc, /copyTextToClipboard/);
+    assert.match(serverModalsSrc, /execCommand\("copy"\)/);
+
+    const sidebarHtml = renderToStaticMarkup(
+      React.createElement(Sidebar, {
+        agentes: [
+          {
+            agente_id: "estrategista",
+            nome: "Estrategista Editorial",
+            papel: "Planejamento",
+            pasta: "estrategista",
+            modelo_padrao: "gemini-4-argon",
+            ativo: true,
+            status: "ocioso",
+            config: { avatar_shape: "hex", avatar_color: "#31CF76", frente: "conteudo" },
+            atualizado_em: "2026-11-21T00:00:00.000Z",
+          },
+          {
+            agente_id: "assistente_servidor_vps",
+            nome: "Especialista em Servidor VPS",
+            papel: "Instalação VPS",
+            pasta: "Infraestrutura VPS",
+            modelo_padrao: "gemini-2.5-flash",
+            ativo: true,
+            status: "ocioso",
+            config: { avatar_shape: "hex", avatar_color: "#2EC4B6", frente: "conteudo" },
+            atualizado_em: "2026-11-21T00:00:00.000Z",
+          },
+        ],
+        selectedAgentId: "assistente_servidor_vps",
+        onSelectAgent: () => {},
+        onDismissVpsAssistant: async () => {},
+      }),
+    );
+    assert.match(sidebarHtml, /data-vps-assistant-card="true"/);
+    assert.match(sidebarHtml, /Especialista em Servidor VPS/);
+    assert.match(sidebarHtml, /Roster \(1 Agentes\)/);
+  });
 });

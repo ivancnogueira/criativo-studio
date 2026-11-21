@@ -92,6 +92,7 @@ export interface SidebarProps {
     { mood?: MascotEyeMood; activity?: AvatarTaskContext | null }
   >;
   onDismissSetupAssistant?: () => Promise<void> | void;
+  onDismissVpsAssistant?: () => Promise<void> | void;
 }
 
 function getAgentVisual(ag: AgenteRegistro) {
@@ -166,6 +167,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   workingAgentIds,
   agentActivityByAgentId,
   onDismissSetupAssistant,
+  onDismissVpsAssistant,
 }) => {
   const workingAgentSet = useMemo(() => new Set(workingAgentIds ?? []), [workingAgentIds]);
   const [search, setSearch] = useState("");
@@ -305,9 +307,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
     [visibleAgents]
   );
 
+  const vpsAssistantAgent = useMemo(
+    () => visibleAgents.find((a) => a.agente_id === "assistente_servidor_vps") ?? null,
+    [visibleAgents]
+  );
+
   const folders = useMemo(() => {
     const unassigned = visibleAgents.filter((a) => {
-      if (a.agente_id === "assistente_setup") return false;
+      if (a.agente_id === "assistente_setup" || a.agente_id === "assistente_servidor_vps") return false;
       const secId = agentAssignments[a.agente_id];
       const inCustomSection = Boolean(secId && sectionIdsSet.has(secId));
       return !inCustomSection && !pinSet.has(a.agente_id);
@@ -1108,7 +1115,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     );
   };
 
-  const permanentAgentsCount = agentes.filter((a) => a.agente_id !== "assistente_setup").length;
+  const permanentAgentsCount = agentes.filter(
+    (a) => a.agente_id !== "assistente_setup" && a.agente_id !== "assistente_servidor_vps"
+  ).length;
 
   return (
     <aside
@@ -1297,6 +1306,61 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </div>
                 <p className="text-[11px] text-[#B8D4F5] truncate">
                   Finalize perfil, fotos e Instagram por aqui
+                </p>
+              </div>
+            </button>
+          </div>
+        )}
+
+        {vpsAssistantAgent && (
+          <div
+            data-vps-assistant-card="true"
+            className={`rounded-xl border p-2 transition-colors ${
+              selectedAgentId === vpsAssistantAgent.agente_id
+                ? "border-[#2EC4B6]/65 bg-[#2EC4B6]/15"
+                : "border-[#2EC4B6]/35 bg-[#1B2524] hover:border-[#2EC4B6]/55"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2 px-1 pb-1.5">
+              <span className="inline-flex items-center gap-1 rounded-full bg-[#2EC4B6]/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#5EEAD4]">
+                <Sparkles className="h-2.5 w-2.5" />
+                VPS
+              </span>
+              {onDismissVpsAssistant && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void onDismissVpsAssistant();
+                  }}
+                  className="text-[10.5px] text-[#979797] hover:text-white underline underline-offset-2"
+                >
+                  Concluir e ocultar
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => onSelectAgent(vpsAssistantAgent.agente_id)}
+              className="w-full flex items-center gap-2.5 px-1.5 py-1 rounded-lg text-left"
+            >
+              <MascoteAvatar
+                avatar={getAgentVisual(vpsAssistantAgent)}
+                agentKey={vpsAssistantAgent.agente_id}
+                size={32}
+                animated={vpsAssistantAgent.status === "trabalhando"}
+                mood={
+                  agentActivityByAgentId?.[vpsAssistantAgent.agente_id]?.mood ??
+                  (vpsAssistantAgent.status === "trabalhando" ? "working" : "idle")
+                }
+                activity={agentActivityByAgentId?.[vpsAssistantAgent.agente_id]?.activity ?? null}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] font-semibold text-white truncate">
+                  {vpsAssistantAgent.nome}
+                </div>
+                <p className="text-[11px] text-[#A7F3D0] truncate">
+                  Instalação e pareamento de servidor Linux/VPS
                 </p>
               </div>
             </button>

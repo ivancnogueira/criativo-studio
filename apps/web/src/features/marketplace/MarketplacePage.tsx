@@ -620,6 +620,7 @@ export function CustomMcpModal({
                   .filter(
                     (ag) =>
                       ag.agente_id !== "assistente_setup" &&
+                      ag.agente_id !== "assistente_servidor_vps" &&
                       (ag.config as Record<string, unknown>)?.upgrade_desbloqueado !== false
                   )
                   .map((ag) => {
@@ -1271,6 +1272,7 @@ export function MarketplacePage({
       agentes.filter(
         (ag) =>
           ag.agente_id !== "assistente_setup" &&
+          ag.agente_id !== "assistente_servidor_vps" &&
           (ag.config as Record<string, unknown>)?.upgrade_desbloqueado !== false
       ),
     [agentes]

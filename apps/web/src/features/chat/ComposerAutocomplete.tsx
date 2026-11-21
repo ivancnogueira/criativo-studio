@@ -197,7 +197,7 @@ export function buildComposerAutocompleteItems(params: {
   }
 
   const unlockedAgents = agentes.filter((ag) => {
-    if (ag.agente_id === "assistente_setup") return false;
+    if (ag.agente_id === "assistente_setup" || ag.agente_id === "assistente_servidor_vps") return false;
     const cfg = (ag.config ?? {}) as Record<string, unknown>;
     return cfg.upgrade_desbloqueado !== false;
   });

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Bot,
@@ -8,6 +8,7 @@ import {
   Link2,
   Loader2,
   Monitor,
+  Palette,
   RefreshCw,
   Server,
   Trash2,
@@ -21,6 +22,7 @@ import type {
 } from "@criativo/contracts";
 import { daemonApi } from "../../services/websocket-client";
 import { MascoteAvatar } from "../../components/MascoteAvatar";
+import { StudioColorPicker } from "../../components/StudioColorPicker";
 
 export const SERVER_ACCENT_COLORS = [
   { hex: "#E88B2D", label: "Âmbar" },
@@ -29,7 +31,46 @@ export const SERVER_ACCENT_COLORS = [
   { hex: "#9B6DFF", label: "Violeta" },
   { hex: "#EC5C8D", label: "Magenta" },
   { hex: "#2EC4B6", label: "Turquesa" },
+  { hex: "#F2555A", label: "Coral" },
+  { hex: "#DDA100", label: "Ouro" },
+  { hex: "#04A9D8", label: "Ciano" },
+  { hex: "#7689FC", label: "Índigo" },
+  { hex: "#CD5BD8", label: "Orquídea" },
+  { hex: "#0BFF5C", label: "Verde Neon" },
 ] as const;
+
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (!text) return false;
+  if (typeof navigator !== "undefined" && navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Segue para fallback clássico em textarea (ex.: contexto Electron/iframe sem foco)
+    }
+  }
+  if (typeof document !== "undefined" && document.body) {
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      textarea.style.top = "0";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      textarea.setSelectionRange(0, text.length);
+      const copied = typeof document.execCommand === "function" ? document.execCommand("copy") : false;
+      document.body.removeChild(textarea);
+      return copied;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
 
 export function formatCountdownMMSS(totalSeconds: number): string {
   const safe = Math.max(0, Math.floor(totalSeconds));
@@ -114,12 +155,14 @@ export const NewLocalServerModal: React.FC<NewLocalServerModalProps> = ({
 }) => {
   const [nome, setNome] = useState("");
   const [corHex, setCorHex] = useState<string>(SERVER_ACCENT_COLORS[0].hex);
+  const [colorPickerOpen, setColorPickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) {
       setNome("");
+      setColorPickerOpen(false);
       setErro(null);
       setSubmitting(false);
     }
@@ -200,12 +243,27 @@ export const NewLocalServerModal: React.FC<NewLocalServerModalProps> = ({
           </div>
 
           <div>
-            <span className="block text-[12px] font-medium text-[#A8A8A8] mb-2">
-              Cor de identificação
-            </span>
-            <div className="flex items-center gap-2">
-              {SERVER_ACCENT_COLORS.map((item) => {
-                const selected = corHex === item.hex;
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <span className="block text-[12px] font-medium text-[#A8A8A8]">
+                Cor de identificação
+              </span>
+              <button
+                type="button"
+                aria-expanded={colorPickerOpen}
+                onClick={() => setColorPickerOpen((v) => !v)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.1] bg-[#141414] hover:border-white/25 px-2 py-1 text-[11.5px] font-mono text-[#E5E5E5] transition-colors"
+              >
+                <span
+                  className="h-3 w-3 rounded-full border border-white/20"
+                  style={{ backgroundColor: corHex }}
+                />
+                <span>{corHex.toUpperCase()}</span>
+                <Palette className="h-3 w-3 text-[#9A9A9A]" />
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {SERVER_ACCENT_COLORS.slice(0, 6).map((item) => {
+                const selected = corHex.toUpperCase() === item.hex.toUpperCase();
                 return (
                   <button
                     key={item.hex}
@@ -222,7 +280,26 @@ export const NewLocalServerModal: React.FC<NewLocalServerModalProps> = ({
                   </button>
                 );
               })}
+              <button
+                type="button"
+                aria-label="Abrir seletor de cor completo"
+                onClick={() => setColorPickerOpen((v) => !v)}
+                className="px-2.5 h-7 rounded-lg border border-white/[0.12] bg-[#141414] hover:border-white/30 text-[11.5px] font-medium text-[#DCDCDC] flex items-center gap-1.5 transition-colors"
+              >
+                <Palette className="w-3.5 h-3.5 text-[#31CF76]" />
+                <span>{colorPickerOpen ? "Fechar cores" : "Mais cores"}</span>
+              </button>
             </div>
+            {colorPickerOpen && (
+              <div className="mt-2.5">
+                <StudioColorPicker
+                  value={corHex}
+                  onChange={setCorHex}
+                  swatches={SERVER_ACCENT_COLORS}
+                  ariaLabelPrefix="Cor do servidor"
+                />
+              </div>
+            )}
           </div>
 
           {quotaCheck.blocked && quotaCheck.message && (
@@ -306,6 +383,7 @@ export const NewRemoteServerClaimModal: React.FC<NewRemoteServerClaimModalProps>
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [copiedMode, setCopiedMode] = useState<"bash" | "agent" | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [openingServer, setOpeningServer] = useState(false);
 
@@ -330,6 +408,10 @@ export const NewRemoteServerClaimModal: React.FC<NewRemoteServerClaimModalProps>
     if (!open) {
       if (!initialClaim) {
         setClaim(null);
+      }
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = null;
       }
       setErro(null);
       setCopiedMode(null);
@@ -376,13 +458,20 @@ export const NewRemoteServerClaimModal: React.FC<NewRemoteServerClaimModalProps>
   const copyText = async (mode: "bash" | "agent") => {
     if (!claim) return;
     const text = mode === "bash" ? claim.command_bash : claim.command_agent_prompt;
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedMode(mode);
-      window.setTimeout(() => setCopiedMode(null), 2000);
-    } catch {
-      // ignora em headless
+    const ok = await copyTextToClipboard(text);
+    if (!ok) {
+      setErro("Não foi possível acessar a área de transferência automaticamente. Selecione o texto do comando para copiar.");
+      return;
     }
+    setErro(null);
+    setCopiedMode(mode);
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+    }
+    copyTimerRef.current = window.setTimeout(() => {
+      setCopiedMode(null);
+      copyTimerRef.current = null;
+    }, 2500);
   };
 
   const handleOpenPaired = async () => {
@@ -467,12 +556,16 @@ export const NewRemoteServerClaimModal: React.FC<NewRemoteServerClaimModalProps>
             <span className="text-[11.5px] font-medium px-2 py-0.5 rounded-md bg-white/[0.06] text-[#B8B8B8]">
               Shell
             </span>
-            <div className="flex items-center gap-3 text-[11.5px] text-[#B0B0B0]">
+            <div className="flex items-center gap-2 text-[11.5px] text-[#B0B0B0]">
               <button
                 type="button"
                 disabled={!claim}
                 onClick={() => void copyText("agent")}
-                className="flex items-center gap-1.5 hover:text-white disabled:opacity-40 transition-colors"
+                className={`flex items-center gap-1.5 rounded-md px-2 py-0.5 transition-colors disabled:opacity-40 ${
+                  copiedMode === "agent"
+                    ? "bg-[#31CF76]/15 text-[#31CF76] border border-[#31CF76]/40 font-semibold"
+                    : "hover:text-white border border-transparent hover:bg-white/[0.06]"
+                }`}
               >
                 {copiedMode === "agent" ? (
                   <Check className="w-3.5 h-3.5 text-[#31CF76]" />
@@ -484,8 +577,13 @@ export const NewRemoteServerClaimModal: React.FC<NewRemoteServerClaimModalProps>
               <button
                 type="button"
                 disabled={!claim}
+                aria-label="Copiar comando shell"
                 onClick={() => void copyText("bash")}
-                className="flex items-center gap-1.5 hover:text-white disabled:opacity-40 transition-colors"
+                className={`flex items-center gap-1.5 rounded-md px-2 py-0.5 transition-colors disabled:opacity-40 ${
+                  copiedMode === "bash"
+                    ? "bg-[#31CF76]/15 text-[#31CF76] border border-[#31CF76]/40 font-semibold"
+                    : "hover:text-white border border-transparent hover:bg-white/[0.06]"
+                }`}
               >
                 {copiedMode === "bash" ? (
                   <Check className="w-3.5 h-3.5 text-[#31CF76]" />
@@ -497,14 +595,33 @@ export const NewRemoteServerClaimModal: React.FC<NewRemoteServerClaimModalProps>
             </div>
           </div>
 
-          <div className="px-3.5 py-3 font-mono text-[12px] text-[#E6E6E6] overflow-x-auto whitespace-nowrap flex items-center gap-3">
+          <div
+            onClick={() => {
+              if (claim) void copyText("bash");
+            }}
+            title={claim ? "Clique para copiar o comando" : undefined}
+            className="px-3.5 py-3 font-mono text-[12px] text-[#E6E6E6] overflow-x-auto whitespace-nowrap flex items-center gap-3 cursor-pointer"
+          >
             <span className="text-[#5C5C5C] select-none">1</span>
-            <code>
+            <code className="select-all">
               {loading
                 ? "Gerando token único CRIATIVO_CLAIM..."
                 : claim?.command_bash ?? "Comando indisponível no momento."}
             </code>
           </div>
+          {copiedMode && (
+            <div
+              role="status"
+              className="px-3 py-1.5 border-t border-[#31CF76]/25 bg-[#31CF76]/10 text-[11.5px] font-medium text-[#31CF76] flex items-center gap-1.5"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+              <span>
+                {copiedMode === "agent"
+                  ? "Prompt com comando copiado para a área de transferência."
+                  : "Comando copiado para a área de transferência."}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Expiração + Novo comando */}
@@ -829,6 +946,7 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
 }) => {
   const [nome, setNome] = useState(server?.nome ?? "");
   const [corHex, setCorHex] = useState(server?.cor_hex ?? SERVER_ACCENT_COLORS[0].hex);
+  const [colorPickerOpen, setColorPickerOpen] = useState(false);
   const [invite, setInvite] = useState<ServerInviteToken | null>(null);
   const [deleteFiles, setDeleteFiles] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -841,6 +959,7 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
     if (open && server) {
       setNome(server.nome);
       setCorHex(server.cor_hex || SERVER_ACCENT_COLORS[0].hex);
+      setColorPickerOpen(false);
       setInvite(null);
       setDeleteFiles(false);
       setErro(null);
@@ -971,12 +1090,27 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
           </div>
 
           <div>
-            <span className="block text-[12px] font-medium text-[#A8A8A8] mb-2">
-              Cor do ícone na barra lateral
-            </span>
-            <div className="flex items-center gap-2">
-              {SERVER_ACCENT_COLORS.map((item) => {
-                const selected = corHex === item.hex;
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <span className="block text-[12px] font-medium text-[#A8A8A8]">
+                Cor do ícone na barra lateral
+              </span>
+              <button
+                type="button"
+                aria-expanded={colorPickerOpen}
+                onClick={() => setColorPickerOpen((v) => !v)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.1] bg-[#141414] hover:border-white/25 px-2 py-1 text-[11.5px] font-mono text-[#E5E5E5] transition-colors"
+              >
+                <span
+                  className="h-3 w-3 rounded-full border border-white/20"
+                  style={{ backgroundColor: corHex }}
+                />
+                <span>{corHex.toUpperCase()}</span>
+                <Palette className="h-3 w-3 text-[#9A9A9A]" />
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {SERVER_ACCENT_COLORS.slice(0, 6).map((item) => {
+                const selected = corHex.toUpperCase() === item.hex.toUpperCase();
                 return (
                   <button
                     key={item.hex}
@@ -992,7 +1126,26 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
                   </button>
                 );
               })}
+              <button
+                type="button"
+                aria-label="Abrir seletor de cor personalizado do servidor"
+                onClick={() => setColorPickerOpen((v) => !v)}
+                className="px-2.5 h-7 rounded-lg border border-white/[0.12] bg-[#141414] hover:border-white/30 text-[11.5px] font-medium text-[#DCDCDC] flex items-center gap-1.5 transition-colors"
+              >
+                <Palette className="w-3.5 h-3.5 text-[#31CF76]" />
+                <span>{colorPickerOpen ? "Fechar cores" : "Mais cores"}</span>
+              </button>
             </div>
+            {colorPickerOpen && (
+              <div className="mt-2.5">
+                <StudioColorPicker
+                  value={corHex}
+                  onChange={setCorHex}
+                  swatches={SERVER_ACCENT_COLORS}
+                  ariaLabelPrefix="Cor do servidor"
+                />
+              </div>
+            )}
           </div>
 
           <div className="rounded-xl bg-[#141414] border border-white/[0.06] p-3 text-[12px] text-[#9A9A9A] space-y-1">
@@ -1032,7 +1185,8 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      void navigator.clipboard.writeText(invite.invite_url).then(() => {
+                      void copyTextToClipboard(invite.invite_url).then((ok) => {
+                        if (!ok) return;
                         setCopiedInvite(true);
                         window.setTimeout(() => setCopiedInvite(false), 2000);
                       });

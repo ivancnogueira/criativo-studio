@@ -434,10 +434,15 @@ export const daemonApi = {
     return json.tarefa;
   },
 
-  async listAgents(options?: { onlyUnlocked?: boolean; includeSetup?: boolean }): Promise<AgenteRegistro[]> {
+  async listAgents(options?: {
+    onlyUnlocked?: boolean;
+    includeSetup?: boolean;
+    includeVps?: boolean;
+  }): Promise<AgenteRegistro[]> {
     const qs = new URLSearchParams();
     if (options?.onlyUnlocked) qs.set("apenas_desbloqueados", "1");
     if (options?.includeSetup) qs.set("incluir_setup", "1");
+    if (options?.includeVps) qs.set("incluir_vps", "1");
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     const json = await requestJson<{
       agentes: Array<
@@ -524,6 +529,16 @@ export const daemonApi = {
     action: "dismiss" | "reopen"
   ): Promise<{ ok: boolean; onboarding: OnboardingEstado; setup_assistant_visible: boolean }> {
     return await requestJson("/api/onboarding/setup-assistant", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
+  },
+
+  async setVpsAssistantState(
+    action: "dismiss" | "reopen"
+  ): Promise<{ ok: boolean; vps_assistant_visible: boolean }> {
+    return await requestJson("/api/servers/vps-assistant", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action }),

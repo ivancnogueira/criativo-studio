@@ -1440,6 +1440,10 @@ export function App() {
       void daemonApi.listAgents().then(setAgentes).catch(() => {});
     });
 
+    const unsubVpsAssistantUpdated = ws.on("vps_assistant:updated", () => {
+      void daemonApi.listAgents().then(setAgentes).catch(() => {});
+    });
+
     setOnLicenseRequiredHandler((status) => {
       if (status) {
         setLicenseStatus(status);
@@ -1504,6 +1508,7 @@ export function App() {
       unsubServersUpdated();
       unsubUpdateStatus();
       unsubOnboardingUpdated();
+      unsubVpsAssistantUpdated();
       wsRef.current = null;
       ws.disconnect();
     };
@@ -1649,8 +1654,24 @@ export function App() {
     async (promptText: string, _claim: ServerClaimTicket | null) => {
       setNewRemoteModalOpen(false);
       setActiveSection("agentes");
-      const targetAgent = agentes.find((a) => a.agente_id === "estrategista") ?? agentes[0];
-      const targetAgentId = targetAgent?.agente_id ?? "estrategista";
+
+      let poolAgents = agentes;
+      try {
+        await daemonApi.setVpsAssistantState("reopen");
+        const nextAgents = await daemonApi.listAgents({ includeVps: true });
+        if (nextAgents.length > 0) {
+          poolAgents = nextAgents;
+          setAgentes(nextAgents);
+        }
+      } catch {
+        // segue com lista atual caso backend legado
+      }
+
+      const targetAgent =
+        poolAgents.find((a) => a.agente_id === "assistente_servidor_vps") ??
+        poolAgents.find((a) => a.agente_id === "estrategista") ??
+        poolAgents[0];
+      const targetAgentId = targetAgent?.agente_id ?? "assistente_servidor_vps";
       const vis = getAgentAvatar(targetAgent);
       setOpenTabs((prev) =>
         prev.some((t) => t.id === `agent:${targetAgentId}`)
@@ -1659,7 +1680,7 @@ export function App() {
               ...prev,
               {
                 id: `agent:${targetAgentId}`,
-                titulo: targetAgent?.nome ?? "Estrategista",
+                titulo: targetAgent?.nome ?? "Especialista em Servidor VPS",
                 shape: vis.shape,
                 color: vis.color,
               },
@@ -3105,6 +3126,7 @@ export function App() {
             agentes.filter(
               (a) =>
                 a.agente_id !== "assistente_setup" &&
+                a.agente_id !== "assistente_servidor_vps" &&
                 (a.config as Record<string, unknown>)?.upgrade_desbloqueado !== false
             ).length
           }
@@ -3327,6 +3349,18 @@ export function App() {
                       const nextAgents = await daemonApi.listAgents();
                       setAgentes(nextAgents);
                       if (centerMode.type === "agent" && centerMode.agenteId === "assistente_setup") {
+                        const fallbackId = nextAgents[0]?.agente_id ?? "estrategista";
+                        handleSelectAgent(fallbackId);
+                      }
+                    }}
+                    onDismissVpsAssistant={async () => {
+                      await daemonApi.setVpsAssistantState("dismiss");
+                      const nextAgents = await daemonApi.listAgents();
+                      setAgentes(nextAgents);
+                      if (
+                        centerMode.type === "agent" &&
+                        centerMode.agenteId === "assistente_servidor_vps"
+                      ) {
                         const fallbackId = nextAgents[0]?.agente_id ?? "estrategista";
                         handleSelectAgent(fallbackId);
                       }
@@ -4322,6 +4356,7 @@ export function App() {
             const unlockedAgents = agentes.filter(
               (a) =>
                 a.agente_id !== "assistente_setup" &&
+                a.agente_id !== "assistente_servidor_vps" &&
                 (a.config as Record<string, unknown>)?.upgrade_desbloqueado !== false
             );
             const poolAgents = unlockedAgents.length > 0 ? unlockedAgents : agentes;

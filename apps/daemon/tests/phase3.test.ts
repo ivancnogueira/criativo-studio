@@ -338,7 +338,9 @@ describe("Fase 3 — Multi-Provedor BYOK, MCP, Geração Multimodal & 15 Agentes
 
     const permanentDbAgentsCount = (
       db.connection
-        .prepare(`SELECT COUNT(*) as total FROM projecao_agentes WHERE agente_id != 'assistente_setup';`)
+        .prepare(
+          `SELECT COUNT(*) as total FROM projecao_agentes WHERE agente_id NOT IN ('assistente_setup', 'assistente_servidor_vps');`
+        )
         .get() as {
         total: number;
       }

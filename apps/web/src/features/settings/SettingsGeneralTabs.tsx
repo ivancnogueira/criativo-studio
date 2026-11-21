@@ -7,6 +7,7 @@ import type {
 } from "@criativo/contracts";
 import { Check, LayoutTemplate, Palette, RotateCcw, Sliders } from "lucide-react";
 import { MascoteAvatar, resolveAgentAvatarConfig } from "../../components/MascoteAvatar";
+import { StudioColorPicker } from "../../components/StudioColorPicker";
 import { CarbonSelect, type CarbonSelectOption } from "../../components/ui/CarbonControls";
 import { getCriativoDesktopBridge } from "../../types/desktop-bridge";
 import { computeBubbleColors, OPERATOR_BUBBLE_SWATCHES } from "../chat/chat-bubble-theme";
@@ -382,6 +383,15 @@ export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
             />
           </label>
         </div>
+
+        <StudioColorPicker
+          value={aparencia.cor_balao_usuario ?? "#2A2A2A"}
+          onChange={(hex) => onChange({ ...aparencia, cor_balao_usuario: hex })}
+          allowDefaultReset
+          isDefaultSelected={(aparencia.cor_balao_usuario ?? "#2A2A2A").toUpperCase() === "#2A2A2A"}
+          onResetDefault={() => onChange({ ...aparencia, cor_balao_usuario: "#2A2A2A" })}
+          ariaLabelPrefix="Cor do balão do operador"
+        />
 
         <ToggleRow
           label="Mensagens do estúdio em blocos sólidos"

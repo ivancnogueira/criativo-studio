@@ -187,4 +187,73 @@ describe("Fase 24 — Hotfixes RemoteClaim HTML Fallback, Auto-Refresh de Cotas 
     assert.deepEqual(loaded.dock?.agentes_ids, ["estrategista", "copywriter"]);
     assert.ok(daemonRoot);
   });
+
+  it("4. (VPS25-01) install-server.sh é resiliente a PPAs depreciados e preserva captura de CRIATIVO_CLAIM", () => {
+    const repoScript = readFileSync(resolve(daemonRoot, "../../scripts/install-server.sh"), "utf8");
+    assert.match(repoScript, /AllowReleaseInfoChange=true/);
+    assert.match(repoScript, /AllowReleaseInfoChange::Label=true/);
+    assert.match(repoScript, /safe_apt_update/);
+    assert.match(repoScript, /CRIATIVO_CLAIM/);
+    assert.match(repoScript, /server-claims\/redeem/);
+    assert.match(repoScript, /servers\/claims\/redeem/);
+  });
+
+  it("5. (VPS25-02) assistente_servidor_vps fica oculto por padrão, aparece sob demanda via POST /api/servers/vps-assistant e não entra na contagem permanente", async () => {
+    const addr = runtime.httpServer.address() as { port: number };
+    const baseUrl = `http://127.0.0.1:${addr.port}`;
+
+    // 1. Por padrão, assistente_servidor_vps NÃO aparece em GET /api/agentes
+    const resDefault = await fetch(`${baseUrl}/api/agentes`);
+    assert.equal(resDefault.status, 200);
+    const jsonDefault = (await resDefault.json()) as {
+      agentes: Array<{ agente_id: string }>;
+      unlocked_agents_count: number;
+      vps_assistant_visible: boolean;
+    };
+    assert.equal(jsonDefault.vps_assistant_visible, false);
+    assert.equal(jsonDefault.agentes.some((a) => a.agente_id === "assistente_servidor_vps"), false);
+    const baselineUnlocked = jsonDefault.unlocked_agents_count;
+
+    // 2. Reabre o especialista VPS -> passa a aparecer com incluir_vps / GET /api/agentes sem inflar unlocked_agents_count
+    const resReopen = await fetch(`${baseUrl}/api/servers/vps-assistant`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "reopen" }),
+    });
+    assert.equal(resReopen.status, 200);
+    const reopenJson = (await resReopen.json()) as { ok: boolean; vps_assistant_visible: boolean };
+    assert.equal(reopenJson.ok, true);
+    assert.equal(reopenJson.vps_assistant_visible, true);
+
+    const resAfterReopen = await fetch(`${baseUrl}/api/agentes`);
+    const jsonAfterReopen = (await resAfterReopen.json()) as {
+      agentes: Array<{ agente_id: string; nome: string }>;
+      unlocked_agents_count: number;
+      vps_assistant_visible: boolean;
+    };
+    assert.equal(jsonAfterReopen.vps_assistant_visible, true);
+    assert.equal(jsonAfterReopen.unlocked_agents_count, baselineUnlocked);
+    assert.equal(
+      jsonAfterReopen.agentes.some((a) => a.agente_id === "assistente_servidor_vps"),
+      true,
+    );
+
+    // 3. Dispensa / oculta novamente
+    const resDismiss = await fetch(`${baseUrl}/api/servers/vps-assistant`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "dismiss" }),
+    });
+    assert.equal(resDismiss.status, 200);
+    const resAfterDismiss = await fetch(`${baseUrl}/api/agentes`);
+    const jsonAfterDismiss = (await resAfterDismiss.json()) as {
+      agentes: Array<{ agente_id: string }>;
+      vps_assistant_visible: boolean;
+    };
+    assert.equal(jsonAfterDismiss.vps_assistant_visible, false);
+    assert.equal(
+      jsonAfterDismiss.agentes.some((a) => a.agente_id === "assistente_servidor_vps"),
+      false,
+    );
+  });
 });

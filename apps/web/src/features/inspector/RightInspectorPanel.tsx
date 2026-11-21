@@ -53,10 +53,10 @@ import {
   MascoteAvatar,
   resolveAgentAvatarConfig,
 } from "../../components/MascoteAvatar";
+import { StudioColorPicker } from "../../components/StudioColorPicker";
 import { CarbonSelect, type CarbonSelectOption } from "../../components/ui/CarbonControls";
 import { getCriativoDesktopBridge } from "../../types/desktop-bridge";
 import { ServerBrowserProfilesPanel } from "../browser/ServerBrowserProfilesPanel";
-import { AGENT_CHAT_COLOR_SWATCHES } from "../chat/chat-bubble-theme";
 import { ApprovalBridge } from "../preview/ApprovalBridge";
 import { InstagramMobilePreview } from "../preview/InstagramMobilePreview";
 import { AgentRoutinesSettings } from "../routines/AgentRoutinesSettings";
@@ -1428,55 +1428,21 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                   </button>
 
                   {colorPickerExpanded && (
-                    <div className="px-3.5 pb-3 pt-1.5 bg-[#181818] border-t border-white/[0.05] space-y-2.5">
-                      <div className="flex flex-wrap items-center gap-2">
-                        {AGENT_CHAT_COLOR_SWATCHES.map((sw) => {
-                          const selected = chatColorDraft?.toUpperCase() === sw.hex.toUpperCase();
-                          return (
-                            <button
-                              key={sw.hex}
-                              type="button"
-                              title={sw.label}
-                              aria-label={`Cor dos balões ${sw.label}`}
-                              onClick={() => {
-                                setChatColorDraft(sw.hex);
-                                void onSaveAgentSettings(agente.agente_id, { chat_color: sw.hex });
-                              }}
-                              style={{ backgroundColor: sw.hex }}
-                              className={`h-6 w-6 rounded-full border border-white/20 flex items-center justify-center transition-transform ${
-                                selected ? "ring-2 ring-white scale-110" : "opacity-85 hover:opacity-100"
-                              }`}
-                            >
-                              {selected && <Check className="h-3 w-3 text-white drop-shadow" />}
-                            </button>
-                          );
-                        })}
-
-                        <input
-                          type="color"
-                          aria-label="Cor personalizada dos balões do agente"
-                          value={chatColorDraft ?? "#166534"}
-                          onChange={(e) => {
-                            const hex = e.target.value.toUpperCase();
-                            setChatColorDraft(hex);
-                            void onSaveAgentSettings(agente.agente_id, { chat_color: hex });
-                          }}
-                          className="h-6 w-6 rounded border-0 bg-transparent cursor-pointer"
-                        />
-
-                        {chatColorDraft && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setChatColorDraft(null);
-                              void onSaveAgentSettings(agente.agente_id, { chat_color: null });
-                            }}
-                            className="ml-auto text-[11px] text-[#979797] hover:text-white underline"
-                          >
-                            Resetar
-                          </button>
-                        )}
-                      </div>
+                    <div className="px-3.5 pb-3 pt-2 bg-[#181818] border-t border-white/[0.05] space-y-2.5">
+                      <StudioColorPicker
+                        value={chatColorDraft ?? "#166534"}
+                        onChange={(hex) => {
+                          setChatColorDraft(hex);
+                          void onSaveAgentSettings(agente.agente_id, { chat_color: hex });
+                        }}
+                        allowDefaultReset
+                        isDefaultSelected={!chatColorDraft}
+                        onResetDefault={() => {
+                          setChatColorDraft(null);
+                          void onSaveAgentSettings(agente.agente_id, { chat_color: null });
+                        }}
+                        ariaLabelPrefix="Cor dos balões do agente"
+                      />
                     </div>
                   )}
                 </div>

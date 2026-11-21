@@ -27,6 +27,12 @@ const DEFAULT_AGENT_TOOLS: Record<string, string[]> = {
     "ask_user",
     "request_api_key",
   ],
+  assistente_servidor_vps: [
+    "instalar_parear_servidor_vps",
+    "gerar_comando_claim_vps",
+    "concluir_conexao_vps",
+    "ask_user",
+  ],
   estrategista: ["salvar_identidade_marca", "inspecionar_ativos_marca", "handoff_agente"],
   copywriter: ["inspecionar_ativos_marca", "handoff_agente"],
   designer_individual: ["generate_image", "crop_margem_segura", "inspecionar_ativos_marca", "handoff_agente"],
@@ -49,6 +55,7 @@ const DEFAULT_AVATAR_THEMES: Record<
   { shape: AvatarShape; color: string; effort: NivelEsforco; pasta: string }
 > = {
   assistente_setup: { shape: "pill", color: "#42a0ff", effort: "baixo", pasta: "Setup Inicial" },
+  assistente_servidor_vps: { shape: "hex", color: "#2EC4B6", effort: "medio", pasta: "Infraestrutura VPS" },
   estrategista: { shape: "hex", color: "#31cf76", effort: "alto", pasta: "Conteúdo Base" },
   copywriter: { shape: "blob", color: "#38bdf8", effort: "alto", pasta: "Conteúdo Base" },
   designer_individual: { shape: "diamond", color: "#f27ba5", effort: "medio", pasta: "Conteúdo Base" },
@@ -335,6 +342,25 @@ export const SETUP_ASSISTANT_AGENT_DEF: AgenteDefinicao = {
     "Você é o Assistente de Configuração inicial do Criativo AI Studio Online. Conduza o usuário em blocos curtos para concluir apenas o que estiver pendente: identidade/perfil da marca (`salvar_identidade_marca`), envio de logo/fotos/referências ou ficha PDF no chat, e teste de credenciais Instagram/Meta (`validar_integracao_meta`). Assim que as pendências estiverem resolvidas ou quando o usuário solicitar encerrar/dispensar, chame `concluir_setup_inicial` para ocultar este assistente da Sidebar.",
 };
 
+export const VPS_ASSISTANT_AGENT_DEF: AgenteDefinicao = {
+  agente_id: "assistente_servidor_vps",
+  nome: "Especialista em Servidor VPS",
+  papel: "Instalação, diagnóstico e pareamento de servidores Linux/VPS (auto-ocultável)",
+  frente: "conteudo",
+  pacote: "base",
+  pasta: "Infraestrutura VPS",
+  skill_slug: "configurar-instagram",
+  modelo_padrao: "gemini-2.5-flash",
+  avatar_shape: "hex",
+  avatar_color: "#2EC4B6",
+  effort: "medio",
+  ordem_exibicao: 0,
+  skills_paths: [],
+  ferramentas: DEFAULT_AGENT_TOOLS.assistente_servidor_vps,
+  prompt_base:
+    "Você é o Especialista em Servidor VPS do Criativo AI Studio Online (agente oculto sob demanda). Seu objetivo é ajudar o usuário a instalar, diagnosticar e conectar servidores Linux Ubuntu/Debian (compatível com Nginx, Apache ou servidor standalone Node.js na porta 3000 sem conflitar com sites já existentes). Sempre que o usuário informar host/IP + chave SSH (ou quiser testar conexão), use `instalar_parear_servidor_vps`. Se precisar renovar o comando seguro de pareamento em 1 linha, use `gerar_comando_claim_vps`. Explique claramente erros de `apt-get` (como PPAs com Label alterada) e como validar `systemctl status criativo` e `/health`. Assim que a VPS estiver conectada ou quando o usuário pedir para encerrar, chame `concluir_conexao_vps` para ocultar este agente automaticamente.",
+};
+
 export const DELETED_NATIVE_AGENTS_CONFIG_KEY = "deleted_native_agents";
 
 export interface DeletedNativeAgentTombstone {
@@ -412,7 +438,7 @@ export function unmarkNativeAgentDeleted(db: CriativoDatabase, agenteId: string)
 }
 
 export function getSetupCompatibleRoster(): readonly AgenteDefinicao[] {
-  return [SETUP_ASSISTANT_AGENT_DEF, ...ROSTER_15_AGENTES];
+  return [SETUP_ASSISTANT_AGENT_DEF, VPS_ASSISTANT_AGENT_DEF, ...ROSTER_15_AGENTES];
 }
 
 /**

@@ -99,12 +99,23 @@ export class RemoteClaimService {
     const existing = this.#manager.listServers();
     assertServerCreationAllowed(this.#licenseService.getStatus(), existing, "remote_vps");
 
-    const headers = this.#licenseService.getCredentialHeaders();
-    if (!headers && !this.#licenseService.isBypassedForTests()) {
+    const rawHeaders = this.#licenseService.getCredentialHeaders();
+    if (!rawHeaders && !this.#licenseService.isBypassedForTests()) {
       const err = new Error("Licença ativa necessária para criar comando de VPS.") as Error & { statusCode?: number };
       err.statusCode = 402;
       throw err;
     }
+    const headers: Record<string, string> | null = rawHeaders
+      ? {
+          ...rawHeaders,
+          ...(rawHeaders["X-Criativo-License-Key"]
+            ? { "x-license-key": rawHeaders["X-Criativo-License-Key"] }
+            : {}),
+          ...(rawHeaders["X-Criativo-Machine-Id"]
+            ? { "x-machine-id": rawHeaders["X-Criativo-Machine-Id"] }
+            : {}),
+        }
+      : null;
 
     type HubCreatePayload = {
       ok?: boolean;
@@ -198,7 +209,16 @@ export class RemoteClaimService {
     };
 
     try {
-      const headers = this.#licenseService.getCredentialHeaders() ?? {};
+      const rawHeaders = this.#licenseService.getCredentialHeaders() ?? {};
+      const headers: Record<string, string> = {
+        ...rawHeaders,
+        ...(rawHeaders["X-Criativo-License-Key"]
+          ? { "x-license-key": rawHeaders["X-Criativo-License-Key"] }
+          : {}),
+        ...(rawHeaders["X-Criativo-Machine-Id"]
+          ? { "x-machine-id": rawHeaders["X-Criativo-Machine-Id"] }
+          : {}),
+      };
       const res = await this.#fetchImpl(
         `${this.#licenseService.hubBaseUrl}/api/server-claims/${encodeURIComponent(claimId)}/status`,
         { method: "GET", headers },

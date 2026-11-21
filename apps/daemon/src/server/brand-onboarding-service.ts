@@ -673,7 +673,7 @@ export function computeUnlockedAgentsSummary(
   let customCount = 0;
 
   for (const row of rows) {
-    if (row.agente_id === "assistente_setup") continue;
+    if (row.agente_id === "assistente_setup" || row.agente_id === "assistente_servidor_vps") continue;
     totalPermanent += 1;
     let cfg: Record<string, unknown> = {};
     try {
@@ -813,4 +813,28 @@ export function evaluateAndSyncSetupCompletion(
     pendencias_setup: pendencias,
     setup_assistant_visible: isSetupAssistantVisible(db, providerConnection),
   };
+}
+
+export const VPS_ASSISTANT_VISIBLE_CONFIG_KEY = "vps_assistant_visible";
+
+export function isVpsAssistantVisible(db: CriativoDatabase): boolean {
+  try {
+    const row = db.connection
+      .prepare(`SELECT valor_json FROM projecao_studio_config WHERE chave = ? LIMIT 1;`)
+      .get(VPS_ASSISTANT_VISIBLE_CONFIG_KEY) as { valor_json?: string } | undefined;
+    return row?.valor_json === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function setVpsAssistantState(
+  db: CriativoDatabase,
+  providerConnection: ProviderConnectionService,
+  action: "dismiss" | "reopen"
+): { vps_assistant_visible: boolean } {
+  const nextVisible = action === "reopen";
+  providerConnection.setStudioConfig(VPS_ASSISTANT_VISIBLE_CONFIG_KEY, nextVisible);
+  void db;
+  return { vps_assistant_visible: nextVisible };
 }

@@ -124,6 +124,9 @@ const DATA_UI_TOOLS = new Set([
   "update_site",
   "delete_site",
   "create_server_install_command",
+  "gerar_comando_claim_vps",
+  "instalar_parear_servidor_vps",
+  "concluir_conexao_vps",
   "salvar_identidade_marca",
   "save_brand_identity",
   "concluir_setup_inicial",
@@ -244,7 +247,7 @@ const IMAGE_GENERATION_OR_VISUAL_EDIT_RE =
   /\b(crie|criar|gere|gerar|fa[cç]a|fazer|produza|produzir|monte|montar|desenhe|desenhar|ilustre|edite|editar|refa[cç]a|ajuste|ajustar|banner|capa|imagem|imagens|arte|artes|carrossel|post|storie|stories|criativo|criativos|an[uú]ncio)\b/i;
 
 const DATA_UI_INTENT_RE =
-  /\b(tabela|tabelas|sql|banco\s+de\s+dados|query|planilha|csv|biblioteca|pasta|pastas|arquivos?|cofre|api\s*key|chave\s+de\s+api|se[cç][aã]o|se[cç][oõ]es|sidebar|barra\s+lateral|showcase|landing|skill|habilidade|habilidades|loja|marketplace|instalar|servidor|servidores|mcp|identidade\s+visual|marca|brandbook|html|gr[aá]fico|dashboard)\b/i;
+  /\b(tabela|tabelas|sql|banco\s+de\s+dados|query|planilha|csv|biblioteca|pasta|pastas|arquivos?|cofre|api\s*key|chave\s+de\s+api|se[cç][aã]o|se[cç][oõ]es|sidebar|barra\s+lateral|showcase|landing|skill|habilidade|habilidades|loja|marketplace|instalar|servidor|servidores|vps|ssh|parear|pareamento|nginx|apache|mcp|identidade\s+visual|marca|brandbook|html|gr[aá]fico|dashboard)\b/i;
 
 const EXTERNAL_MCP_INTENT_RE =
   /\b(mcp|crm|notion|github|slack|discord|google\s+drive|calendar|agenda\s+google|docs|sheets|wordpress|woocommerce|elementor|shopify|rd\s*station|hubspot|pipedrive|airtable|stripe|email|e-mail|imap|smtp)\b/i;
