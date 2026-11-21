@@ -1215,4 +1215,215 @@ describe("Fase 24 — Hotfixes RemoteClaim HTML Fallback, Auto-Refresh de Cotas 
       dbQ29.close();
     }
   });
+
+  it("15. (MOD30-01 & MOD30-02) Instala Antigravity CLI standalone para Linux/Desktop, filtra modelos legados/internos no HTTP fallback e preserva modelos ACP exportados na VPS", async () => {
+    const {
+      installAntigravityStandaloneBinary,
+      resolveAntigravityReleaseAssetName,
+      resolveManagedProviderRuntime,
+    } = await import("../src/providers/provider-runtime-resolver.ts");
+    const {
+      extractRemainingPercentage,
+      filterHttpAvailableModels,
+    } = await import("../src/providers/antigravity-live-service.ts");
+
+    assert.equal(resolveAntigravityReleaseAssetName("linux", "x64")?.assetName, "agy_cli_linux_x64.tar.gz");
+    assert.equal(resolveAntigravityReleaseAssetName("linux", "arm64")?.assetName, "agy_cli_linux_arm64.tar.gz");
+    assert.equal(resolveAntigravityReleaseAssetName("win32", "x64")?.assetName, "agy_cli_windows_x64.zip");
+    assert.equal(resolveAntigravityReleaseAssetName("darwin", "arm64")?.assetName, "agy_cli_mac_arm64.tar.gz");
+
+    assert.equal(
+      extractRemainingPercentage({
+        resetTime: new Date(Date.now() + 3_600_000).toISOString(),
+        disabled: false,
+      }),
+      0,
+    );
+
+    const appDataMock = join(tempDir, "appdata-mod30");
+    mkdirSync(appDataMock, { recursive: true });
+    const mockFetchInstall: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.includes("/releases/latest")) {
+        return new Response(
+          JSON.stringify({
+            tag_name: "1.5.14",
+            assets: [
+              {
+                name: "agy_cli_linux_x64.tar.gz",
+                browser_download_url: "https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.14/agy_cli_linux_x64.tar.gz",
+              },
+              {
+                name: "agy_cli_windows_x64.zip",
+                browser_download_url: "https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.14/agy_cli_windows_x64.zip",
+              },
+              {
+                name: "agy_cli_mac_arm64.tar.gz",
+                browser_download_url: "https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.14/agy_cli_mac_arm64.tar.gz",
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(Buffer.from("fake-archive-bytes"), { status: 200 });
+    };
+
+    const prevSkip = process.env.CRIATIVO_SKIP_LOCAL_PROBE;
+    delete process.env.CRIATIVO_SKIP_LOCAL_PROBE;
+    try {
+      const linuxInstalled = await installAntigravityStandaloneBinary({
+        appDataDir: appDataMock,
+        platform: "linux",
+        arch: "x64",
+        includeSystemPaths: false,
+        fetchImpl: mockFetchInstall,
+        extractImpl: async (_archive, destDir) => {
+          writeFileSync(join(destDir, "antigravity"), "#!/bin/sh\necho 1.5.14\n", "utf8");
+        },
+      });
+      assert.equal(linuxInstalled.installedNow, true);
+      assert.equal(linuxInstalled.version, "1.5.14");
+      assert.ok(linuxInstalled.executable?.includes(join("antigravity", "linux-x64", "1.5.14", "bin", "antigravity")));
+
+      const hostInstalled = await installAntigravityStandaloneBinary({
+        appDataDir: appDataMock,
+        platform: process.platform,
+        arch: process.arch,
+        includeSystemPaths: false,
+        fetchImpl: mockFetchInstall,
+        extractImpl: async (_archive, destDir) => {
+          const binFile = process.platform === "win32" ? "antigravity.exe" : "antigravity";
+          writeFileSync(join(destDir, binFile), "binary-stub", "utf8");
+        },
+      });
+      assert.equal(hostInstalled.installedNow, true);
+      const resolvedHost = resolveManagedProviderRuntime("antigravity", {
+        appDataDir: appDataMock,
+        includeSystemPaths: false,
+      });
+      assert.equal(resolvedHost.executable, hostInstalled.executable);
+    } finally {
+      if (prevSkip === undefined) delete process.env.CRIATIVO_SKIP_LOCAL_PROBE;
+      else process.env.CRIATIVO_SKIP_LOCAL_PROBE = prevSkip;
+    }
+
+    // MOD30-01: HTTP fallback deve filtrar legados/internos (-tiered, -sonar, gemini-2.5, gemini-3-flash) e deduplicar variantes Low/Medium/High
+    const rawHttpPayload = {
+      defaultAgentModelId: "gemini-3.8-flash-high",
+      imageGenerationModelIds: ["gemini-3.1-flash-image"],
+      deprecatedModelIds: { "gemini-2.5-pro": { newModelId: "gemini-3.8-flash-high" } },
+      webSearchModelIds: ["gemini-4-hydrogen-sonar"],
+      models: {
+        "gemini-2.5-pro": { displayName: "Gemini 2.5 Pro", modelProvider: "MODEL_PROVIDER_GOOGLE" },
+        "gemini-2.5-flash-thinking": { displayName: "Gemini 3.5 Flash Lite", modelProvider: "MODEL_PROVIDER_GOOGLE" },
+        "gemini-3-flash": { displayName: "Gemini 3 Flash", modelProvider: "MODEL_PROVIDER_GOOGLE" },
+        "gemini-3.1-flash-lite": { displayName: "Gemini 3.1 Flash Lite", modelProvider: "MODEL_PROVIDER_GOOGLE" },
+        "gemini-3.8-flash-tiered": { displayName: "gemini-3.8-flash-tiered", modelProvider: "MODEL_PROVIDER_GOOGLE" },
+        "gemini-4-hydrogen-sonar": { displayName: "gemini-4-hydrogen-sonar", modelProvider: "MODEL_PROVIDER_GOOGLE" },
+        "gemini-3.8-flash-high": { displayName: "Gemini 3.8 Flash (High)", modelProvider: "MODEL_PROVIDER_GOOGLE", supportsThinking: true, recommended: true },
+        "gemini-3.8-flash-medium": { displayName: "Gemini 3.8 Flash (Medium)", modelProvider: "MODEL_PROVIDER_GOOGLE", supportsThinking: true },
+        "gemini-3.8-flash-low": { displayName: "Gemini 3.8 Flash (Low)", modelProvider: "MODEL_PROVIDER_GOOGLE", supportsThinking: true },
+        "claude-opus-5-5-high": { displayName: "Claude Opus 5.5 (High)", modelProvider: "MODEL_PROVIDER_ANTHROPIC", supportsThinking: true },
+        "claude-opus-5-5-medium": { displayName: "Claude Opus 5.5 (Medium)", modelProvider: "MODEL_PROVIDER_ANTHROPIC", supportsThinking: true },
+        "claude-opus-5-5-low": { displayName: "Claude Opus 5.5 (Low)", modelProvider: "MODEL_PROVIDER_ANTHROPIC", supportsThinking: true },
+        "claude-sonnet-5-5-high": { displayName: "Claude Sonnet 5.5 (High)", modelProvider: "MODEL_PROVIDER_ANTHROPIC", supportsThinking: true },
+        "claude-sonnet-5-5-medium": { displayName: "Claude Sonnet 5.5 (Medium)", modelProvider: "MODEL_PROVIDER_ANTHROPIC", supportsThinking: true },
+        "claude-sonnet-5-5-low": { displayName: "Claude Sonnet 5.5 (Low)", modelProvider: "MODEL_PROVIDER_ANTHROPIC", supportsThinking: true },
+        "gpt-oss-120b-medium": { displayName: "GPT-OSS 120B (Medium)", modelProvider: "MODEL_PROVIDER_OPENAI" },
+        "gemini-3.1-flash-image": { displayName: "Gemini 3.1 Flash Image", modelProvider: "MODEL_PROVIDER_GOOGLE", supportsImages: true },
+      },
+    };
+    const filteredEntries = filterHttpAvailableModels(rawHttpPayload).map(([id]) => id);
+    assert.ok(!filteredEntries.includes("gemini-2.5-pro"));
+    assert.ok(!filteredEntries.includes("gemini-2.5-flash-thinking"));
+    assert.ok(!filteredEntries.includes("gemini-3-flash"));
+    assert.ok(!filteredEntries.includes("gemini-3.1-flash-lite"));
+    assert.ok(!filteredEntries.includes("gemini-3.8-flash-tiered"));
+    assert.ok(!filteredEntries.includes("gemini-4-hydrogen-sonar"));
+
+    const accountsRootHttp = join(tempDir, "gemini-accounts-30-http");
+    mkdirSync(accountsRootHttp, { recursive: true });
+    const db30Http = new CriativoDatabase({ dbPath: join(tempDir, "criativo-30-http.db") });
+    db30Http.initializeDatabase();
+    try {
+      const agHttpOnly = new AntigravityLiveService({
+        db: db30Http,
+        accountsRootDir: accountsRootHttp,
+        workspaceCwd: tempDir,
+        fetchImpl: async (input) => {
+          const url = String(input);
+          if (url.endsWith(":loadCodeAssist")) return new Response(JSON.stringify({ cloudaicompanionProject: "proj-30" }), { status: 200 });
+          if (url.endsWith(":retrieveUserQuotaSummary")) {
+            return new Response(
+              JSON.stringify({
+                groups: [
+                  {
+                    displayName: "Gemini Models",
+                    buckets: [{ duration: "18000s", remainingFraction: 0.79 }],
+                  },
+                ],
+              }),
+              { status: 200 },
+            );
+          }
+          if (url.endsWith(":fetchAvailableModels")) {
+            return new Response(JSON.stringify(rawHttpPayload), { status: 200 });
+          }
+          return new Response("{}", { status: 404 });
+        },
+      });
+      agHttpOnly.addManualTokenAccount({
+        email: "mod30-http@exemplo.invalid",
+        accessToken: "ya29.mod30-http",
+      });
+      const snapHttp = await agHttpOnly.getLiveSnapshot(true);
+      const httpLabels = snapHttp.modelos.map((m) => m.rotulo);
+      assert.deepEqual(
+        httpLabels.filter((l) => l === "Claude Opus 5.5"),
+        ["Claude Opus 5.5"],
+      );
+      assert.deepEqual(
+        httpLabels.filter((l) => l === "Gemini 3.8 Flash"),
+        ["Gemini 3.8 Flash"],
+      );
+      assert.ok(!httpLabels.some((l) => /-tiered|-sonar|Gemini 2\.5|Gemini 3 Flash|3\.5 Flash Lite|3\.1 Flash Lite/i.test(l)));
+
+      // MOD30-02: Se addManualTokenAccount recebeu acpModels exportados pelo Desktop, VPS mostra exatamente os modelos ACP reais
+      const accountsRootAcp = join(tempDir, "gemini-accounts-30-acp");
+      mkdirSync(accountsRootAcp, { recursive: true });
+      const agWithAcp = new AntigravityLiveService({
+        db: db30Http,
+        accountsRootDir: accountsRootAcp,
+        workspaceCwd: tempDir,
+        fetchImpl: async (input) => {
+          const url = String(input);
+          if (url.endsWith(":loadCodeAssist")) return new Response(JSON.stringify({ cloudaicompanionProject: "proj-30" }), { status: 200 });
+          if (url.endsWith(":retrieveUserQuotaSummary")) return new Response(JSON.stringify({ groups: [] }), { status: 200 });
+          if (url.endsWith(":fetchAvailableModels")) return new Response(JSON.stringify(rawHttpPayload), { status: 200 });
+          return new Response("{}", { status: 404 });
+        },
+      });
+      agWithAcp.addManualTokenAccount({
+        email: "mod30-acp@exemplo.invalid",
+        accessToken: "ya29.mod30-acp",
+        acpDefaultModelId: "gemini-4-neon-high",
+        acpModels: [
+          { modelId: "gemini-4-neon-high", name: "Gemini 4 Neon (High)", isDefault: true },
+          { modelId: "gemini-4-argon-medium", name: "Gemini 4 Argon (Medium)" },
+          { modelId: "gemini-4-hydrogen-medium", name: "Gemini 4 Hydrogen (Medium)" },
+          { modelId: "gemini-pro-orchestrator-g1-pro", name: "Orchestrator (Argon)" },
+        ],
+      });
+      const snapAcp = await agWithAcp.getLiveSnapshot(true);
+      const acpIds = snapAcp.modelos.map((m) => m.id);
+      assert.ok(acpIds.includes("gemini-4-neon"));
+      assert.ok(acpIds.includes("gemini-4-argon"));
+      assert.ok(acpIds.includes("gemini-4-hydrogen"));
+      assert.ok(acpIds.includes("gemini-pro-orchestrator-g1-pro"));
+      assert.ok(acpIds.includes("gemini-3.1-flash-image"));
+    } finally {
+      db30Http.close();
+    }
+  });
 });

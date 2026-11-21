@@ -23,6 +23,7 @@ import { CliOAuthAccountsService, resolveCliBinaryForProvider } from "./cli-oaut
 import { OpenCodeLiveService } from "./opencode-live-service.ts";
 import { buildUsageWindowsFromGroups } from "./provider-quota-utils.ts";
 import {
+  ensureProviderRuntimeInstalled,
   resolveManagedProviderRuntime,
   type ManagedRuntimeFolder,
 } from "./provider-runtime-resolver.ts";
@@ -784,9 +785,22 @@ export class ProviderConnectionService {
     return map;
   }
 
+  public invalidateCliProbeCache(): void {
+    this.cliCache = null;
+  }
+
   public async getProvidersStatus(forceProbe = false): Promise<ProvedorStatusInfo[]> {
     if (forceProbe) {
       this.cliCache = null;
+      if (
+        process.env.CRIATIVO_SKIP_LOCAL_PROBE !== "1" &&
+        !this.antigravityLive.getCliExecutable()
+      ) {
+        const installed = await ensureProviderRuntimeInstalled("antigravity").catch(() => null);
+        if (installed?.executable) {
+          this.cliCache = null;
+        }
+      }
     }
 
     const [

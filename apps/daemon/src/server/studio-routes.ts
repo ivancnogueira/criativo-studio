@@ -53,6 +53,7 @@ import type { SkillsManager } from "../marketplace/skills-manager.ts";
 import type { McpGateway, McpOAuthRequiredNotice } from "../mcp/mcp-gateway.ts";
 import { redactMcpPayload, redactMcpSecrets } from "../mcp/mcp-redaction.ts";
 import type { ProviderConnectionService } from "../providers/provider-connection-service.ts";
+import { ensureProviderRuntimeInstalled } from "../providers/provider-runtime-resolver.ts";
 import type { FifoQueueManager } from "../queue/fifo-queue.ts";
 import type { VaultService } from "../vault/vault-service.ts";
 import { LicenseValidationError, type LicenseClientService } from "../license/license-service.ts";
@@ -3066,6 +3067,8 @@ export async function tryHandleStudioRoute(
             access_token: exported.accessToken,
             refresh_token: exported.refreshToken,
             expiry: exported.expiry,
+            ...(exported.acpModels ? { acp_models: exported.acpModels } : {}),
+            ...(exported.acpDefaultModelId ? { acp_default_model_id: exported.acpDefaultModelId } : {}),
           }),
         }
       );
@@ -3666,13 +3669,28 @@ export async function tryHandleStudioRoute(
       sendJson(res, 400, { erro: "Campos obrigatórios: 'email' e 'access_token'." });
       return true;
     }
+    const rawAcpModels = Array.isArray(body.acp_models)
+      ? body.acp_models.filter(
+          (item): item is { modelId: string; name: string; description?: string | null; isDefault?: boolean } =>
+            Boolean(item && typeof item === "object" && typeof (item as { modelId?: unknown }).modelId === "string" && typeof (item as { name?: unknown }).name === "string")
+        )
+      : undefined;
     const conta = providerConnection.getAntigravityService().addManualTokenAccount({
       email: body.email,
       label: typeof body.label === "string" ? body.label : undefined,
       accessToken: body.access_token,
       refreshToken: typeof body.refresh_token === "string" ? body.refresh_token : undefined,
       expiry: typeof body.expiry === "string" ? body.expiry : undefined,
+      acpModels: rawAcpModels,
+      acpDefaultModelId: typeof body.acp_default_model_id === "string" ? body.acp_default_model_id : null,
     });
+    if (
+      process.env.CRIATIVO_SKIP_LOCAL_PROBE !== "1" &&
+      !providerConnection.getAntigravityService().getCliExecutable()
+    ) {
+      await ensureProviderRuntimeInstalled("antigravity").catch(() => null);
+      providerConnection.invalidateCliProbeCache();
+    }
     const provedores = await providerConnection.getProvidersStatus(true);
     const uso = await providerConnection.getUsageSnapshot(false);
     const geminiProv = provedores.find((p) => p.provedor === "gemini");

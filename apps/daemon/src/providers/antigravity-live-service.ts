@@ -23,10 +23,12 @@ import {
   formatResetCountdownPtBr,
   refreshCachedQuotaGroupCountdowns,
 } from "./provider-quota-utils.ts";
+import { ensureProviderRuntimeInstalled } from "./provider-runtime-resolver.ts";
 
 const CODE_ASSIST_URL = "https://cloudcode-pa.googleapis.com/v1internal";
 const DAILY_CODE_ASSIST_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal";
-const DESKTOP_VERSION = "2.31.0";
+const DESKTOP_VERSION = "2.24.0";
+const DESKTOP_BUILD = "963137146";
 const QUOTA_TIMEOUT_MS = 10_000;
 const GENERATE_TIMEOUT_MS = 60_000;
 const CACHE_TTL_MS = 45_000;
@@ -74,6 +76,8 @@ export interface CodeAssistQuotaBucket {
   remainingPercent?: number;
   usedFraction?: number;
   usedPercent?: number;
+  remainingAmount?: string | number;
+  disabled?: boolean;
   isExhausted?: boolean;
 }
 
@@ -120,6 +124,31 @@ export interface FetchAvailableModelEntry {
   weeklyQuotaInfo?: FetchAvailableModelQuotaSlot;
 }
 
+export interface FetchAvailableModelsResponse {
+  models?: Record<string, FetchAvailableModelEntry>;
+  defaultAgentModelId?: string;
+  agentModelSorts?: Array<{
+    displayName?: string;
+    groups?: Array<{
+      displayName?: string;
+      modelIds?: string[];
+    }>;
+  }>;
+  commandModelIds?: string[];
+  tabModelIds?: string[];
+  imageGenerationModelIds?: string[];
+  mqueryModelIds?: string[];
+  webSearchModelIds?: string[];
+  commitMessageModelIds?: string[];
+  deprecatedModelIds?: Record<string, unknown>;
+  audioTranscriptionModelIds?: string[];
+  tieredModelIds?: {
+    flashLite?: string;
+    flash?: string;
+    pro?: string;
+  };
+}
+
 export interface AntigravityLiveSnapshot {
   contas: ContaProvedorInfo[];
   pool: PoolContasConfig | null;
@@ -160,7 +189,7 @@ export interface CodeAssistGenerateOutput {
 function getAntigravityUserAgent(): string {
   const osName = process.platform === "win32" ? "windows" : process.platform;
   const archName = process.arch === "x64" ? "amd64" : process.arch;
-  return `antigravity/${DESKTOP_VERSION} ${osName}/${archName}`;
+  return `antigravity/hub/${DESKTOP_VERSION} (aidev_client; os_type=${osName}; arch=${archName}; cl=${DESKTOP_BUILD})`;
 }
 
 function inferImageMimeFromPath(filePath: string): string {
@@ -280,6 +309,15 @@ export function extractRemainingPercentage(bucket: CodeAssistQuotaBucket): numbe
     return Math.max(0, Math.min(100, Math.round(100 - bucket.usedPercent)));
   }
   if (bucket.isExhausted === true) {
+    return 0;
+  }
+  const resetStr = bucket.resetTime ?? bucket.resetsAt;
+  if (
+    resetStr !== undefined &&
+    Number.isFinite(Date.parse(resetStr)) &&
+    bucket.remainingAmount === undefined &&
+    bucket.disabled !== true
+  ) {
     return 0;
   }
   return null;
@@ -545,9 +583,94 @@ function safeReadJson<T>(filePath: string): T | null {
   }
 }
 
-function isInternalHiddenModelId(modelId: string): boolean {
+const LEGACY_HTTP_MODEL_RE =
+  /^(?:gemini-2\.5-|gemini-3-flash$|gemini-3\.1-flash-lite$|gemini-3\.5-flash-lite$)/i;
+
+export function isInternalHiddenModelId(modelId: string): boolean {
   const lower = modelId.toLowerCase();
-  return lower.startsWith("tab_") || lower.startsWith("chat_") || lower.includes("_tiered");
+  return (
+    lower.startsWith("tab_") ||
+    lower.startsWith("chat_") ||
+    lower.includes("_tiered") ||
+    lower.includes("-tiered") ||
+    lower.includes("-sonar")
+  );
+}
+
+/**
+ * Filtra os modelos retornados por `fetchAvailableModels`, removendo IDs internos, de autocompletar,
+ * depreciados e gerações antigas quando modelos atuais estão presentes ou há ordenação `agentModelSorts`.
+ */
+export function filterHttpAvailableModels(
+  modelsRes: FetchAvailableModelsResponse | null | undefined
+): Array<[string, FetchAvailableModelEntry]> {
+  const rawModels = modelsRes?.models;
+  if (!rawModels) return [];
+
+  const blocked = new Set<string>([
+    ...Object.keys(modelsRes.deprecatedModelIds ?? {}),
+    ...(modelsRes.commandModelIds ?? []),
+    ...(modelsRes.tabModelIds ?? []),
+    ...(modelsRes.mqueryModelIds ?? []),
+    ...(modelsRes.webSearchModelIds ?? []),
+    ...(modelsRes.commitMessageModelIds ?? []),
+    ...(modelsRes.audioTranscriptionModelIds ?? []),
+    ...(modelsRes.tieredModelIds?.flashLite ? [modelsRes.tieredModelIds.flashLite] : []),
+    ...(modelsRes.tieredModelIds?.flash ? [modelsRes.tieredModelIds.flash] : []),
+    ...(modelsRes.tieredModelIds?.pro ? [modelsRes.tieredModelIds.pro] : []),
+  ]);
+
+  const sortedIds: string[] = [];
+  for (const sort of modelsRes.agentModelSorts ?? []) {
+    for (const grp of sort.groups ?? []) {
+      for (const mId of grp.modelIds ?? []) {
+        if (mId && !sortedIds.includes(mId)) {
+          sortedIds.push(mId);
+        }
+      }
+    }
+  }
+  const sortedSet = new Set(sortedIds);
+
+  let entries: Array<[string, FetchAvailableModelEntry]>;
+  if (sortedIds.length > 0) {
+    const orderedIds = Array.from(
+      new Set([...sortedIds, ...(modelsRes.imageGenerationModelIds ?? [])])
+    );
+    entries = [];
+    for (const id of orderedIds) {
+      const meta = rawModels[id];
+      if (!meta || blocked.has(id) || isInternalHiddenModelId(id)) continue;
+      entries.push([id, meta]);
+    }
+  } else {
+    entries = Object.entries(rawModels).filter(
+      ([id]) => !blocked.has(id) && !isInternalHiddenModelId(id)
+    );
+  }
+
+  const imageIds = new Set(modelsRes.imageGenerationModelIds ?? []);
+  const hasCurrentGen = entries.some(([id]) => {
+    const lower = id.toLowerCase();
+    return (
+      (lower.startsWith("gemini-3.8-") || lower.startsWith("gemini-4-")) &&
+      !lower.includes("-image") &&
+      !lower.includes("imagen")
+    );
+  });
+
+  if (hasCurrentGen) {
+    entries = entries.filter(([id]) => {
+      const lower = id.toLowerCase();
+      const isImage =
+        imageIds.has(id) || lower.includes("-image") || lower.includes("imagen");
+      if (isImage) return true;
+      if (sortedSet.has(id)) return true;
+      return !LEGACY_HTTP_MODEL_RE.test(id);
+    });
+  }
+
+  return entries;
 }
 
 function normalizeModelFamilyAndEffort(
@@ -558,7 +681,9 @@ function normalizeModelFamilyAndEffort(
 ): ModeloProvedorInfo | null {
   if (isInternalHiddenModelId(rawId)) return null;
 
-  const baseName = meta.displayName?.trim() || rawId;
+  const rawBaseName = meta.displayName?.trim() || rawId;
+  const isFixedVariant = rawId === "gpt-oss-120b-medium" || rawId.includes("orchestrator");
+  const baseName = isFixedVariant ? rawBaseName : cleanAcpDisplayName(rawBaseName) || rawBaseName;
   const remainingPct = meta.quotaInfo ? extractRemainingPercentage(meta.quotaInfo) : null;
 
   const isImage =
@@ -601,6 +726,7 @@ export class AntigravityLiveService {
   private readonly db?: CriativoDatabase;
   private readonly accountsRootDir: string;
   private readonly workspaceCwd: string;
+  private readonly appDataDir?: string;
   private readonly fetchImpl: typeof fetch;
   private readonly acpService: AntigravityAcpService;
   private readonly allowAutoAcpDiscovery: boolean;
@@ -625,6 +751,7 @@ export class AntigravityLiveService {
     mcpGateway?: McpGateway;
   }) {
     this.db = options?.db;
+    this.appDataDir = options?.appDataDir;
     this.workspaceCwd = resolve(options?.workspaceCwd ?? process.cwd());
     this.accountsRootDir = resolve(
       options?.accountsRootDir ?? join(this.workspaceCwd, "dados", "contas", "gemini")
@@ -643,6 +770,50 @@ export class AntigravityLiveService {
         (agentId) => this.resolveCombinedMcpServers(agentId)
       );
     }
+  }
+
+  private persistDiscoveredAcpModels(
+    geminiDir: string,
+    models: AcpDiscoveredModel[],
+    defaultModelId: string | null
+  ): void {
+    try {
+      if (!models || models.length === 0) return;
+      const acpDir = join(resolve(geminiDir), "antigravity-acp");
+      mkdirSync(acpDir, { recursive: true });
+      writeFileSync(
+        join(acpDir, "acp-discovered-models.json"),
+        JSON.stringify(
+          {
+            models,
+            defaultModelId,
+            updatedAt: new Date().toISOString(),
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+    } catch {
+      // ignora erro ao gravar cache em disco
+    }
+  }
+
+  private loadDiscoveredAcpModels(
+    geminiDir: string
+  ): { models: AcpDiscoveredModel[]; defaultModelId: string | null } | null {
+    const filePath = join(resolve(geminiDir), "antigravity-acp", "acp-discovered-models.json");
+    const parsed = safeReadJson<{
+      models?: AcpDiscoveredModel[];
+      defaultModelId?: string | null;
+    }>(filePath);
+    if (!parsed || !Array.isArray(parsed.models) || parsed.models.length === 0) {
+      return null;
+    }
+    return {
+      models: parsed.models,
+      defaultModelId: parsed.defaultModelId ?? null,
+    };
   }
 
   private resolveCombinedMcpServers(agentId?: string | null): unknown[] {
@@ -910,7 +1081,25 @@ export class AntigravityLiveService {
       return emptySnap;
     }
 
-    const cliExe = this.acpService.getCliExecutable();
+    let cliExe = this.acpService.getCliExecutable();
+    if (
+      !cliExe &&
+      this.allowAutoAcpDiscovery &&
+      process.env.CRIATIVO_SKIP_LOCAL_PROBE !== "1"
+    ) {
+      if (forceRefresh) {
+        const installed = await ensureProviderRuntimeInstalled("antigravity", {
+          appDataDir: this.appDataDir,
+        }).catch(() => null);
+        if (installed?.executable) {
+          cliExe = installed.executable;
+        }
+      } else {
+        void ensureProviderRuntimeInstalled("antigravity", {
+          appDataDir: this.appDataDir,
+        }).catch(() => {});
+      }
+    }
     const cachedPrev = this.loadLastSnapshotCache();
 
     const contas: ContaProvedorInfo[] = [];
@@ -998,11 +1187,7 @@ export class AntigravityLiveService {
               tokenToUse,
               queryPayload
             ).catch(() => null),
-            this.callCodeAssist<{
-              models?: Record<string, FetchAvailableModelEntry>;
-              defaultAgentModelId?: string;
-              imageGenerationModelIds?: string[];
-            }>(
+            this.callCodeAssist<FetchAvailableModelsResponse>(
               DAILY_CODE_ASSIST_URL,
               "fetchAvailableModels",
               tokenToUse,
@@ -1011,25 +1196,24 @@ export class AntigravityLiveService {
           ]);
 
           let quotaRes = dailyQuotaRes;
-          if (!quotaRes?.groups?.length) {
+          if (extractQuotaGroupsFromResponse(quotaRes).length === 0) {
             const prodQuotaRes = await this.callCodeAssist<CodeAssistRetrieveQuotaResponse>(
               CODE_ASSIST_URL,
               "retrieveUserQuotaSummary",
               tokenToUse,
               queryPayload
             ).catch(() => null);
-            if (prodQuotaRes?.groups?.length || prodQuotaRes?.buckets?.length) {
+            if (
+              extractQuotaGroupsFromResponse(prodQuotaRes).length > 0 ||
+              extractQuotaBucketsFromResponse(prodQuotaRes).length > 0
+            ) {
               quotaRes = prodQuotaRes;
             }
           }
 
           let modelsRes = dailyModelsRes;
           if (!modelsRes?.models || Object.keys(modelsRes.models).length === 0) {
-            const prodModelsRes = await this.callCodeAssist<{
-              models?: Record<string, FetchAvailableModelEntry>;
-              defaultAgentModelId?: string;
-              imageGenerationModelIds?: string[];
-            }>(
+            const prodModelsRes = await this.callCodeAssist<FetchAvailableModelsResponse>(
               CODE_ASSIST_URL,
               "fetchAvailableModels",
               tokenToUse,
@@ -1111,7 +1295,7 @@ export class AntigravityLiveService {
             for (const imgId of modelsRes.imageGenerationModelIds ?? []) {
               imageGenerationModelIds.add(imgId);
             }
-            for (const [mId, mMeta] of Object.entries(modelsRes.models)) {
+            for (const [mId, mMeta] of filterHttpAvailableModels(modelsRes)) {
               const normalized = normalizeModelFamilyAndEffort(
                 mId,
                 mMeta,
@@ -1239,7 +1423,29 @@ export class AntigravityLiveService {
             models: acpResult.models,
             defaultModelId: acpResult.defaultModelId,
           };
+          this.persistDiscoveredAcpModels(
+            acpTargetEntry.geminiDir,
+            acpResult.models,
+            acpResult.defaultModelId
+          );
           anyFreshLiveSuccess = true;
+        }
+      }
+    }
+
+    if (!this.acpModelsCache || this.acpModelsCache.models.length === 0) {
+      for (const candidate of [acpTargetEntry, ...entries].filter(
+        (e): e is DiscoveredTokenEntry => Boolean(e)
+      )) {
+        const diskAcp = this.loadDiscoveredAcpModels(candidate.geminiDir);
+        if (diskAcp && diskAcp.models.length > 0) {
+          this.acpModelsCache = {
+            accountId: candidate.id,
+            expiresAt: now + ACP_MODELS_CACHE_TTL_MS,
+            models: diskAcp.models,
+            defaultModelId: diskAcp.defaultModelId,
+          };
+          break;
         }
       }
     }
@@ -1422,6 +1628,8 @@ export class AntigravityLiveService {
     refreshToken: string;
     expiry: string;
     label?: string;
+    acpModels?: AcpDiscoveredModel[];
+    acpDefaultModelId?: string | null;
   }> {
     const tempId = `ag-remote-${randomUUID().slice(0, 8)}`;
     const tempDir = mkdtempSync(join(tmpdir(), "criativo-gemini-remote-"));
@@ -1445,12 +1653,22 @@ export class AntigravityLiveService {
         );
       }
 
+      const acpCatalog = await this.acpService
+        .listAvailableModels(tempId, tempDir)
+        .catch(() => null);
+
       return {
         email,
         accessToken,
         refreshToken,
         expiry,
         ...(label?.trim() ? { label: label.trim() } : {}),
+        ...(acpCatalog && acpCatalog.models.length > 0
+          ? {
+              acpModels: acpCatalog.models,
+              acpDefaultModelId: acpCatalog.defaultModelId,
+            }
+          : {}),
       };
     } finally {
       this.acpService.disposeAccount(tempId);
@@ -1468,6 +1686,8 @@ export class AntigravityLiveService {
     accessToken: string;
     refreshToken?: string;
     expiry?: string;
+    acpModels?: AcpDiscoveredModel[];
+    acpDefaultModelId?: string | null;
   }): ContaProvedorInfo {
     if (!this.db) throw new Error("Banco indisponível para salvar conta.");
     const id = `ag-${Date.now().toString(36)}`;
@@ -1511,6 +1731,17 @@ export class AntigravityLiveService {
     ];
     this.saveStudioRecords(nextAccounts);
     this.snapshotCache = null;
+
+    if (Array.isArray(input.acpModels) && input.acpModels.length > 0) {
+      const defaultId = input.acpDefaultModelId ?? null;
+      this.persistDiscoveredAcpModels(geminiDir, input.acpModels, defaultId);
+      this.acpModelsCache = {
+        accountId: id,
+        expiresAt: Date.now() + ACP_MODELS_CACHE_TTL_MS,
+        models: input.acpModels,
+        defaultModelId: defaultId,
+      };
+    }
 
     return {
       id,
