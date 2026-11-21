@@ -101,7 +101,7 @@ describe("Fase 20 — Paridade de UX, In-Focus Settings, Rotinas, DynamicIsland,
     const { WorkspaceRail } = await vite.ssrLoadModule("/src/components/WorkspaceRail.tsx");
     const html = renderToStaticMarkup(
       React.createElement(WorkspaceRail, {
-        activeSection: "rotinas",
+        activeSection: "fluxos",
         onSelectSection: () => {},
         pendingCount: 0,
         whatsappStatus: "desconectado",
@@ -119,7 +119,8 @@ describe("Fase 20 — Paridade de UX, In-Focus Settings, Rotinas, DynamicIsland,
         onOpenDisplaySettings: () => {},
       })
     );
-    assert.match(html, /Rotinas/);
+    assert.match(html, /Automações/);
+    assert.doesNotMatch(html, /aria-label="Rotinas"/);
   });
 
   it("4. (UX20-03) ModelProviderPopover lista apenas provedor conectado no rail e possui container ampliado", async () => {

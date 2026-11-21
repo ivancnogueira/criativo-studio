@@ -272,9 +272,10 @@ describe("Fase 15 — UI Carbon Dark SSR & Auditoria Estática Clean-Room", () =
         onRequestRevision: async () => {},
       }),
     );
-    assert.match(inspectorHtml, /Governança &amp; Navegador|Governança & Navegador/);
-    assert.match(inspectorHtml, /Configurar backup models/);
-    assert.match(inspectorHtml, /Gerenciar perfis de navegador/);
+    assert.match(inspectorHtml, /Motor IA/);
+    assert.match(inspectorHtml, /Modelo Reserva/);
+    assert.match(inspectorHtml, /Controle/);
+    assert.match(inspectorHtml, /Avançado/);
     assert.doesNotMatch(inspectorHtml, /<select/i);
 
     const sidebarHtml = renderToStaticMarkup(

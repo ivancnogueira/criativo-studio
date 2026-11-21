@@ -1317,7 +1317,7 @@ export const AgentRoutinesSettings: React.FC<AgentRoutinesSettingsProps> = ({
               {groupedDestinationSections.channelOpts.length > 0 && (
                 <div>
                   <p className="px-2.5 pt-1 text-[11px] font-semibold text-[#979797]">
-                    Canais em Equipe
+                    Equipes
                   </p>
                   {groupedDestinationSections.channelOpts.map((opt) => {
                     const selected =

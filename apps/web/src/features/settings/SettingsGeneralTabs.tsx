@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
-import type { StudioUserSettings } from "@criativo/contracts";
-import { Check, LayoutTemplate, Palette, Sliders } from "lucide-react";
+import type { DeletedNativeAgentInfo, StudioUserSettings } from "@criativo/contracts";
+import { Check, LayoutTemplate, Palette, RotateCcw, Sliders } from "lucide-react";
 import { CarbonSelect, type CarbonSelectOption } from "../../components/ui/CarbonControls";
 import { getCriativoDesktopBridge } from "../../types/desktop-bridge";
+import { computeBubbleColors, OPERATOR_BUBBLE_SWATCHES } from "../chat/chat-bubble-theme";
 
 const ACCENT_COLORS = [
   { hex: "#007CF7", label: "Azul Carbon" },
@@ -74,6 +75,9 @@ export interface SettingsGeneralTabProps {
   onChange: (next: StudioUserSettings["geral"]) => void;
   onReopenSetupAssistant?: () => Promise<void> | void;
   onResetLayoutWidths?: () => void;
+  deletedNativeAgents?: DeletedNativeAgentInfo[];
+  onRestoreDeletedAgent?: (agenteId: string) => Promise<void> | void;
+  onRestoreAllDeletedAgents?: () => Promise<void> | void;
 }
 
 export const SettingsGeneralTab: React.FC<SettingsGeneralTabProps> = ({
@@ -81,6 +85,9 @@ export const SettingsGeneralTab: React.FC<SettingsGeneralTabProps> = ({
   onChange,
   onReopenSetupAssistant,
   onResetLayoutWidths,
+  deletedNativeAgents = [],
+  onRestoreDeletedAgent,
+  onRestoreAllDeletedAgents,
 }) => {
   return (
     <div className="space-y-4">
@@ -114,7 +121,7 @@ export const SettingsGeneralTab: React.FC<SettingsGeneralTabProps> = ({
         <div className="text-[13px] font-semibold text-white">Ordenação da barra lateral</div>
         <div className="grid grid-cols-3 gap-2">
           {[
-            { id: "secoes" as const, label: "Por seções" },
+            { id: "secoes" as const, label: "Por diretórios" },
             { id: "recente" as const, label: "Atividade recente" },
             { id: "alfabetica" as const, label: "Alfabética" },
           ].map((opt) => (
@@ -176,6 +183,56 @@ export const SettingsGeneralTab: React.FC<SettingsGeneralTabProps> = ({
           </div>
         </div>
       )}
+
+      {deletedNativeAgents.length > 0 && (onRestoreDeletedAgent || onRestoreAllDeletedAgents) && (
+        <div
+          data-testid="deleted-native-agents-card"
+          className="rounded-xl border border-white/[0.06] bg-[#212121] p-4 space-y-3"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-[13px] font-semibold text-white">
+                Agentes padrão excluídos ({deletedNativeAgents.length})
+              </div>
+              <p className="text-[11.5px] text-[#979797]">
+                Estes especialistas nativos foram removidos por você e não voltarão automaticamente. Restaure quando desejar.
+              </p>
+            </div>
+            {onRestoreAllDeletedAgents && (
+              <button
+                type="button"
+                onClick={() => void onRestoreAllDeletedAgents()}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[#007CF7]/40 bg-[#007CF7]/15 px-3 py-1.5 text-[12px] font-semibold text-[#74B9FF] hover:bg-[#007CF7]/25 shrink-0"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span>Restaurar todos</span>
+              </button>
+            )}
+          </div>
+          <div className="space-y-1.5 max-h-44 overflow-y-auto">
+            {deletedNativeAgents.map((ag) => (
+              <div
+                key={ag.agente_id}
+                className="flex items-center justify-between gap-2 rounded-lg border border-white/[0.06] bg-[#141414] px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <p className="text-[12.5px] font-semibold text-white truncate">{ag.nome}</p>
+                  <p className="text-[11px] text-[#8E8E93] truncate">{ag.papel}</p>
+                </div>
+                {onRestoreDeletedAgent && (
+                  <button
+                    type="button"
+                    onClick={() => void onRestoreDeletedAgent(ag.agente_id)}
+                    className="rounded-lg bg-[#2A2A2A] px-2.5 py-1 text-[11.5px] font-semibold text-white hover:bg-[#353538] shrink-0"
+                  >
+                    Restaurar
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -206,6 +263,8 @@ export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
       });
     });
   }, []);
+
+  const opPalette = computeBubbleColors(aparencia.cor_balao_usuario, "#2A2A2A");
 
   return (
     <div className="space-y-4">
@@ -265,6 +324,90 @@ export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
               </button>
             );
           })}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-white/[0.06] bg-[#212121] p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <div className="text-[13px] font-semibold text-white">Cor do balão do operador</div>
+            <div className="text-[11.5px] text-[#979797]">
+              Define a cor das suas mensagens no chat. A cor dos balões de cada especialista é configurada no painel do agente.
+            </div>
+          </div>
+          <span className="font-mono text-[11.5px] text-[#A8A8A8]">
+            {(aparencia.cor_balao_usuario ?? "#2A2A2A").toUpperCase()}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2.5">
+          {OPERATOR_BUBBLE_SWATCHES.map((c) => {
+            const current = (aparencia.cor_balao_usuario ?? "#2A2A2A").toUpperCase();
+            const active = current === c.hex.toUpperCase();
+            return (
+              <button
+                key={c.hex}
+                type="button"
+                title={c.label}
+                aria-label={`Balão operador ${c.label}`}
+                onClick={() => onChange({ ...aparencia, cor_balao_usuario: c.hex })}
+                style={{ backgroundColor: c.hex }}
+                className={`h-8 w-8 rounded-full border border-white/15 flex items-center justify-center transition-transform ${
+                  active ? "ring-2 ring-white scale-105" : "opacity-85 hover:opacity-100"
+                }`}
+              >
+                {active && <Check className="h-4 w-4 text-white drop-shadow" />}
+              </button>
+            );
+          })}
+          <label
+            title="Escolher cor personalizada"
+            className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-[#141414] px-2.5 py-1 text-[11.5px] text-[#DCDCDC] cursor-pointer hover:border-white/30"
+          >
+            <span>Personalizada</span>
+            <input
+              type="color"
+              aria-label="Cor personalizada do balão do operador"
+              value={aparencia.cor_balao_usuario ?? "#2A2A2A"}
+              onChange={(e) =>
+                onChange({ ...aparencia, cor_balao_usuario: e.target.value.toUpperCase() })
+              }
+              className="h-5 w-5 rounded border-0 bg-transparent cursor-pointer"
+            />
+          </label>
+        </div>
+
+        <ToggleRow
+          label="Mensagens do estúdio em blocos sólidos"
+          description="Exibe cada bloco de resposta do especialista em balões arredondados coloridos com alto contraste."
+          checked={aparencia.baloes_solidos !== false}
+          onChange={(next) => onChange({ ...aparencia, baloes_solidos: next })}
+        />
+
+        <div className="rounded-xl border border-white/[0.06] bg-[#141414] p-3 space-y-2">
+          <div className="flex justify-end">
+            <div
+              style={{
+                backgroundColor: opPalette.backgroundColor,
+                color: opPalette.textColor,
+                borderColor: opPalette.borderColor,
+              }}
+              className="rounded-[18px] border px-3.5 py-1.5 text-[12px] font-medium"
+            >
+              Prévia da sua mensagem no chat
+            </div>
+          </div>
+          <div className="flex justify-start">
+            <div
+              className={
+                aparencia.baloes_solidos !== false
+                  ? "rounded-[18px] bg-[#166534] border border-white/10 px-3.5 py-1.5 text-[12px] text-white"
+                  : "px-1 text-[12px] text-[#DCDCDC]"
+              }
+            >
+              Resposta do especialista em bloco com cor configurável
+            </div>
+          </div>
         </div>
       </div>
 
@@ -360,13 +503,13 @@ export const SettingsBehaviorTab: React.FC<SettingsBehaviorTabProps> = ({
     <div className="space-y-4">
       <ToggleRow
         label="Restaurar última aba ao abrir"
-        description="Reabre automaticamente o último agente ou canal selecionado no navegador."
+        description="Reabre automaticamente o último agente ou equipe selecionado no navegador."
         checked={comportamento.restaurar_ultima_aba}
         onChange={(next) => onChange({ ...comportamento, restaurar_ultima_aba: next })}
       />
 
       <ToggleRow
-        label="Exibir Dynamic Island"
+        label="Exibir Barra de Pulso"
         description="Mantém a cápsula superior com abas rápidas e status ao vivo dos agentes."
         checked={comportamento.exibir_dynamic_island}
         onChange={(next) => onChange({ ...comportamento, exibir_dynamic_island: next })}
@@ -375,7 +518,7 @@ export const SettingsBehaviorTab: React.FC<SettingsBehaviorTabProps> = ({
       <div className="rounded-xl border border-white/[0.06] bg-[#212121] p-4 space-y-2.5">
         <div className="flex items-center gap-2 text-[13px] font-semibold text-white">
           <LayoutTemplate className="h-4 w-4 text-[#42A0FF]" />
-          <span>Detalhe da Dynamic Island</span>
+          <span>Detalhe da Barra de Pulso</span>
         </div>
         <div className="grid grid-cols-2 gap-2">
           {[

@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, extname, relative, resolve, sep } from "node:path";
 import {
   resolveMetaGraphApiVersion,
+  type AgentAllowedFolder,
   type AgentNotificationLevel,
   type AnexoChat,
   type AprendizadoConfig,
@@ -15,6 +16,7 @@ import {
   type ChatVisualMeta,
   type ConversationMessage,
   type ConversationUiBlock,
+  type DeletedNativeAgentInfo,
   type MemoriaInclusao,
   type MemoryReviewAlteracao,
   type MensagemChat,
@@ -35,7 +37,15 @@ import type { WhatsAppOrchestrator, WhatsAppSessionManager } from "@criativo/wha
 import type { CriativoDatabase } from "../database/client.ts";
 import type { ProviderRegistry } from "../engine/providers/provider-registry.ts";
 import { HandoffBus } from "../engine/runner/handoff-bus.ts";
-import { ROSTER_15_AGENTES, SETUP_ASSISTANT_AGENT_DEF } from "../engine/runner/roster-defaults.ts";
+import {
+  getDeletedNativeAgentsMeta,
+  getSetupCompatibleRoster,
+  markNativeAgentDeleted,
+  ROSTER_15_AGENTES,
+  SETUP_ASSISTANT_AGENT_DEF,
+  unmarkNativeAgentDeleted,
+} from "../engine/runner/roster-defaults.ts";
+import { mutateSidebarLayout } from "./sidebar-service.ts";
 import { SkillLoader } from "../engine/runner/skill-loader.ts";
 import type { CatalogService } from "../marketplace/catalog-service.ts";
 import type { GithubImporter } from "../marketplace/github-importer.ts";
@@ -100,6 +110,7 @@ import {
   readAgentContextCutoffAt,
   readAgentGovernance,
   ROUTINE_AGENT_TOOLS_SCHEMA,
+  sanitizeAllowedFoldersList,
   selectBalancedVisualAssets,
   syncWorkspaceFilesToDatabase,
   validateMetaIntegration,
@@ -902,6 +913,10 @@ function enrichAgentRow(
       ? interpolateBrandPlaceholders(rawLastMessage, activeBrand)
       : rawLastMessage;
 
+  const rawUnreadCount = Number(unreadRow?.total ?? 0);
+  const naoLidasFinal =
+    parsedConfig.marked_unread === true ? Math.max(1, rawUnreadCount) : rawUnreadCount;
+
   return {
     ...row,
     papel: resolvedPapel,
@@ -915,7 +930,7 @@ function enrichAgentRow(
     pinned,
     hidden,
     section_id: sectionId,
-    nao_lidas: Number(unreadRow?.total ?? 0),
+    nao_lidas: naoLidasFinal,
     ultima_mensagem: resolvedLastMessage,
     ultima_mensagem_em: lastRow?.criado_em ?? row.atualizado_em,
   };
@@ -3453,6 +3468,86 @@ export async function tryHandleStudioRoute(
     return true;
   }
 
+  if (method === "GET" && path === "/api/agentes/excluidos") {
+    const metaList = getDeletedNativeAgentsMeta(db);
+    const allRoster = getSetupCompatibleRoster();
+    const excluidos: DeletedNativeAgentInfo[] = [];
+    for (const meta of metaList) {
+      const def = allRoster.find((a) => a.agente_id === meta.agente_id);
+      if (!def) continue;
+      excluidos.push({
+        agente_id: def.agente_id,
+        nome: def.nome,
+        papel: def.papel,
+        pasta: def.pasta,
+        avatar_shape: def.avatar_shape,
+        avatar_color: def.avatar_color,
+        pacote: def.pacote,
+        deleted_at: meta.deleted_at || undefined,
+      });
+    }
+    sendJson(res, 200, { excluidos });
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/agentes/restaurar-excluidos") {
+    const metaList = getDeletedNativeAgentsMeta(db);
+    const allRoster = getSetupCompatibleRoster();
+    const now = new Date().toISOString();
+    const restoredIds: string[] = [];
+
+    db.runInTransaction(() => {
+      for (const meta of metaList) {
+        const def = allRoster.find((a) => a.agente_id === meta.agente_id);
+        unmarkNativeAgentDeleted(db, meta.agente_id);
+        if (!def) continue;
+        const restoredConfig = {
+          frente: def.frente,
+          pacote: def.pacote,
+          pasta: def.pasta,
+          skill_slug: def.skill_slug,
+          avatar_shape: def.avatar_shape,
+          avatar_color: def.avatar_color,
+          avatar_style: "classic" as const,
+          avatar_variant: def.avatar_shape,
+          avatar_image_url: null,
+          effort: def.effort,
+          ferramentas: def.ferramentas,
+          prompt_base: def.prompt_base,
+          customizado: false,
+        };
+        db.connection
+          .prepare(
+            `INSERT INTO projecao_agentes (
+               agente_id, nome, papel, modelo_padrao, status,
+               skills_paths_json, memoria_resumo, ordem_exibicao, config_json, atualizado_em
+             ) VALUES (?, ?, ?, ?, 'ocioso', ?, NULL, ?, ?, ?)
+             ON CONFLICT(agente_id) DO UPDATE SET
+               nome = excluded.nome,
+               papel = excluded.papel,
+               modelo_padrao = excluded.modelo_padrao,
+               config_json = excluded.config_json,
+               atualizado_em = excluded.atualizado_em;`,
+          )
+          .run(
+            def.agente_id,
+            def.nome,
+            def.papel,
+            def.modelo_padrao,
+            JSON.stringify(def.skills_paths),
+            def.ordem_exibicao,
+            JSON.stringify(restoredConfig),
+            now,
+          );
+        restoredIds.push(def.agente_id);
+      }
+    });
+
+    wsHub.broadcast("sidebar:updated", { revision: Date.now() });
+    sendJson(res, 200, { ok: true, restored_ids: restoredIds });
+    return true;
+  }
+
   if (method === "POST" && path === "/api/agentes/avatar/upload") {
     const body = await readJsonBody(req);
     const rawBase64 =
@@ -3773,7 +3868,7 @@ export async function tryHandleStudioRoute(
   }
 
   const agentUpdateMatch = path.match(/^\/api\/agentes\/([^/]+)$/);
-  if (method === "PUT" && agentUpdateMatch) {
+  if (agentUpdateMatch && (method === "PUT" || method === "PATCH")) {
     const agenteId = decodeURIComponent(agentUpdateMatch[1]);
     const body = await readJsonBody(req);
     const existing = db.connection
@@ -3790,6 +3885,45 @@ export async function tryHandleStudioRoute(
       body.config && typeof body.config === "object"
         ? (body.config as Record<string, unknown>)
         : {};
+
+    // Validação de pastas autorizadas fora do workspace (FS23-01)
+    let nextAllowedFolders: AgentAllowedFolder[] | undefined;
+    const rawFoldersInput =
+      body.allowed_folders !== undefined
+        ? body.allowed_folders
+        : incomingConfig.allowed_folders !== undefined
+          ? incomingConfig.allowed_folders
+          : undefined;
+    if (rawFoldersInput !== undefined) {
+      const sanitized = sanitizeAllowedFoldersList(rawFoldersInput);
+      if (!sanitized.ok) {
+        sendJson(res, 400, { erro: sanitized.error });
+        return true;
+      }
+      nextAllowedFolders = sanitized.folders;
+    }
+
+    // Validação de cor personalizada do balão de chat do agente
+    const hasExplicitChatColor =
+      body.chat_color !== undefined || incomingConfig.chat_color !== undefined;
+    const rawChatColor =
+      body.chat_color !== undefined ? body.chat_color : incomingConfig.chat_color;
+    const nextChatColor =
+      typeof rawChatColor === "string" && /^#[0-9A-Fa-f]{6}$/.test(rawChatColor.trim())
+        ? rawChatColor.trim().toUpperCase()
+        : null;
+
+    const rawAutoMem =
+      body.auto_memory_enabled !== undefined
+        ? body.auto_memory_enabled
+        : incomingConfig.auto_memory_enabled;
+    const hasExplicitAutoMem = typeof rawAutoMem === "boolean";
+
+    const rawMarkedUnread =
+      body.marked_unread !== undefined
+        ? body.marked_unread
+        : incomingConfig.marked_unread;
+    const hasExplicitMarkedUnread = typeof rawMarkedUnread === "boolean";
 
     const rawBackupInput =
       body.backup_models && typeof body.backup_models === "object"
@@ -3911,6 +4045,10 @@ export async function tryHandleStudioRoute(
       ...(nextAvatarStyle ? { avatar_style: nextAvatarStyle } : {}),
       ...(nextAvatarVariant ? { avatar_variant: nextAvatarVariant } : {}),
       ...(hasExplicitAvatarImage ? { avatar_image_url: nextAvatarImageUrl } : {}),
+      ...(hasExplicitChatColor ? { chat_color: nextChatColor } : {}),
+      ...(nextAllowedFolders !== undefined ? { allowed_folders: nextAllowedFolders } : {}),
+      ...(hasExplicitAutoMem ? { auto_memory_enabled: Boolean(rawAutoMem) } : {}),
+      ...(hasExplicitMarkedUnread ? { marked_unread: Boolean(rawMarkedUnread) } : {}),
       ...(typeof body.prompt_base === "string" ? { prompt_base: body.prompt_base } : {}),
       ...(body.modo_ocupado === "steer" || body.modo_ocupado === "queue"
         ? { modo_ocupado: body.modo_ocupado }
@@ -3976,18 +4114,49 @@ export async function tryHandleStudioRoute(
       .prepare(`SELECT * FROM projecao_agentes WHERE agente_id = ?;`)
       .get(agenteId) as Parameters<typeof enrichAgentRow>[1];
 
+    wsHub.broadcast("sidebar:updated", { revision: Date.now() });
     sendJson(res, 200, { agente: enrichAgentRow(db, updated, workspaceRoot, deps.licenseService) });
+    return true;
+  }
+
+  if (method === "DELETE" && agentUpdateMatch) {
+    const agenteId = decodeURIComponent(agentUpdateMatch[1]);
+    const existing = db.connection
+      .prepare(`SELECT agente_id FROM projecao_agentes WHERE agente_id = ? LIMIT 1;`)
+      .get(agenteId) as { agente_id: string } | undefined;
+    if (!existing) {
+      sendJson(res, 404, { erro: `Agente '${agenteId}' não encontrado.` });
+      return true;
+    }
+
+    const isNative = getSetupCompatibleRoster().some((a) => a.agente_id === agenteId);
+    try {
+      mutateSidebarLayout(db, { op: "set_pin", agentId: agenteId, pinned: false });
+    } catch {
+      // ignora caso agente não esteja nos pins
+    }
+
+    db.runInTransaction(() => {
+      db.connection.prepare(`DELETE FROM projecao_agentes WHERE agente_id = ?;`).run(agenteId);
+      if (isNative) {
+        markNativeAgentDeleted(db, agenteId);
+      }
+    });
+
+    wsHub.broadcast("sidebar:updated", { revision: Date.now() });
+    sendJson(res, 200, { ok: true, agente_id: agenteId, nativo: isNative });
     return true;
   }
 
   const agentRestoreMatch = path.match(/^\/api\/agentes\/([^/]+)\/restaurar$/);
   if (method === "POST" && agentRestoreMatch) {
     const agenteId = decodeURIComponent(agentRestoreMatch[1]);
-    const def = ROSTER_15_AGENTES.find((a) => a.agente_id === agenteId);
+    const def = getSetupCompatibleRoster().find((a) => a.agente_id === agenteId);
     if (!def) {
       sendJson(res, 404, { erro: `Agente padrão '${agenteId}' não encontrado.` });
       return true;
     }
+    const now = new Date().toISOString();
     const restoredConfig = {
       frente: def.frente,
       pacote: def.pacote,
@@ -3998,26 +4167,45 @@ export async function tryHandleStudioRoute(
       avatar_style: "classic" as const,
       avatar_variant: def.avatar_shape,
       avatar_image_url: null,
+      chat_color: null,
+      allowed_folders: [],
+      auto_memory_enabled: true,
+      marked_unread: false,
       effort: def.effort,
       ferramentas: def.ferramentas,
       prompt_base: def.prompt_base,
       customizado: false,
     };
-    db.connection
-      .prepare(
-        `UPDATE projecao_agentes SET nome = ?, papel = ?, modelo_padrao = ?, config_json = ?, atualizado_em = ? WHERE agente_id = ?;`
-      )
-      .run(
-        def.nome,
-        def.papel,
-        def.modelo_padrao,
-        JSON.stringify(restoredConfig),
-        new Date().toISOString(),
-        agenteId
-      );
+    db.runInTransaction(() => {
+      unmarkNativeAgentDeleted(db, agenteId);
+      db.connection
+        .prepare(
+          `INSERT INTO projecao_agentes (
+             agente_id, nome, papel, modelo_padrao, status,
+             skills_paths_json, memoria_resumo, ordem_exibicao, config_json, atualizado_em
+           ) VALUES (?, ?, ?, ?, 'ocioso', ?, NULL, ?, ?, ?)
+           ON CONFLICT(agente_id) DO UPDATE SET
+             nome = excluded.nome,
+             papel = excluded.papel,
+             modelo_padrao = excluded.modelo_padrao,
+             config_json = excluded.config_json,
+             atualizado_em = excluded.atualizado_em;`,
+        )
+        .run(
+          def.agente_id,
+          def.nome,
+          def.papel,
+          def.modelo_padrao,
+          JSON.stringify(def.skills_paths),
+          def.ordem_exibicao,
+          JSON.stringify(restoredConfig),
+          now,
+        );
+    });
     const updated = db.connection
       .prepare(`SELECT * FROM projecao_agentes WHERE agente_id = ?;`)
       .get(agenteId) as Parameters<typeof enrichAgentRow>[1];
+    wsHub.broadcast("sidebar:updated", { revision: Date.now() });
     sendJson(res, 200, { agente: enrichAgentRow(db, updated, workspaceRoot, deps.licenseService) });
     return true;
   }
@@ -4164,14 +4352,56 @@ export async function tryHandleStudioRoute(
     return true;
   }
 
-  // Mensagens do Agente (GET / POST / lidas)
+  // Mensagens do Agente (GET / POST / DELETE / lidas / nao-lida)
   const agentReadMatch = path.match(/^\/api\/agentes\/([^/]+)\/mensagens\/lidas$/);
   if (method === "POST" && agentReadMatch) {
     const agenteId = decodeURIComponent(agentReadMatch[1]);
     db.connection
       .prepare(`UPDATE projecao_conversas_chat SET lida = 1 WHERE canal_id = ?;`)
       .run(`agente:${agenteId}`);
+    const row = db.connection
+      .prepare(`SELECT config_json FROM projecao_agentes WHERE agente_id = ? LIMIT 1;`)
+      .get(agenteId) as { config_json?: string } | undefined;
+    if (row?.config_json) {
+      const cfg = safeJsonParse<Record<string, unknown>>(row.config_json, {});
+      if (cfg.marked_unread === true) {
+        cfg.marked_unread = false;
+        db.connection
+          .prepare(`UPDATE projecao_agentes SET config_json = ? WHERE agente_id = ?;`)
+          .run(JSON.stringify(cfg), agenteId);
+      }
+    }
     sendJson(res, 200, { ok: true });
+    return true;
+  }
+
+  const agentUnreadMatch = path.match(/^\/api\/agentes\/([^/]+)\/mensagens\/nao-lida$/);
+  if (method === "POST" && agentUnreadMatch) {
+    const agenteId = decodeURIComponent(agentUnreadMatch[1]);
+    const row = db.connection
+      .prepare(`SELECT config_json FROM projecao_agentes WHERE agente_id = ? LIMIT 1;`)
+      .get(agenteId) as { config_json?: string } | undefined;
+    if (!row) {
+      sendJson(res, 404, { erro: `Agente '${agenteId}' não encontrado.` });
+      return true;
+    }
+    const lastMsg = db.connection
+      .prepare(
+        `SELECT mensagem_id FROM projecao_conversas_chat WHERE canal_id = ? ORDER BY criado_em DESC, COALESCE(ordinal, 0) DESC LIMIT 1;`,
+      )
+      .get(`agente:${agenteId}`) as { mensagem_id?: string } | undefined;
+    if (lastMsg?.mensagem_id) {
+      db.connection
+        .prepare(`UPDATE projecao_conversas_chat SET lida = 0 WHERE mensagem_id = ?;`)
+        .run(lastMsg.mensagem_id);
+    }
+    const cfg = safeJsonParse<Record<string, unknown>>(row.config_json ?? "{}", {});
+    cfg.marked_unread = true;
+    db.connection
+      .prepare(`UPDATE projecao_agentes SET config_json = ? WHERE agente_id = ?;`)
+      .run(JSON.stringify(cfg), agenteId);
+    wsHub.broadcast("sidebar:updated", { revision: Date.now() });
+    sendJson(res, 200, { ok: true, nao_lidas: 1 });
     return true;
   }
 
@@ -4190,6 +4420,29 @@ export async function tryHandleStudioRoute(
   }
 
   const agentMsgMatch = path.match(/^\/api\/agentes\/([^/]+)\/mensagens$/);
+  if (agentMsgMatch && method === "DELETE") {
+    const agenteId = decodeURIComponent(agentMsgMatch[1]);
+    const canalId = `agente:${agenteId}`;
+    const delRes = db.connection
+      .prepare(`DELETE FROM projecao_conversas_chat WHERE canal_id = ?;`)
+      .run(canalId);
+    const row = db.connection
+      .prepare(`SELECT config_json FROM projecao_agentes WHERE agente_id = ? LIMIT 1;`)
+      .get(agenteId) as { config_json?: string } | undefined;
+    if (row?.config_json) {
+      const cfg = safeJsonParse<Record<string, unknown>>(row.config_json, {});
+      if (cfg.marked_unread === true) {
+        cfg.marked_unread = false;
+        db.connection
+          .prepare(`UPDATE projecao_agentes SET config_json = ? WHERE agente_id = ?;`)
+          .run(JSON.stringify(cfg), agenteId);
+      }
+    }
+    wsHub.broadcast("sidebar:updated", { revision: Date.now() });
+    sendJson(res, 200, { ok: true, removidas: Number(delRes.changes) });
+    return true;
+  }
+
   if (agentMsgMatch && (method === "GET" || method === "POST")) {
     const agenteId = decodeURIComponent(agentMsgMatch[1]);
     const canalIdQuery = url.searchParams.get("canal_id");
@@ -4632,6 +4885,16 @@ export async function tryHandleStudioRoute(
   }
 
   const canalMsgMatch = path.match(/^\/api\/canais\/([^/]+)\/mensagens$/);
+  if (canalMsgMatch && method === "DELETE") {
+    const canalId = decodeURIComponent(canalMsgMatch[1]);
+    const delRes = db.connection
+      .prepare(`DELETE FROM projecao_conversas_chat WHERE canal_id = ?;`)
+      .run(canalId);
+    wsHub.broadcast("sidebar:updated", { revision: Date.now() });
+    sendJson(res, 200, { ok: true, removidas: Number(delRes.changes) });
+    return true;
+  }
+
   if (canalMsgMatch && (method === "GET" || method === "POST")) {
     const canalId = decodeURIComponent(canalMsgMatch[1]);
     if (method === "GET") {

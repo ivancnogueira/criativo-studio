@@ -82,6 +82,12 @@ export const ServerSwitcherPopover: React.FC<ServerSwitcherPopoverProps> = ({
       <div
         role="dialog"
         aria-label="Seletor de servidores"
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            setAddMenuOpen(false);
+            onClose();
+          }
+        }}
         className="fixed bottom-3 left-[60px] z-50 w-[290px] bg-[#181818] border border-white/[0.1] rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.75)] text-[#F0F0F0] select-none"
       >
         <div className="px-3.5 pt-3 pb-1.5 flex items-center justify-between gap-2">
@@ -93,7 +99,7 @@ export const ServerSwitcherPopover: React.FC<ServerSwitcherPopoverProps> = ({
           )}
         </div>
 
-        <div className="px-1.5 pb-1.5 space-y-0.5 max-h-[240px] overflow-y-auto">
+        <div className="px-1.5 pb-1 space-y-0.5 max-h-[200px] overflow-y-auto overflow-x-hidden">
           {servers.map((srv) => {
             const isActive = srv.server_id === activeServerId;
             return (
@@ -156,75 +162,80 @@ export const ServerSwitcherPopover: React.FC<ServerSwitcherPopoverProps> = ({
               </button>
             );
           })}
+        </div>
 
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setAddMenuOpen((prev) => !prev)}
-              aria-expanded={addMenuOpen}
-              className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left text-[13px] font-medium transition-colors ${
-                addMenuOpen
-                  ? "bg-white/[0.08] text-white"
-                  : "text-[#EAEAEA] hover:bg-white/[0.05] hover:text-white"
-              }`}
+        {/* Bloco 'Adicionar servidor' fora do container overflow-y-auto para o submenu flutuar livremente sem recorte */}
+        <div className="px-1.5 pb-1.5 relative">
+          <button
+            type="button"
+            data-testid="add-server-trigger"
+            onClick={(e) => {
+              e.stopPropagation();
+              setAddMenuOpen((prev) => !prev);
+            }}
+            aria-expanded={addMenuOpen}
+            className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left text-[13px] font-medium transition-colors ${
+              addMenuOpen
+                ? "bg-white/[0.08] text-white"
+                : "text-[#EAEAEA] hover:bg-white/[0.05] hover:text-white"
+            }`}
+          >
+            <span className="w-4 h-4 rounded-full border border-dashed border-white/45 flex items-center justify-center shrink-0">
+              <Plus className="w-2.5 h-2.5 text-white/85" />
+            </span>
+            <span className="flex-1 truncate">Adicionar servidor</span>
+            <ChevronRight className="w-3.5 h-3.5 text-[#7A7A7A] shrink-0" />
+          </button>
+
+          {addMenuOpen && (
+            <div
+              role="menu"
+              aria-label="Opções de adição de servidor"
+              className="sm:absolute sm:left-[calc(100%+8px)] sm:bottom-[-6px] mt-1.5 sm:mt-0 w-full sm:w-[272px] bg-[#1A1A1A] border border-white/[0.1] rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.85)] p-1.5 space-y-0.5 z-50"
             >
-              <span className="w-4 h-4 rounded-full border border-dashed border-white/45 flex items-center justify-center shrink-0">
-                <Plus className="w-2.5 h-2.5 text-white/85" />
-              </span>
-              <span className="flex-1 truncate">Adicionar servidor</span>
-              <ChevronRight className="w-3.5 h-3.5 text-[#7A7A7A] shrink-0" />
-            </button>
-
-            {addMenuOpen && (
-              <div
-                role="menu"
-                aria-label="Opções de adição de servidor"
-                className="sm:absolute sm:left-[calc(100%+8px)] sm:top-[-6px] mt-1.5 sm:mt-0 w-full sm:w-[272px] bg-[#1A1A1A] border border-white/[0.1] rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.85)] p-1.5 space-y-0.5 z-50"
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setAddMenuOpen(false);
+                  onClose();
+                  onOpenNewLocalModal();
+                }}
+                className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left text-[13px] text-[#EDEDED] hover:bg-white/[0.07] hover:text-white transition-colors"
               >
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setAddMenuOpen(false);
-                    onClose();
-                    onOpenNewLocalModal();
-                  }}
-                  className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left text-[13px] text-[#EDEDED] hover:bg-white/[0.07] hover:text-white transition-colors"
-                >
-                  <Monitor className="w-4 h-4 text-[#A5A5A5] shrink-0" />
-                  <span className="truncate">Novo servidor neste computador</span>
-                </button>
+                <Monitor className="w-4 h-4 text-[#A5A5A5] shrink-0" />
+                <span className="truncate">Novo servidor neste computador</span>
+              </button>
 
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setAddMenuOpen(false);
-                    onClose();
-                    onOpenNewRemoteModal();
-                  }}
-                  className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left text-[13px] text-[#EDEDED] hover:bg-white/[0.07] hover:text-white transition-colors"
-                >
-                  <Server className="w-4 h-4 text-[#A5A5A5] shrink-0" />
-                  <span className="truncate">Novo servidor em outro computador</span>
-                </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setAddMenuOpen(false);
+                  onClose();
+                  onOpenNewRemoteModal();
+                }}
+                className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left text-[13px] text-[#EDEDED] hover:bg-white/[0.07] hover:text-white transition-colors"
+              >
+                <Server className="w-4 h-4 text-[#A5A5A5] shrink-0" />
+                <span className="truncate">Novo servidor em outro computador</span>
+              </button>
 
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setAddMenuOpen(false);
-                    onClose();
-                    onOpenJoinModal();
-                  }}
-                  className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left text-[13px] text-[#EDEDED] hover:bg-white/[0.07] hover:text-white transition-colors"
-                >
-                  <Link2 className="w-4 h-4 text-[#A5A5A5] shrink-0" />
-                  <span className="truncate">Entrar em um servidor</span>
-                </button>
-              </div>
-            )}
-          </div>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setAddMenuOpen(false);
+                  onClose();
+                  onOpenJoinModal();
+                }}
+                className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left text-[13px] text-[#EDEDED] hover:bg-white/[0.07] hover:text-white transition-colors"
+              >
+                <Link2 className="w-4 h-4 text-[#A5A5A5] shrink-0" />
+                <span className="truncate">Entrar em um servidor</span>
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="border-t border-white/[0.08] p-1.5">

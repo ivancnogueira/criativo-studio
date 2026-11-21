@@ -34,6 +34,8 @@ export const DEFAULT_STUDIO_USER_SETTINGS: StudioUserSettings = {
   aparencia: {
     tema: "carbon_dark",
     cor_acento: "#007CF7",
+    cor_balao_usuario: "#2A2A2A",
+    baloes_solidos: true,
     escala: 100,
     fonte_interface: "Inter",
     fonte_codigo: "JetBrains Mono",
@@ -104,6 +106,17 @@ function mergeUserSettings(
       ? aparenciaRaw.cor_acento.trim().toUpperCase()
       : base.aparencia.cor_acento;
 
+  const corBalaoUsuario =
+    typeof aparenciaRaw.cor_balao_usuario === "string" &&
+    HEX_COLOR_RE.test(aparenciaRaw.cor_balao_usuario.trim())
+      ? aparenciaRaw.cor_balao_usuario.trim().toUpperCase()
+      : (base.aparencia.cor_balao_usuario ?? "#2A2A2A");
+
+  const baloesSolidos =
+    typeof aparenciaRaw.baloes_solidos === "boolean"
+      ? aparenciaRaw.baloes_solidos
+      : (base.aparencia.baloes_solidos ?? true);
+
   const velocidadeRaw = Number(vozRaw.velocidade ?? base.voz.velocidade);
   const velocidade = Number.isFinite(velocidadeRaw)
     ? Math.min(2.0, Math.max(0.5, Math.round(velocidadeRaw * 100) / 100))
@@ -138,6 +151,8 @@ function mergeUserSettings(
           ? aparenciaRaw.tema
           : base.aparencia.tema,
       cor_acento: corAcento,
+      cor_balao_usuario: corBalaoUsuario,
+      baloes_solidos: baloesSolidos,
       escala,
       fonte_interface:
         typeof aparenciaRaw.fonte_interface === "string" && aparenciaRaw.fonte_interface.trim()

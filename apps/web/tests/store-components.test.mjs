@@ -169,9 +169,9 @@ describe("Fase 10 — UI Carbon Dark da Loja Unificada, WhatsApp Multi-Número &
         onOpenHelp: () => {},
       })
     );
-    assert.match(railHtml, /Loja de Apps, Agentes e Habilidades/);
-    assert.match(railHtml, /Agentes e Chats/);
-    assert.match(railHtml, /Conexões e Cofre/);
+    assert.match(railHtml, /Catálogo/);
+    assert.match(railHtml, /Estúdio/);
+    assert.match(railHtml, /Integrações/);
 
     const controlsHtml = renderToStaticMarkup(
       React.createElement(

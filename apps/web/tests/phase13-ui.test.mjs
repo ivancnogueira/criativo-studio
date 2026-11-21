@@ -242,7 +242,7 @@ describe("Fase 13 — Cockpit Tasks, Threads Paralelas, Esperas, Fila, Branch, P
       }),
     );
     assert.match(tabsHtml, /Conversa principal/);
-    assert.match(tabsHtml, /Novo tópico/);
+    assert.match(tabsHtml, /Nova Subconversa/);
 
     const dividerActive = renderToStaticMarkup(
       React.createElement(BranchDivider, {

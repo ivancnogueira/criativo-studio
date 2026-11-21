@@ -199,8 +199,8 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
             <button
               type="button"
               onClick={onNewTopic ?? onNewTab}
-              title="Novo tópico"
-              aria-label="Novo tópico"
+              title="Nova Subconversa"
+              aria-label="Nova Subconversa"
               className="h-7 w-7 rounded-lg flex items-center justify-center text-[#979797] hover:bg-[#212121] hover:text-white transition-colors shrink-0"
             >
               <Plus className="h-3.5 w-3.5" />
@@ -209,8 +209,9 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         </div>
       </div>
 
-      {/* Centro: Dynamic Island #000000 do Criativo Studio */}
+      {/* Centro: Barra de Pulso #000000 do Criativo Studio */}
       <div
+        aria-label="Barra de Pulso"
         className="hidden md:flex items-center gap-2.5 h-[30px] px-3.5 rounded-full bg-[#000000] border border-white/10 shadow-[0_6px_20px_rgba(0,0,0,0.65)] shrink-0"
         title={wsConnected ? "Daemon Live" : "Reconectando"}
       >

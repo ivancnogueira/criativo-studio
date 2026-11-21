@@ -335,17 +335,95 @@ export const SETUP_ASSISTANT_AGENT_DEF: AgenteDefinicao = {
     "Você é o Assistente de Configuração inicial do Criativo AI Studio Online. Conduza o usuário em blocos curtos para concluir apenas o que estiver pendente: identidade/perfil da marca (`salvar_identidade_marca`), envio de logo/fotos/referências ou ficha PDF no chat, e teste de credenciais Instagram/Meta (`validar_integracao_meta`). Assim que as pendências estiverem resolvidas ou quando o usuário solicitar encerrar/dispensar, chame `concluir_setup_inicial` para ocultar este assistente da Sidebar.",
 };
 
+export const DELETED_NATIVE_AGENTS_CONFIG_KEY = "deleted_native_agents";
+
+export interface DeletedNativeAgentTombstone {
+  agente_id: string;
+  deleted_at: string;
+}
+
+export function getDeletedNativeAgentsMeta(db: CriativoDatabase): DeletedNativeAgentTombstone[] {
+  try {
+    const row = db.connection
+      .prepare(`SELECT valor_json FROM projecao_studio_config WHERE chave = ? LIMIT 1;`)
+      .get(DELETED_NATIVE_AGENTS_CONFIG_KEY) as { valor_json?: string } | undefined;
+    if (!row?.valor_json) return [];
+    const parsed = JSON.parse(row.valor_json) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const result: DeletedNativeAgentTombstone[] = [];
+    for (const item of parsed) {
+      if (typeof item === "string" && item.trim()) {
+        result.push({ agente_id: item.trim(), deleted_at: "" });
+      } else if (
+        item &&
+        typeof item === "object" &&
+        typeof (item as { agente_id?: unknown }).agente_id === "string"
+      ) {
+        const rec = item as { agente_id: string; deleted_at?: unknown };
+        result.push({
+          agente_id: rec.agente_id.trim(),
+          deleted_at: typeof rec.deleted_at === "string" ? rec.deleted_at : "",
+        });
+      }
+    }
+    return result;
+  } catch {
+    return [];
+  }
+}
+
+export function getDeletedNativeAgentIds(db: CriativoDatabase): Set<string> {
+  return new Set(getDeletedNativeAgentsMeta(db).map((t) => t.agente_id));
+}
+
+export function setDeletedNativeAgentsMeta(
+  db: CriativoDatabase,
+  list: DeletedNativeAgentTombstone[],
+): void {
+  const uniqueMap = new Map<string, DeletedNativeAgentTombstone>();
+  for (const item of list) {
+    if (!item.agente_id.trim()) continue;
+    uniqueMap.set(item.agente_id.trim(), {
+      agente_id: item.agente_id.trim(),
+      deleted_at: item.deleted_at || new Date().toISOString(),
+    });
+  }
+  const now = new Date().toISOString();
+  db.connection
+    .prepare(
+      `INSERT INTO projecao_studio_config (chave, valor_json, atualizado_em)
+       VALUES (?, ?, ?)
+       ON CONFLICT(chave) DO UPDATE SET
+         valor_json = excluded.valor_json,
+         atualizado_em = excluded.atualizado_em;`,
+    )
+    .run(DELETED_NATIVE_AGENTS_CONFIG_KEY, JSON.stringify(Array.from(uniqueMap.values())), now);
+}
+
+export function markNativeAgentDeleted(db: CriativoDatabase, agenteId: string): void {
+  const current = getDeletedNativeAgentsMeta(db).filter((t) => t.agente_id !== agenteId);
+  current.push({ agente_id: agenteId, deleted_at: new Date().toISOString() });
+  setDeletedNativeAgentsMeta(db, current);
+}
+
+export function unmarkNativeAgentDeleted(db: CriativoDatabase, agenteId: string): void {
+  const next = getDeletedNativeAgentsMeta(db).filter((t) => t.agente_id !== agenteId);
+  setDeletedNativeAgentsMeta(db, next);
+}
+
 export function getSetupCompatibleRoster(): readonly AgenteDefinicao[] {
   return [SETUP_ASSISTANT_AGENT_DEF, ...ROSTER_15_AGENTES];
 }
 
 /**
- * Garante que os agentes padrão (e o assistente temporário de setup) existam na tabela `projecao_agentes`.
+ * Garante que os agentes padrão (e o assistente temporário de setup) existam na tabela `projecao_agentes`,
+ * respeitando exclusões explícitas gravadas em `deleted_native_agents`.
  */
 export function seedDefaultAgents(db: CriativoDatabase): number {
   const agora = new Date().toISOString();
   let inseridos = 0;
   const allDefs = getSetupCompatibleRoster();
+  const deletedNativeIds = getDeletedNativeAgentIds(db);
 
   db.runInTransaction(() => {
     const insertStmt = db.connection.prepare(`
@@ -357,6 +435,9 @@ export function seedDefaultAgents(db: CriativoDatabase): number {
     `);
 
     for (const ag of allDefs) {
+      if (deletedNativeIds.has(ag.agente_id)) {
+        continue;
+      }
       const config = {
         frente: ag.frente,
         pacote: ag.pacote,

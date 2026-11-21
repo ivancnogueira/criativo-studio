@@ -33,6 +33,8 @@ export interface CriativoDesktopBridge {
   onDockStateChanged: (listener: (state: CriativoDockStatePayload) => void) => () => void;
   openMainWindow: (opts?: CriativoMainNavigatePayload) => Promise<void>;
   onMainNavigate: (listener: (payload: CriativoMainNavigatePayload) => void) => () => void;
+  pickFolder: () => Promise<{ canceled: boolean; path: string | null }>;
+  openAgentWindow: (agenteId: string) => Promise<boolean>;
 }
 
 const bridge: CriativoDesktopBridge = {
@@ -76,6 +78,9 @@ const bridge: CriativoDesktopBridge = {
       ipcRenderer.removeListener("criativo:main-navigate", wrapped);
     };
   },
+  pickFolder: () => ipcRenderer.invoke("criativo:pick-folder"),
+  openAgentWindow: (agenteId: string) =>
+    ipcRenderer.invoke("criativo:open-agent-window", { agenteId }),
 };
 
 contextBridge.exposeInMainWorld("criativoDesktop", bridge);

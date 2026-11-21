@@ -48,9 +48,15 @@ import {
   Smartphone,
   Sparkles,
   Square,
+  Trash2,
   Wrench,
   X,
 } from "lucide-react";
+import {
+  computeBubbleColors,
+  splitMarkdownIntoBubbleChunks,
+  type BubbleColorPalette,
+} from "./chat-bubble-theme";
 import {
   ChannelMascoteCluster,
   inferTaskContextFromActivity,
@@ -306,6 +312,9 @@ interface AgentConversationViewProps {
   sendShortcut?: "enter" | "mod_enter";
   compactActions?: boolean;
   showAgentSteps?: boolean;
+  userBubbleColor?: string;
+  solidBubbles?: boolean;
+  onClearHistory?: () => Promise<void>;
   liveVoiceEnabled?: boolean;
   liveVoiceActive?: boolean;
   onOpenTakeover?: (tabId: string) => void;
@@ -430,10 +439,24 @@ function toCsv(headers: string[], rows: string[][]): string {
   return [headers.map(esc).join(","), ...rows.map((r) => r.map(esc).join(","))].join("\n");
 }
 
-function renderInlineMarkdown(text: string, depth = 0): React.ReactNode[] {
+function renderInlineMarkdown(
+  text: string,
+  depth = 0,
+  palette?: BubbleColorPalette
+): React.ReactNode[] {
   const parts = text.split(
     /(\*\*[^*]+?\*\*|__[^_]+?__|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^)\s]+\)|~~[^~]+?~~|\*[^*\s][^*]*?\*|(?<![A-Za-z0-9_])_[^_\s][^_]*?_(?![A-Za-z0-9_]))/g
   );
+  const strongClass = palette?.isLightBg
+    ? "font-semibold text-[#0D1117]"
+    : "font-semibold text-white";
+  const codeClass = palette
+    ? `rounded border px-1.5 py-0.5 font-terminal text-[12px] ${palette.codeBgClass}`
+    : "rounded bg-[#2A2A2A] border border-white/10 px-1.5 py-0.5 font-terminal text-[12px] text-[#74B9FF]";
+  const linkClass = palette?.isLightBg
+    ? "text-[#0B4F8A] underline underline-offset-2 font-medium"
+    : "text-[#42A0FF] underline underline-offset-2 hover:text-[#74B9FF]";
+
   return parts.map((part, idx) => {
     if (
       ((part.startsWith("**") && part.endsWith("**")) ||
@@ -441,17 +464,16 @@ function renderInlineMarkdown(text: string, depth = 0): React.ReactNode[] {
       part.length > 4
     ) {
       return (
-        <strong key={idx} className="font-semibold text-white">
-          {depth < 3 ? renderInlineMarkdown(part.slice(2, -2), depth + 1) : part.slice(2, -2)}
+        <strong key={idx} className={strongClass}>
+          {depth < 3
+            ? renderInlineMarkdown(part.slice(2, -2), depth + 1, palette)
+            : part.slice(2, -2)}
         </strong>
       );
     }
     if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
       return (
-        <code
-          key={idx}
-          className="rounded bg-[#2A2A2A] border border-white/10 px-1.5 py-0.5 font-terminal text-[12px] text-[#74B9FF]"
-        >
+        <code key={idx} className={codeClass}>
           {part.slice(1, -1)}
         </code>
       );
@@ -465,7 +487,7 @@ function renderInlineMarkdown(text: string, depth = 0): React.ReactNode[] {
             href={linkMatch[2]}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-[#42A0FF] underline underline-offset-2 hover:text-[#74B9FF]"
+            className={linkClass}
           >
             {linkMatch[1]}
           </a>
@@ -474,8 +496,13 @@ function renderInlineMarkdown(text: string, depth = 0): React.ReactNode[] {
     }
     if (part.startsWith("~~") && part.endsWith("~~") && part.length > 4) {
       return (
-        <del key={idx} className="line-through text-[#888888]">
-          {depth < 3 ? renderInlineMarkdown(part.slice(2, -2), depth + 1) : part.slice(2, -2)}
+        <del
+          key={idx}
+          className={`line-through ${palette?.isLightBg ? "text-[#0D1117]/60" : "text-[#888888]"}`}
+        >
+          {depth < 3
+            ? renderInlineMarkdown(part.slice(2, -2), depth + 1, palette)
+            : part.slice(2, -2)}
         </del>
       );
     }
@@ -485,8 +512,13 @@ function renderInlineMarkdown(text: string, depth = 0): React.ReactNode[] {
       part.length > 2
     ) {
       return (
-        <em key={idx} className="italic text-[#B5B5B5]">
-          {depth < 3 ? renderInlineMarkdown(part.slice(1, -1), depth + 1) : part.slice(1, -1)}
+        <em
+          key={idx}
+          className={`italic ${palette?.isLightBg ? "text-[#0D1117]/85" : "text-[#B5B5B5]"}`}
+        >
+          {depth < 3
+            ? renderInlineMarkdown(part.slice(1, -1), depth + 1, palette)
+            : part.slice(1, -1)}
         </em>
       );
     }
@@ -494,8 +526,14 @@ function renderInlineMarkdown(text: string, depth = 0): React.ReactNode[] {
   });
 }
 
-function renderFormattedMarkdownText(content: string): React.ReactNode {
+function renderFormattedMarkdownText(
+  content: string,
+  palette?: BubbleColorPalette
+): React.ReactNode {
   const lines = content.split(/\r?\n/);
+  const headingColor = palette?.isLightBg ? "text-[#0D1117]" : "text-white";
+  const subHeadingColor = palette?.isLightBg ? "text-[#0D1117]/90" : "text-[#E8E8E8]";
+  const markerColor = palette?.isLightBg ? "text-[#0D1117]/75" : "text-[#8E8E93]";
   return (
     <div className="space-y-2">
       {lines.map((line, idx) => {
@@ -513,37 +551,44 @@ function renderFormattedMarkdownText(content: string): React.ReactNode {
 
         // Separador horizontal --- / *** / ___
         if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
-          return <hr key={idx} className="border-0 border-t border-white/10 my-2.5" />;
+          return (
+            <hr
+              key={idx}
+              className={`border-0 border-t my-2.5 ${
+                palette?.isLightBg ? "border-black/15" : "border-white/10"
+              }`}
+            />
+          );
         }
 
         // Títulos Markdown (#, ##, ###, ####)
         const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
         if (headingMatch) {
           const level = headingMatch[1].length;
-          const inner = renderInlineMarkdown(headingMatch[2]);
+          const inner = renderInlineMarkdown(headingMatch[2], 0, palette);
           if (level === 1) {
             return (
-              <h1 key={idx} className="text-[17px] font-bold text-white pt-1.5 leading-snug">
+              <h1 key={idx} className={`text-[17px] font-bold pt-1.5 leading-snug ${headingColor}`}>
                 {inner}
               </h1>
             );
           }
           if (level === 2) {
             return (
-              <h2 key={idx} className="text-[15.5px] font-bold text-white pt-1.5 leading-snug">
+              <h2 key={idx} className={`text-[15.5px] font-bold pt-1.5 leading-snug ${headingColor}`}>
                 {inner}
               </h2>
             );
           }
           if (level === 3) {
             return (
-              <h3 key={idx} className="text-[14px] font-semibold text-white pt-1 leading-snug">
+              <h3 key={idx} className={`text-[14px] font-semibold pt-1 leading-snug ${headingColor}`}>
                 {inner}
               </h3>
             );
           }
           return (
-            <h4 key={idx} className="text-[13px] font-semibold text-[#E8E8E8] pt-0.5 leading-snug">
+            <h4 key={idx} className={`text-[13px] font-semibold pt-0.5 leading-snug ${subHeadingColor}`}>
               {inner}
             </h4>
           );
@@ -553,9 +598,13 @@ function renderFormattedMarkdownText(content: string): React.ReactNode {
           return (
             <blockquote
               key={idx}
-              className="border-l-2 border-[#42A0FF]/70 pl-3 py-0.5 text-[#DCDCDC] italic bg-white/[0.02] rounded-r-lg"
+              className={`border-l-2 pl-3 py-0.5 italic rounded-r-lg ${
+                palette?.isLightBg
+                  ? "border-[#0D1117]/40 text-[#0D1117]/90 bg-black/[0.06]"
+                  : "border-[#42A0FF]/70 text-[#DCDCDC] bg-white/[0.04]"
+              }`}
             >
-              {renderInlineMarkdown(trimmed.slice(2))}
+              {renderInlineMarkdown(trimmed.slice(2), 0, palette)}
             </blockquote>
           );
         }
@@ -570,11 +619,11 @@ function renderFormattedMarkdownText(content: string): React.ReactNode {
               style={{ paddingLeft: `${indentLevel * 14 + 4}px` }}
               className="flex items-start gap-2"
             >
-              <span className="text-[#8E8E8E] font-medium shrink-0 tabular-nums">
+              <span className={`font-medium shrink-0 tabular-nums ${markerColor}`}>
                 {orderedMatch[2]}
               </span>
               <span className="flex-1 min-w-0 break-words">
-                {renderInlineMarkdown(orderedMatch[3])}
+                {renderInlineMarkdown(orderedMatch[3], 0, palette)}
               </span>
             </div>
           );
@@ -590,11 +639,11 @@ function renderFormattedMarkdownText(content: string): React.ReactNode {
               style={{ paddingLeft: `${indentLevel * 14 + 4}px` }}
               className="flex items-start gap-2"
             >
-              <span className="text-[#787878] mt-0.5 shrink-0">
+              <span className={`mt-0.5 shrink-0 ${markerColor}`}>
                 {indentLevel > 0 ? "◦" : "•"}
               </span>
               <span className="flex-1 min-w-0 break-words">
-                {renderInlineMarkdown(bulletMatch[2])}
+                {renderInlineMarkdown(bulletMatch[2], 0, palette)}
               </span>
             </div>
           );
@@ -602,7 +651,7 @@ function renderFormattedMarkdownText(content: string): React.ReactNode {
 
         return (
           <p key={idx} className="break-words leading-relaxed">
-            {renderInlineMarkdown(line)}
+            {renderInlineMarkdown(line, 0, palette)}
           </p>
         );
       })}
@@ -677,6 +726,9 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
   sendShortcut = "enter",
   compactActions = false,
   showAgentSteps = true,
+  userBubbleColor = "#2A2A2A",
+  solidBubbles = true,
+  onClearHistory,
   liveVoiceEnabled = false,
   liveVoiceActive = false,
   onOpenTakeover,
@@ -737,6 +789,13 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
   const [recordingLevel, setRecordingLevel] = useState(0);
   const [transcribingVoice, setTranscribingVoice] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [confirmClearHistory, setConfirmClearHistory] = useState(false);
+  const [clearingHistory, setClearingHistory] = useState(false);
+
+  const operatorPalette = useMemo(
+    () => computeBubbleColors(userBubbleColor, "#2A2A2A"),
+    [userBubbleColor]
+  );
   const [pendingFailedAudio, setPendingFailedAudio] = useState<{
     file: File;
     message: string;
@@ -1348,6 +1407,48 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
               </button>
             )}
 
+            {onClearHistory && !activeThread && mensagens.length > 0 && (
+              confirmClearHistory ? (
+                <div className="inline-flex items-center gap-1 rounded-lg border border-[#FD2F3B]/40 bg-[#141414] px-2 py-1 text-[11px]">
+                  <span className="text-[#FF7675] font-medium">Apagar histórico?</span>
+                  <button
+                    type="button"
+                    disabled={clearingHistory}
+                    onClick={async () => {
+                      setClearingHistory(true);
+                      try {
+                        await onClearHistory();
+                        setConfirmClearHistory(false);
+                      } finally {
+                        setClearingHistory(false);
+                      }
+                    }}
+                    className="rounded px-1.5 py-0.5 bg-[#FD2F3B] text-white font-semibold hover:bg-[#e12732]"
+                  >
+                    Sim
+                  </button>
+                  <button
+                    type="button"
+                    disabled={clearingHistory}
+                    onClick={() => setConfirmClearHistory(false)}
+                    className="rounded px-1.5 py-0.5 bg-[#2A2A2A] text-[#DCDCDC] hover:bg-[#333336]"
+                  >
+                    Não
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  title="Apagar histórico do chat"
+                  aria-label="Apagar histórico do chat"
+                  onClick={() => setConfirmClearHistory(true)}
+                  className="h-8 w-8 rounded-lg flex items-center justify-center text-[#979797] hover:bg-[#FD2F3B]/15 hover:text-[#FF7675] transition-colors"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              )
+            )}
+
             <button
               type="button"
               onClick={onToggleInspector}
@@ -1512,6 +1613,16 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
 
             const isUser = msg.autor === "usuario";
             const blocks = splitMarkdownBlocks(msg.conteudo_markdown);
+            const senderAgentForMsg =
+              !isUser && mode === "channel" && msg.agente_id
+                ? allAgentes.find((a) => a.agente_id === msg.agente_id)
+                : !isUser
+                  ? agente
+                  : undefined;
+            const customAgentChatColor = (
+              senderAgentForMsg?.config as Record<string, unknown> | undefined
+            )?.chat_color as string | null | undefined;
+            const agentBubblePalette = computeBubbleColors(customAgentChatColor, "#212121");
             const isHighlighted = highlightedMessageId === msg.mensagem_id;
             const isPinned = pins.some((p) => p.mensagem_id === msg.mensagem_id);
             const isWhatsAppMsg =
@@ -1555,10 +1666,19 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                   }`}
                 >
                   <div
+                    style={
+                      isUser
+                        ? {
+                            backgroundColor: operatorPalette.backgroundColor,
+                            color: operatorPalette.textColor,
+                            borderColor: operatorPalette.borderColor,
+                          }
+                        : undefined
+                    }
                     className={`min-w-0 w-full ${
                       isUser
-                        ? "bg-[#2A2A2A] border border-white/10 rounded-[18px] px-4 py-2.5 text-white"
-                        : "space-y-3"
+                        ? "border rounded-[18px] px-4 py-2.5 shadow-sm"
+                        : "space-y-2.5"
                     }`}
                   >
                   {isUser && isWhatsAppMsg && (
@@ -1633,7 +1753,15 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                   )}
 
                   {/* Blocos de texto, códigos e tabelas Markdown com formatação inline */}
-                  <div className="space-y-3 text-[13.5px] leading-relaxed text-[#DCDCDC]">
+                  <div
+                    className={`text-[13.5px] leading-relaxed ${
+                      isUser
+                        ? "space-y-2"
+                        : solidBubbles
+                          ? "space-y-1.5"
+                          : "space-y-3 text-[#DCDCDC]"
+                    }`}
+                  >
                     {blocks.map((block, bIdx) => {
                       if (block.type === "code") {
                         if (block.language?.toLowerCase() === "mermaid") {
@@ -1709,7 +1837,33 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                         );
                       }
 
-                      return <div key={bIdx}>{renderFormattedMarkdownText(block.content)}</div>;
+                      if (isUser) {
+                        return (
+                          <div key={bIdx}>
+                            {renderFormattedMarkdownText(block.content, operatorPalette)}
+                          </div>
+                        );
+                      }
+
+                      if (!solidBubbles) {
+                        return <div key={bIdx}>{renderFormattedMarkdownText(block.content)}</div>;
+                      }
+
+                      const chunks = splitMarkdownIntoBubbleChunks(block.content);
+                      return chunks.map((chunk, cIdx) => (
+                        <div
+                          key={`${bIdx}-${cIdx}`}
+                          data-testid="agent-reply-bubble"
+                          style={{
+                            backgroundColor: agentBubblePalette.backgroundColor,
+                            color: agentBubblePalette.textColor,
+                            borderColor: agentBubblePalette.borderColor,
+                          }}
+                          className="w-fit max-w-full rounded-[18px] border px-4 py-2.5 shadow-sm"
+                        >
+                          {renderFormattedMarkdownText(chunk, agentBubblePalette)}
+                        </div>
+                      ));
                     })}
                   </div>
 
@@ -2016,8 +2170,13 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                 </div>
               )}
 
-              {liveRun && liveRun.streamingText.trim().length > 0 && (
-                <div className="space-y-2 text-[13.5px] leading-relaxed text-[#DCDCDC]">
+              {liveRun && liveRun.streamingText.trim().length > 0 && (() => {
+                const liveAgentColor = (
+                  agente?.config as Record<string, unknown> | undefined
+                )?.chat_color as string | null | undefined;
+                const livePalette = computeBubbleColors(liveAgentColor, "#212121");
+                return (
+                <div className="space-y-1.5 text-[13.5px] leading-relaxed text-[#DCDCDC]">
                   {splitMarkdownBlocks(liveRun.streamingText).map((block, bIdx) =>
                     block.type === "table" && block.headers && block.rows ? (
                       <div key={bIdx} className="overflow-x-auto rounded-xl border border-[#303030] bg-[#141414]">
@@ -2044,12 +2203,27 @@ export const AgentConversationView: React.FC<AgentConversationViewProps> = ({
                           </tbody>
                         </table>
                       </div>
+                    ) : solidBubbles ? (
+                      splitMarkdownIntoBubbleChunks(block.content).map((chunk, cIdx) => (
+                        <div
+                          key={`${bIdx}-${cIdx}`}
+                          style={{
+                            backgroundColor: livePalette.backgroundColor,
+                            color: livePalette.textColor,
+                            borderColor: livePalette.borderColor,
+                          }}
+                          className="w-fit max-w-full rounded-[18px] border px-4 py-2.5 shadow-sm"
+                        >
+                          {renderFormattedMarkdownText(chunk, livePalette)}
+                        </div>
+                      ))
                     ) : (
                       <div key={bIdx}>{renderFormattedMarkdownText(block.content)}</div>
                     )
                   )}
                 </div>
-              )}
+                );
+              })()}
             </div>
           </div>
           );

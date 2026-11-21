@@ -584,6 +584,7 @@ export class AgentRunner {
           permissionLevel: governance.permissionLevel,
           agenteId: context.agenteId,
           operation: "write",
+          allowedFolders: governance.allowedFolders,
         });
       }
       const res = await generateImageTool(args, { vault: this.vault });
@@ -602,6 +603,7 @@ export class AgentRunner {
           permissionLevel: governance.permissionLevel,
           agenteId: context.agenteId,
           operation: "write",
+          allowedFolders: governance.allowedFolders,
         });
       }
       const res = await generateVideoTool(args, { vault: this.vault });
@@ -623,6 +625,7 @@ export class AgentRunner {
         permissionLevel: governance.permissionLevel,
         agenteId: context.agenteId,
         operation: "write",
+        allowedFolders: governance.allowedFolders,
       });
       const res = await processImageMarginsAndCrop({
         inputPath: args.input_path,
@@ -644,6 +647,7 @@ export class AgentRunner {
           permissionLevel: governance.permissionLevel,
           agenteId: context.agenteId,
           operation: "write",
+          allowedFolders: governance.allowedFolders,
         });
       }
       const res = await executeRemotionRender(args);

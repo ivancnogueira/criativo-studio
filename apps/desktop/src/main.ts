@@ -297,6 +297,71 @@ function registerIpcHandlers(userDataDir: string): void {
       }
     }
   });
+
+  ipcMain.handle("criativo:pick-folder", async () => {
+    const parentWin =
+      mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    const opts: Electron.OpenDialogOptions = {
+      title: "Selecionar Pasta Autorizada",
+      properties: ["openDirectory"],
+    };
+    const result = parentWin
+      ? await dialog.showOpenDialog(parentWin, opts)
+      : await dialog.showOpenDialog(opts);
+    if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+      return { canceled: true, path: null };
+    }
+    return { canceled: false, path: result.filePaths[0]! };
+  });
+
+  ipcMain.handle("criativo:open-agent-window", async (_evt, rawPayload: unknown) => {
+    if (!daemonHandle) return false;
+    const payload =
+      rawPayload && typeof rawPayload === "object"
+        ? (rawPayload as { agenteId?: unknown })
+        : {};
+    const agenteId = typeof payload.agenteId === "string" ? payload.agenteId.trim() : "";
+    if (!agenteId) return false;
+
+    const productRoot = resolveDesktopProductRoot({
+      isPackaged: app.isPackaged,
+      resourcesPath: (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath,
+    });
+    const iconPath = resolveWindowIconPath(productRoot);
+    const childWin = new BrowserWindow({
+      width: 1120,
+      height: 760,
+      minWidth: 780,
+      minHeight: 560,
+      title: "Criativo AI Studio Online",
+      backgroundColor: "#0D0D0D",
+      ...(iconPath ? { icon: iconPath } : {}),
+      autoHideMenuBar: true,
+      webPreferences: {
+        preload: join(__dirname, "preload.cjs"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+    const port = daemonHandle.port;
+    childWin.webContents.setWindowOpenHandler(({ url }) => {
+      if (!isLocalDaemonOrigin(url, port)) {
+        openExternalValidated(url);
+        return { action: "deny" };
+      }
+      return { action: "allow" };
+    });
+    childWin.webContents.on("will-navigate", (event: { preventDefault: () => void }, url: string) => {
+      if (url.startsWith("data:text/html")) return;
+      if (!isLocalDaemonOrigin(url, port)) {
+        event.preventDefault();
+        openExternalValidated(url);
+      }
+    });
+    await childWin.loadURL(`${daemonHandle.baseUrl}/?agent=${encodeURIComponent(agenteId)}`);
+    return true;
+  });
 }
 
 async function handleUpdateRestart(userDataDir: string, payload: UpdateRestartPayload): Promise<void> {

@@ -66,15 +66,14 @@ const RAIL_ITEMS: Array<{
   label: string;
   Icon: React.FC<{ className?: string }>;
 }> = [
-  { id: "agentes", label: "Agentes e Chats", Icon: Bot },
-  { id: "rotinas", label: "Rotinas", Icon: Workflow },
-  { id: "fluxos", label: "Fluxos de Trabalho", Icon: GitBranch },
-  { id: "tarefas", label: "Fila e Tarefas", Icon: WalletCards },
-  { id: "agenda", label: "Agenda", Icon: CalendarClock },
-  { id: "uso", label: "Uso e Cotas", Icon: Activity },
-  { id: "arquivos", label: "Arquivos e ImagePaths", Icon: FolderOpen },
-  { id: "loja", label: "Loja de Apps, Agentes e Habilidades", Icon: Store },
-  { id: "conexoes", label: "Conexões e Cofre", Icon: Plug },
+  { id: "agentes", label: "Estúdio", Icon: Bot },
+  { id: "fluxos", label: "Automações", Icon: GitBranch },
+  { id: "tarefas", label: "Tarefas", Icon: WalletCards },
+  { id: "agenda", label: "Calendário", Icon: CalendarClock },
+  { id: "uso", label: "Consumo", Icon: Activity },
+  { id: "arquivos", label: "Biblioteca", Icon: FolderOpen },
+  { id: "loja", label: "Catálogo", Icon: Store },
+  { id: "conexoes", label: "Integrações", Icon: Plug },
 ];
 
 function ringStrokeColor(percent: number): string {

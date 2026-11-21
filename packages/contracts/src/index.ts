@@ -486,6 +486,23 @@ export type WebSocketEventMap = {
   "update:status": UpdateStatusSnapshot;
 };
 
+export interface AgentAllowedFolder {
+  path: string;
+  mode: "read" | "read_write";
+  added_at?: string;
+}
+
+export interface DeletedNativeAgentInfo {
+  agente_id: string;
+  nome: string;
+  papel: string;
+  pasta: string;
+  avatar_shape: AvatarShape;
+  avatar_color: string;
+  pacote: "base" | "bonus" | "video";
+  deleted_at?: string;
+}
+
 export interface AgenteConfigVisual {
   frente?: FrenteAgente;
   skill_slug?: string;
@@ -495,6 +512,10 @@ export interface AgenteConfigVisual {
   avatar_style?: AvatarStyle;
   avatar_variant?: string;
   avatar_image_url?: string | null;
+  chat_color?: string | null;
+  allowed_folders?: AgentAllowedFolder[];
+  auto_memory_enabled?: boolean;
+  marked_unread?: boolean;
   effort?: NivelEsforco;
   customizado?: boolean;
   prompt_base?: string;
@@ -1509,6 +1530,8 @@ export interface StudioUserSettings {
   aparencia: {
     tema: "carbon_dark" | "midnight_contrast" | "light";
     cor_acento: string;
+    cor_balao_usuario?: string;
+    baloes_solidos?: boolean;
     escala: 80 | 90 | 100 | 110 | 120;
     fonte_interface: string;
     fonte_codigo: string;

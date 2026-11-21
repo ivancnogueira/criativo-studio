@@ -31,6 +31,8 @@ export interface CriativoDesktopWindowBridge {
   onDockStateChanged?: (listener: (state: CriativoDockStatePayload) => void) => () => void;
   openMainWindow?: (opts?: CriativoMainNavigatePayload) => Promise<void>;
   onMainNavigate?: (listener: (payload: CriativoMainNavigatePayload) => void) => () => void;
+  pickFolder?: () => Promise<{ canceled: boolean; path: string | null }>;
+  openAgentWindow?: (agenteId: string) => Promise<boolean>;
 }
 
 export function getCriativoDesktopBridge(): CriativoDesktopWindowBridge | null {

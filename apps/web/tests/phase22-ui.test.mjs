@@ -238,7 +238,7 @@ describe("Fase 22 — Navegador Integrado, Dock Flutuante Desktop, WhatsApp Sync
 
     assert.doesNotMatch(islandHtml, /Fechar aba Estrategista Editorial/);
     assert.match(islandHtml, /Fechar aba Pauta Semanal/);
-    assert.match(islandHtml, /aria-label="Novo tópico"/);
+    assert.match(islandHtml, /aria-label="Nova Subconversa"/);
 
     const chatHtml = renderToStaticMarkup(
       React.createElement(AgentConversationView, {

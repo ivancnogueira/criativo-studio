@@ -194,15 +194,46 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
       void refreshRoster();
     });
 
+    const unsubLicense = ws.on("license:updated", () => {
+      void refreshRoster();
+    });
+
+    const unsubServers = ws.on("servers:updated", () => {
+      void refreshRoster();
+    });
+
+    const unsubStatus = ws.onConnectionChange((connected) => {
+      if (connected) {
+        void refreshRoster();
+      }
+    });
+
+    const handleFocus = () => {
+      void refreshRoster();
+    };
+    window.addEventListener("focus", handleFocus);
+
     return () => {
       if (hidePeekTimerRef.current) window.clearTimeout(hidePeekTimerRef.current);
       unsubDock?.();
       unsubMsg();
       unsubProg();
       unsubSidebar();
+      unsubLicense();
+      unsubServers();
+      unsubStatus();
+      window.removeEventListener("focus", handleFocus);
       ws.disconnect();
     };
   }, [initialAgentes.length, refreshRoster]);
+
+  useEffect(() => {
+    if (initialAgentes.length > 0 || agentes.length > 0) return;
+    const retryTimer = window.setInterval(() => {
+      void refreshRoster();
+    }, 2500);
+    return () => window.clearInterval(retryTimer);
+  }, [agentes.length, initialAgentes.length, refreshRoster]);
 
   useEffect(() => {
     if (selectedAgentId) {
@@ -215,12 +246,18 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
   }, [messagesByAgent, selectedAgentId]);
 
   const dockAgents = useMemo(() => {
-    const byId = new Map(agentes.map((a) => [a.agente_id, a]));
+    const visible = agentes.filter(
+      (a) =>
+        !a.hidden &&
+        (a.config as Record<string, unknown> | undefined)?.upgrade_desbloqueado !== false,
+    );
+    const pool = visible.length > 0 ? visible : agentes;
+    const byId = new Map(pool.map((a) => [a.agente_id, a]));
     const pinned = pinnedIds
       .map((id) => byId.get(id))
       .filter((a): a is AgenteRegistro => Boolean(a));
     if (pinned.length > 0) return pinned.slice(0, 6);
-    return agentes.slice(0, 6);
+    return pool.slice(0, 6);
   }, [agentes, pinnedIds]);
 
   const desiredHeight = useMemo(

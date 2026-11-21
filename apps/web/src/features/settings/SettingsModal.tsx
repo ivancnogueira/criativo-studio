@@ -6,6 +6,7 @@ import type {
   BrowserProxyConfig,
   BrowserStatusReport,
   CanalEquipe,
+  DeletedNativeAgentInfo,
   LicenseActivationStatus,
   LicenseDeviceRecord,
   StorageUsageSnapshot,
@@ -76,6 +77,8 @@ export const DEFAULT_FRONTEND_USER_SETTINGS: StudioUserSettings = {
   aparencia: {
     tema: "carbon_dark",
     cor_acento: "#007CF7",
+    cor_balao_usuario: "#2A2A2A",
+    baloes_solidos: true,
     escala: 100,
     fonte_interface: "Inter",
     fonte_codigo: "JetBrains Mono",
@@ -205,6 +208,9 @@ export interface SettingsModalProps {
   onRestartForUpdate?: () => Promise<void>;
   onResetLayoutWidths?: () => void;
   onReopenSetupAssistant?: () => Promise<void>;
+  deletedNativeAgents?: DeletedNativeAgentInfo[];
+  onRestoreDeletedAgent?: (agenteId: string) => Promise<void>;
+  onRestoreAllDeletedAgents?: () => Promise<void>;
   licenseStatus?: LicenseActivationStatus | null;
   onRefreshLicense?: () => Promise<void>;
   onDeactivateLicenseDevice?: (payload: {
@@ -258,6 +264,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onRestartForUpdate,
   onResetLayoutWidths,
   onReopenSetupAssistant,
+  deletedNativeAgents = [],
+  onRestoreDeletedAgent,
+  onRestoreAllDeletedAgents,
   licenseStatus = null,
   onRefreshLicense,
   onDeactivateLicenseDevice,
@@ -412,6 +421,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               onChange={(geral) => setDraft((prev) => ({ ...prev, geral }))}
               onReopenSetupAssistant={onReopenSetupAssistant}
               onResetLayoutWidths={onResetLayoutWidths}
+              deletedNativeAgents={deletedNativeAgents}
+              onRestoreDeletedAgent={onRestoreDeletedAgent}
+              onRestoreAllDeletedAgents={onRestoreAllDeletedAgents}
             />
           )}
 

@@ -149,6 +149,19 @@ export class MemoryReviewService {
     return row ?? null;
   }
 
+  private isAutoMemoryEnabledForAgent(agenteId: string): boolean {
+    try {
+      const row = this.db.connection
+        .prepare("SELECT config_json FROM projecao_agentes WHERE agente_id = ? LIMIT 1;")
+        .get(agenteId) as { config_json?: string } | undefined;
+      if (!row?.config_json) return true;
+      const parsed = JSON.parse(row.config_json) as { auto_memory_enabled?: unknown };
+      return parsed.auto_memory_enabled !== false;
+    } catch {
+      return true;
+    }
+  }
+
   /**
    * Registra conclusão de um turno e agenda/dispara revisão conforme intervalo e ociosidade.
    */
@@ -160,6 +173,7 @@ export class MemoryReviewService {
     workSteps?: PassoChat[];
   }): void {
     if (this.disposed) return;
+    if (!this.isAutoMemoryEnabledForAgent(params.agenteId)) return;
 
     const normThread = params.threadId && !params.threadId.startsWith("main:") ? params.threadId : null;
     const chave = MemoryReviewService.buildCursorKey(params.agenteId, normThread);
@@ -328,11 +342,29 @@ export class MemoryReviewService {
     this.clearIdleTimer(chave);
 
     const agente = this.db.connection
-      .prepare("SELECT agente_id, nome, papel, modelo_padrao FROM projecao_agentes WHERE agente_id = ? LIMIT 1;")
+      .prepare(
+        "SELECT agente_id, nome, papel, modelo_padrao, config_json FROM projecao_agentes WHERE agente_id = ? LIMIT 1;",
+      )
       .get(agenteId) as
-      | { agente_id: string; nome: string; papel: string; modelo_padrao: string }
+      | {
+          agente_id: string;
+          nome: string;
+          papel: string;
+          modelo_padrao: string;
+          config_json?: string;
+        }
       | undefined;
     if (!agente) return [];
+    try {
+      const cfg = agente.config_json
+        ? (JSON.parse(agente.config_json) as { auto_memory_enabled?: unknown })
+        : {};
+      if (cfg.auto_memory_enabled === false) {
+        return [];
+      }
+    } catch {
+      // prossegue se config inválido
+    }
 
     const cursor = this.readCursorRow(chave);
     let cursorTimestamp = "";

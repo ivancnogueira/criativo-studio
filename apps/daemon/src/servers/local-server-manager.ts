@@ -359,6 +359,7 @@ export class LocalServerManager {
       env: {
         ...process.env,
         ...(process.env.CRIATIVO_DESKTOP_PACKAGED === "1" ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+        CRIATIVO_USER_DATA_DIR: row.workspace_path,
         CRIATIVO_LOCAL_CHILD: "1",
         CRIATIVO_CHILD_SERVER_ID: serverId,
         CRIATIVO_CHILD_SERVER_NAME: record.nome,

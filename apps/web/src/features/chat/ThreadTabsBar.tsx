@@ -25,7 +25,7 @@ export const ThreadTabsBar: React.FC<ThreadTabsBarProps> = ({
 
   return (
     <nav
-      aria-label="Sub-threads da conversa"
+      aria-label="Subconversas do agente"
       className="flex h-12 shrink-0 items-center gap-2 overflow-x-auto border-b border-white/[0.06] bg-[#0D0D0D] px-4"
     >
       <button
@@ -97,7 +97,7 @@ export const ThreadTabsBar: React.FC<ThreadTabsBarProps> = ({
         className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-dashed border-white/[0.06] bg-transparent px-2 py-1 text-[12px] font-semibold text-[#DCDCDC] transition hover:bg-[#212121] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
       >
         <Plus className="h-3 w-3" />
-        <span>Novo tópico</span>
+        <span>Nova Subconversa</span>
       </button>
     </nav>
   );

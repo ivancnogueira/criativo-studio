@@ -1,4 +1,5 @@
 import type {
+  AgentAllowedFolder,
   AgenteEspera,
   AgenteMemoria,
   AgenteMemoriasSnapshot,
@@ -29,6 +30,7 @@ import type {
   ConectorIntegracaoInfo,
   ContaProvedorInfo,
   ConversationUiBlock,
+  DeletedNativeAgentInfo,
   EventFilter,
   FilaChatEntrega,
   FilaChatSnapshot,
@@ -752,6 +754,10 @@ export const daemonApi = {
       avatar_style?: AvatarStyle;
       avatar_variant?: string;
       avatar_image_url?: string | null;
+      chat_color?: string | null;
+      allowed_folders?: AgentAllowedFolder[];
+      auto_memory_enabled?: boolean;
+      marked_unread?: boolean;
       backup_models?: BackupModelsConfig;
       permission_level?: PermissionLevel;
       allow_new_chat?: boolean;
@@ -820,14 +826,45 @@ export const daemonApi = {
   },
 
   async restoreAgentDefaults(agenteId: string): Promise<AgenteRegistro> {
-    const res = await fetch(`/api/agentes/${encodeURIComponent(agenteId)}/restaurar`, {
-      method: "POST",
-    });
-    const json = (await res.json()) as { agente: AgenteRegistro & { config_json?: string } };
+    const json = await requestJson<{ agente: AgenteRegistro & { config_json?: string } }>(
+      `/api/agentes/${encodeURIComponent(agenteId)}/restaurar`,
+      { method: "POST" },
+    );
     const cfg = json.agente.config_json
       ? (JSON.parse(json.agente.config_json) as Record<string, unknown>)
       : {};
     return { ...json.agente, config: json.agente.config ?? cfg };
+  },
+
+  async deleteAgent(agenteId: string): Promise<{ ok: boolean; agente_id: string; nativo: boolean }> {
+    return await requestJson(`/api/agentes/${encodeURIComponent(agenteId)}`, {
+      method: "DELETE",
+    });
+  },
+
+  async listDeletedNativeAgents(): Promise<DeletedNativeAgentInfo[]> {
+    const json = await requestJson<{ excluidos?: DeletedNativeAgentInfo[] }>(
+      "/api/agentes/excluidos",
+    );
+    return json.excluidos ?? [];
+  },
+
+  async restoreAllDeletedAgents(): Promise<{ ok: boolean; restored_ids: string[] }> {
+    return await requestJson("/api/agentes/restaurar-excluidos", {
+      method: "POST",
+    });
+  },
+
+  async markAgentUnread(agenteId: string): Promise<void> {
+    await requestJson(`/api/agentes/${encodeURIComponent(agenteId)}/mensagens/nao-lida`, {
+      method: "POST",
+    });
+  },
+
+  async clearAgentHistory(agenteId: string): Promise<{ ok: boolean; removidas: number }> {
+    return await requestJson(`/api/agentes/${encodeURIComponent(agenteId)}/mensagens`, {
+      method: "DELETE",
+    });
   },
 
   async listUpgrades(): Promise<PacoteUpgradeInfo[]> {
@@ -963,6 +1000,12 @@ export const daemonApi = {
       mensagem_usuario: MensagemChat;
       mensagens_equipe: MensagemChat[];
     };
+  },
+
+  async clearChannelHistory(canalId: string): Promise<{ ok: boolean; removidas: number }> {
+    return await requestJson(`/api/canais/${encodeURIComponent(canalId)}/mensagens`, {
+      method: "DELETE",
+    });
   },
 
   async listWorkflows(): Promise<WorkflowSummary[]> {

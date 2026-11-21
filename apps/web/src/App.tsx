@@ -20,6 +20,7 @@ import type {
   CanalEquipe,
   CaptureScreenConsentRequest,
   ConectorIntegracaoInfo,
+  DeletedNativeAgentInfo,
   FilaChatEntrega,
   FilaChatSnapshot,
   HabilidadeInstaladaInfo,
@@ -94,7 +95,7 @@ import {
   type PreviewableFileItem,
 } from "./features/chat/FilePreviewPanel";
 import { SharedTablesModal } from "./features/chat/SharedTablesModal";
-import { RightInspectorPanel } from "./features/inspector/RightInspectorPanel";
+import { RightInspectorPanel, type InspectorSubView } from "./features/inspector/RightInspectorPanel";
 import { MarketplacePage } from "./features/marketplace/MarketplacePage";
 import { OnboardingFlow } from "./features/onboarding/OnboardingFlow";
 import { ConnectorsPage } from "./features/pages/ConnectorsPage";
@@ -337,10 +338,11 @@ export function App() {
   const [routinesRefreshNonce, setRoutinesRefreshNonce] = useState(0);
   const [flowRefreshNonce, setFlowRefreshNonce] = useState(0);
   const [routineInspectorSignal, setRoutineInspectorSignal] = useState<{
-    subView?: "routines";
+    subView?: InspectorSubView;
     rotinaId?: string | null;
     nonce: number;
   } | null>(null);
+  const [deletedNativeAgents, setDeletedNativeAgents] = useState<DeletedNativeAgentInfo[]>([]);
   const [routineNotifications, setRoutineNotifications] = useState<
     Array<{ id: string; rotina_nome: string; resumo: string; owner_id: string }>
   >([]);
@@ -600,6 +602,7 @@ export function App() {
         remoteWhatsNew,
         remoteServersSnap,
         remoteUpdateStatus,
+        remoteDeletedAgents,
       ] = await Promise.all([
         daemonApi.getOnboarding().catch(() => null),
         daemonApi.listAgents().catch(() => [] as AgenteEnriquecido[]),
@@ -632,7 +635,10 @@ export function App() {
         daemonApi.getWhatsNew().catch(() => null),
         daemonApi.listarServidores().catch(() => null),
         daemonApi.obterStatusAtualizacao().catch(() => null),
+        daemonApi.listDeletedNativeAgents().catch(() => [] as DeletedNativeAgentInfo[]),
       ]);
+
+      setDeletedNativeAgents(remoteDeletedAgents);
 
       if (remoteUpdateStatus) {
         setUpdateStatus(remoteUpdateStatus);
@@ -711,10 +717,30 @@ export function App() {
 
       if (!restoredLastTabRef.current && typeof window !== "undefined") {
         restoredLastTabRef.current = true;
-        const shouldRestore =
-          (remoteUserSettings ?? readCachedUserSettings()).comportamento.restaurar_ultima_aba;
-        if (shouldRestore) {
-          const savedTabId = window.localStorage.getItem(LAST_TAB_STORAGE_KEY);
+        const urlAgentId = new URLSearchParams(window.location.search).get("agent");
+        const urlMatch = urlAgentId ? agList.find((a) => a.agente_id === urlAgentId) : undefined;
+        if (urlMatch) {
+          const vis = getAgentAvatar(urlMatch);
+          const tabId = `agent:${urlMatch.agente_id}`;
+          setOpenTabs((prev) =>
+            prev.some((t) => t.id === tabId)
+              ? prev
+              : [
+                  ...prev,
+                  {
+                    id: tabId,
+                    titulo: urlMatch.nome,
+                    shape: vis.shape,
+                    color: vis.color,
+                  },
+                ]
+          );
+          setActiveTabId(tabId);
+          setCenterMode({ type: "agent", agenteId: urlMatch.agente_id });
+        } else {
+          const shouldRestore =
+            (remoteUserSettings ?? readCachedUserSettings()).comportamento.restaurar_ultima_aba;
+          const savedTabId = shouldRestore ? window.localStorage.getItem(LAST_TAB_STORAGE_KEY) : null;
           if (savedTabId && savedTabId.startsWith("agent:")) {
             const agId = savedTabId.slice("agent:".length);
             const agMatch = agList.find((a) => a.agente_id === agId);
@@ -735,6 +761,13 @@ export function App() {
               );
               setActiveTabId(savedTabId);
               setCenterMode({ type: "agent", agenteId: agId });
+            } else if (agList.length > 0 && !agList.some((a) => a.agente_id === "estrategista")) {
+              const firstAg = agList[0]!;
+              const vis = getAgentAvatar(firstAg);
+              const fallbackTab = `agent:${firstAg.agente_id}`;
+              setOpenTabs([{ id: fallbackTab, titulo: firstAg.nome, shape: vis.shape, color: vis.color }]);
+              setActiveTabId(fallbackTab);
+              setCenterMode({ type: "agent", agenteId: firstAg.agente_id });
             }
           } else if (savedTabId && savedTabId.startsWith("channel:")) {
             const cId = savedTabId.slice("channel:".length);
@@ -756,6 +789,13 @@ export function App() {
               setActiveTabId(savedTabId);
               setCenterMode({ type: "channel", canalId: cId });
             }
+          } else if (agList.length > 0 && !agList.some((a) => a.agente_id === "estrategista")) {
+            const firstAg = agList[0]!;
+            const vis = getAgentAvatar(firstAg);
+            const fallbackTab = `agent:${firstAg.agente_id}`;
+            setOpenTabs([{ id: fallbackTab, titulo: firstAg.nome, shape: vis.shape, color: vis.color }]);
+            setActiveTabId(fallbackTab);
+            setCenterMode({ type: "agent", agenteId: firstAg.agente_id });
           }
         }
       }
@@ -1349,6 +1389,7 @@ export function App() {
     const unsubSidebarUpdated = ws.on("sidebar:updated", () => {
       void daemonApi.getSidebarLayout().then(setSidebarLayout).catch(() => {});
       void daemonApi.listAgents().then(setAgentes).catch(() => {});
+      void daemonApi.listDeletedNativeAgents().then(setDeletedNativeAgents).catch(() => {});
     });
 
     const unsubSettingsUpdated = ws.on("settings:updated", () => {
@@ -1702,6 +1743,159 @@ export function App() {
     [agentes, ensureAndActivateTab]
   );
 
+  const handleDeleteAgent = useCallback(
+    async (agenteId: string) => {
+      await daemonApi.deleteAgent(agenteId);
+      const [nextAgents, nextDeleted, nextLayout] = await Promise.all([
+        daemonApi.listAgents(),
+        daemonApi.listDeletedNativeAgents().catch(() => [] as DeletedNativeAgentInfo[]),
+        daemonApi.getSidebarLayout().catch(() => null),
+      ]);
+      setAgentes(nextAgents);
+      setDeletedNativeAgents(nextDeleted);
+      if (nextLayout) setSidebarLayout(nextLayout);
+      setOpenTabs((prev) =>
+        prev.filter((t) => t.id !== `agent:${agenteId}` && !t.id.startsWith(`thread:${agenteId}:`))
+      );
+      if (
+        (centerMode.type === "agent" || centerMode.type === "thread") &&
+        centerMode.agenteId === agenteId
+      ) {
+        const nextAg = nextAgents[0];
+        if (nextAg) {
+          const vis = getAgentAvatar(nextAg);
+          ensureAndActivateTab(
+            { id: `agent:${nextAg.agente_id}`, titulo: nextAg.nome, shape: vis.shape, color: vis.color },
+            { type: "agent", agenteId: nextAg.agente_id }
+          );
+        } else {
+          setCenterMode({ type: "new_agent" });
+          setActiveTabId("new-agent");
+        }
+      }
+    },
+    [centerMode, ensureAndActivateTab]
+  );
+
+  const handleRestoreDeletedAgent = useCallback(
+    async (agenteId: string) => {
+      await daemonApi.restoreAgentDefaults(agenteId);
+      const [nextAgents, nextDeleted, nextLayout] = await Promise.all([
+        daemonApi.listAgents(),
+        daemonApi.listDeletedNativeAgents().catch(() => [] as DeletedNativeAgentInfo[]),
+        daemonApi.getSidebarLayout().catch(() => null),
+      ]);
+      setAgentes(nextAgents);
+      setDeletedNativeAgents(nextDeleted);
+      if (nextLayout) setSidebarLayout(nextLayout);
+      const restored = nextAgents.find((a) => a.agente_id === agenteId);
+      if (restored) {
+        const vis = getAgentAvatar(restored);
+        ensureAndActivateTab(
+          { id: `agent:${restored.agente_id}`, titulo: restored.nome, shape: vis.shape, color: vis.color },
+          { type: "agent", agenteId: restored.agente_id }
+        );
+      }
+    },
+    [ensureAndActivateTab]
+  );
+
+  const handleRestoreAllDeletedAgents = useCallback(async () => {
+    await daemonApi.restoreAllDeletedAgents();
+    const [nextAgents, nextDeleted, nextLayout] = await Promise.all([
+      daemonApi.listAgents(),
+      daemonApi.listDeletedNativeAgents().catch(() => [] as DeletedNativeAgentInfo[]),
+      daemonApi.getSidebarLayout().catch(() => null),
+    ]);
+    setAgentes(nextAgents);
+    setDeletedNativeAgents(nextDeleted);
+    if (nextLayout) setSidebarLayout(nextLayout);
+  }, []);
+
+  const handleToggleUnreadAgent = useCallback(async (agenteId: string, markUnread: boolean) => {
+    if (markUnread) {
+      await daemonApi.markAgentUnread(agenteId);
+      setAgentes((prev) =>
+        prev.map((a) =>
+          a.agente_id === agenteId
+            ? {
+                ...a,
+                nao_lidas: Math.max(1, a.nao_lidas ?? 0),
+                config: { ...(a.config ?? {}), marked_unread: true },
+              }
+            : a
+        )
+      );
+    } else {
+      await daemonApi.markAgentRead(agenteId);
+      setAgentes((prev) =>
+        prev.map((a) =>
+          a.agente_id === agenteId
+            ? {
+                ...a,
+                nao_lidas: 0,
+                config: { ...(a.config ?? {}), marked_unread: false },
+              }
+            : a
+        )
+      );
+    }
+  }, []);
+
+  const handleToggleMuteAgent = useCallback(async (agenteId: string, nextLevel: "all" | "muted") => {
+    const updated = await daemonApi.updateAgentSettings(agenteId, { notification_level: nextLevel });
+    setAgentes((prev) =>
+      prev.map((a) => (a.agente_id === updated.agente_id ? { ...a, ...updated } : a))
+    );
+  }, []);
+
+  const handleOpenAgentNewWindow = useCallback(async (agenteId: string) => {
+    const bridge = getCriativoDesktopBridge();
+    if (bridge?.openAgentWindow) {
+      await bridge.openAgentWindow(agenteId);
+      return;
+    }
+    if (typeof window !== "undefined") {
+      window.open(
+        `${window.location.origin}/?agent=${encodeURIComponent(agenteId)}`,
+        "_blank",
+        "noopener,noreferrer"
+      );
+    }
+  }, []);
+
+  const handleNewSubconversationForAgent = useCallback(
+    async (agenteId: string) => {
+      const targetAgent = agentes.find((a) => a.agente_id === agenteId);
+      const vis = getAgentAvatar(targetAgent);
+      const { thread } = await daemonApi.createEmptyTopic(agenteId);
+      setAllThreads((prev) => [
+        thread,
+        ...prev.filter((t) => t.thread_id !== thread.thread_id),
+      ]);
+      setThreadChatById((prev) => ({
+        ...prev,
+        [thread.thread_id]: prev[thread.thread_id] ?? [],
+      }));
+      setActiveThreadIdByAgent((prev) => ({
+        ...prev,
+        [agenteId]: thread.thread_id,
+      }));
+      ensureAndActivateTab(
+        {
+          id: `thread:${agenteId}:${thread.thread_id}`,
+          titulo: thread.titulo || "Nova Subconversa",
+          kind: "topic",
+          shape: vis.shape,
+          color: vis.color,
+        },
+        { type: "thread", agenteId, threadId: thread.thread_id }
+      );
+      await refreshAgentThreadsState(agenteId, thread.thread_id).catch(() => {});
+    },
+    [agentes, ensureAndActivateTab, refreshAgentThreadsState]
+  );
+
   const handleSelectThreadInAgent = useCallback(
     (agenteId: string, threadId: string | null) => {
       setActiveSideThreadId(null);
@@ -1840,7 +2034,7 @@ export function App() {
     ensureAndActivateTab(
       {
         id: `thread:${targetAgentId}:${thread.thread_id}`,
-        titulo: thread.titulo || "Novo tópico",
+        titulo: thread.titulo || "Nova Subconversa",
         kind: "topic",
         shape: vis.shape,
         color: vis.color,
@@ -2084,7 +2278,7 @@ export function App() {
         th.turno_ativo_id !== null;
       return {
         id: `thread:${ag.agente_id}:${th.thread_id}`,
-        titulo: customTab?.titulo || th.titulo || "Novo tópico",
+        titulo: customTab?.titulo || th.titulo || "Nova Subconversa",
         kind: "topic",
         closable: true,
         shape: vis.shape,
@@ -2320,10 +2514,15 @@ export function App() {
       }
       setSendingChat(true);
       let keepLiveRun = hadExistingRun;
+      const currentTopicTitle = activeThread?.titulo;
+      const currentTabTitle = openTabs.find(
+        (t) => t.id === `thread:${activeAgent.agente_id}:${threadId}`
+      )?.titulo;
       const shouldRenameTopicTab =
-        (activeThread?.titulo === "Novo tópico" ||
-          openTabs.find((t) => t.id === `thread:${activeAgent.agente_id}:${threadId}`)?.titulo ===
-            "Novo tópico") &&
+        (currentTopicTitle === "Nova Subconversa" ||
+          currentTopicTitle === "Novo tópico" ||
+          currentTabTitle === "Nova Subconversa" ||
+          currentTabTitle === "Novo tópico") &&
         conteudo.trim().length > 0;
       if (shouldRenameTopicTab) {
         const cleanTitle = conteudo.trim().replace(/\s+/g, " ");
@@ -3043,6 +3242,7 @@ export function App() {
                     showModeTabs={false}
                     agentes={agentes}
                     canais={canais}
+                    deletedNativeAgents={deletedNativeAgents}
                     workingAgentIds={workingAgentIds}
                     agentActivityByAgentId={agentActivityByAgentId}
                   selectedAgentId={
@@ -3082,6 +3282,18 @@ export function App() {
                     setAgentes(await daemonApi.listAgents());
                     handleSelectAgent(res.agente.agente_id);
                   }}
+                  onRestoreDeletedAgent={handleRestoreDeletedAgent}
+                  onRestoreAllDeletedAgents={handleRestoreAllDeletedAgents}
+                  onToggleUnreadAgent={handleToggleUnreadAgent}
+                  onToggleMuteAgent={handleToggleMuteAgent}
+                  onNewSubconversation={handleNewSubconversationForAgent}
+                  onOpenAgentNewWindow={handleOpenAgentNewWindow}
+                  onEditAgent={(agenteId) => {
+                    handleSelectAgent(agenteId);
+                    setInspectorOpen(true);
+                    setRoutineInspectorSignal({ subView: "config", nonce: Date.now() });
+                  }}
+                  onDeleteAgent={handleDeleteAgent}
                     updateStatus={updateStatus}
                     onApplyUpdate={() => void handleApplyUpdate()}
                     onOpenUpdateSettings={() => openSettings("atualizacoes")}
@@ -3305,6 +3517,39 @@ export function App() {
                         sendShortcut={userSettings.geral.atalho_envio}
                         compactActions={userSettings.geral.acoes_compactas}
                         showAgentSteps={userSettings.geral.exibir_passos_agente}
+                        userBubbleColor={userSettings.aparencia.cor_balao_usuario}
+                        solidBubbles={userSettings.aparencia.baloes_solidos !== false}
+                        onClearHistory={async () => {
+                          if (centerMode.type === "channel" && activeChannel) {
+                            await daemonApi.clearChannelHistory(activeChannel.canal_id);
+                            setChatByKey((prev) => ({
+                              ...prev,
+                              [activeChannel.canal_id]: [],
+                            }));
+                            setCanais((prev) =>
+                              prev.map((c) =>
+                                c.canal_id === activeChannel.canal_id
+                                  ? { ...c, ultima_mensagem: null }
+                                  : c
+                              )
+                            );
+                            return;
+                          }
+                          if (!activeAgent) return;
+                          await daemonApi.clearAgentHistory(activeAgent.agente_id);
+                          setChatByKey((prev) => ({
+                            ...prev,
+                            [`agente:${activeAgent.agente_id}`]: [],
+                          }));
+                          setAgentes((prev) =>
+                            prev.map((a) =>
+                              a.agente_id === activeAgent.agente_id
+                                ? { ...a, nao_lidas: 0, ultima_mensagem: null }
+                                : a
+                            )
+                          );
+                          await refreshAgentThreadsState(activeAgent.agente_id, null).catch(() => {});
+                        }}
                         liveVoiceEnabled={userSettings.voz.live_voice_habilitada}
                         liveVoiceActive={liveVoiceActive}
                         onOpenTakeover={(tabId) => {
@@ -3550,6 +3795,24 @@ export function App() {
                     agente={activeAgent}
                       arquivos={arquivos}
                       canais={canais}
+                      threads={
+                        activeAgent
+                          ? (
+                              threadsByAgent[activeAgent.agente_id]?.threads ??
+                              allThreads.filter(
+                                (t) => t.agente_id === activeAgent.agente_id && !t.arquivada_em
+                              )
+                            )
+                          : []
+                      }
+                      activeThreadId={activeThread?.thread_id ?? null}
+                      skillsCount={
+                        activeAgent
+                          ? habilidades.filter((h) =>
+                              h.agentes_vinculados.includes(activeAgent.agente_id)
+                            ).length
+                          : habilidades.length
+                      }
                       provedores={provedores}
                       browserProfiles={browserProfiles}
                       browserProxies={browserProxies}
@@ -3561,6 +3824,26 @@ export function App() {
                       previewTarefa={previewTarefa}
                       onClose={() => setInspectorOpen(false)}
                       onOpenFilesPage={() => setActiveSection("arquivos")}
+                      onOpenUsagePage={() => setActiveSection("uso")}
+                      onOpenStorePage={() => setActiveSection("loja")}
+                      onOpenTablesModal={() => setSharedTablesOpen(true)}
+                      onSelectThread={(threadId) => {
+                        if (!activeAgent) return;
+                        handleSelectThreadInAgent(activeAgent.agente_id, threadId);
+                      }}
+                      onCreateSubconversation={() => void handleCreateNewTopic()}
+                      onClearChatHistory={async (agenteId) => {
+                        await daemonApi.clearAgentHistory(agenteId);
+                        setChatByKey((prev) => ({ ...prev, [`agente:${agenteId}`]: [] }));
+                        setAgentes((prev) =>
+                          prev.map((a) =>
+                            a.agente_id === agenteId
+                              ? { ...a, nao_lidas: 0, ultima_mensagem: null }
+                              : a
+                          )
+                        );
+                        await refreshAgentThreadsState(agenteId, null).catch(() => {});
+                      }}
                       onDeleteFile={handleDeleteFile}
                       onOpenWhatsAppModal={() => setWhatsappModalOpen(true)}
                       onCreateBrowserProfile={async (input) => {
@@ -4287,6 +4570,9 @@ export function App() {
                 setActiveSection("agentes");
                 handleSelectAgent("assistente_setup");
               }}
+              deletedNativeAgents={deletedNativeAgents}
+              onRestoreDeletedAgent={handleRestoreDeletedAgent}
+              onRestoreAllDeletedAgents={handleRestoreAllDeletedAgents}
               licenseStatus={licenseStatus}
               onRefreshLicense={async () => {
                 const next = await daemonApi.sincronizarLicenca();
@@ -4382,12 +4668,12 @@ export function App() {
         }}
       />
 
-      {/* Modal Criar Canal em Equipe */}
+      {/* Modal Nova equipe */}
       {channelModalOpen && (
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Novo canal em equipe"
+          aria-label="Nova equipe"
           className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4"
         >
           <form
@@ -4397,7 +4683,7 @@ export function App() {
             <div className="flex items-center justify-between">
               <h3 className="text-[15px] font-semibold text-white flex items-center gap-2">
                 <Users className="h-4 w-4 text-[#31CF76]" />
-                <span>Criar Canal em Equipe</span>
+                <span>Nova equipe</span>
               </h3>
               <button
                 type="button"
@@ -4410,12 +4696,12 @@ export function App() {
 
             <div>
               <label htmlFor="new-channel-name" className="block text-[11.5px] text-[#979797] mb-1">
-                Nome do Canal
+                Nome da equipe
               </label>
               <input
                 id="new-channel-name"
                 name="new_channel_name"
-                aria-label="Nome do canal em equipe"
+                aria-label="Nome da equipe"
                 required
                 type="text"
                 value={newChannelName}
@@ -4432,7 +4718,7 @@ export function App() {
               <input
                 id="new-channel-desc"
                 name="new_channel_desc"
-                aria-label="Objetivo do canal"
+                aria-label="Objetivo da equipe"
                 type="text"
                 value={newChannelDesc}
                 onChange={(e) => setNewChannelDesc(e.target.value)}
@@ -4485,7 +4771,7 @@ export function App() {
                 Cancelar
               </button>
               <button type="submit" className="studio-btn-primary px-5 py-1.5 text-[12.5px]">
-                Criar Canal
+                Criar equipe
               </button>
             </div>
           </form>
@@ -4514,7 +4800,7 @@ export function App() {
               </button>
             </div>
             <ul className="space-y-2 text-[12.5px] text-[#DCDCDC] list-disc pl-5">
-              <li>Use o trilho esquerdo para alternar entre <strong>Agentes</strong>, <strong>Fluxos Dot-Grid</strong>, <strong>Fila FIFO</strong>, <strong>Uso &amp; Cotas</strong>, <strong>Arquivos ImagePaths</strong> e <strong>Conexões</strong>.</li>
+              <li>Use o trilho esquerdo para alternar entre <strong>Estúdio</strong>, <strong>Automações</strong>, <strong>Tarefas</strong>, <strong>Calendário</strong>, <strong>Consumo</strong>, <strong>Biblioteca</strong>, <strong>Catálogo</strong> e <strong>Integrações</strong>.</li>
               <li>Nos chats, anexe fotos reais ou logos pelo botão <strong>+</strong>; designers usam modelos generativos de imagem nativamente e o Remotion gera Reels 9:16 MP4.</li>
               <li>Toda publicação Instagram passa por <strong>Aprovação Humana obrigatória</strong> no Cockpit ou via resposta &ldquo;1&rdquo; no WhatsApp pareado.</li>
             </ul>

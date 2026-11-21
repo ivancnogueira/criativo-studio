@@ -3,6 +3,7 @@ import type {
   AgenteRegistro,
   AvatarShape,
   CanalEquipe,
+  DeletedNativeAgentInfo,
   SidebarLayoutMutation,
   SidebarLayoutSnapshot,
   SidebarSectionNode,
@@ -10,18 +11,24 @@ import type {
   UpdateStatusSnapshot,
 } from "@criativo/contracts";
 import {
+  Bell,
+  BellOff,
   Bot,
   ChevronDown,
   ChevronRight,
+  CircleDot,
   Copy,
+  ExternalLink,
   Eye,
   EyeOff,
   FolderPlus,
+  GitFork,
   MoreVertical,
   Pencil,
   Pin,
   PinOff,
   Plus,
+  RotateCcw,
   Search,
   Smartphone,
   Sparkles,
@@ -47,6 +54,7 @@ export interface SidebarProps {
     }
   >;
   canais?: CanalEquipe[];
+  deletedNativeAgents?: DeletedNativeAgentInfo[];
   selectedAgentId: string | null;
   selectedChannelId?: string | null;
   onSelectAgent: (agenteId: string) => void;
@@ -60,12 +68,20 @@ export interface SidebarProps {
   onChangeViewMode?: (mode: "agents" | "routines") => void;
   showModeTabs?: boolean;
   routineCountsByAgent?: Record<string, number>;
-  // Fase 15 — Seções aninhadas, Fixados, Ocultos, D&D e Duplicação
+  // Fase 15 — Diretórios aninhados, Fixados, Ocultos, D&D e Duplicação
   sidebarLayout?: SidebarLayoutSnapshot | null;
   sortMode?: "custom" | "alphabetical" | "recent";
   onMutateSidebar?: (mutation: SidebarLayoutMutation) => Promise<void> | void;
   onDuplicateAgent?: (agentId: string) => Promise<void> | void;
   onReorderPins?: (pins: string[]) => Promise<void> | void;
+  onRestoreDeletedAgent?: (agentId: string) => Promise<void> | void;
+  onRestoreAllDeletedAgents?: () => Promise<void> | void;
+  onToggleUnreadAgent?: (agentId: string, markUnread: boolean) => Promise<void> | void;
+  onToggleMuteAgent?: (agentId: string, nextLevel: "all" | "muted") => Promise<void> | void;
+  onNewSubconversation?: (agentId: string) => Promise<void> | void;
+  onOpenAgentNewWindow?: (agentId: string) => Promise<void> | void;
+  onEditAgent?: (agentId: string) => void;
+  onDeleteAgent?: (agentId: string) => Promise<void> | void;
   updateStatus?: UpdateStatusSnapshot | null;
   onApplyUpdate?: () => void;
   onOpenUpdateSettings?: () => void;
@@ -117,6 +133,7 @@ function stripMarkdownPreview(text?: string | null): string {
 export const Sidebar: React.FC<SidebarProps> = ({
   agentes,
   canais = [],
+  deletedNativeAgents = [],
   selectedAgentId,
   selectedChannelId = null,
   onSelectAgent,
@@ -134,6 +151,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onMutateSidebar,
   onDuplicateAgent,
   onReorderPins,
+  onRestoreDeletedAgent,
+  onRestoreAllDeletedAgents,
+  onToggleUnreadAgent,
+  onToggleMuteAgent,
+  onNewSubconversation,
+  onOpenAgentNewWindow,
+  onEditAgent,
+  onDeleteAgent,
   updateStatus = null,
   onApplyUpdate,
   onOpenUpdateSettings,
@@ -158,6 +183,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [agentMenuKey, setAgentMenuKey] = useState<string | null>(null);
   const [agentMoveSubmenuOpen, setAgentMoveSubmenuOpen] = useState(false);
   const [hiddenExpanded, setHiddenExpanded] = useState(false);
+  const [confirmDeleteAgent, setConfirmDeleteAgent] = useState<AgenteRegistro | null>(null);
+  const [deletingAgentId, setDeletingAgentId] = useState<string | null>(null);
+  const [restoreModalOpen, setRestoreModalOpen] = useState(false);
+  const [restoringAgentId, setRestoringAgentId] = useState<string | null>(null);
   const [dragPayload, setDragPayload] = useState<
     | { kind: "agent"; agentId: string }
     | { kind: "pin"; agentId: string }
@@ -262,8 +291,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       .filter((a): a is SidebarProps["agentes"][number] => Boolean(a));
   }, [pinOrder, visibleAgents]);
 
+  const isAgentMarkedUnread = (ag: SidebarProps["agentes"][number]) =>
+    (ag.nao_lidas ?? 0) > 0 ||
+    Boolean((ag.config as Record<string, unknown> | undefined)?.marked_unread);
+
   const unreadAgents = useMemo(
-    () => visibleAgents.filter((a) => (a.nao_lidas ?? 0) > 0),
+    () => visibleAgents.filter((a) => isAgentMarkedUnread(a)),
     [visibleAgents]
   );
 
@@ -350,6 +383,361 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setRenamingSectionName("");
   };
 
+  const renderAgentContextMenu = (
+    ag: SidebarProps["agentes"][number],
+    isPinned: boolean,
+    isHidden: boolean,
+    alignLeft = false
+  ) => {
+    const markedUnread = isAgentMarkedUnread(ag);
+    const currentNotificationLevel =
+      ((ag.config as Record<string, unknown> | undefined)?.notification_level as
+        | "all"
+        | "mentions_only"
+        | "muted"
+        | undefined) ?? "all";
+    const isMuted = currentNotificationLevel === "muted";
+
+    return (
+      <div
+        role="menu"
+        aria-label={`Opções de ${ag.nome}`}
+        onClick={(e) => e.stopPropagation()}
+        className={`absolute ${alignLeft ? "left-0" : "right-1"} top-full mt-1 z-50 w-56 rounded-xl bg-[#242424] border border-white/10 shadow-[0_14px_35px_rgba(0,0,0,0.75)] p-1 space-y-0.5`}
+      >
+        {onMutateSidebar && (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={async () => {
+              setAgentMenuKey(null);
+              await onMutateSidebar({
+                op: "set_pin",
+                agentId: ag.agente_id,
+                pinned: !isPinned,
+              });
+            }}
+            className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center gap-2"
+          >
+            {isPinned ? (
+              <PinOff className="h-3.5 w-3.5 text-[#42A0FF]" />
+            ) : (
+              <Pin className="h-3.5 w-3.5 text-[#42A0FF]" />
+            )}
+            <span>{isPinned ? "Desafixar" : "Fixar"}</span>
+          </button>
+        )}
+
+        {onToggleUnreadAgent && (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={async () => {
+              setAgentMenuKey(null);
+              await onToggleUnreadAgent(ag.agente_id, !markedUnread);
+            }}
+            className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center gap-2"
+          >
+            <CircleDot className="h-3.5 w-3.5 text-[#74B9FF]" />
+            <span>{markedUnread ? "Marcar como lido" : "Marcar como não lido"}</span>
+          </button>
+        )}
+
+        {onToggleMuteAgent && (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={async () => {
+              setAgentMenuKey(null);
+              await onToggleMuteAgent(ag.agente_id, isMuted ? "all" : "muted");
+            }}
+            className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center gap-2"
+          >
+            {isMuted ? (
+              <Bell className="h-3.5 w-3.5 text-[#31CF76]" />
+            ) : (
+              <BellOff className="h-3.5 w-3.5 text-[#979797]" />
+            )}
+            <span>{isMuted ? "Ativar alertas" : "Silenciar agente"}</span>
+          </button>
+        )}
+
+        {onNewSubconversation && (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={async () => {
+              setAgentMenuKey(null);
+              await onNewSubconversation(ag.agente_id);
+            }}
+            className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center gap-2"
+          >
+            <GitFork className="h-3.5 w-3.5 text-[#42A0FF]" />
+            <span>Nova Subconversa</span>
+          </button>
+        )}
+
+        {onOpenAgentNewWindow && (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={async () => {
+              setAgentMenuKey(null);
+              await onOpenAgentNewWindow(ag.agente_id);
+            }}
+            className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center gap-2"
+          >
+            <ExternalLink className="h-3.5 w-3.5 text-[#979797]" />
+            <span>Abrir em nova janela</span>
+          </button>
+        )}
+
+        {onMutateSidebar && (
+          <div>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => setAgentMoveSubmenuOpen((v) => !v)}
+              className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center justify-between gap-2"
+            >
+              <span className="flex items-center gap-2">
+                <FolderPlus className="h-3.5 w-3.5 text-[#979797]" />
+                <span>Mover para</span>
+              </span>
+              <ChevronRight
+                className={`h-3 w-3 transition-transform ${agentMoveSubmenuOpen ? "rotate-90" : ""}`}
+              />
+            </button>
+            {agentMoveSubmenuOpen && (
+              <div className="mt-0.5 pl-3 space-y-0.5 max-h-36 overflow-y-auto">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setAgentMenuKey(null);
+                    setAgentMoveSubmenuOpen(false);
+                    await onMutateSidebar({
+                      op: "move_agent",
+                      agentId: ag.agente_id,
+                      sectionId: null,
+                    });
+                  }}
+                  className="w-full px-2 py-1 rounded-md text-left text-[11.5px] text-[#979797] hover:bg-[#303033] hover:text-white truncate"
+                >
+                  Sem diretório (padrão)
+                </button>
+                {orderedSections.map((sec) => (
+                  <button
+                    key={sec.section_id}
+                    type="button"
+                    onClick={async () => {
+                      setAgentMenuKey(null);
+                      setAgentMoveSubmenuOpen(false);
+                      await onMutateSidebar({
+                        op: "move_agent",
+                        agentId: ag.agente_id,
+                        sectionId: sec.section_id,
+                      });
+                    }}
+                    className="w-full px-2 py-1 rounded-md text-left text-[11.5px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white truncate"
+                    style={{ paddingLeft: `${Math.max(0, sec.nivel - 1) * 10 + 8}px` }}
+                  >
+                    {sec.nome}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {onEditAgent && (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setAgentMenuKey(null);
+              onEditAgent(ag.agente_id);
+            }}
+            className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center gap-2"
+          >
+            <Pencil className="h-3.5 w-3.5 text-[#979797]" />
+            <span>Editar agente</span>
+          </button>
+        )}
+
+        {onDuplicateAgent && (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={async () => {
+              setAgentMenuKey(null);
+              await onDuplicateAgent(ag.agente_id);
+            }}
+            className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center gap-2"
+          >
+            <Copy className="h-3.5 w-3.5 text-[#31CF76]" />
+            <span>Duplicar agente</span>
+          </button>
+        )}
+
+        {onMutateSidebar && (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={async () => {
+              setAgentMenuKey(null);
+              await onMutateSidebar({
+                op: "set_hidden",
+                agentId: ag.agente_id,
+                hidden: !isHidden,
+              });
+            }}
+            className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center gap-2"
+          >
+            {isHidden ? (
+              <Eye className="h-3.5 w-3.5 text-[#31CF76]" />
+            ) : (
+              <EyeOff className="h-3.5 w-3.5 text-[#979797]" />
+            )}
+            <span>{isHidden ? "Reexibir agente" : "Ocultar agente"}</span>
+          </button>
+        )}
+
+        {onDeleteAgent && (
+          <div className="border-t border-white/[0.06] pt-0.5 mt-0.5">
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="context-delete-agent"
+              onClick={() => {
+                setAgentMenuKey(null);
+                setAgentMoveSubmenuOpen(false);
+                setConfirmDeleteAgent(ag);
+              }}
+              className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#FF7675] hover:bg-[#FD2F3B]/15 flex items-center gap-2"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span>Excluir agente</span>
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderPinnedTile = (ag: SidebarProps["agentes"][number]) => {
+    const vis = getAgentVisual(ag);
+    const selected = selectedAgentId === ag.agente_id && !selectedChannelId;
+    const isWorking = ag.status === "trabalhando" || workingAgentSet.has(ag.agente_id);
+    const rowKey = `pin-${ag.agente_id}`;
+    const isHidden = hiddenSet.has(ag.agente_id);
+    const showMenu = agentMenuKey === rowKey;
+    const unreadCount = ag.nao_lidas ?? 0;
+    const markedUnread = isAgentMarkedUnread(ag);
+    const canManageRow = Boolean(
+      onMutateSidebar ||
+        onDuplicateAgent ||
+        onDeleteAgent ||
+        onEditAgent ||
+        onToggleUnreadAgent ||
+        onToggleMuteAgent ||
+        onNewSubconversation ||
+        onOpenAgentNewWindow
+    );
+
+    return (
+      <div
+        key={rowKey}
+        draggable={Boolean(onReorderPins || onMutateSidebar)}
+        onDragStart={(e) => {
+          e.stopPropagation();
+          setDragPayload({ kind: "pin", agentId: ag.agente_id });
+        }}
+        onDragEnd={() => {
+          setDragPayload(null);
+          setDropIndicatorKey(null);
+        }}
+        onDragOver={(e) => {
+          if (!dragPayload || dragPayload.kind !== "pin" || dragPayload.agentId === ag.agente_id) {
+            return;
+          }
+          e.preventDefault();
+          e.stopPropagation();
+          setDropIndicatorKey(`agent:${rowKey}`);
+        }}
+        onDrop={async (e) => {
+          if (!dragPayload || dragPayload.kind !== "pin" || dragPayload.agentId === ag.agente_id) {
+            return;
+          }
+          e.preventDefault();
+          e.stopPropagation();
+          setDropIndicatorKey(null);
+          const next = pinOrder.filter((id) => id !== dragPayload.agentId);
+          const targetIdx = next.indexOf(ag.agente_id);
+          const insertAt = targetIdx >= 0 ? targetIdx : next.length;
+          next.splice(insertAt, 0, dragPayload.agentId);
+          if (onReorderPins) {
+            await onReorderPins(next);
+          } else if (onMutateSidebar) {
+            await onMutateSidebar({ op: "reorder_pins", pins: next });
+          }
+          setDragPayload(null);
+        }}
+        onContextMenu={(e) => {
+          if (!canManageRow) return;
+          e.preventDefault();
+          setSectionMenuId(null);
+          setAgentMoveSubmenuOpen(false);
+          setAgentMenuKey((prev) => (prev === rowKey ? null : rowKey));
+        }}
+        className="group/pin relative"
+      >
+        <button
+          type="button"
+          data-testid={`pinned-agent-tile-${ag.agente_id}`}
+          title={ag.nome}
+          aria-label={ag.nome}
+          onClick={() => onSelectAgent(ag.agente_id)}
+          className={`relative h-[48px] w-[48px] rounded-2xl flex items-center justify-center transition-colors border ${
+            selected
+              ? "bg-[#252527] border-[#007CF7]/70 ring-1 ring-[#007CF7]/40"
+              : "bg-[#202022] border-white/[0.06] hover:bg-[#2A2A2E] hover:border-white/15"
+          }`}
+        >
+          <MascoteAvatar
+            avatar={vis}
+            agentKey={ag.agente_id}
+            size={40}
+            animated={isWorking}
+            mood={
+              agentActivityByAgentId?.[ag.agente_id]?.mood ??
+              (isWorking ? "working" : unreadCount > 0 ? "waiting" : "idle")
+            }
+            activity={agentActivityByAgentId?.[ag.agente_id]?.activity ?? null}
+          />
+          {unreadCount > 0 ? (
+            <span className="absolute -bottom-1 -right-1 h-4 min-w-[16px] px-1 rounded-full bg-[#74B9FF] text-[#0D0D0D] text-[10px] font-bold flex items-center justify-center ring-2 ring-[#1A1A1A]">
+              {unreadCount}
+            </span>
+          ) : markedUnread ? (
+            <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-[#74B9FF] ring-2 ring-[#1A1A1A]" />
+          ) : isWorking ? (
+            <span
+              title="Trabalhando agora"
+              className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-[#31CF76] ring-2 ring-[#1A1A1A] animate-pulse"
+            />
+          ) : null}
+        </button>
+        <span
+          role="tooltip"
+          className="pointer-events-none absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 z-40 whitespace-nowrap rounded-lg bg-[#101012] border border-white/10 px-2 py-1 text-[11px] font-medium text-white shadow-lg opacity-0 group-hover/pin:opacity-100 group-focus-within/pin:opacity-100 transition-opacity"
+        >
+          {ag.nome}
+        </span>
+        {showMenu && renderAgentContextMenu(ag, true, isHidden, true)}
+      </div>
+    );
+  };
+
   const renderAgentRow = (
     ag: SidebarProps["agentes"][number],
     keyPrefix: string,
@@ -369,7 +757,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const isHidden = hiddenSet.has(ag.agente_id);
     const showMenu = agentMenuKey === rowKey;
     const showDropLine = dropIndicatorKey === `agent:${rowKey}`;
-    const canManageRow = Boolean(onMutateSidebar || onDuplicateAgent);
+    const unreadCount = ag.nao_lidas ?? 0;
+    const markedUnread = isAgentMarkedUnread(ag);
+    const canManageRow = Boolean(
+      onMutateSidebar ||
+        onDuplicateAgent ||
+        onDeleteAgent ||
+        onEditAgent ||
+        onToggleUnreadAgent ||
+        onToggleMuteAgent ||
+        onNewSubconversation ||
+        onOpenAgentNewWindow
+    );
 
     return (
       <div
@@ -453,11 +852,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
               }
               activity={agentActivityByAgentId?.[ag.agente_id]?.activity ?? null}
             />
-            {showUnreadBadge && (ag.nao_lidas ?? 0) > 0 && (
-              <span className="absolute -bottom-0.5 -right-0.5 h-4 min-w-[16px] px-1 rounded-full bg-[#74B9FF] text-[#0D0D0D] text-[10px] font-bold flex items-center justify-center ring-2 ring-[#1A1A1A]">
-                {ag.nao_lidas}
-              </span>
-            )}
+            {showUnreadBadge && (unreadCount > 0 || markedUnread) ? (
+              unreadCount > 0 ? (
+                <span className="absolute -bottom-0.5 -right-0.5 h-4 min-w-[16px] px-1 rounded-full bg-[#74B9FF] text-[#0D0D0D] text-[10px] font-bold flex items-center justify-center ring-2 ring-[#1A1A1A]">
+                  {unreadCount}
+                </span>
+              ) : (
+                <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-[#74B9FF] ring-2 ring-[#1A1A1A]" />
+              )
+            ) : null}
             {!showUnreadBadge && isWorking && (
               <span
                 title="Trabalhando agora"
@@ -512,115 +915,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         )}
 
-        {showMenu && (
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="absolute right-1 top-full mt-1 z-50 w-48 rounded-xl bg-[#242424] border border-white/10 shadow-[0_14px_35px_rgba(0,0,0,0.75)] p-1 space-y-0.5"
-          >
-            {onMutateSidebar && (
-              <button
-                type="button"
-                onClick={async () => {
-                  setAgentMenuKey(null);
-                  await onMutateSidebar({
-                    op: "set_pin",
-                    agentId: ag.agente_id,
-                    pinned: !isPinned,
-                  });
-                }}
-                className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center gap-2"
-              >
-                {isPinned ? <PinOff className="h-3.5 w-3.5 text-[#42A0FF]" /> : <Pin className="h-3.5 w-3.5 text-[#42A0FF]" />}
-                <span>{isPinned ? "Desafixar agente" : "Fixar agente"}</span>
-              </button>
-            )}
-
-            {onDuplicateAgent && (
-              <button
-                type="button"
-                onClick={async () => {
-                  setAgentMenuKey(null);
-                  await onDuplicateAgent(ag.agente_id);
-                }}
-                className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center gap-2"
-              >
-                <Copy className="h-3.5 w-3.5 text-[#31CF76]" />
-                <span>Duplicar agente</span>
-              </button>
-            )}
-
-            {onMutateSidebar && (
-              <div className="border-t border-white/[0.06] pt-0.5 mt-0.5">
-                <button
-                  type="button"
-                  onClick={() => setAgentMoveSubmenuOpen((v) => !v)}
-                  className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center justify-between gap-2"
-                >
-                  <span>Mover para seção</span>
-                  <ChevronRight
-                    className={`h-3 w-3 transition-transform ${agentMoveSubmenuOpen ? "rotate-90" : ""}`}
-                  />
-                </button>
-                {agentMoveSubmenuOpen && (
-                  <div className="mt-0.5 pl-2 space-y-0.5 max-h-36 overflow-y-auto">
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        setAgentMenuKey(null);
-                        setAgentMoveSubmenuOpen(false);
-                        await onMutateSidebar({
-                          op: "move_agent",
-                          agentId: ag.agente_id,
-                          sectionId: null,
-                        });
-                      }}
-                      className="w-full px-2 py-1 rounded-md text-left text-[11.5px] text-[#979797] hover:bg-[#303033] hover:text-white truncate"
-                    >
-                      Sem seção (padrão)
-                    </button>
-                    {orderedSections.map((sec) => (
-                      <button
-                        key={sec.section_id}
-                        type="button"
-                        onClick={async () => {
-                          setAgentMenuKey(null);
-                          setAgentMoveSubmenuOpen(false);
-                          await onMutateSidebar({
-                            op: "move_agent",
-                            agentId: ag.agente_id,
-                            sectionId: sec.section_id,
-                          });
-                        }}
-                        className="w-full px-2 py-1 rounded-md text-left text-[11.5px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white truncate"
-                        style={{ paddingLeft: `${Math.max(0, sec.nivel - 1) * 10 + 8}px` }}
-                      >
-                        {sec.nome}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {onMutateSidebar && (
-              <button
-                type="button"
-                onClick={async () => {
-                  setAgentMenuKey(null);
-                  await onMutateSidebar({
-                    op: "set_hidden",
-                    agentId: ag.agente_id,
-                    hidden: !isHidden,
-                  });
-                }}
-                className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center gap-2"
-              >
-                {isHidden ? <Eye className="h-3.5 w-3.5 text-[#31CF76]" /> : <EyeOff className="h-3.5 w-3.5 text-[#979797]" />}
-                <span>{isHidden ? "Reexibir agente" : "Ocultar agente"}</span>
-              </button>
-            )}
-          </div>
-        )}
+        {showMenu && renderAgentContextMenu(ag, isPinned, isHidden)}
       </div>
     );
   };
@@ -702,7 +997,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 type="text"
                 value={renamingSectionName}
                 onChange={(e) => setRenamingSectionName(e.target.value)}
-                aria-label="Novo nome da seção"
+                aria-label="Novo nome do diretório"
                 autoFocus
                 className="flex-1 min-w-0 rounded-md bg-[#141414] border border-[#007CF7] px-2 py-0.5 text-[11.5px] text-white focus:outline-none"
               />
@@ -737,7 +1032,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               {onMutateSidebar && (
                 <button
                   type="button"
-                  aria-label={`Ações da seção ${sec.nome}`}
+                  aria-label={`Ações do diretório ${sec.nome}`}
                   onClick={(e) => {
                     e.stopPropagation();
                     setAgentMenuKey(null);
@@ -770,7 +1065,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center gap-2"
               >
                 <Pencil className="h-3.5 w-3.5 text-[#42A0FF]" />
-                <span>Renomear seção</span>
+                <span>Renomear diretório</span>
               </button>
 
               {sec.nivel < 3 && sectionsList.length < 40 && (
@@ -784,7 +1079,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center gap-2"
                 >
                   <FolderPlus className="h-3.5 w-3.5 text-[#31CF76]" />
-                  <span>Criar subseção</span>
+                  <span>Novo subdiretório</span>
                 </button>
               )}
 
@@ -797,7 +1092,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#FF7675] hover:bg-[#FD2F3B]/15 flex items-center gap-2"
               >
                 <Trash2 className="h-3.5 w-3.5" />
-                <span>Remover seção</span>
+                <span>Remover diretório</span>
               </button>
             </div>
           )}
@@ -844,15 +1139,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
               ? setMenuOpen((o) => !o)
               : undefined
           }
-          title="Novo agente, seção ou canal"
-          aria-label="Criar novo agente ou canal"
+          title="Novo agente, equipe ou diretório"
+          aria-label="Criar novo agente, equipe ou diretório"
           className="h-[32px] w-[32px] rounded-xl flex items-center justify-center text-[#979797] hover:text-white hover:bg-[#242424] transition-colors shrink-0"
         >
           <Plus className="h-4 w-4" />
         </button>
 
         {menuOpen && (
-          <div className="absolute right-2.5 top-12 z-40 w-48 rounded-xl bg-[#242424] border border-white/10 shadow-[0_14px_35px_rgba(0,0,0,0.65)] p-1">
+          <div className="absolute right-2.5 top-12 z-40 w-56 rounded-xl bg-[#242424] border border-white/10 shadow-[0_14px_35px_rgba(0,0,0,0.65)] p-1">
             {onCreateAgent && (
               <button
                 type="button"
@@ -876,7 +1171,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-[12px] text-white hover:bg-white/[0.06] text-left"
               >
                 <Users className="h-3.5 w-3.5 text-[#31cf76]" />
-                <span>Novo canal em equipe</span>
+                <span>Nova equipe</span>
               </button>
             )}
             {onMutateSidebar && (
@@ -891,7 +1186,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-[12px] text-white hover:bg-white/[0.06] disabled:opacity-40 text-left"
               >
                 <FolderPlus className="h-3.5 w-3.5 text-[#31cf76]" />
-                <span>Criar seção</span>
+                <span>Novo diretório</span>
+              </button>
+            )}
+            {deletedNativeAgents.length > 0 && (onRestoreDeletedAgent || onRestoreAllDeletedAgents) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setRestoreModalOpen(true);
+                }}
+                className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-[12px] text-[#74B9FF] hover:bg-white/[0.06] text-left border-t border-white/[0.06] mt-0.5 pt-2"
+              >
+                <RotateCcw className="h-3.5 w-3.5 shrink-0" />
+                <span>Restaurar agentes excluídos ({deletedNativeAgents.length})</span>
               </button>
             )}
           </div>
@@ -1001,14 +1309,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="rounded-xl border border-[#007CF7]/50 bg-[#141414] p-2 space-y-2"
           >
             <div className="text-[11px] font-semibold text-[#42A0FF]">
-              {creatingSectionParentId ? "Nova subseção" : "Nova seção"}
+              {creatingSectionParentId ? "Novo subdiretório" : "Novo diretório"}
             </div>
             <input
               type="text"
               value={newSectionName}
               onChange={(e) => setNewSectionName(e.target.value)}
-              placeholder="Nome da seção"
-              aria-label="Nome da nova seção"
+              placeholder="Nome do diretório"
+              aria-label="Nome do novo diretório"
               autoFocus
               className="w-full rounded-lg border border-white/10 bg-[#212121] px-2.5 py-1.5 text-[12px] text-white placeholder-[#6A6A6A] focus:border-[#007CF7] focus:outline-none"
             />
@@ -1028,7 +1336,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 disabled={!newSectionName.trim()}
                 className="rounded-lg bg-[#007CF7] px-2.5 py-1 text-[11.5px] font-semibold text-white disabled:opacity-40"
               >
-                {creatingSectionParentId ? "Criar subseção" : "Criar seção"}
+                {creatingSectionParentId ? "Criar subdiretório" : "Criar diretório"}
               </button>
             </div>
           </form>
@@ -1036,15 +1344,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {pinnedAgents.length > 0 && (
           <div>
-            <div className="px-2 pb-1 flex items-center justify-between text-[11px] font-medium text-[#7A7A80]">
+            <div className="px-2 pb-1.5 flex items-center justify-between text-[11px] font-medium text-[#7A7A80]">
               <span className="flex items-center gap-1.5">
                 <Pin className="h-3 w-3 text-[#42A0FF]" />
                 Fixados
               </span>
               <span>{pinnedAgents.length}</span>
             </div>
-            <div className="space-y-0.5">
-              {pinnedAgents.map((ag) => renderAgentRow(ag, "pin-", false, null, true))}
+            <div
+              data-testid="sidebar-pinned-strip"
+              className="flex flex-wrap items-center gap-2 px-1.5 py-1"
+            >
+              {pinnedAgents.map((ag) => renderPinnedTile(ag))}
             </div>
           </div>
         )}
@@ -1061,7 +1372,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         )}
 
-        {/* Canais em Equipe (Multi-agente) — oculto em modo Rotinas */}
+        {/* Equipes (Multi-agente) — oculto em modo Rotinas */}
         {effectiveMode === "agents" && filteredChannels.length > 0 && (
           <div>
             <button
@@ -1075,7 +1386,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 ) : (
                   <ChevronDown className="h-3 w-3" />
                 )}
-                Canais em Equipe
+                Equipes
               </span>
             </button>
 
@@ -1212,6 +1523,137 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               {whatsappStatus === "conectado" ? "Gerenciar Pareamento" : "Conectar Agora"}
             </button>
+          </div>
+        </div>
+      )}
+
+      {confirmDeleteAgent && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirmar exclusão de agente"
+          data-testid="confirm-delete-agent-modal"
+          className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4"
+        >
+          <div className="w-full max-w-sm rounded-2xl bg-[#212121] border border-white/10 p-5 space-y-4 shadow-2xl">
+            <div className="space-y-1.5">
+              <h3 className="text-[15px] font-semibold text-white">
+                Excluir agente {confirmDeleteAgent.nome}?
+              </h3>
+              <p className="text-[12.5px] text-[#A0A0A8] leading-relaxed">
+                Este agente será removido da barra lateral e suas conversas locais ficarão arquivadas. Agentes padrão do sistema podem ser restaurados a qualquer momento em Configurações.
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteAgent(null)}
+                disabled={deletingAgentId !== null}
+                className="rounded-lg bg-[#2A2A2E] hover:bg-[#34343A] px-3.5 py-1.5 text-[12px] font-medium text-[#E0E0E4]"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                data-testid="confirm-delete-agent-submit"
+                disabled={deletingAgentId !== null}
+                onClick={async () => {
+                  const target = confirmDeleteAgent;
+                  if (!target || !onDeleteAgent) return;
+                  setDeletingAgentId(target.agente_id);
+                  try {
+                    await onDeleteAgent(target.agente_id);
+                    setConfirmDeleteAgent(null);
+                  } finally {
+                    setDeletingAgentId(null);
+                  }
+                }}
+                className="rounded-lg bg-[#FD2F3B] hover:bg-[#E12530] px-4 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
+              >
+                {deletingAgentId === confirmDeleteAgent.agente_id ? "Excluindo..." : "Excluir agente"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {restoreModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Restaurar agentes padrão excluídos"
+          data-testid="restore-deleted-agents-modal"
+          className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4"
+        >
+          <div className="w-full max-w-md rounded-2xl bg-[#212121] border border-white/10 p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-[15px] font-semibold text-white">
+                Restaurar agentes excluídos ({deletedNativeAgents.length})
+              </h3>
+              <button
+                type="button"
+                onClick={() => setRestoreModalOpen(false)}
+                className="text-[#979797] hover:text-white text-[13px]"
+              >
+                Fechar
+              </button>
+            </div>
+            <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
+              {deletedNativeAgents.map((item) => (
+                <div
+                  key={item.agente_id}
+                  className="flex items-center justify-between gap-3 rounded-xl bg-[#18181A] border border-white/[0.06] px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-medium text-white truncate">
+                      {item.nome}
+                    </div>
+                    <div className="text-[11px] text-[#8E8E93] truncate">{item.papel}</div>
+                  </div>
+                  {onRestoreDeletedAgent && (
+                    <button
+                      type="button"
+                      disabled={restoringAgentId === item.agente_id}
+                      onClick={async () => {
+                        setRestoringAgentId(item.agente_id);
+                        try {
+                          await onRestoreDeletedAgent(item.agente_id);
+                          if (deletedNativeAgents.length <= 1) {
+                            setRestoreModalOpen(false);
+                          }
+                        } finally {
+                          setRestoringAgentId(null);
+                        }
+                      }}
+                      className="rounded-lg bg-[#007CF7] hover:bg-[#198BFF] px-3 py-1 text-[11.5px] font-semibold text-white shrink-0 disabled:opacity-50"
+                    >
+                      {restoringAgentId === item.agente_id ? "Restaurando..." : "Restaurar"}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setRestoreModalOpen(false)}
+                className="rounded-lg bg-[#2A2A2E] hover:bg-[#34343A] px-3.5 py-1.5 text-[12px] text-[#E0E0E4]"
+              >
+                Fechar
+              </button>
+              {onRestoreAllDeletedAgents && deletedNativeAgents.length > 0 && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await onRestoreAllDeletedAgents();
+                    setRestoreModalOpen(false);
+                  }}
+                  className="rounded-lg bg-[#31CF76] hover:bg-[#28B867] px-3.5 py-1.5 text-[12px] font-semibold text-[#0E0E10]"
+                >
+                  Restaurar todos
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

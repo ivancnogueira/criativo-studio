@@ -133,7 +133,7 @@ describe("Fase 11 — UI Agenda, Switch Rotinas, Webhook 3 Passos, Editor & Canv
         onOpenHelp: () => {},
       })
     );
-    assert.match(railHtml, /aria-label="Agenda"/);
+    assert.match(railHtml, /aria-label="Calendário"/);
     assert.doesNotMatch(railHtml, /<select/i);
 
     const sidebarAgentsHtml = renderToStaticMarkup(
@@ -149,7 +149,7 @@ describe("Fase 11 — UI Agenda, Switch Rotinas, Webhook 3 Passos, Editor & Canv
     );
     assert.match(sidebarAgentsHtml, /Agentes/);
     assert.match(sidebarAgentsHtml, /Rotinas/);
-    assert.match(sidebarAgentsHtml, /Canais em Equipe/);
+    assert.match(sidebarAgentsHtml, /Equipes/);
 
     const sidebarRoutinesHtml = renderToStaticMarkup(
       React.createElement(Sidebar, {
@@ -162,7 +162,7 @@ describe("Fase 11 — UI Agenda, Switch Rotinas, Webhook 3 Passos, Editor & Canv
         routineCountsByAgent: { estrategista: 3 },
       })
     );
-    assert.doesNotMatch(sidebarRoutinesHtml, /Canais em Equipe/);
+    assert.doesNotMatch(sidebarRoutinesHtml, /Equipes/);
     assert.match(sidebarRoutinesHtml, /3 rotinas/);
     assert.doesNotMatch(sidebarRoutinesHtml, /<select/i);
   });
