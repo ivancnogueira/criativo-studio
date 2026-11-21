@@ -1011,13 +1011,17 @@ export class ProviderConnectionService {
     label?: string,
     onAuthUrl?: (url: string) => void
   ): Promise<{ conta: ContaProvedorInfo; provedores: ProvedorStatusInfo[] }> {
-    const conta =
-      provedor === "gemini"
-        ? await this.antigravityLive.connectGoogleViaBrowser(label, onAuthUrl)
-        : await this.cliOAuth.connectViaBrowser(provedor, label, onAuthUrl);
+    try {
+      const conta =
+        provedor === "gemini"
+          ? await this.antigravityLive.connectGoogleViaBrowser(label, onAuthUrl)
+          : await this.cliOAuth.connectViaBrowser(provedor, label, onAuthUrl);
 
-    const provedores = await this.getProvidersStatus(true);
-    return { conta, provedores };
+      const provedores = await this.getProvidersStatus(true);
+      return { conta, provedores };
+    } finally {
+      this.cliCache = null;
+    }
   }
 
   public cancelBrowserSignIn(provedor: "gemini" | "claude" | "openai"): boolean {
@@ -1071,10 +1075,8 @@ export class ProviderConnectionService {
   }
 
   public async getUsageSnapshot(forceRefresh = false): Promise<UsoProvedoresSnapshot> {
-    const [statuses, agSnapshot] = await Promise.all([
-      this.getProvidersStatus(forceRefresh),
-      this.antigravityLive.getLiveSnapshot(forceRefresh),
-    ]);
+    const statuses = await this.getProvidersStatus(forceRefresh);
+    const agSnapshot = await this.antigravityLive.getLiveSnapshot(false);
 
     const cutoffIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const rowUso = this.db.connection

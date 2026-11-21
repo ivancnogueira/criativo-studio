@@ -473,6 +473,7 @@ export class CliOAuthAccountsService {
     label?: string,
     onAuthUrl?: (url: string) => void
   ): Promise<ContaProvedorInfo> {
+    this.cancelPendingSignIn(provedor);
     let executable = resolveCliBinaryForProvider(provedor, this.appDataDir).executable;
     if (!executable) {
       const installed = await ensureProviderRuntimeInstalled(
@@ -710,13 +711,27 @@ export class CliOAuthAccountsService {
       let activeLoginId: string | null = null;
       let loginStartSent = false;
       let settled = false;
+      let stderrTail = "";
       const pending = new Map<number, (msg: Record<string, unknown>) => void>();
       const rl = createInterface({ input: child.stdout });
+
+      child.stderr.on("data", (chunk) => {
+        stderrTail = (stderrTail + chunk.toString("utf8")).slice(-800);
+      });
 
       const finish = (err: Error | null, res?: { email: string | null; plano: string | null }) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        if (err && activeLoginId) {
+          try {
+            child.stdin.write(
+              `${JSON.stringify({ jsonrpc: "2.0", id: nextId++, method: "account/login/cancel", params: { loginId: activeLoginId } })}\n`
+            );
+          } catch {
+            // ignora erro ao enviar cancelamento no fechamento
+          }
+        }
         rl.close();
         try {
           child.stdin.end();
@@ -778,7 +793,12 @@ export class CliOAuthAccountsService {
       child.on("error", (err) => finish(err instanceof Error ? err : new Error(String(err))));
       child.on("exit", (code) => {
         if (!settled) {
-          finish(new Error(`Codex app-server encerrou antes de concluir o login (código ${code ?? "null"}).`));
+          const detail = stderrTail.trim() ? ` (${stderrTail.trim().slice(-240)})` : "";
+          finish(
+            new Error(
+              `Codex app-server encerrou antes de concluir o login (código ${code ?? "null"})${detail}.`
+            )
+          );
         }
       });
 
@@ -1580,13 +1600,174 @@ export class CliOAuthAccountsService {
   }
 
   /**
+   * Executa login ChatGPT/Codex no Desktop em pasta temporária isolada e devolve o payload
+   * `auth.json` apenas para exportação segura a um servidor remoto (VPS), sem gravar localmente.
+   */
+  public async signInCodexIsolatedForRemoteExport(
+    label?: string,
+    onAuthUrl?: (url: string) => void
+  ): Promise<{
+    authJson: string;
+    email: string | null;
+    plano: string | null;
+    label?: string;
+  }> {
+    this.cancelPendingSignIn("openai");
+    let executable = resolveCliBinaryForProvider("openai", this.appDataDir).executable;
+    if (!executable) {
+      const installed = await ensureProviderRuntimeInstalled("codex", { appDataDir: this.appDataDir });
+      executable = installed.executable;
+      if (!executable) {
+        const extraReason = installed.error ? ` (${installed.error})` : "";
+        throw new Error(
+          `Runtime Codex CLI (codex) não encontrado e não pôde ser instalado automaticamente${extraReason}.`
+        );
+      }
+    }
+
+    const tempDir = mkdtempSync(join(tmpdir(), "criativo-codex-remote-"));
+    try {
+      const appResult = await this.signInCodexViaAppServer({
+        executable,
+        codexHome: tempDir,
+        onAuthUrl: (url) => {
+          onAuthUrl?.(url);
+          openExternalUrlIfNeeded(url);
+        },
+        onRegisterAbort: (abortFn) => {
+          this.pendingSignInAbort.set("openai", abortFn);
+        },
+      });
+
+      const authPath = join(tempDir, "auth.json");
+      if (!existsSync(authPath)) {
+        throw new Error("Login ChatGPT concluído, porém o arquivo auth.json não foi gerado para exportação.");
+      }
+
+      const authJson = readFileSync(authPath, "utf8");
+      let email = appResult.email;
+      let plano = appResult.plano;
+      try {
+        const auth = JSON.parse(authJson) as { tokens?: { id_token?: string } };
+        const jwt = auth.tokens?.id_token ? decodeJwtPayload(auth.tokens.id_token) : null;
+        if (jwt && typeof jwt.email === "string") email = email ?? jwt.email;
+        const authMeta = jwt?.["https://api.openai.com/auth"] as { chatgpt_plan_type?: string } | undefined;
+        if (authMeta?.chatgpt_plan_type) plano = plano ?? `ChatGPT ${authMeta.chatgpt_plan_type}`;
+      } catch {
+        // segue com os metadados obtidos pelo app-server
+      }
+
+      return {
+        authJson,
+        email,
+        plano,
+        ...(label?.trim() ? { label: label.trim() } : {}),
+      };
+    } finally {
+      this.pendingSignInAbort.delete("openai");
+      try {
+        rmSync(tempDir, { recursive: true, force: true });
+      } catch {
+        // ignora erro ao remover pasta temporária
+      }
+    }
+  }
+
+  /**
+   * Importa uma sessão `auth.json` do Codex/ChatGPT em pasta isolada no servidor destino (ex.: VPS)
+   * e garante em best-effort que o runtime `codex` esteja instalado para cotas e execução.
+   */
+  public async importCodexAuthAccount(input: {
+    authJson: string;
+    email?: string | null;
+    plano?: string | null;
+    label?: string;
+  }): Promise<ContaProvedorInfo> {
+    let parsedAuth: { tokens?: { id_token?: string; access_token?: string }; OPENAI_API_KEY?: string };
+    try {
+      parsedAuth = JSON.parse(input.authJson) as typeof parsedAuth;
+    } catch {
+      throw new Error("Payload 'auth_json' inválido para conta ChatGPT/Codex.");
+    }
+    if (!parsedAuth?.tokens && !parsedAuth?.OPENAI_API_KEY) {
+      throw new Error("Arquivo auth.json sem credenciais OAuth válidas.");
+    }
+
+    let email = input.email?.trim() || null;
+    let plano = input.plano?.trim() || null;
+    if (parsedAuth.tokens?.id_token) {
+      const jwt = decodeJwtPayload(parsedAuth.tokens.id_token);
+      if (!email && jwt && typeof jwt.email === "string") email = jwt.email;
+      const authMeta = jwt?.["https://api.openai.com/auth"] as { chatgpt_plan_type?: string } | undefined;
+      if (!plano && authMeta?.chatgpt_plan_type) plano = `ChatGPT ${authMeta.chatgpt_plan_type}`;
+    }
+
+    const id = `oa-${randomUUID().slice(0, 8)}`;
+    const configDir = resolve(this.accountsRootDir, "openai", id);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "auth.json"), JSON.stringify(parsedAuth, null, 2), "utf8");
+
+    const records = this.getStoredRecords();
+    const cleaned = records.filter((r) => {
+      if (r.provedor !== "openai") return true;
+      if (email && r.email && r.email.toLowerCase() === email.toLowerCase()) {
+        try {
+          rmSync(resolve(r.configDir), { recursive: true, force: true });
+        } catch {
+          // ignora remoção da pasta duplicada antiga
+        }
+        return false;
+      }
+      return true;
+    });
+
+    cleaned.push({
+      id,
+      provedor: "openai",
+      configDir,
+      label: input.label?.trim() || null,
+      email,
+      plano,
+    });
+    this.saveStoredRecords(cleaned);
+    this.invalidateModelCache("openai");
+    this.invalidateQuotaCache("openai");
+
+    if (!resolveCliBinaryForProvider("openai", this.appDataDir).executable) {
+      await ensureProviderRuntimeInstalled("codex", { appDataDir: this.appDataDir }).catch(() => null);
+    }
+
+    const list = await this.listAccountsWithQuotas("openai", true).catch(() => this.listAccounts("openai"));
+    return (
+      list.find((a) => a.id === id) ?? {
+        id,
+        provedor: "openai",
+        rotulo: input.label?.trim() || null,
+        email,
+        plano: plano ?? "ChatGPT Plus / Pro",
+        estado: "conectado",
+        padrao: list.length <= 1,
+        token_valido: true,
+        grupos_cota: [],
+        origem: "criativo",
+      }
+    );
+  }
+
+  /**
    * Entrega localmente o callback OAuth capturado pelo App Desktop (ou colado manualmente)
    * ao servidor loopback interno aberto pela CLI (`codex` / `claude`) nesta máquina.
    */
   public async relayLoopbackCallback(
     provedor: "claude" | "openai",
     rawCallbackInput: string
-  ): Promise<{ status: number; body: string; contentType: string }> {
+  ): Promise<{
+    status: number;
+    body: string;
+    contentType: string;
+    accepted: boolean;
+    errorMessage?: string;
+  }> {
     const cleanInput = rawCallbackInput.trim();
     if (!cleanInput) {
       throw new Error("URL ou caminho de callback OAuth vazio.");
@@ -1621,15 +1802,61 @@ export class CliOAuthAccountsService {
       throw new Error("Caminho de callback OAuth inválido.");
     }
 
+    const parsedPath = new URL(safePath, `http://localhost:${target.port}`);
+    const lowerPath = parsedPath.pathname.toLowerCase();
+    if (lowerPath === "/cancel" || lowerPath.endsWith("/cancel")) {
+      throw new Error("Retorno /cancel bloqueado pelo relay OAuth.");
+    }
+    if (!parsedPath.searchParams.has("code") && !parsedPath.searchParams.has("error") && !(lowerPath.includes("callback") && parsedPath.search.length > 1)) {
+      throw new Error("Callback OAuth sem parâmetros de autorização ('code' ou 'error').");
+    }
+
     const upstream = await this.fetchImpl(`http://${target.host}:${target.port}${safePath}`, {
       method: "GET",
+      headers: {
+        Host: `localhost:${target.port}`,
+      },
       redirect: "manual",
     });
     const body = await upstream.text().catch(() => "");
+    let errorMessage: string | undefined;
+    let isErrorRedirect = false;
+
+    if (upstream.status >= 300 && upstream.status < 400) {
+      const locationHeader = upstream.headers.get("location")?.trim() || "";
+      if (locationHeader) {
+        const lowerLoc = locationHeader.toLowerCase();
+        if (lowerLoc.includes("/cancel") || lowerLoc.includes("error=")) {
+          isErrorRedirect = true;
+          errorMessage = "O servidor OAuth local cancelou ou recusou a autorização.";
+        } else if (
+          lowerLoc.startsWith("/success") ||
+          lowerLoc.includes("://localhost") ||
+          lowerLoc.includes("://127.0.0.1")
+        ) {
+          const confirmUrl = locationHeader.startsWith("/")
+            ? `http://${target.host}:${target.port}${locationHeader}`
+            : locationHeader;
+          await this.fetchImpl(confirmUrl, {
+            method: "GET",
+            headers: { Host: `localhost:${target.port}` },
+            redirect: "manual",
+          }).catch(() => null);
+        }
+      }
+    }
+
+    const accepted = upstream.status >= 200 && upstream.status < 400 && !isErrorRedirect;
+    if (!accepted && !errorMessage) {
+      errorMessage = `Servidor OAuth respondeu HTTP ${upstream.status}.`;
+    }
+
     return {
       status: upstream.status,
       body,
       contentType: upstream.headers.get("content-type") ?? "text/html; charset=utf-8",
+      accepted,
+      ...(errorMessage ? { errorMessage } : {}),
     };
   }
 }

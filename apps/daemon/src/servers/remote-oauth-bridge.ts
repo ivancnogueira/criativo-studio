@@ -17,7 +17,7 @@ interface ActiveBridgeEntry {
 
 const DEFAULT_BRIDGE_TIMEOUT_MS = 5 * 60_000;
 
-function extractLoopbackRedirect(rawAuthUrl: string): { host: string; port: number } | null {
+function extractLoopbackRedirect(rawAuthUrl: string): { host: string; port: number; expectedPath: string } | null {
   try {
     const parsed = new URL(rawAuthUrl);
     const redirectUri = parsed.searchParams.get("redirect_uri")?.trim();
@@ -31,9 +31,45 @@ function extractLoopbackRedirect(rawAuthUrl: string): { host: string; port: numb
     if (!Number.isInteger(portNum) || portNum < 1024 || portNum > 65535) {
       return null;
     }
-    return { host: "127.0.0.1", port: portNum };
+    return {
+      host: "127.0.0.1",
+      port: portNum,
+      expectedPath: redUrl.pathname || "/auth/callback",
+    };
   } catch {
     return null;
+  }
+}
+
+function isSpuriousOrCancelPath(pathname: string): boolean {
+  const lower = pathname.toLowerCase();
+  return (
+    lower === "/favicon.ico" ||
+    lower === "/robots.txt" ||
+    lower.startsWith("/apple-touch-icon") ||
+    lower === "/cancel" ||
+    lower.endsWith("/cancel")
+  );
+}
+
+function isValidOAuthCallbackRequest(
+  reqUrl: string,
+  expectedPath: string
+): boolean {
+  try {
+    const parsed = new URL(reqUrl, "http://127.0.0.1");
+    if (isSpuriousOrCancelPath(parsed.pathname)) {
+      return false;
+    }
+    const hasOAuthParam = parsed.searchParams.has("code") || parsed.searchParams.has("error");
+    if (hasOAuthParam) {
+      return true;
+    }
+    const normalizedPath = parsed.pathname.replace(/\/+$/, "") || "/";
+    const normalizedExpected = expectedPath.replace(/\/+$/, "") || "/";
+    return normalizedPath === normalizedExpected && parsed.search.length > 1;
+  } catch {
+    return false;
   }
 }
 
@@ -133,12 +169,14 @@ export class RemoteOAuthBridgeService {
 
     server = http.createServer(async (req, res) => {
       const reqUrl = req.url || "/";
-      if (reqUrl === "/favicon.ico") {
+      const method = (req.method || "GET").toUpperCase();
+      if (method !== "GET" || !isValidOAuthCallbackRequest(reqUrl, loopback.expectedPath)) {
         res.writeHead(204);
         res.end();
         return;
       }
 
+      let shouldCloseAfterCallback = false;
       try {
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
@@ -157,21 +195,31 @@ export class RemoteOAuthBridgeService {
         );
         const relayPayload = (await relayRes.json().catch(() => ({}))) as {
           ok?: boolean;
+          accepted?: boolean;
+          status?: number;
           erro?: string;
         };
 
-        if (!relayRes.ok || relayPayload.ok === false) {
+        const callbackAccepted =
+          relayRes.ok &&
+          relayPayload.ok !== false &&
+          relayPayload.accepted !== false &&
+          (relayPayload.status === undefined || (relayPayload.status >= 200 && relayPayload.status < 400));
+
+        if (!callbackAccepted) {
           res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
           res.end(
             renderBridgeResultHtml(
               false,
               relayPayload.erro ||
-                "Não foi possível entregar o retorno OAuth ao servidor remoto. Tente reiniciar o login.",
+                "A CLI no servidor remoto rejeitou ou cancelou o retorno OAuth. Clique em Conectar novamente no Studio.",
             ),
           );
+          shouldCloseAfterCallback = true;
           return;
         }
 
+        shouldCloseAfterCallback = true;
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         res.end(
           renderBridgeResultHtml(
@@ -180,6 +228,7 @@ export class RemoteOAuthBridgeService {
           ),
         );
       } catch (err) {
+        shouldCloseAfterCallback = true;
         res.writeHead(502, { "Content-Type": "text/html; charset=utf-8" });
         res.end(
           renderBridgeResultHtml(
@@ -190,7 +239,9 @@ export class RemoteOAuthBridgeService {
           ),
         );
       } finally {
-        setTimeout(closeBridge, 400).unref?.();
+        if (shouldCloseAfterCallback) {
+          setTimeout(closeBridge, 400).unref?.();
+        }
       }
     });
 

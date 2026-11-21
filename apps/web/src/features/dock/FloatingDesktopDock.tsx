@@ -19,7 +19,13 @@ import {
   MascoteAvatar,
   resolveAgentAvatarConfig,
 } from "../../components/MascoteAvatar";
-import { daemonApi, WebSocketClient } from "../../services/websocket-client";
+import {
+  daemonApi,
+  getActiveServerId,
+  setActiveServerId,
+  subscribeActiveServerChanges,
+  WebSocketClient,
+} from "../../services/websocket-client";
 import { getCriativoDesktopBridge } from "../../types/desktop-bridge";
 import {
   DEFAULT_FRONTEND_DOCK_SETTINGS,
@@ -114,7 +120,10 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
   const [progressByAgent, setProgressByAgent] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [rosterError, setRosterError] = useState<string | null>(null);
+  const [activeServerName, setActiveServerName] = useState("Servidor Principal");
 
+  const wsRef = useRef<WebSocketClient | null>(null);
   const draggingRef = useRef(false);
   const movedDuringDragRef = useRef(false);
   const dragStartClientRef = useRef<{ x: number; y: number } | null>(null);
@@ -122,20 +131,70 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
   const pillRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  const refreshRoster = useCallback(async () => {
+  const refreshRoster = useCallback(async (opts?: { syncServer?: boolean }) => {
     try {
-      const [ags, layout, settings] = await Promise.all([
-        daemonApi.listAgents(),
-        daemonApi.getSidebarLayout().catch(() => null),
-        daemonApi.getUserSettings().catch(() => null),
-      ]);
-      setAgentes(ags);
-      if (layout?.pins) setPinnedIds(layout.pins);
-      if (settings?.dock) {
-        setDockSettings({ ...DEFAULT_FRONTEND_DOCK_SETTINGS, ...settings.dock });
+      const srvSnap = opts?.syncServer === false ? null : await daemonApi.listarServidores().catch(() => null);
+      if (srvSnap) {
+        const targetSid = srvSnap.active_server_id || "primary";
+        const matchedSrv = srvSnap.servers.find((s) => s.server_id === targetSid);
+        if (matchedSrv?.nome) {
+          setActiveServerName(matchedSrv.nome);
+        }
+        if (targetSid !== getActiveServerId()) {
+          setActiveServerId(targetSid);
+          wsRef.current?.reconnectForServer(targetSid);
+          setSelectedAgentId(null);
+        }
       }
-    } catch {
-      // Ignora erro transitório se daemon ainda estiver inicializando
+
+      let ags: AgenteRegistro[];
+      let layout: Awaited<ReturnType<typeof daemonApi.getSidebarLayout>> | null = null;
+      let settings: Awaited<ReturnType<typeof daemonApi.getUserSettings>> | null = null;
+
+      try {
+        [ags, layout, settings] = await Promise.all([
+          daemonApi.listAgents(),
+          daemonApi.getSidebarLayout().catch(() => null),
+          daemonApi.getUserSettings().catch(() => null),
+        ]);
+      } catch (agentErr) {
+        const curSid = getActiveServerId();
+        if (curSid !== "primary") {
+          const checkSnap = srvSnap ?? (await daemonApi.listarServidores().catch(() => null));
+          const exists = checkSnap?.servers?.some((s) => s.server_id === curSid);
+          const fallbackSid = checkSnap?.active_server_id && checkSnap.active_server_id !== curSid
+            ? checkSnap.active_server_id
+            : "primary";
+          if (!exists || checkSnap?.active_server_id === "primary") {
+            setActiveServerId(fallbackSid);
+            wsRef.current?.reconnectForServer(fallbackSid);
+            [ags, layout, settings] = await Promise.all([
+              daemonApi.listAgents(),
+              daemonApi.getSidebarLayout().catch(() => null),
+              daemonApi.getUserSettings().catch(() => null),
+            ]);
+          } else {
+            throw agentErr;
+          }
+        } else {
+          throw agentErr;
+        }
+      }
+
+      setRosterError(null);
+      setAgentes(ags);
+      setPinnedIds(layout?.pins ?? []);
+      setDockSettings(
+        settings?.dock ? { ...DEFAULT_FRONTEND_DOCK_SETTINGS, ...settings.dock } : DEFAULT_FRONTEND_DOCK_SETTINGS,
+      );
+      setSelectedAgentId((prev) =>
+        prev && ags.some((a) => a.agente_id === prev) ? prev : null,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      setRosterError(
+        msg || "Não foi possível carregar os agentes deste servidor.",
+      );
     }
   }, []);
 
@@ -169,7 +228,24 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
     });
 
     const ws = new WebSocketClient();
+    wsRef.current = ws;
     ws.connect();
+
+    const unsubActiveStorage = subscribeActiveServerChanges((nextServerId) => {
+      if (nextServerId !== getActiveServerId()) {
+        setActiveServerId(nextServerId);
+      }
+      ws.reconnectForServer(nextServerId);
+      setSelectedAgentId(null);
+      void refreshRoster({ syncServer: true });
+    });
+
+    const unsubDockServer = bridge?.onDockActiveServerChanged?.((nextServerId) => {
+      setActiveServerId(nextServerId);
+      ws.reconnectForServer(nextServerId);
+      setSelectedAgentId(null);
+      void refreshRoster({ syncServer: true });
+    });
 
     const unsubMsg = ws.on("chat:message", (evt) => {
       if (!evt?.agente_id || !evt?.mensagem) return;
@@ -216,8 +292,18 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
       void refreshRoster();
     });
 
-    const unsubServers = ws.on("servers:updated", () => {
-      void refreshRoster();
+    const unsubServers = ws.on("servers:updated", (evt) => {
+      const targetSid = evt?.active_server_id || "primary";
+      const matched = evt?.servers?.find((s) => s.server_id === targetSid);
+      if (matched?.nome) {
+        setActiveServerName(matched.nome);
+      }
+      if (targetSid !== getActiveServerId()) {
+        setActiveServerId(targetSid);
+        ws.reconnectForServer(targetSid);
+        setSelectedAgentId(null);
+      }
+      void refreshRoster({ syncServer: false });
     });
 
     const unsubSettings = ws.on("settings:updated", () => {
@@ -245,6 +331,8 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
     return () => {
       if (hidePeekTimerRef.current) window.clearTimeout(hidePeekTimerRef.current);
       unsubDock?.();
+      unsubActiveStorage();
+      unsubDockServer?.();
       unsubMsg();
       unsubProg();
       unsubSidebar();
@@ -254,6 +342,9 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
       unsubStatus();
       window.removeEventListener("focus", handleFocus);
       ws.disconnect();
+      if (wsRef.current === ws) {
+        wsRef.current = null;
+      }
     };
   }, [initialAgentes.length, refreshRoster]);
 
@@ -385,6 +476,7 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
     if (nextOpen) {
       setSelectedAgentId(null);
       setDockPeeked(true);
+      void refreshRoster();
     }
     const bridge = getCriativoDesktopBridge();
     if (bridge?.dockSetExpanded) {
@@ -557,8 +649,17 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
 
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {eligibleAgents.length === 0 ? (
-              <div className="px-3 py-6 text-center text-[12px] text-[#8E8E93]">
-                Nenhum agente disponível neste servidor.
+              <div className="px-3 py-6 text-center space-y-2.5">
+                <div className="text-[12px] text-[#8E8E93]">
+                  {rosterError || `Nenhum agente disponível em ${activeServerName}.`}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void refreshRoster()}
+                  className="inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] px-3 py-1 text-[11px] font-medium text-white transition-colors"
+                >
+                  Tentar novamente
+                </button>
               </div>
             ) : (
               eligibleAgents.map((ag) => {

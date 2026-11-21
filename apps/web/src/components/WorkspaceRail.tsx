@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Bot,
@@ -252,34 +252,43 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
   const fallbackPercent = Math.max(5, Math.min(100, quotaPercent));
   const hasAnyConnectedAccount = allAccounts.length > 0;
   const autoSyncedAccountsKeyRef = useRef<string | null>(null);
+  const lastAutoSyncAtRef = useRef<number>(0);
 
-  useEffect(() => {
-    if (!onRefreshUsage || allAccounts.length === 0 || providerGroups.length > 0) {
-      return;
-    }
-    const key = allAccounts
-      .map((acc) => `${acc.provedor}:${acc.id}`)
-      .sort()
-      .join("|");
-    if (autoSyncedAccountsKeyRef.current === key) {
-      return;
-    }
-    autoSyncedAccountsKeyRef.current = key;
-    setRefreshing(true);
-    void Promise.resolve(onRefreshUsage()).finally(() => {
-      setRefreshing(false);
-    });
-  }, [allAccounts, onRefreshUsage, providerGroups.length]);
-
-  const handleRefresh = async () => {
+  const handleRefresh = useCallback(async () => {
     if (!onRefreshUsage || refreshing) return;
+    lastAutoSyncAtRef.current = Date.now();
     setRefreshing(true);
     try {
       await onRefreshUsage();
     } finally {
       setRefreshing(false);
     }
-  };
+  }, [onRefreshUsage, refreshing]);
+
+  const triggerFallbackUsageSync = useCallback(() => {
+    if (!onRefreshUsage || refreshing || allAccounts.length === 0 || providerGroups.length > 0) {
+      return;
+    }
+    if (Date.now() - lastAutoSyncAtRef.current < 15_000) {
+      return;
+    }
+    void handleRefresh();
+  }, [allAccounts.length, handleRefresh, onRefreshUsage, providerGroups.length, refreshing]);
+
+  useEffect(() => {
+    if (!onRefreshUsage || allAccounts.length === 0 || providerGroups.length > 0) {
+      return;
+    }
+    const key = `${activeServerId}::${allAccounts
+      .map((acc) => `${acc.provedor}:${acc.id}`)
+      .sort()
+      .join("|")}`;
+    if (autoSyncedAccountsKeyRef.current === key) {
+      return;
+    }
+    autoSyncedAccountsKeyRef.current = key;
+    void handleRefresh();
+  }, [activeServerId, allAccounts, handleRefresh, onRefreshUsage, providerGroups.length]);
 
   return (
     <aside
@@ -364,8 +373,14 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
           ) : (
             <button
               type="button"
-              onMouseEnter={() => setFallbackPopoverOpen(true)}
-              onClick={() => setFallbackPopoverOpen((v) => !v)}
+              onMouseEnter={() => {
+                setFallbackPopoverOpen(true);
+                triggerFallbackUsageSync();
+              }}
+              onClick={() => {
+                setFallbackPopoverOpen((v) => !v);
+                triggerFallbackUsageSync();
+              }}
               onDoubleClick={() => onSelectSection("uso")}
               title={
                 hasAnyConnectedAccount
@@ -511,7 +526,13 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
                     </div>
                   ))}
                   <p className="text-[11px] text-[#787878]">
-                    Clique em <strong>↻</strong> acima para sincronizar as janelas de cota.
+                    {refreshing ? (
+                      "Sincronizando janelas de cota..."
+                    ) : (
+                      <>
+                        Clique em <strong>↻</strong> acima para sincronizar as janelas de cota.
+                      </>
+                    )}
                   </p>
                 </div>
               ) : (

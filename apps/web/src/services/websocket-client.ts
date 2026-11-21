@@ -151,7 +151,10 @@ export class DaemonHttpError extends Error {
 }
 
 let licenseRequiredListener: ((status: LicenseActivationStatus | null) => void) | null = null;
-const ACTIVE_SERVER_STORAGE_KEY = "criativo_active_server_id";
+export const ACTIVE_SERVER_STORAGE_KEY = "criativo_active_server_id";
+const activeServerListeners = new Set<(serverId: string) => void>();
+let storageListenerInstalled = false;
+
 let activeServerId = (() => {
   if (typeof window === "undefined") return "primary";
   try {
@@ -161,18 +164,51 @@ let activeServerId = (() => {
   }
 })();
 
+function notifyActiveServerListeners(nextId: string): void {
+  for (const listener of activeServerListeners) {
+    try {
+      listener(nextId);
+    } catch {
+      // ignora erro em listener individual
+    }
+  }
+}
+
+export function subscribeActiveServerChanges(listener: (serverId: string) => void): () => void {
+  if (typeof window !== "undefined" && !storageListenerInstalled) {
+    storageListenerInstalled = true;
+    window.addEventListener("storage", (evt) => {
+      if (evt.key !== ACTIVE_SERVER_STORAGE_KEY) return;
+      const nextId = evt.newValue || "primary";
+      if (nextId !== activeServerId) {
+        activeServerId = nextId;
+        notifyActiveServerListeners(nextId);
+      }
+    });
+  }
+  activeServerListeners.add(listener);
+  return () => {
+    activeServerListeners.delete(listener);
+  };
+}
+
 export function getActiveServerId(): string {
   return activeServerId;
 }
 
 export function setActiveServerId(serverId: string): void {
-  activeServerId = serverId || "primary";
+  const nextId = serverId || "primary";
+  const changed = nextId !== activeServerId;
+  activeServerId = nextId;
   if (typeof window !== "undefined") {
     try {
       window.localStorage.setItem(ACTIVE_SERVER_STORAGE_KEY, activeServerId);
     } catch {
       // ignora erro de quota
     }
+  }
+  if (changed) {
+    notifyActiveServerListeners(activeServerId);
   }
 }
 
@@ -313,6 +349,10 @@ export class WebSocketClient {
   public connect(): void {
     this.closedManually = false;
     if (typeof WebSocket === "undefined") return;
+    if (this.reconnectTimer !== null && typeof window !== "undefined") {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
       return;
     }
@@ -321,6 +361,7 @@ export class WebSocketClient {
     this.socket = ws;
 
     ws.addEventListener("open", () => {
+      if (this.socket !== ws) return;
       this.reconnectAttempt = 0;
       const reconnected = this.hasConnectedOnce;
       this.hasConnectedOnce = true;
@@ -328,6 +369,7 @@ export class WebSocketClient {
     });
 
     ws.addEventListener("message", (evt) => {
+      if (this.socket !== ws) return;
       try {
         const envelope = JSON.parse(String(evt.data)) as WebSocketEnvelope;
         const bucket = this.listeners.get(envelope.event);
@@ -342,9 +384,8 @@ export class WebSocketClient {
     });
 
     ws.addEventListener("close", () => {
-      if (this.socket === ws) {
-        this.socket = null;
-      }
+      if (this.socket !== ws) return;
+      this.socket = null;
       for (const cb of this.connectionListeners) cb(false, false);
       if (!this.closedManually) {
         this.scheduleReconnect();
@@ -352,6 +393,7 @@ export class WebSocketClient {
     });
 
     ws.addEventListener("error", () => {
+      if (this.socket !== ws) return;
       ws.close();
     });
   }
@@ -379,8 +421,9 @@ export class WebSocketClient {
       window.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    this.socket?.close();
+    const prev = this.socket;
     this.socket = null;
+    prev?.close();
   }
 }
 
@@ -3718,10 +3761,32 @@ export const daemonApi = {
     canceled?: boolean;
     conta?: ContaProvedorInfo;
     provedores?: ProvedorStatusInfo[];
+    uso?: UsoProvedoresSnapshot;
     erro?: string;
   }> {
     return await requestJson(
       `/api/studio/servers/${encodeURIComponent(serverId)}/connect-gemini-via-desktop`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(label ? { label } : {}),
+      }
+    );
+  },
+
+  async conectarOpenAiRemotoViaDesktop(
+    serverId: string,
+    label?: string
+  ): Promise<{
+    ok: boolean;
+    canceled?: boolean;
+    conta?: ContaProvedorInfo;
+    provedores?: ProvedorStatusInfo[];
+    uso?: UsoProvedoresSnapshot;
+    erro?: string;
+  }> {
+    return await requestJson(
+      `/api/studio/servers/${encodeURIComponent(serverId)}/connect-openai-via-desktop`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },

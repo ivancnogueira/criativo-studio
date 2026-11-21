@@ -340,6 +340,12 @@ function registerIpcHandlers(userDataDir: string): void {
     );
   });
 
+  ipcMain.handle("criativo:dock-sync-active-server", (_evt, rawServerId: unknown) => {
+    const serverId = typeof rawServerId === "string" && rawServerId.trim() ? rawServerId.trim() : "primary";
+    floatingDock?.notifyActiveServerChanged(serverId);
+    return true;
+  });
+
   ipcMain.handle("criativo:open-main-window", (_evt, rawOpts: unknown) => {
     focusOrShowMainWindow();
     if (mainWindow && !mainWindow.isDestroyed()) {

@@ -488,6 +488,8 @@ export function App() {
   }, []);
   const wsRef = useRef<WebSocketClient | null>(null);
   const restoredLastTabRef = useRef(false);
+  const desktopAssistedProviderRef = useRef<"gemini" | "openai" | null>(null);
+  const rehydratingServerRef = useRef<string | null>(null);
 
   useEffect(() => {
     applyUserSettingsToDocument(userSettings);
@@ -574,6 +576,7 @@ export function App() {
 
   const hydrateAll = useCallback(async () => {
     try {
+      const serverIdAtStart = getActiveServerId();
       const licStatus = await daemonApi.obterStatusLicenca().catch(() => null);
       if (licStatus) {
         setLicenseStatus(licStatus);
@@ -656,10 +659,16 @@ export function App() {
         setServers(remoteServersSnap.servers);
         setServerQuota(remoteServersSnap.quota);
         const resolvedServerId = remoteServersSnap.active_server_id || "primary";
-        if (resolvedServerId !== getActiveServerId()) {
+        void getCriativoDesktopBridge()?.dockSyncActiveServer?.(resolvedServerId);
+        if (resolvedServerId !== serverIdAtStart && rehydratingServerRef.current !== resolvedServerId) {
+          rehydratingServerRef.current = resolvedServerId;
           setActiveServerId(resolvedServerId);
           setActiveServerIdState(resolvedServerId);
+          wsRef.current?.reconnectForServer(resolvedServerId);
+          await hydrateAll();
+          return;
         }
+        rehydratingServerRef.current = null;
       }
 
       if (onb) setOnboarding(onb);
@@ -996,7 +1005,8 @@ export function App() {
       });
     });
     const unsubProv = ws.on("provider:updated", () => {
-      void daemonApi.listProvidersStatus(false).then(setProvedores);
+      void daemonApi.listProvidersStatus(false).then(setProvedores).catch(() => {});
+      void daemonApi.getProvidersUsage(false).then(setUso).catch(() => {});
     });
     const unsubAuthUrl = ws.on("provider:auth_url", (evt) => {
       setPendingAuthLink(evt);
@@ -1005,7 +1015,8 @@ export function App() {
         if (
           currentServerId &&
           currentServerId !== "primary" &&
-          (evt.provedor === "openai" || evt.provedor === "claude")
+          (evt.provedor === "openai" || evt.provedor === "claude") &&
+          desktopAssistedProviderRef.current !== evt.provedor
         ) {
           await daemonApi
             .prepararPonteOAuthRemoto(currentServerId, evt.provedor, evt.url)
@@ -1640,6 +1651,7 @@ export function App() {
         setServers(res.servers);
         setActiveServerIdState(res.active_server_id);
         setOnboarding(null);
+        setUso(null);
         setActiveSideThreadId(null);
         setChatByKey({});
         setThreadChatById({});
@@ -1653,6 +1665,7 @@ export function App() {
         setActiveSection("agentes");
         restoredLastTabRef.current = false;
         wsRef.current?.reconnectForServer(res.active_server_id);
+        void getCriativoDesktopBridge()?.dockSyncActiveServer?.(res.active_server_id);
         await hydrateAll();
       } catch {
         // toast/error silencioso; status permanece no servidor atual
@@ -3044,20 +3057,46 @@ export function App() {
       try {
         const currentServerId = getActiveServerId();
         const activeSrv = servers.find((s) => s.server_id === currentServerId);
-        if (
-          prov === "gemini" &&
-          (activeSrv?.kind === "remote_vps" || activeSrv?.kind === "joined")
-        ) {
+        const isRemoteTarget = activeSrv?.kind === "remote_vps" || activeSrv?.kind === "joined";
+        if (prov === "gemini" && isRemoteTarget) {
+          desktopAssistedProviderRef.current = "gemini";
           const remoteRes = await daemonApi.conectarGeminiRemotoViaDesktop(currentServerId, label);
           if (remoteRes.ok && remoteRes.provedores) {
             setProvedores(remoteRes.provedores);
-            setUso(await daemonApi.getProvidersUsage(true).catch(() => uso));
+            setUso(remoteRes.uso ?? (await daemonApi.getProvidersUsage(true).catch(() => uso)));
           }
           return {
             ok: Boolean(remoteRes.ok),
             canceled: Boolean(remoteRes.canceled),
             erro: remoteRes.erro,
           };
+        }
+        if (prov === "openai" && isRemoteTarget) {
+          desktopAssistedProviderRef.current = "openai";
+          try {
+            const remoteRes = await daemonApi.conectarOpenAiRemotoViaDesktop(currentServerId, label);
+            if (remoteRes.ok && remoteRes.provedores) {
+              setProvedores(remoteRes.provedores);
+              setUso(remoteRes.uso ?? (await daemonApi.getProvidersUsage(true).catch(() => uso)));
+              return { ok: true, canceled: false };
+            }
+            if (remoteRes.canceled) {
+              return { ok: false, canceled: true, erro: remoteRes.erro };
+            }
+            if (
+              remoteRes.erro &&
+              !/Runtime Codex CLI|não encontrado|não pôde ser instalado|404|503/i.test(remoteRes.erro)
+            ) {
+              return { ok: false, canceled: false, erro: remoteRes.erro };
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : "";
+            if (msg && !/Runtime Codex CLI|não encontrado|não pôde ser instalado|404|503/i.test(msg)) {
+              return { ok: false, canceled: false, erro: msg };
+            }
+          } finally {
+            desktopAssistedProviderRef.current = null;
+          }
         }
         const res = await daemonApi.connectProviderViaBrowser(prov, label);
         if (res.ok && res.provedores) {
@@ -3066,6 +3105,7 @@ export function App() {
         }
         return { ok: Boolean(res.ok), canceled: Boolean(res.canceled), erro: res.erro };
       } finally {
+        desktopAssistedProviderRef.current = null;
         setPendingAuthLink((cur) => (cur?.provedor === prov ? null : cur));
       }
     },

@@ -9,6 +9,7 @@ import { CriativoDatabase } from "../src/database/client.ts";
 import { MemoryManager } from "../src/engine/runner/memory-manager.ts";
 import { AntigravityLiveService } from "../src/providers/antigravity-live-service.ts";
 import { RemoteClaimService } from "../src/servers/remote-claim-service.ts";
+import { RemoteOAuthBridgeService } from "../src/servers/remote-oauth-bridge.ts";
 import {
   listInstalledSkills,
   loadSkillPromptBySlug,
@@ -827,6 +828,237 @@ describe("Fase 24 — Hotfixes RemoteClaim HTML Fallback, Auto-Refresh de Cotas 
       assert.equal(geminiStatus?.contas?.[0]?.email, "gemini-vps27@exemplo.invalid");
     } finally {
       await vpsRt.close().catch(() => {});
+    }
+  });
+
+  it("12. (QUOTA28-01 & QUOTA28-02) AntigravityLiveService sintetiza cotas via fetchAvailableModels/retrieveUserQuota, deduplica chamadas concorrentes e POST contas retorna uso populado", async () => {
+    const accountsRoot = join(tempDir, "contas-gemini-q28");
+    mkdirSync(accountsRoot, { recursive: true });
+
+    let quotaSummaryCalls = 0;
+    const fiveHoursLater = new Date(Date.now() + 4 * 3600_000).toISOString();
+    const sixDaysLater = new Date(Date.now() + 6 * 86400_000).toISOString();
+
+    const synthFetch: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith(":loadCodeAssist")) {
+        return new Response(JSON.stringify({ cloudaicompanionProject: "proj-q28", currentTier: { name: "Google AI Pro" } }), {
+          status: 200,
+        });
+      }
+      if (url.endsWith(":retrieveUserQuotaSummary")) {
+        quotaSummaryCalls += 1;
+        return new Response("Not Found", { status: 404 });
+      }
+      if (url.endsWith(":retrieveUserQuota")) {
+        return new Response(JSON.stringify({ buckets: [] }), { status: 200 });
+      }
+      if (url.endsWith(":fetchAvailableModels")) {
+        return new Response(
+          JSON.stringify({
+            defaultAgentModelId: "gemini-3.8-flash-high",
+            models: {
+              "gemini-3.8-flash-high": {
+                displayName: "Gemini 3.8 Flash",
+                modelProvider: "MODEL_PROVIDER_GOOGLE",
+                quotaInfo: { remainingFraction: 0.84, resetTime: fiveHoursLater },
+              },
+              "claude-sonnet-4-6": {
+                displayName: "Claude Sonnet 4.6",
+                modelProvider: "MODEL_PROVIDER_ANTHROPIC",
+                quotaInfo: { remainingFraction: 0.61, resetTime: sixDaysLater },
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response("{}", { status: 200 });
+    };
+
+    const dbQ28 = new CriativoDatabase({ dbPath: join(tempDir, "criativo-q28.db") });
+    dbQ28.initializeDatabase();
+    try {
+      const agSvc = new AntigravityLiveService({
+        db: dbQ28,
+        accountsRootDir: accountsRoot,
+        workspaceCwd: tempDir,
+        fetchImpl: synthFetch,
+      });
+
+      agSvc.addManualTokenAccount({
+        email: "quota-synth@exemplo.invalid",
+        accessToken: "ya29.q28-synth-token",
+        refreshToken: "",
+        expiry: new Date(Date.now() + 50 * 60_000).toISOString(),
+      });
+
+      // Chamadas concorrentes devem compartilhar inFlightSnapshot (deduplicação)
+      const [snapA, snapB] = await Promise.all([agSvc.getLiveSnapshot(false), agSvc.getLiveSnapshot(false)]);
+      assert.equal(quotaSummaryCalls, 2); // 1x daily + 1x prod em apenas 1 rodada
+      assert.equal(snapA.contas.length, 1);
+      assert.equal(snapB.contas.length, 1);
+      const grupos = snapA.contas[0]!.grupos_cota;
+      assert.equal(grupos.length, 2);
+      const geminiGrp = grupos.find((g) => g.nome === "Gemini Models");
+      const claudeGrp = grupos.find((g) => g.nome === "Claude and GPT models");
+      assert.equal(geminiGrp?.janela_5h?.restante_percentual, 84);
+      assert.equal(claudeGrp?.janela_semanal?.restante_percentual, 61);
+    } finally {
+      dbQ28.close();
+    }
+
+    // QUOTA28-02: POST /api/provedores/gemini/contas já devolve uso populado
+    const addr = runtime.httpServer.address() as { port: number };
+    const postRes = await fetch(`http://127.0.0.1:${addr.port}/api/provedores/gemini/contas`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: "quota-route28@exemplo.invalid",
+        access_token: "ya29.route28-token",
+        expiry: new Date(Date.now() + 55 * 60_000).toISOString(),
+      }),
+    });
+    assert.equal(postRes.status, 201);
+    const postJson = (await postRes.json()) as {
+      conta: { email: string };
+      uso?: { contas: Array<{ email: string }> };
+    };
+    assert.equal(postJson.conta.email, "quota-route28@exemplo.invalid");
+    assert.ok(postJson.uso?.contas?.some((c) => c.email === "quota-route28@exemplo.invalid"));
+  });
+
+  it("13. (OAUTH28-01 & OAUTH28-02) RemoteOAuthBridgeService ignora /cancel e só mostra sucesso quando CLI aceita; OpenAI auth.json é importado isoladamente na VPS", async () => {
+    const vpsDir = join(tempDir, "vps-oauth-28");
+    const desktopDir = join(tempDir, "desktop-oauth-28");
+    mkdirSync(vpsDir, { recursive: true });
+    mkdirSync(desktopDir, { recursive: true });
+
+    const desktopRt = await createDaemonServer({
+      port: 0,
+      host: "127.0.0.1",
+      dbPath: join(desktopDir, "criativo.db"),
+      workspaceRoot: desktopDir,
+      autoStartLoops: false,
+      autoBootWhatsApp: false,
+      controlSocketPath: null,
+      bypassLicenseForTests: true,
+    });
+    const vpsToken = "vps-oauth-28-token";
+    const vpsRt = await createDaemonServer({
+      port: 0,
+      host: "127.0.0.1",
+      dbPath: join(vpsDir, "criativo.db"),
+      workspaceRoot: vpsDir,
+      autoStartLoops: false,
+      autoBootWhatsApp: false,
+      controlSocketPath: null,
+      bypassLicenseForTests: true,
+      accessToken: vpsToken,
+    });
+
+    const probePort = createHttpServer();
+    await new Promise<void>((r) => probePort.listen(0, "127.0.0.1", () => r()));
+    const bridgePort = (probePort.address() as { port: number }).port;
+    await new Promise<void>((r) => probePort.close(() => r()));
+
+    const mockCodexLoopback = createHttpServer((req, res) => {
+      if ((req.url || "").includes("code=REJECT_28")) {
+        res.writeHead(400, { "Content-Type": "text/plain" });
+        res.end("Login cancelled");
+        return;
+      }
+      res.writeHead(302, { Location: "/success" });
+      res.end();
+    });
+    await new Promise<void>((r) => mockCodexLoopback.listen(0, "127.0.0.1", () => r()));
+    const mockCodexPort = (mockCodexLoopback.address() as { port: number }).port;
+
+    const bridgeSvc = new RemoteOAuthBridgeService({
+      localServerManager: desktopRt.localServerManager!,
+    });
+
+    try {
+      const srvRec = desktopRt.localServerManager!.registerRemoteServer({
+        nome: "VPS Codex 28",
+        kind: "remote_vps",
+        base_url: `http://127.0.0.1:${vpsRt.port}`,
+        access_token: vpsToken,
+      });
+
+      vpsRt.providerConnection.getCliOAuthService().registerPendingLoopbackPort("openai", mockCodexPort);
+
+      await bridgeSvc.prepareBridgeForAuthUrl({
+        serverId: srvRec.server_id,
+        provedor: "openai",
+        authUrl: `https://auth.example.invalid/oauth/authorize?redirect_uri=${encodeURIComponent(
+          `http://localhost:${bridgePort}/auth/callback`,
+        )}`,
+      });
+
+      // Requisição espúria /cancel deve ser ignorada sem fechar a ponte
+      const cancelRes = await fetch(`http://127.0.0.1:${bridgePort}/cancel`);
+      assert.equal(cancelRes.status, 204);
+
+      // Rejeição da CLI deve retornar 400 com mensagem vermelha de falha (nunca tela verde)
+      const rejectRes = await fetch(`http://127.0.0.1:${bridgePort}/auth/callback?code=REJECT_28&state=1`);
+      assert.equal(rejectRes.status, 400);
+      const rejectHtml = await rejectRes.text();
+      assert.match(rejectHtml, /Falha na autenticação remota/i);
+      assert.doesNotMatch(rejectHtml, /Autenticação concluída/i);
+
+      // OAUTH28-02: importCodexAuthAccount via POST /api/provedores/openai/contas-auth
+      const fakeJwtPayload = Buffer.from(
+        JSON.stringify({
+          email: "codex-vps28@exemplo.invalid",
+          "https://api.openai.com/auth": { chatgpt_plan_type: "plus" },
+        }),
+      ).toString("base64url");
+      const fakeAuthJson = JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          id_token: `hdr.${fakeJwtPayload}.sig`,
+          access_token: "at-codex-vps28",
+          refresh_token: "rt-codex-vps28",
+        },
+      });
+
+      const prevProbe = process.env.CRIATIVO_SKIP_LOCAL_PROBE;
+      process.env.CRIATIVO_SKIP_LOCAL_PROBE = "1";
+      try {
+        const importRes = await fetch(`http://127.0.0.1:${vpsRt.port}/api/provedores/openai/contas-auth`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${vpsToken}`,
+          },
+          body: JSON.stringify({
+            auth_json: fakeAuthJson,
+            label: "Codex VPS",
+          }),
+        });
+        assert.equal(importRes.status, 201);
+        const importJson = (await importRes.json()) as {
+          ok: boolean;
+          conta: { email: string; provedor: string };
+          provedores: Array<{ provedor: string; conectado: boolean; contas?: Array<{ email: string }> }>;
+          uso?: { contas: Array<{ email: string; provedor: string }> };
+        };
+        assert.equal(importJson.ok, true);
+        assert.equal(importJson.conta.email, "codex-vps28@exemplo.invalid");
+        const openaiProv = importJson.provedores.find((p) => p.provedor === "openai");
+        assert.equal(openaiProv?.conectado, true);
+        assert.equal(openaiProv?.contas?.[0]?.email, "codex-vps28@exemplo.invalid");
+        assert.ok(importJson.uso?.contas?.some((c) => c.email === "codex-vps28@exemplo.invalid"));
+      } finally {
+        if (prevProbe === undefined) delete process.env.CRIATIVO_SKIP_LOCAL_PROBE;
+        else process.env.CRIATIVO_SKIP_LOCAL_PROBE = prevProbe;
+      }
+    } finally {
+      bridgeSvc.closeAll();
+      await new Promise<void>((r) => mockCodexLoopback.close(() => r()));
+      await vpsRt.close().catch(() => {});
+      await desktopRt.close().catch(() => {});
     }
   });
 });

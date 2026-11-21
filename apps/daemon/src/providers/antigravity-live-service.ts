@@ -65,13 +65,24 @@ interface CodeAssistQuotaBucket {
   bucketId?: string;
   displayName?: string;
   window?: string;
+  duration?: string;
+  modelId?: string;
+  tokenType?: string;
   resetTime?: string;
   remainingFraction?: number;
+  remainingPercent?: number;
+  usedFraction?: number;
+  usedPercent?: number;
 }
 
 interface CodeAssistQuotaGroup {
   displayName?: string;
   description?: string;
+  buckets?: CodeAssistQuotaBucket[];
+}
+
+interface CodeAssistRetrieveQuotaResponse {
+  groups?: CodeAssistQuotaGroup[];
   buckets?: CodeAssistQuotaBucket[];
 }
 
@@ -231,20 +242,64 @@ function parseGroupModelsDescription(desc: string | undefined): string[] {
     .filter(Boolean);
 }
 
+function extractRemainingPercentage(bucket: CodeAssistQuotaBucket): number | null {
+  if (typeof bucket.remainingFraction === "number" && Number.isFinite(bucket.remainingFraction)) {
+    const scaled = bucket.remainingFraction <= 1 ? bucket.remainingFraction * 100 : bucket.remainingFraction;
+    return Math.max(0, Math.min(100, Math.round(scaled)));
+  }
+  if (typeof bucket.remainingPercent === "number" && Number.isFinite(bucket.remainingPercent)) {
+    return Math.max(0, Math.min(100, Math.round(bucket.remainingPercent)));
+  }
+  if (typeof bucket.usedFraction === "number" && Number.isFinite(bucket.usedFraction)) {
+    const scaled = bucket.usedFraction <= 1 ? bucket.usedFraction * 100 : bucket.usedFraction;
+    return Math.max(0, Math.min(100, Math.round(100 - scaled)));
+  }
+  if (typeof bucket.usedPercent === "number" && Number.isFinite(bucket.usedPercent)) {
+    return Math.max(0, Math.min(100, Math.round(100 - bucket.usedPercent)));
+  }
+  return null;
+}
+
+function classifyQuotaWindowKind(
+  descriptorRaw: string,
+  resetIso: string | null
+): "5h" | "semanal" {
+  const descriptor = descriptorRaw.toLowerCase();
+  if (/week|semanal|7\s*d|seven.?day|long/.test(descriptor)) {
+    return "semanal";
+  }
+  if (/\b5\s*-?\s*h|five.?hour|short|hourly|24\s*h|daily/.test(descriptor)) {
+    return "5h";
+  }
+  if (resetIso) {
+    const resetMs = Date.parse(resetIso);
+    if (Number.isFinite(resetMs)) {
+      const diffHours = (resetMs - Date.now()) / 3_600_000;
+      if (diffHours > 18) {
+        return "semanal";
+      }
+      if (diffHours >= 0) {
+        return "5h";
+      }
+    }
+  }
+  return "5h";
+}
+
 function normalizeWindowBucket(bucket: CodeAssistQuotaBucket): JanelaCotaConta | null {
-  if (typeof bucket.remainingFraction !== "number") return null;
-  const remainingPct = Math.max(0, Math.min(100, Math.round(bucket.remainingFraction * 100)));
+  const remainingPct = extractRemainingPercentage(bucket);
+  if (remainingPct === null) return null;
   const usedPct = 100 - remainingPct;
-  const descriptor = `${bucket.window ?? ""} ${bucket.displayName ?? ""}`.toLowerCase();
-  const isWeekly = /week|semanal|7\s*d/.test(descriptor);
-  const is5h = /\b5\s*-?\s*h|five.?hour/.test(descriptor);
-  const janela: JanelaCotaConta["janela"] = isWeekly ? "semanal" : is5h ? "5h" : "outro";
-  const duracaoMinutos = isWeekly ? 10_080 : is5h ? 300 : 0;
   const resetIso = bucket.resetTime ?? null;
+  const janela = classifyQuotaWindowKind(
+    `${bucket.window ?? ""} ${bucket.duration ?? ""} ${bucket.displayName ?? ""} ${bucket.bucketId ?? ""}`,
+    resetIso
+  );
+  const duracaoMinutos = janela === "semanal" ? 10_080 : 300;
 
   return {
     bucket_id: bucket.bucketId,
-    rotulo: bucket.displayName?.trim() || (isWeekly ? "Limite semanal" : is5h ? "Limite de 5 horas" : "Cota"),
+    rotulo: bucket.displayName?.trim() || (janela === "semanal" ? "Limite semanal" : "Limite de 5 horas"),
     janela,
     duracao_minutos: duracaoMinutos,
     restante_percentual: remainingPct,
@@ -252,6 +307,83 @@ function normalizeWindowBucket(bucket: CodeAssistQuotaBucket): JanelaCotaConta |
     reseta_em: resetIso,
     reseta_em_texto: formatResetCountdownPtBr(resetIso),
   };
+}
+
+function resolveQuotaGroupName(modelId: string, modelProvider?: string): "Claude and GPT models" | "Gemini Models" {
+  const lower = modelId.toLowerCase();
+  if (
+    modelProvider === "MODEL_PROVIDER_ANTHROPIC" ||
+    modelProvider === "MODEL_PROVIDER_OPENAI" ||
+    lower.includes("claude") ||
+    lower.includes("gpt") ||
+    lower.includes("opus") ||
+    lower.includes("sonnet") ||
+    lower.includes("haiku")
+  ) {
+    return "Claude and GPT models";
+  }
+  return "Gemini Models";
+}
+
+function synthesizeQuotaGroupsFromModels(
+  models: Record<string, FetchAvailableModelEntry> | undefined,
+  rawBuckets?: CodeAssistQuotaBucket[]
+): GrupoCotaConta[] {
+  const grouped = new Map<
+    string,
+    { modelos: Set<string>; janela5h: JanelaCotaConta | null; janelaSemanal: JanelaCotaConta | null }
+  >();
+
+  const pushBucketForGroup = (groupName: string, modelLabel: string | null, win: JanelaCotaConta) => {
+    let acc = grouped.get(groupName);
+    if (!acc) {
+      acc = { modelos: new Set<string>(), janela5h: null, janelaSemanal: null };
+      grouped.set(groupName, acc);
+    }
+    if (modelLabel) acc.modelos.add(modelLabel);
+    if (win.janela === "semanal") {
+      if (!acc.janelaSemanal || win.restante_percentual < acc.janelaSemanal.restante_percentual) {
+        acc.janelaSemanal = win;
+      }
+    } else if (!acc.janela5h || win.restante_percentual < acc.janela5h.restante_percentual) {
+      acc.janela5h = win;
+    }
+  };
+
+  for (const bucket of rawBuckets ?? []) {
+    const modelId = bucket.modelId?.trim() || "";
+    if (modelId && isInternalHiddenModelId(modelId)) continue;
+    const win = normalizeWindowBucket(bucket);
+    if (!win) continue;
+    const groupName = resolveQuotaGroupName(modelId || bucket.displayName || "gemini");
+    pushBucketForGroup(groupName, modelId || null, win);
+  }
+
+  for (const [mId, meta] of Object.entries(models ?? {})) {
+    if (isInternalHiddenModelId(mId)) continue;
+    if (!meta?.quotaInfo || typeof meta.quotaInfo.remainingFraction !== "number") continue;
+    const win = normalizeWindowBucket({
+      bucketId: mId,
+      displayName: meta.displayName,
+      remainingFraction: meta.quotaInfo.remainingFraction,
+      resetTime: meta.quotaInfo.resetTime,
+    });
+    if (!win) continue;
+    const groupName = resolveQuotaGroupName(mId, meta.modelProvider);
+    pushBucketForGroup(groupName, meta.displayName?.trim() || mId, win);
+  }
+
+  const out: GrupoCotaConta[] = [];
+  for (const [nome, data] of grouped.entries()) {
+    if (!data.janela5h && !data.janelaSemanal) continue;
+    out.push({
+      nome,
+      modelos: Array.from(data.modelos).slice(0, 8),
+      janela_5h: data.janela5h,
+      janela_semanal: data.janelaSemanal,
+    });
+  }
+  return out;
 }
 
 function safeReadJson<T>(filePath: string): T | null {
@@ -326,6 +458,7 @@ export class AntigravityLiveService {
   private mcpGateway?: McpGateway;
   private extraMcpServersResolver?: (agentId?: string | null) => unknown[];
   private snapshotCache: { expiresAt: number; data: AntigravityLiveSnapshot } | null = null;
+  private inFlightSnapshot: Promise<AntigravityLiveSnapshot> | null = null;
   private acpModelsCache: {
     accountId: string;
     expiresAt: number;
@@ -597,6 +730,22 @@ export class AntigravityLiveService {
     if (!forceRefresh && this.snapshotCache && this.snapshotCache.expiresAt > now) {
       return this.snapshotCache.data;
     }
+    if (!forceRefresh && this.inFlightSnapshot) {
+      return await this.inFlightSnapshot;
+    }
+
+    const promise = this.computeLiveSnapshot(forceRefresh).finally(() => {
+      if (this.inFlightSnapshot === promise) {
+        this.inFlightSnapshot = null;
+      }
+    });
+    this.inFlightSnapshot = promise;
+    return await promise;
+  }
+
+  private async computeLiveSnapshot(forceRefresh = false): Promise<AntigravityLiveSnapshot> {
+    const now = Date.now();
+    const SHORT_MISSING_QUOTA_TTL_MS = 5_000;
 
     const { entries, poolOverride } = this.discoverStudioTokenEntries();
     if (entries.length === 0) {
@@ -646,96 +795,196 @@ export class AntigravityLiveService {
           }
         }
 
-        const estado: ContaProvedorInfo["estado"] =
+        let estado: ContaProvedorInfo["estado"] =
           tokenValidNow || (entry.hasRefreshToken && Boolean(cliExe)) ? "conectado" : "desconectado";
         let plano: string | null = cachedAccount?.plano ?? null;
 
         const fetchLiveQuotaAndModels = async (tokenToUse: string) => {
-          const codeAssistInfo = await this.callCodeAssist<{
+          const loadBody = {
+            metadata: {
+              ideType: "ANTIGRAVITY",
+              platform:
+                process.platform === "win32"
+                  ? "WINDOWS"
+                  : process.platform === "darwin"
+                    ? "MACOS"
+                    : "LINUX",
+              pluginType: "GEMINI",
+            },
+          };
+
+          let codeAssistInfo = await this.callCodeAssist<{
             cloudaicompanionProject?: string;
             currentTier?: { name?: string };
-          }>(CODE_ASSIST_URL, "loadCodeAssist", tokenToUse, {});
+          }>(CODE_ASSIST_URL, "loadCodeAssist", tokenToUse, loadBody).catch(() => null);
+
+          if (!codeAssistInfo?.cloudaicompanionProject) {
+            const dailyLoad = await this.callCodeAssist<{
+              cloudaicompanionProject?: string;
+              currentTier?: { name?: string };
+            }>(DAILY_CODE_ASSIST_URL, "loadCodeAssist", tokenToUse, loadBody).catch(() => null);
+            if (dailyLoad?.cloudaicompanionProject || !codeAssistInfo) {
+              codeAssistInfo = dailyLoad;
+            }
+          }
+
+          if (!codeAssistInfo) {
+            codeAssistInfo = await this.callCodeAssist<{
+              cloudaicompanionProject?: string;
+              currentTier?: { name?: string };
+            }>(CODE_ASSIST_URL, "loadCodeAssist", tokenToUse, {});
+          }
 
           if (codeAssistInfo.currentTier?.name) {
             plano = codeAssistInfo.currentTier.name;
           }
 
-          if (codeAssistInfo.cloudaicompanionProject) {
-            anyFreshLiveSuccess = true;
-            const [quotaRes, modelsRes] = await Promise.all([
-              this.callCodeAssist<{ groups?: CodeAssistQuotaGroup[] }>(
-                DAILY_CODE_ASSIST_URL,
-                "retrieveUserQuotaSummary",
-                tokenToUse,
-                { project: codeAssistInfo.cloudaicompanionProject }
-              ).catch(() => ({ groups: [] as CodeAssistQuotaGroup[] })),
-              this.callCodeAssist<{
-                models?: Record<string, FetchAvailableModelEntry>;
-                defaultAgentModelId?: string;
-                imageGenerationModelIds?: string[];
-              }>(
-                DAILY_CODE_ASSIST_URL,
-                "fetchAvailableModels",
-                tokenToUse,
-                { project: codeAssistInfo.cloudaicompanionProject }
-              ).catch(() => null),
-            ]);
+          const project = codeAssistInfo.cloudaicompanionProject;
+          const queryPayload = project ? { project } : {};
 
-            for (const rawGroup of quotaRes.groups ?? []) {
-              const nome = rawGroup.displayName?.trim();
-              if (!nome) continue;
-              let janela5h: JanelaCotaConta | null = null;
-              let janelaSemanal: JanelaCotaConta | null = null;
-              for (const b of rawGroup.buckets ?? []) {
-                const win = normalizeWindowBucket(b);
-                if (!win) continue;
-                if (win.janela === "5h") {
-                  if (!janela5h || win.restante_percentual < janela5h.restante_percentual) janela5h = win;
-                } else if (win.janela === "semanal") {
-                  if (!janelaSemanal || win.restante_percentual < janelaSemanal.restante_percentual) janelaSemanal = win;
-                }
-              }
-              if (janela5h || janelaSemanal) {
-                grupos.push({
-                  nome,
-                  modelos: parseGroupModelsDescription(rawGroup.description),
-                  janela_5h: janela5h,
-                  janela_semanal: janelaSemanal,
-                });
+          const [dailyQuotaRes, dailyModelsRes] = await Promise.all([
+            this.callCodeAssist<CodeAssistRetrieveQuotaResponse>(
+              DAILY_CODE_ASSIST_URL,
+              "retrieveUserQuotaSummary",
+              tokenToUse,
+              queryPayload
+            ).catch(() => null),
+            this.callCodeAssist<{
+              models?: Record<string, FetchAvailableModelEntry>;
+              defaultAgentModelId?: string;
+              imageGenerationModelIds?: string[];
+            }>(
+              DAILY_CODE_ASSIST_URL,
+              "fetchAvailableModels",
+              tokenToUse,
+              queryPayload
+            ).catch(() => null),
+          ]);
+
+          let quotaRes = dailyQuotaRes;
+          if (!quotaRes?.groups?.length) {
+            const prodQuotaRes = await this.callCodeAssist<CodeAssistRetrieveQuotaResponse>(
+              CODE_ASSIST_URL,
+              "retrieveUserQuotaSummary",
+              tokenToUse,
+              queryPayload
+            ).catch(() => null);
+            if (prodQuotaRes?.groups?.length || prodQuotaRes?.buckets?.length) {
+              quotaRes = prodQuotaRes;
+            }
+          }
+
+          let modelsRes = dailyModelsRes;
+          if (!modelsRes?.models || Object.keys(modelsRes.models).length === 0) {
+            const prodModelsRes = await this.callCodeAssist<{
+              models?: Record<string, FetchAvailableModelEntry>;
+              defaultAgentModelId?: string;
+              imageGenerationModelIds?: string[];
+            }>(
+              CODE_ASSIST_URL,
+              "fetchAvailableModels",
+              tokenToUse,
+              queryPayload
+            ).catch(() => null);
+            if (prodModelsRes?.models && Object.keys(prodModelsRes.models).length > 0) {
+              modelsRes = prodModelsRes;
+            }
+          }
+
+          if (project || quotaRes || modelsRes) {
+            anyFreshLiveSuccess = true;
+          }
+
+          for (const rawGroup of quotaRes?.groups ?? []) {
+            const nome = rawGroup.displayName?.trim();
+            if (!nome) continue;
+            let janela5h: JanelaCotaConta | null = null;
+            let janelaSemanal: JanelaCotaConta | null = null;
+            for (const b of rawGroup.buckets ?? []) {
+              const win = normalizeWindowBucket(b);
+              if (!win) continue;
+              if (win.janela === "5h") {
+                if (!janela5h || win.restante_percentual < janela5h.restante_percentual) janela5h = win;
+              } else if (win.janela === "semanal") {
+                if (!janelaSemanal || win.restante_percentual < janelaSemanal.restante_percentual) janelaSemanal = win;
+              } else if (!janela5h) {
+                janela5h = win;
+              } else if (!janelaSemanal) {
+                janelaSemanal = win;
               }
             }
+            if (janela5h || janelaSemanal) {
+              grupos.push({
+                nome,
+                modelos: parseGroupModelsDescription(rawGroup.description),
+                janela_5h: janela5h,
+                janela_semanal: janelaSemanal,
+              });
+            }
+          }
 
-            if (modelsRes?.models) {
-              if (modelsRes.defaultAgentModelId) {
-                defaultModelId = modelsRes.defaultAgentModelId;
-              }
-              for (const imgId of modelsRes.imageGenerationModelIds ?? []) {
-                imageGenerationModelIds.add(imgId);
-              }
-              for (const [mId, mMeta] of Object.entries(modelsRes.models)) {
-                const normalized = normalizeModelFamilyAndEffort(
-                  mId,
-                  mMeta,
-                  imageGenerationModelIds,
-                  defaultModelId
-                );
-                if (!normalized) continue;
-                modelosConta.push(normalized.id);
-                const existing = modelMap.get(normalized.id);
-                if (
-                  !existing ||
-                  (normalized.restante_percentual ?? 0) > (existing.restante_percentual ?? -1)
-                ) {
-                  modelMap.set(normalized.id, normalized);
-                }
+          let rawBuckets = quotaRes?.buckets ?? [];
+          if (grupos.length === 0 && rawBuckets.length === 0 && project) {
+            const flatQuota =
+              (await this.callCodeAssist<CodeAssistRetrieveQuotaResponse>(
+                CODE_ASSIST_URL,
+                "retrieveUserQuota",
+                tokenToUse,
+                queryPayload
+              ).catch(() => null)) ??
+              (await this.callCodeAssist<CodeAssistRetrieveQuotaResponse>(
+                DAILY_CODE_ASSIST_URL,
+                "retrieveUserQuota",
+                tokenToUse,
+                queryPayload
+              ).catch(() => null));
+            if (flatQuota?.buckets?.length) {
+              rawBuckets = flatQuota.buckets;
+              anyFreshLiveSuccess = true;
+            }
+          }
+
+          if (grupos.length === 0) {
+            const synthesized = synthesizeQuotaGroupsFromModels(modelsRes?.models, rawBuckets);
+            if (synthesized.length > 0) {
+              grupos.push(...synthesized);
+            }
+          }
+
+          if (modelsRes?.models) {
+            if (modelsRes.defaultAgentModelId) {
+              defaultModelId = modelsRes.defaultAgentModelId;
+            }
+            for (const imgId of modelsRes.imageGenerationModelIds ?? []) {
+              imageGenerationModelIds.add(imgId);
+            }
+            for (const [mId, mMeta] of Object.entries(modelsRes.models)) {
+              const normalized = normalizeModelFamilyAndEffort(
+                mId,
+                mMeta,
+                imageGenerationModelIds,
+                defaultModelId
+              );
+              if (!normalized) continue;
+              modelosConta.push(normalized.id);
+              const existing = modelMap.get(normalized.id);
+              if (
+                !existing ||
+                (normalized.restante_percentual ?? 0) > (existing.restante_percentual ?? -1)
+              ) {
+                modelMap.set(normalized.id, normalized);
               }
             }
           }
         };
 
-        if (activeAccessToken && tokenValidNow) {
+        if (activeAccessToken && (tokenValidNow || entry.hasRefreshToken || !cliExe)) {
           try {
             await fetchLiveQuotaAndModels(activeAccessToken);
+            if (anyFreshLiveSuccess) {
+              tokenValidNow = true;
+              estado = "conectado";
+            }
           } catch (liveErr) {
             const msg = liveErr instanceof Error ? liveErr.message : String(liveErr);
             if (/\b401\b|\b403\b/i.test(msg) && entry.hasRefreshToken && cliExe) {
@@ -745,6 +994,7 @@ export class AntigravityLiveService {
                   activeAccessToken = refreshed.accessToken;
                   expiryIsoNow = refreshed.expiryIso;
                   tokenValidNow = true;
+                  estado = "conectado";
                   await fetchLiveQuotaAndModels(activeAccessToken);
                 }
               } catch {
@@ -897,7 +1147,11 @@ export class AntigravityLiveService {
       imageGenerationModelIds: [...imageGenerationModelIds],
       atualizado_em: new Date().toISOString(),
     };
-    this.snapshotCache = { expiresAt: now + CACHE_TTL_MS, data: snapshot };
+    const hasMissingQuotaForConnected = contas.some(
+      (c) => c.estado === "conectado" && c.grupos_cota.length === 0
+    );
+    const cacheTtl = hasMissingQuotaForConnected ? SHORT_MISSING_QUOTA_TTL_MS : CACHE_TTL_MS;
+    this.snapshotCache = { expiresAt: Date.now() + cacheTtl, data: snapshot };
     return snapshot;
   }
 

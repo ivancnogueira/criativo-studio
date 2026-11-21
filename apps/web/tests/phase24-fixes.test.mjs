@@ -313,4 +313,39 @@ describe("Fase 24 — UI: Logo Servidor Remoto, Cotas Auto, Dock Settings & Sele
     assert.match(sidebarHtml, /Especialista em Servidor VPS/);
     assert.match(sidebarHtml, /Roster \(1 Agentes\)/);
   });
+
+  it("6. (DOCK28-01 & QUOTA28-03) Protege WebSocket contra close antigo, sincroniza servidor ativo no Dock, atualiza cotas em provider:updated e evita colisão na porta 1455", () => {
+    const wsClientSrc = readFileSync(
+      join(webRoot, "src", "services", "websocket-client.ts"),
+      "utf8",
+    );
+    assert.match(wsClientSrc, /subscribeActiveServerChanges/);
+    assert.match(wsClientSrc, /addEventListener\("storage"/);
+    assert.match(wsClientSrc, /if \(this\.socket !== ws\) return;/);
+    assert.match(wsClientSrc, /conectarOpenAiRemotoViaDesktop/);
+
+    const dockSrc = readFileSync(
+      join(webRoot, "src", "features", "dock", "FloatingDesktopDock.tsx"),
+      "utf8",
+    );
+    assert.match(dockSrc, /listarServidores/);
+    assert.match(dockSrc, /subscribeActiveServerChanges/);
+    assert.match(dockSrc, /onDockActiveServerChanged/);
+    assert.match(dockSrc, /DEFAULT_FRONTEND_DOCK_SETTINGS/);
+    assert.match(dockSrc, /Tentar novamente/);
+
+    const railSrc = readFileSync(
+      join(webRoot, "src", "components", "WorkspaceRail.tsx"),
+      "utf8",
+    );
+    assert.match(railSrc, /\$\{activeServerId\}::/);
+    assert.match(railSrc, /triggerFallbackUsageSync/);
+    assert.match(railSrc, /Sincronizando janelas de cota\.\.\./);
+
+    const appSrc = readFileSync(join(webRoot, "src", "App.tsx"), "utf8");
+    assert.match(appSrc, /ws\.on\("provider:updated"[\s\S]*?getProvidersUsage/);
+    assert.match(appSrc, /dockSyncActiveServer/);
+    assert.match(appSrc, /desktopAssistedProviderRef\.current !== evt\.provedor/);
+    assert.match(appSrc, /setUso\(null\)/);
+  });
 });

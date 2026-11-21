@@ -225,6 +225,13 @@ export class FloatingDockController {
     }
   }
 
+  public notifyActiveServerChanged(serverId: string): void {
+    const clean = typeof serverId === "string" && serverId.trim() ? serverId.trim() : "primary";
+    if (this.win && !this.win.isDestroyed()) {
+      this.win.webContents.send("criativo:dock-active-server-changed", { serverId: clean });
+    }
+  }
+
   private applyCollapsedBounds(): void {
     const win = this.win;
     if (!win || win.isDestroyed() || this.expanded) return;

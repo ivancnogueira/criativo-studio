@@ -46,6 +46,8 @@ export interface CriativoDesktopBridge {
   dockMoveDrag: () => Promise<void>;
   dockEndDrag: () => Promise<CriativoDockStatePayload>;
   onDockStateChanged: (listener: (state: CriativoDockStatePayload) => void) => () => void;
+  dockSyncActiveServer: (serverId: string) => Promise<boolean>;
+  onDockActiveServerChanged: (listener: (serverId: string) => void) => () => void;
   openMainWindow: (opts?: CriativoMainNavigatePayload) => Promise<void>;
   onMainNavigate: (listener: (payload: CriativoMainNavigatePayload) => void) => () => void;
   pickFolder: () => Promise<{ canceled: boolean; path: string | null }>;
@@ -83,6 +85,17 @@ const bridge: CriativoDesktopBridge = {
     ipcRenderer.on("criativo:dock-state-changed", wrapped);
     return () => {
       ipcRenderer.removeListener("criativo:dock-state-changed", wrapped);
+    };
+  },
+  dockSyncActiveServer: (serverId: string) =>
+    ipcRenderer.invoke("criativo:dock-sync-active-server", serverId),
+  onDockActiveServerChanged: (listener: (serverId: string) => void) => {
+    const wrapped = (_event: unknown, payload: { serverId?: string } | undefined) => {
+      listener(typeof payload?.serverId === "string" && payload.serverId ? payload.serverId : "primary");
+    };
+    ipcRenderer.on("criativo:dock-active-server-changed", wrapped);
+    return () => {
+      ipcRenderer.removeListener("criativo:dock-active-server-changed", wrapped);
     };
   },
   openMainWindow: (opts?: CriativoMainNavigatePayload) =>

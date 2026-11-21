@@ -3072,6 +3072,7 @@ export async function tryHandleStudioRoute(
       const upstreamPayload = (await upstreamRes.json().catch(() => ({}))) as {
         conta?: unknown;
         provedores?: unknown;
+        uso?: unknown;
         erro?: string;
       };
       if (!upstreamRes.ok) {
@@ -3085,12 +3086,94 @@ export async function tryHandleStudioRoute(
         ok: true,
         conta: upstreamPayload.conta,
         provedores: upstreamPayload.provedores,
+        uso: upstreamPayload.uso,
       });
     } catch (err) {
       const msg =
         err instanceof Error
           ? err.message
           : "Não foi possível autenticar sua conta Google pelo Desktop para o servidor remoto.";
+      const isCanceled = /cancelad[oa] pelo usuário/i.test(msg);
+      sendJson(res, isCanceled ? 200 : 400, {
+        ok: false,
+        canceled: isCanceled,
+        erro: msg,
+      });
+    }
+    return true;
+  }
+
+  const remoteOpenAiMatch = path.match(/^\/api\/studio\/servers\/([^/]+)\/connect-openai-via-desktop$/);
+  if (method === "POST" && remoteOpenAiMatch) {
+    if (!deps.localServerManager) {
+      sendJson(res, 503, { erro: "Gerenciador de servidores indisponível." });
+      return true;
+    }
+    const srvId = decodeURIComponent(remoteOpenAiMatch[1]);
+    const targetSrv = deps.localServerManager.getServer(srvId);
+    if (!targetSrv) {
+      sendJson(res, 404, { erro: `Servidor '${srvId}' não encontrado.` });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    const label = typeof body.label === "string" ? body.label : undefined;
+
+    try {
+      const exported = await providerConnection
+        .getCliOAuthService()
+        .signInCodexIsolatedForRemoteExport(label, (url) => {
+          wsHub.broadcast("provider:auth_url", { provedor: "openai", url });
+        });
+
+      const accessToken = deps.localServerManager.getServerAccessToken(targetSrv.server_id);
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (accessToken) {
+        headers.Authorization = `Bearer ${accessToken}`;
+      }
+      const syncedCertB64 = deps.licenseService?.exportCertificateForPeerSync();
+      if (syncedCertB64) {
+        headers["X-Criativo-Synced-License"] = syncedCertB64;
+      }
+
+      const upstreamRes = await fetch(
+        `${targetSrv.base_url.replace(/\/+$/, "")}/api/provedores/openai/contas-auth`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            auth_json: exported.authJson,
+            email: exported.email,
+            plano: exported.plano,
+            label: exported.label,
+          }),
+        }
+      );
+      const upstreamPayload = (await upstreamRes.json().catch(() => ({}))) as {
+        conta?: unknown;
+        provedores?: unknown;
+        uso?: unknown;
+        erro?: string;
+      };
+      if (!upstreamRes.ok) {
+        sendJson(res, upstreamRes.status, {
+          ok: false,
+          erro: upstreamPayload.erro ?? `Falha ao enviar sessão ChatGPT para '${targetSrv.nome}'.`,
+        });
+        return true;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        conta: upstreamPayload.conta,
+        provedores: upstreamPayload.provedores,
+        uso: upstreamPayload.uso,
+      });
+    } catch (err) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : "Não foi possível autenticar sua conta ChatGPT pelo Desktop para o servidor remoto.";
       const isCanceled = /cancelad[oa] pelo usuário/i.test(msg);
       sendJson(res, isCanceled ? 200 : 400, {
         ok: false,
@@ -3503,8 +3586,18 @@ export async function tryHandleStudioRoute(
       const relayRes = await providerConnection
         .getCliOAuthService()
         .relayLoopbackCallback(provId, rawCallback);
+      if (!relayRes.accepted) {
+        sendJson(res, 400, {
+          ok: false,
+          accepted: false,
+          status: relayRes.status,
+          erro: relayRes.errorMessage ?? "A CLI rejeitou o callback OAuth.",
+        });
+        return true;
+      }
       sendJson(res, 200, {
         ok: true,
+        accepted: true,
         status: relayRes.status,
         body: relayRes.body,
         content_type: relayRes.contentType,
@@ -3512,6 +3605,7 @@ export async function tryHandleStudioRoute(
     } catch (err) {
       sendJson(res, 400, {
         ok: false,
+        accepted: false,
         erro: err instanceof Error ? err.message : "Falha ao entregar callback OAuth ao provedor.",
       });
     }
@@ -3580,12 +3674,41 @@ export async function tryHandleStudioRoute(
       expiry: typeof body.expiry === "string" ? body.expiry : undefined,
     });
     const provedores = await providerConnection.getProvidersStatus(true);
+    const uso = await providerConnection.getUsageSnapshot(false);
+    const geminiProv = provedores.find((p) => p.provedor === "gemini");
+    const enrichedConta = geminiProv?.contas?.find((c) => c.id === conta.id) ?? conta;
     wsHub.broadcast("provider:updated", {
       provedor: "gemini",
       conectado: true,
       modo: "assinatura",
     });
-    sendJson(res, 201, { conta, provedores });
+    sendJson(res, 201, { conta: enrichedConta, provedores, uso });
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/provedores/openai/contas-auth") {
+    const body = await readJsonBody(req);
+    const authJson = typeof body.auth_json === "string" ? body.auth_json : "";
+    if (!authJson.trim()) {
+      sendJson(res, 400, { erro: "Campo obrigatório: 'auth_json'." });
+      return true;
+    }
+    const conta = await providerConnection.getCliOAuthService().importCodexAuthAccount({
+      authJson,
+      email: typeof body.email === "string" ? body.email : null,
+      plano: typeof body.plano === "string" ? body.plano : null,
+      label: typeof body.label === "string" ? body.label : undefined,
+    });
+    const provedores = await providerConnection.getProvidersStatus(true);
+    const uso = await providerConnection.getUsageSnapshot(false);
+    const openaiProv = provedores.find((p) => p.provedor === "openai");
+    const enrichedConta = openaiProv?.contas?.find((c) => c.id === conta.id) ?? conta;
+    wsHub.broadcast("provider:updated", {
+      provedor: "openai",
+      conectado: true,
+      modo: "assinatura",
+    });
+    sendJson(res, 201, { ok: true, conta: enrichedConta, provedores, uso });
     return true;
   }
 

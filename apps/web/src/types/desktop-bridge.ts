@@ -44,6 +44,8 @@ export interface CriativoDesktopWindowBridge {
   dockMoveDrag?: () => Promise<void>;
   dockEndDrag?: () => Promise<CriativoDockStatePayload>;
   onDockStateChanged?: (listener: (state: CriativoDockStatePayload) => void) => () => void;
+  dockSyncActiveServer?: (serverId: string) => Promise<boolean>;
+  onDockActiveServerChanged?: (listener: (serverId: string) => void) => () => void;
   openMainWindow?: (opts?: CriativoMainNavigatePayload) => Promise<void>;
   onMainNavigate?: (listener: (payload: CriativoMainNavigatePayload) => void) => () => void;
   pickFolder?: () => Promise<{ canceled: boolean; path: string | null }>;
