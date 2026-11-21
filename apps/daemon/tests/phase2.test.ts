@@ -33,6 +33,7 @@ describe("Fase 2 — Núcleo do Daemon, SQLite, Fila FIFO, Vault & Servidor", ()
 
     const tables = db.listTables();
     for (const expectedTable of SCHEMA_TABLE_NAMES) {
+      if (expectedTable === "agente_memorias_fts" && !db.fts5Enabled) continue;
       assert.ok(
         tables.includes(expectedTable),
         `Tabela ausente no schema: ${expectedTable}`

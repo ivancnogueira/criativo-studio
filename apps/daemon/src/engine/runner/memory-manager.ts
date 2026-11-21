@@ -69,6 +69,10 @@ function normalizeMemoryTextKey(text: string): string {
   return text.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+function normalizeForTokenSearch(text: string): string {
+  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
 function serializeEssentialBlock(items: Array<{ texto: string; escopo_site: string | null }>): string {
   if (items.length === 0) {
     return `<agent_memories count="0"></agent_memories>`;
@@ -121,6 +125,7 @@ export class MemoryManager {
   }
 
   private syncFtsEntry(memoriaId: string, agenteId: string, texto: string | null): void {
+    if (!this.db.hasFts5MemoriesTable()) return;
     this.db.connection
       .prepare("DELETE FROM agente_memorias_fts WHERE memoria_id = ?;")
       .run(memoriaId);
@@ -536,8 +541,75 @@ export class MemoryManager {
     };
   }
 
+  private searchMemoriesSqlFallback(
+    agenteId: string,
+    query: string,
+    rawTerms: string[],
+    cleanSite: string | null,
+    limit: number,
+  ): MemoriaRow[] {
+    const candidates = (
+      cleanSite
+        ? this.db.connection
+            .prepare(
+              `SELECT * FROM projecao_agente_memorias
+               WHERE agente_id = ? AND (escopo_site IS NULL OR escopo_site = ?)
+               ORDER BY COALESCE(NULLIF(atualizado_em, ''), criado_em) DESC
+               LIMIT 1000;`,
+            )
+            .all(agenteId, cleanSite)
+        : this.db.connection
+            .prepare(
+              `SELECT * FROM projecao_agente_memorias
+               WHERE agente_id = ?
+               ORDER BY COALESCE(NULLIF(atualizado_em, ''), criado_em) DESC
+               LIMIT 1000;`,
+            )
+            .all(agenteId)
+    ) as unknown as MemoriaRow[];
+
+    const normQuery = normalizeForTokenSearch(query.trim());
+    const normTerms = rawTerms.map((t) => normalizeForTokenSearch(t)).filter((t) => t.length >= 2);
+    if (!normQuery && normTerms.length === 0) return [];
+
+    const scored: Array<{ row: MemoriaRow; score: number }> = [];
+    for (const row of candidates) {
+      const normText = normalizeForTokenSearch(row.texto);
+      const words = normText.split(/[^a-z0-9_]+/).filter(Boolean);
+      let score = 0;
+
+      for (const term of normTerms) {
+        if (words.includes(term)) {
+          score += 3;
+        } else if (term.length >= 6 && words.some((w) => w.startsWith(term))) {
+          score += 2;
+        } else if (normText.includes(term)) {
+          score += 1;
+        }
+      }
+
+      if (normQuery.length >= 2 && normText.includes(normQuery)) {
+        score += 4;
+      }
+
+      if (score > 0) {
+        scored.push({ row, score });
+      }
+    }
+
+    scored.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      const bTime = b.row.atualizado_em || b.row.criado_em;
+      const aTime = a.row.atualizado_em || a.row.criado_em;
+      return bTime.localeCompare(aTime);
+    });
+
+    return scored.slice(0, limit).map((item) => item.row);
+  }
+
   /**
    * Busca memórias via FTS5 BM25 com prefix matching para termos >= 6 caracteres e teto de 8.192 bytes.
+   * Quando o runtime SQLite não dispõe de FTS5, utiliza pontuação SQL/tokenizada compatível.
    */
   public searchMemoriesFts(
     agenteId: string,
@@ -560,7 +632,7 @@ export class MemoryManager {
 
     let matchedRows: MemoriaRow[] = [];
 
-    if (rawTerms.length > 0) {
+    if (rawTerms.length > 0 && this.db.hasFts5MemoriesTable()) {
       const ftsExpr = rawTerms
         .map((term) => {
           const safe = term.replace(/"/g, '""');
@@ -601,27 +673,7 @@ export class MemoryManager {
     }
 
     if (matchedRows.length === 0 && query.trim().length > 0) {
-      const likeTerm = `%${query.trim().toLowerCase()}%`;
-      matchedRows = (
-        cleanSite
-          ? this.db.connection
-              .prepare(
-                `SELECT * FROM projecao_agente_memorias
-                 WHERE agente_id = ? AND lower(texto) LIKE ?
-                   AND (escopo_site IS NULL OR escopo_site = ?)
-                 ORDER BY COALESCE(NULLIF(atualizado_em, ''), criado_em) DESC
-                 LIMIT ?;`,
-              )
-              .all(agenteId, likeTerm, cleanSite, limit)
-          : this.db.connection
-              .prepare(
-                `SELECT * FROM projecao_agente_memorias
-                 WHERE agente_id = ? AND lower(texto) LIKE ?
-                 ORDER BY COALESCE(NULLIF(atualizado_em, ''), criado_em) DESC
-                 LIMIT ?;`,
-              )
-              .all(agenteId, likeTerm, limit)
-      ) as unknown as MemoriaRow[];
+      matchedRows = this.searchMemoriesSqlFallback(agenteId, query, rawTerms, cleanSite, limit);
     }
 
     const bounded: AgenteMemoria[] = [];

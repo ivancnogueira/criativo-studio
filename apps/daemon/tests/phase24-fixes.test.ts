@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
+import { CriativoDatabase } from "../src/database/client.ts";
+import { MemoryManager } from "../src/engine/runner/memory-manager.ts";
 import { AntigravityLiveService } from "../src/providers/antigravity-live-service.ts";
 import { RemoteClaimService } from "../src/servers/remote-claim-service.ts";
 import { getUserSettings, updateUserSettings } from "../src/server/settings-storage-service.ts";
@@ -414,6 +416,126 @@ describe("Fase 24 — Hotfixes RemoteClaim HTML Fallback, Auto-Refresh de Cotas 
       await desktopRt.close().catch(() => {});
       licenseHub.close();
       await new Promise<void>((r) => hubServer.close(() => r()));
+    }
+  });
+
+  it("8. (VPS26-03) CriativoDatabase e MemoryManager funcionam integralmente sem módulo SQLite FTS5 (fallback Linux/VPS)", () => {
+    const noFtsDbPath = join(tempDir, "criativo-no-fts5.db");
+    const dbNoFts = new CriativoDatabase({ dbPath: noFtsDbPath, disableFts5: true });
+    let dbWithFts: CriativoDatabase | null = null;
+
+    try {
+      dbNoFts.initializeDatabase();
+      assert.equal(dbNoFts.fts5Enabled, false);
+      assert.equal(dbNoFts.hasTable("agente_memorias_fts"), false);
+      assert.equal(dbNoFts.hasFts5MemoriesTable(), false);
+      assert.equal(dbNoFts.hasTable("projecao_agente_memorias"), true);
+
+      const nowIso = new Date().toISOString();
+      dbNoFts.connection
+        .prepare(
+          `INSERT INTO projecao_agentes (
+            agente_id, nome, papel, modelo_padrao, atualizado_em
+          ) VALUES (?, ?, ?, ?, ?);`,
+        )
+        .run(
+          "agente_fallback",
+          "Agente Fallback",
+          "Especialista em fallback de memória",
+          "gemini-2.5-flash",
+          nowIso,
+        );
+
+      const mgr = new MemoryManager(dbNoFts);
+
+      // 1. Criação e atualização via addMemory
+      const m1 = mgr.addMemory(
+        "agente_fallback",
+        "Diretriz de criação editorial para [NOME_DA_MARCA] com acentuação impecável",
+        "automatica",
+        { categoria: "searchable", escopoSite: "example.com" },
+      );
+      assert.ok(m1);
+      const m1Updated = mgr.addMemory(
+        "agente_fallback",
+        "Diretriz de criação editorial para [NOME_DA_MARCA] com acentuação impecável",
+        "automatica",
+        { categoria: "essential", escopoSite: "example.com" },
+      );
+      assert.equal(m1Updated?.categoria, "essential");
+
+      // 2. Staging transacional por turno concluído
+      const stageRes = mgr.stageTurnMutation("turn-no-fts-1", "agente_fallback", {
+        action: "remember",
+        texto: "Publicar carrosséis educativos sobre automação criativa na terça-feira",
+        categoria: "searchable",
+        escopoSite: "blog.example.com",
+      });
+      assert.equal(stageRes.ok, true);
+      const commitRes = mgr.commitTurnMutations("turn-no-fts-1", "completed");
+      assert.equal(commitRes.committed, true);
+
+      // 3. Atualização manual
+      const mManual = mgr.addMemory(
+        "agente_fallback",
+        "Observação provisória do briefing semanal",
+        "manual",
+        { categoria: "searchable" },
+      );
+      assert.ok(mManual);
+      const updatedManual = mgr.updateManualMemory("agente_fallback", mManual.memoria_id, {
+        texto: "Briefing estratégico definitivo com segredo TOKEN_RESTRITO_123",
+      });
+      assert.match(updatedManual.texto, /Briefing estratégico definitivo/);
+
+      // 4. Buscas no fallback SQL: termos não adjacentes, acentuação PT-BR, prefixo >= 6 chars, site e redação
+      const hitsNonAdj = mgr.searchMemoriesFts("agente_fallback", "criacao editorial acentuacao", {
+        site: "example.com",
+      });
+      assert.equal(hitsNonAdj.length, 1);
+      assert.equal(hitsNonAdj[0]?.memoria_id, m1.memoria_id);
+
+      const hitsPrefixAndSite = mgr.searchMemoriesFts("agente_fallback", "automac carross", {
+        site: "blog.example.com",
+      });
+      assert.equal(hitsPrefixAndSite.length, 1);
+      assert.match(hitsPrefixAndSite[0]!.texto, /carrosséis educativos/);
+
+      const hitsRedacted = mgr.searchMemoriesFts("agente_fallback", "briefing estrategico", {
+        redact: (s) => s.replace("TOKEN_RESTRITO_123", "[REDACTED]"),
+      });
+      assert.equal(hitsRedacted.length, 1);
+      assert.equal(hitsRedacted[0]?.texto.includes("TOKEN_RESTRITO_123"), false);
+      assert.equal(hitsRedacted[0]?.texto.includes("[REDACTED]"), true);
+
+      // 5. Remoção sem erros SQLite
+      const deleted = mgr.deleteMemory("agente_fallback", m1.memoria_id, true);
+      assert.equal(deleted, true);
+
+      // 6. Reabre o mesmo arquivo com FTS5 habilitado (se disponível neste SO) e valida backfill automático
+      dbNoFts.close();
+      dbWithFts = new CriativoDatabase({ dbPath: noFtsDbPath, disableFts5: false });
+      dbWithFts.initializeDatabase();
+      if (dbWithFts.fts5Enabled) {
+        assert.equal(dbWithFts.hasFts5MemoriesTable(), true);
+        const mgrWithFts = new MemoryManager(dbWithFts);
+        const ftsBackfillHits = mgrWithFts.searchMemoriesFts("agente_fallback", "automação criativa", {
+          site: "blog.example.com",
+        });
+        assert.ok(ftsBackfillHits.length >= 1);
+        assert.match(ftsBackfillHits[0]!.texto, /carrosséis educativos/);
+      }
+    } finally {
+      try {
+        dbNoFts.close();
+      } catch {
+        // já fechado após teste de reabertura
+      }
+      try {
+        dbWithFts?.close();
+      } catch {
+        // ignora erro de fechamento
+      }
     }
   });
 });

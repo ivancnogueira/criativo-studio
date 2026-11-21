@@ -3,7 +3,7 @@
  * Segue o padrão Event Sourcing + Projeções materializadas com integridade referencial.
  */
 
-export const SCHEMA_TABLES: readonly { nome: string; sql: string }[] = [
+export const SCHEMA_TABLES: readonly { nome: string; sql: string; requiresFts5?: boolean }[] = [
   {
     nome: "eventos_orquestracao",
     sql: `
@@ -963,6 +963,7 @@ export const SCHEMA_TABLES: readonly { nome: string; sql: string }[] = [
   },
   {
     nome: "agente_memorias_fts",
+    requiresFts5: true,
     sql: `
       CREATE VIRTUAL TABLE IF NOT EXISTS agente_memorias_fts USING fts5(
         texto,

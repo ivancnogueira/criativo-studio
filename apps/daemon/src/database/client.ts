@@ -6,6 +6,8 @@ import { SCHEMA_TABLES } from "./schema.ts";
 
 export interface DatabaseClientOptions {
   dbPath?: string;
+  /** Permite simular runtime sem módulo SQLite FTS5 (útil para testar fallback de VPS Linux). */
+  disableFts5?: boolean;
 }
 
 /**
@@ -15,6 +17,7 @@ export interface DatabaseClientOptions {
 export class CriativoDatabase {
   public readonly dbPath: string;
   public readonly connection: DatabaseSync;
+  public readonly fts5Enabled: boolean;
 
   constructor(options: DatabaseClientOptions = {}) {
     this.dbPath =
@@ -26,6 +29,32 @@ export class CriativoDatabase {
     }
     this.connection = new DatabaseSync(this.dbPath);
     this.configurePragmas();
+    this.fts5Enabled = this.detectFts5Support(options.disableFts5 === true);
+  }
+
+  private detectFts5Support(forceDisable: boolean): boolean {
+    if (forceDisable) return false;
+    try {
+      this.connection.exec(
+        "CREATE VIRTUAL TABLE temp.__criativo_fts5_probe USING fts5(x, tokenize = 'unicode61');",
+      );
+      this.connection.exec("DROP TABLE IF EXISTS temp.__criativo_fts5_probe;");
+      return true;
+    } catch {
+      try {
+        this.connection.exec("DROP TABLE IF EXISTS temp.__criativo_fts5_probe;");
+      } catch {
+        // ignora falha secundária de limpeza
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Indica se a tabela virtual `agente_memorias_fts` está disponível e operacional neste runtime SQLite.
+   */
+  public hasFts5MemoriesTable(): boolean {
+    return this.fts5Enabled && this.hasTable("agente_memorias_fts");
   }
 
   private configurePragmas(): void {
@@ -39,8 +68,18 @@ export class CriativoDatabase {
    * Aplica todas as tabelas e índices DDL do API-SPEC.md de forma idempotente e transacional.
    */
   public initializeDatabase(): void {
+    let warnedNoFts5 = false;
     this.runInTransaction(() => {
       for (const item of SCHEMA_TABLES) {
+        if (item.requiresFts5 && !this.fts5Enabled) {
+          if (!warnedNoFts5) {
+            warnedNoFts5 = true;
+            console.warn(
+              "[Criativo DB] Módulo SQLite FTS5 indisponível neste runtime Node.js; utilizando busca SQL compatível para memórias de agentes.",
+            );
+          }
+          continue;
+        }
         this.connection.exec(item.sql);
       }
       runPhase10Migrations(this.connection);
@@ -167,14 +206,16 @@ export class CriativoDatabase {
       WHERE normalized_text = '' OR atualizado_em = '';
     `);
 
-    this.connection.exec(`
-      INSERT INTO agente_memorias_fts (texto, memoria_id, agente_id)
-      SELECT m.texto, m.memoria_id, m.agente_id
-      FROM projecao_agente_memorias m
-      WHERE NOT EXISTS (
-        SELECT 1 FROM agente_memorias_fts f WHERE f.memoria_id = m.memoria_id
-      );
-    `);
+    if (this.hasFts5MemoriesTable()) {
+      this.connection.exec(`
+        INSERT INTO agente_memorias_fts (texto, memoria_id, agente_id)
+        SELECT m.texto, m.memoria_id, m.agente_id
+        FROM projecao_agente_memorias m
+        WHERE NOT EXISTS (
+          SELECT 1 FROM agente_memorias_fts f WHERE f.memoria_id = m.memoria_id
+        );
+      `);
+    }
 
     // 2. projecao_arquivos — pastas hierárquicas da Biblioteca e URL de páginas visuais
     this.ensureColumn("projecao_arquivos", "url", "TEXT");

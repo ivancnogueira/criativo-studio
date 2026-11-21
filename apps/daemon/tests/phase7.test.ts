@@ -39,6 +39,7 @@ describe("Fase 7 — Paridade Criativo Studio Backend (Onboarding, Provedores, C
   it("inicializa todas as 16 tabelas e enriquece os 15 agentes padrão com avatar_shape, avatar_color e effort", async () => {
     const tables = runtime.db.listTables();
     for (const t of SCHEMA_TABLE_NAMES) {
+      if (t === "agente_memorias_fts" && !runtime.db.fts5Enabled) continue;
       assert.ok(tables.includes(t), `Tabela esperada ausente: ${t}`);
     }
 
