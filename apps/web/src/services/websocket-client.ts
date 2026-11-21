@@ -3687,6 +3687,49 @@ export const daemonApi = {
     return data.invite;
   },
 
+  async prepararPonteOAuthRemoto(
+    serverId: string,
+    provedor: "claude" | "openai",
+    authUrl: string
+  ): Promise<{ ok: boolean; bridged: boolean; port?: number; reason?: string }> {
+    return await requestJson(`/api/studio/servers/${encodeURIComponent(serverId)}/oauth-bridge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provedor, auth_url: authUrl }),
+    });
+  },
+
+  async enviarCallbackOAuthManual(
+    provedor: "claude" | "openai",
+    callbackUrl: string
+  ): Promise<{ ok: boolean; status?: number; erro?: string }> {
+    return await requestJson(`/api/provedores/${encodeURIComponent(provedor)}/oauth-callback-relay`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ callback_url: callbackUrl }),
+    });
+  },
+
+  async conectarGeminiRemotoViaDesktop(
+    serverId: string,
+    label?: string
+  ): Promise<{
+    ok: boolean;
+    canceled?: boolean;
+    conta?: ContaProvedorInfo;
+    provedores?: ProvedorStatusInfo[];
+    erro?: string;
+  }> {
+    return await requestJson(
+      `/api/studio/servers/${encodeURIComponent(serverId)}/connect-gemini-via-desktop`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(label ? { label } : {}),
+      }
+    );
+  },
+
   // Fase 18 — Auto-Update (Desktop e VPS)
   async obterStatusAtualizacao(): Promise<UpdateStatusSnapshot> {
     const data = await requestJson<{ ok: boolean; status: UpdateStatusSnapshot }>(

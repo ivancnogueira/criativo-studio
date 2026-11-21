@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join, resolve } from "node:path";
 import type {
   ContaProvedorInfo,
@@ -85,7 +85,7 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogMeta[] = [
   {
     provedor: "opencode",
     rotulo: "OpenCode",
-    subtitulo: "Modelos gratuitos ativos neste computador (API Key opcional)",
+    subtitulo: "Modelos gratuitos ativos neste servidor (API Key opcional)",
     cliBins: ["opencode"],
     managedRuntimeFolder: "opencode",
     vaultKeys: ["opencode_api_key"],
@@ -919,6 +919,8 @@ export class ProviderConnectionService {
             meta.provedor === "opencode" ? opencodeCatalog.version : cli.version,
           cli_executavel:
             meta.provedor === "opencode" ? opencodeCatalog.executable : cli.executable,
+          runtime_host: hostname(),
+          runtime_platform: process.platform,
           vault_configurado: vaultConfigured,
           modo_conexao: modo,
           modelos: decoratedModelos,

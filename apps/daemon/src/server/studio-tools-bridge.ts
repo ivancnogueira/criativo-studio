@@ -118,7 +118,7 @@ import type { TranscriptionService } from "../voice/transcription-service.ts";
 import { executeSidebarTool, SIDEBAR_AGENT_TOOL_NAMES } from "./sidebar-service.ts";
 import type { AgentWakeupService } from "../waits/agent-wakeup-service.ts";
 import { listAgentsWithAliases, resolveAgentIdFromDb } from "./agent-resolver.ts";
-import { loadSkillPromptBySlug } from "./analytics-skills-service.ts";
+import { loadSkillPromptBySlug, getSkillUpgradePackage } from "./analytics-skills-service.ts";
 import {
   executeShowcaseTool,
   SHOWCASE_AGENT_TOOL_NAMES,
@@ -3448,6 +3448,9 @@ export interface Phase14ToolServices {
   visualPreview?: ChatVisualPreviewService;
   uiBlockRegistry?: UiBlockRegistry;
   apiKeysBridge?: ApiKeysBridge;
+  licenseService?: LicenseClientService;
+  workspaceRoot?: string;
+  productRoot?: string;
   isAgentBusy?: (agenteId: string) => { busy: boolean; policy: "steer" | "queue" };
   onSteerMessage?: (recipientId: string, row: CanalMensagemRow) => void;
   onDispatchQueuedInterAgent?: (
@@ -4259,7 +4262,28 @@ export async function executePhase14ToolCall(
       }
 
       if (targetSlug) {
-        const loaded = loadSkillPromptBySlug(targetSlug);
+        const upgradePkg = getSkillUpgradePackage(targetSlug);
+        if (
+          upgradePkg &&
+          !isUpgradeUnlocked(
+            services.db,
+            services.workspaceRoot ?? process.cwd(),
+            upgradePkg,
+            services.licenseService,
+            services.productRoot
+          )
+        ) {
+          return {
+            ok: false,
+            slug: targetSlug,
+            erro: `Habilidade '${targetSlug}' pertence ao módulo '${upgradePkg}', não liberado na licença ativa.`,
+          };
+        }
+        const loaded = loadSkillPromptBySlug(targetSlug, undefined, services.workspaceRoot, {
+          db: services.db,
+          licenseService: services.licenseService,
+          productRoot: services.productRoot,
+        });
         if (loaded) {
           return {
             ok: true,

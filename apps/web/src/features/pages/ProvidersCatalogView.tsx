@@ -40,6 +40,12 @@ export interface ProvidersCatalogViewProps {
   ) => Promise<void>;
   onSetModelsVisibility?: (provedor: ProviderName, hiddenIds: string[]) => Promise<void>;
   onActiveProviderChange?: (prov: ProvedorStatusInfo | null) => void;
+  activeServerName?: string;
+  activeServerKind?: "primary" | "local_child" | "remote_vps" | "joined";
+  onSubmitManualOAuthCallback?: (
+    provedor: "claude" | "openai",
+    callbackUrl: string
+  ) => Promise<void>;
   onShowToast: (msg: string) => void;
 }
 
@@ -68,7 +74,20 @@ const SwitchPill: React.FC<{
   </button>
 );
 
-function formatAccountSummary(prov: ProvedorStatusInfo, authorizing: string | null): string {
+function formatPlatformLabel(platform?: string | null): string | null {
+  if (!platform) return null;
+  if (platform === "linux") return "Linux";
+  if (platform === "win32") return "Windows";
+  if (platform === "darwin") return "macOS";
+  return platform;
+}
+
+function formatAccountSummary(
+  prov: ProvedorStatusInfo,
+  authorizing: string | null,
+  activeServerName?: string,
+  activeServerKind?: "primary" | "local_child" | "remote_vps" | "joined"
+): string {
   if (authorizing === prov.provedor) return "Conectando...";
   const contas = prov.contas ?? [];
   if (contas.length > 0) {
@@ -77,7 +96,13 @@ function formatAccountSummary(prov: ProvedorStatusInfo, authorizing: string | nu
     return contas.length > 1 ? `${base} (+${contas.length - 1})` : base;
   }
   if (prov.provedor === "opencode" && prov.conectado) {
-    return "Disponível neste computador";
+    const osLabel = formatPlatformLabel(prov.runtime_platform);
+    if (activeServerKind && activeServerKind !== "primary") {
+      const targetName =
+        activeServerName || (activeServerKind === "local_child" ? "Servidor Local" : "Servidor VPS");
+      return osLabel ? `Rodando em ${targetName} (${osLabel})` : `Rodando em ${targetName}`;
+    }
+    return osLabel ? `Disponível neste computador (${osLabel})` : "Disponível neste computador";
   }
   if (prov.provedor === "ollama" && prov.conectado) {
     return "Daemon local ativo em 127.0.0.1:11434";
@@ -122,6 +147,9 @@ export const ProvidersCatalogView: React.FC<ProvidersCatalogViewProps> = ({
   onAddManualAccount,
   onSetModelsVisibility,
   onActiveProviderChange,
+  activeServerName,
+  activeServerKind,
+  onSubmitManualOAuthCallback,
   onShowToast,
 }) => {
   const [detailProviderId, setDetailProviderId] = useState<ProviderName | null>(
@@ -147,6 +175,9 @@ export const ProvidersCatalogView: React.FC<ProvidersCatalogViewProps> = ({
   const [manualToken, setManualToken] = useState("");
   const [refreshingRuntime, setRefreshingRuntime] = useState(false);
   const [installingOpenCode, setInstallingOpenCode] = useState(false);
+  const [manualCallbackDraft, setManualCallbackDraft] = useState("");
+  const [sendingManualCallback, setSendingManualCallback] = useState(false);
+  const isRemoteServer = activeServerKind === "remote_vps" || activeServerKind === "joined";
 
   const activeDefaultInfo = useMemo(
     () => provedores.find((p) => p.provedor === defaultProvider) ?? provedores[0],
@@ -324,53 +355,100 @@ export const ProvidersCatalogView: React.FC<ProvidersCatalogViewProps> = ({
 
           <div className="rounded-2xl bg-[#18181A] border border-white/[0.07] divide-y divide-white/[0.05]">
             {isAuthorizing ? (
-              <div className="px-4 py-3.5 flex flex-wrap items-center justify-between gap-3">
-                <div className="space-y-1 min-w-0">
-                  <div className="text-[13px] font-medium text-white">Conectando</div>
-                  <p className="text-[11.5px] text-[#8E8E93]">
-                    Conclua o login se uma página do navegador abrir.
-                  </p>
-                  {authLink && (
-                    <a
-                      href={authLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-[11.5px] font-medium text-[#74B9FF] hover:text-white underline pt-0.5"
-                    >
-                      <span>Abrir login aqui</span>
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {onCancelBrowserSignIn && (
+              <div className="px-4 py-3.5 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="space-y-1 min-w-0">
+                    <div className="text-[13px] font-medium text-white">Conectando</div>
+                    <p className="text-[11.5px] text-[#8E8E93]">
+                      {isRemoteServer
+                        ? "Conclua o login no navegador do seu computador; a ponte local enviará a sessão automaticamente para este servidor."
+                        : "Conclua o login se uma página do navegador abrir."}
+                    </p>
+                    {authLink && (
+                      <a
+                        href={authLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-[11.5px] font-medium text-[#74B9FF] hover:text-white underline pt-0.5"
+                      >
+                        <span>Abrir login aqui</span>
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {onCancelBrowserSignIn && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void onCancelBrowserSignIn(
+                            detailProvider.provedor as "gemini" | "claude" | "openai"
+                          )
+                        }
+                        className="rounded-xl bg-[#242428] hover:bg-[#303036] border border-white/[0.08] px-3 py-1.5 text-[12px] font-medium text-[#E5E5E7]"
+                      >
+                        Cancelar
+                      </button>
+                    )}
                     <button
                       type="button"
-                      onClick={() =>
-                        void onCancelBrowserSignIn(
-                          detailProvider.provedor as "gemini" | "claude" | "openai"
-                        )
-                      }
-                      className="rounded-xl bg-[#242428] hover:bg-[#303036] border border-white/[0.08] px-3 py-1.5 text-[12px] font-medium text-[#E5E5E7]"
+                      onClick={async () => {
+                        const targetProv = detailProvider.provedor as
+                          | "gemini"
+                          | "claude"
+                          | "openai";
+                        await onCancelBrowserSignIn?.(targetProv);
+                        void onStartBrowserSignIn(targetProv);
+                      }}
+                      className="rounded-xl bg-[#242428] hover:bg-[#303036] border border-white/[0.08] px-3 py-1.5 text-[12px] font-medium text-white"
                     >
-                      Cancelar
+                      Reiniciar
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const targetProv = detailProvider.provedor as
-                        | "gemini"
-                        | "claude"
-                        | "openai";
-                      await onCancelBrowserSignIn?.(targetProv);
-                      void onStartBrowserSignIn(targetProv);
-                    }}
-                    className="rounded-xl bg-[#242428] hover:bg-[#303036] border border-white/[0.08] px-3 py-1.5 text-[12px] font-medium text-white"
-                  >
-                    Reiniciar
-                  </button>
+                  </div>
                 </div>
+
+                {isRemoteServer &&
+                  (detailProvider.provedor === "openai" || detailProvider.provedor === "claude") &&
+                  onSubmitManualOAuthCallback && (
+                    <form
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+                        const clean = manualCallbackDraft.trim();
+                        if (!clean) return;
+                        setSendingManualCallback(true);
+                        try {
+                          await onSubmitManualOAuthCallback(
+                            detailProvider.provedor as "claude" | "openai",
+                            clean
+                          );
+                          setManualCallbackDraft("");
+                          onShowToast("Retorno OAuth encaminhado ao servidor remoto.");
+                        } catch (err) {
+                          onShowToast(
+                            err instanceof Error ? err.message : "Erro ao encaminhar URL de retorno."
+                          );
+                        } finally {
+                          setSendingManualCallback(false);
+                        }
+                      }}
+                      className="pt-2.5 border-t border-white/[0.06] flex flex-col sm:flex-row gap-2 items-stretch sm:items-center"
+                    >
+                      <input
+                        type="text"
+                        value={manualCallbackDraft}
+                        onChange={(e) => setManualCallbackDraft(e.target.value)}
+                        placeholder="Plano B: se o navegador parar em http://127.0.0.1:..., cole a URL aqui"
+                        className="flex-1 rounded-xl bg-[#111113] border border-white/10 px-3 py-1.5 text-[11.5px] text-white placeholder-[#6E6E73]"
+                      />
+                      <button
+                        type="submit"
+                        disabled={sendingManualCallback || !manualCallbackDraft.trim()}
+                        className="rounded-xl bg-[#242428] hover:bg-[#303036] disabled:opacity-50 border border-white/[0.08] px-3 py-1.5 text-[11.5px] font-medium text-white shrink-0"
+                      >
+                        {sendingManualCallback ? "Enviando..." : "Enviar retorno"}
+                      </button>
+                    </form>
+                  )}
               </div>
             ) : isBrowserProvider ? (
               contas.length > 0 ? (
@@ -509,7 +587,9 @@ export const ProvidersCatalogView: React.FC<ProvidersCatalogViewProps> = ({
                     <div className="text-[13px] font-medium text-white">Não conectado</div>
                     <p className="text-[11.5px] text-[#8E8E93] mt-0.5">
                       {detailProvider.provedor === "gemini"
-                        ? "Autentique sua conta Google no navegador (requer Antigravity CLI) ou cole uma Gemini API Key abaixo sem instalar nada."
+                        ? isRemoteServer
+                          ? "Autentique sua conta Google pelo navegador do Desktop (salva isoladamente neste servidor) ou cole uma Gemini API Key abaixo."
+                          : "Autentique sua conta Google no navegador (requer Antigravity CLI) ou cole uma Gemini API Key abaixo sem instalar nada."
                         : "Autentique sua conta diretamente no navegador em pasta isolada do Studio."}
                     </p>
                   </div>
@@ -736,13 +816,25 @@ export const ProvidersCatalogView: React.FC<ProvidersCatalogViewProps> = ({
                 <div className="text-[13px] font-medium text-white">Versão</div>
                 <p className="text-[11.5px] text-[#8E8E93] mt-0.5 truncate">
                   {detailProvider.cli_detectado
-                    ? `${detailProvider.cli_versao ?? "Instalada na máquina"}${
+                    ? `${detailProvider.cli_versao ?? "Instalada no servidor"}${
                         detailProvider.cli_executavel
                           ? ` · ${detailProvider.cli_executavel}`
                           : ""
                       }`
-                    : "CLI não detectada localmente"}
+                    : "CLI não detectada neste servidor"}
                 </p>
+                {(activeServerName || detailProvider.runtime_platform || detailProvider.runtime_host) && (
+                  <p className="text-[11px] text-[#6E6E73] mt-0.5 truncate">
+                    Ambiente:{" "}
+                    {[
+                      activeServerName,
+                      formatPlatformLabel(detailProvider.runtime_platform),
+                      detailProvider.runtime_host,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
+                )}
               </div>
               {onRefreshProviders && (
                 <button
@@ -965,7 +1057,12 @@ export const ProvidersCatalogView: React.FC<ProvidersCatalogViewProps> = ({
                       {prov.rotulo}
                     </div>
                     <div className="text-[11.5px] text-[#8E8E93] truncate">
-                      {formatAccountSummary(prov, authorizingProvider)}
+                      {formatAccountSummary(
+                        prov,
+                        authorizingProvider,
+                        activeServerName,
+                        activeServerKind
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1007,7 +1104,12 @@ export const ProvidersCatalogView: React.FC<ProvidersCatalogViewProps> = ({
                       {prov.rotulo}
                     </div>
                     <div className="text-[11.5px] text-[#8E8E93] truncate">
-                      {formatAccountSummary(prov, authorizingProvider)}
+                      {formatAccountSummary(
+                        prov,
+                        authorizingProvider,
+                        activeServerName,
+                        activeServerKind
+                      )}
                     </div>
                   </div>
                 </div>

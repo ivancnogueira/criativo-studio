@@ -198,6 +198,8 @@ function spawnCommandWithStdin(input: {
 }
 
 function openExternalUrlIfNeeded(url: string): void {
+  if (process.env.CRIATIVO_ISOLATED_SERVER === "1") return;
+  if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) return;
   try {
     if (process.platform === "win32") {
       // rundll32 passa a URL inteira por argv sem cmd.exe cortar query params no '&'
@@ -290,6 +292,7 @@ export class CliOAuthAccountsService {
   private readonly appDataDir?: string;
   private readonly fetchImpl: typeof fetch;
   private readonly pendingSignInAbort = new Map<"claude" | "openai", () => void>();
+  private readonly pendingLoopbackTarget = new Map<"claude" | "openai", { host: string; port: number }>();
   private mcpConfigResolver?: (agentId?: string | null) => Record<string, unknown> | null;
   private readonly dynamicModelsCache = new Map<
     "claude" | "openai",
@@ -504,6 +507,7 @@ export class CliOAuthAccountsService {
         const launchBrowserOnce = (url: string) => {
           if (openedFallbackBrowser) return;
           openedFallbackBrowser = true;
+          this.registerLoopbackTargetFromAuthUrl("claude", url);
           onAuthUrl?.(url);
           openExternalUrlIfNeeded(url);
         };
@@ -568,6 +572,7 @@ export class CliOAuthAccountsService {
           });
         } finally {
           this.pendingSignInAbort.delete("claude");
+          this.pendingLoopbackTarget.delete("claude");
           shim.cleanup();
         }
 
@@ -600,6 +605,7 @@ export class CliOAuthAccountsService {
           executable: resolvedExecutable,
           codexHome: configDir,
           onAuthUrl: (url) => {
+            this.registerLoopbackTargetFromAuthUrl("openai", url);
             onAuthUrl?.(url);
             openExternalUrlIfNeeded(url);
           },
@@ -608,6 +614,7 @@ export class CliOAuthAccountsService {
           },
         }).finally(() => {
           this.pendingSignInAbort.delete("openai");
+          this.pendingLoopbackTarget.delete("openai");
         });
         email = appResult.email;
         plano = appResult.plano;
@@ -1547,6 +1554,82 @@ export class CliOAuthAccountsService {
         cachedInput,
         output: output || Math.round(finalText.length / 4),
       },
+    };
+  }
+
+  private registerLoopbackTargetFromAuthUrl(provedor: "claude" | "openai", rawUrl: string): void {
+    try {
+      const parsed = new URL(rawUrl);
+      const redirectUri = parsed.searchParams.get("redirect_uri")?.trim();
+      if (!redirectUri) return;
+      const redUrl = new URL(redirectUri);
+      const host = redUrl.hostname.toLowerCase();
+      if (host !== "127.0.0.1" && host !== "localhost") return;
+      const port = Number(redUrl.port);
+      if (!Number.isInteger(port) || port < 1024 || port > 65535) return;
+      this.pendingLoopbackTarget.set(provedor, { host: "127.0.0.1", port });
+    } catch {
+      // ignora URL de redirect inválida
+    }
+  }
+
+  public registerPendingLoopbackPort(provedor: "claude" | "openai", port: number): void {
+    if (Number.isInteger(port) && port >= 1024 && port <= 65535) {
+      this.pendingLoopbackTarget.set(provedor, { host: "127.0.0.1", port });
+    }
+  }
+
+  /**
+   * Entrega localmente o callback OAuth capturado pelo App Desktop (ou colado manualmente)
+   * ao servidor loopback interno aberto pela CLI (`codex` / `claude`) nesta máquina.
+   */
+  public async relayLoopbackCallback(
+    provedor: "claude" | "openai",
+    rawCallbackInput: string
+  ): Promise<{ status: number; body: string; contentType: string }> {
+    const cleanInput = rawCallbackInput.trim();
+    if (!cleanInput) {
+      throw new Error("URL ou caminho de callback OAuth vazio.");
+    }
+
+    let target = this.pendingLoopbackTarget.get(provedor);
+    let safePath = "";
+
+    if (/^https?:\/\//i.test(cleanInput)) {
+      const parsed = new URL(cleanInput);
+      const host = parsed.hostname.toLowerCase();
+      if (host !== "127.0.0.1" && host !== "localhost") {
+        throw new Error("Callback OAuth deve apontar para 127.0.0.1 ou localhost.");
+      }
+      safePath = `${parsed.pathname || "/"}${parsed.search || ""}`;
+      if (!target && parsed.port) {
+        const portNum = Number(parsed.port);
+        if (Number.isInteger(portNum) && portNum >= 1024 && portNum <= 65535) {
+          target = { host: "127.0.0.1", port: portNum };
+        }
+      }
+    } else {
+      safePath = cleanInput.startsWith("/") ? cleanInput : `/${cleanInput}`;
+    }
+
+    if (!target) {
+      throw new Error(
+        "Nenhum fluxo de login aguardando retorno neste servidor. Clique em Conectar novamente."
+      );
+    }
+    if (safePath.startsWith("//") || /[\r\n]/.test(safePath)) {
+      throw new Error("Caminho de callback OAuth inválido.");
+    }
+
+    const upstream = await this.fetchImpl(`http://${target.host}:${target.port}${safePath}`, {
+      method: "GET",
+      redirect: "manual",
+    });
+    const body = await upstream.text().catch(() => "");
+    return {
+      status: upstream.status,
+      body,
+      contentType: upstream.headers.get("content-type") ?? "text/html; charset=utf-8",
     };
   }
 }

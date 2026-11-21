@@ -88,6 +88,7 @@ export function prepareDesktopBundle(options = {}) {
   copyDirClean(join(repoRoot, "packages/whatsapp/dist"), join(outDir, "packages/whatsapp/dist"), skipDevSources);
   copyDirClean(join(repoRoot, "templates/marca"), join(outDir, "templates/marca"));
   copyDirClean(join(repoRoot, ".agents/skills"), join(outDir, ".agents/skills"));
+  copyDirClean(join(repoRoot, ".agents/skills-upgrades"), join(outDir, ".agents/skills-upgrades"));
 
   const catalogSrc = join(repoRoot, "apps/daemon/src/marketplace/catalog/catalog-bundle.json");
   if (existsSync(catalogSrc)) {

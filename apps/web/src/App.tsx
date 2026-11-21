@@ -1000,13 +1000,25 @@ export function App() {
     });
     const unsubAuthUrl = ws.on("provider:auth_url", (evt) => {
       setPendingAuthLink(evt);
-      try {
-        if (typeof window !== "undefined") {
-          window.open(evt.url, "_blank", "noopener,noreferrer");
+      void (async () => {
+        const currentServerId = getActiveServerId();
+        if (
+          currentServerId &&
+          currentServerId !== "primary" &&
+          (evt.provedor === "openai" || evt.provedor === "claude")
+        ) {
+          await daemonApi
+            .prepararPonteOAuthRemoto(currentServerId, evt.provedor, evt.url)
+            .catch(() => null);
         }
-      } catch {
-        // fallback visível pelo botão clicável direto na interface
-      }
+        try {
+          if (typeof window !== "undefined") {
+            window.open(evt.url, "_blank", "noopener,noreferrer");
+          }
+        } catch {
+          // fallback visível pelo botão clicável direto na interface
+        }
+      })();
     });
 
     const unsubWaConta = ws.on("whatsapp.conta_atualizada", () => {
@@ -1627,6 +1639,7 @@ export function App() {
         const res = await daemonApi.selecionarServidor(serverId);
         setServers(res.servers);
         setActiveServerIdState(res.active_server_id);
+        setOnboarding(null);
         setActiveSideThreadId(null);
         setChatByKey({});
         setThreadChatById({});
@@ -3029,6 +3042,23 @@ export function App() {
     async (prov: "gemini" | "claude" | "openai", label?: string) => {
       setPendingAuthLink(null);
       try {
+        const currentServerId = getActiveServerId();
+        const activeSrv = servers.find((s) => s.server_id === currentServerId);
+        if (
+          prov === "gemini" &&
+          (activeSrv?.kind === "remote_vps" || activeSrv?.kind === "joined")
+        ) {
+          const remoteRes = await daemonApi.conectarGeminiRemotoViaDesktop(currentServerId, label);
+          if (remoteRes.ok && remoteRes.provedores) {
+            setProvedores(remoteRes.provedores);
+            setUso(await daemonApi.getProvidersUsage(true).catch(() => uso));
+          }
+          return {
+            ok: Boolean(remoteRes.ok),
+            canceled: Boolean(remoteRes.canceled),
+            erro: remoteRes.erro,
+          };
+        }
         const res = await daemonApi.connectProviderViaBrowser(prov, label);
         if (res.ok && res.provedores) {
           setProvedores(res.provedores);
@@ -3039,7 +3069,7 @@ export function App() {
         setPendingAuthLink((cur) => (cur?.provedor === prov ? null : cur));
       }
     },
-    []
+    [servers, uso]
   );
 
   const handleCancelBrowserSignIn = useCallback(
@@ -3121,6 +3151,11 @@ export function App() {
         <OnboardingFlow
           initialState={onboarding}
           provedores={provedores}
+          activeServerName={
+            servers.find((s) => s.server_id === activeServerId)?.nome ?? "Servidor"
+          }
+          isSecondaryServer={activeServerId !== "primary"}
+          onBackToPrimaryServer={() => void handleSwitchServer("primary")}
           unlockedAgentsCount={
             licenseStatus?.unlocked_agents_count ??
             agentes.filter(
@@ -4313,6 +4348,18 @@ export function App() {
               onConnectProviderViaBrowser={handleConnectViaBrowser}
               onCancelProviderBrowserSignIn={handleCancelBrowserSignIn}
               pendingAuthUrl={pendingAuthLink}
+              activeServerName={
+                servers.find((s) => s.server_id === activeServerId)?.nome ?? "Servidor Principal"
+              }
+              activeServerKind={
+                servers.find((s) => s.server_id === activeServerId)?.kind ?? "primary"
+              }
+              onSubmitManualOAuthCallback={async (prov, callbackUrl) => {
+                const relay = await daemonApi.enviarCallbackOAuthManual(prov, callbackUrl);
+                if (!relay.ok) {
+                  throw new Error(relay.erro ?? "Não foi possível entregar o callback OAuth.");
+                }
+              }}
               onAddProviderAccount={async (prov, payload) => {
                 const res = await daemonApi.addProviderAccount(prov, payload);
                 setProvedores(res.provedores);

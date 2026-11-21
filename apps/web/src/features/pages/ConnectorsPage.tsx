@@ -73,6 +73,12 @@ interface ConnectorsPageProps {
     provedor: "gemini" | "claude" | "openai"
   ) => Promise<void>;
   pendingAuthUrl?: { provedor: "gemini" | "claude" | "openai"; url: string } | null;
+  activeServerName?: string;
+  activeServerKind?: "primary" | "local_child" | "remote_vps" | "joined";
+  onSubmitManualOAuthCallback?: (
+    provedor: "claude" | "openai",
+    callbackUrl: string
+  ) => Promise<void>;
   onAddProviderAccount?: (
     provedor: ProviderName,
     payload: { email: string; access_token: string; label?: string }
@@ -218,6 +224,9 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
   onConnectProviderViaBrowser,
   onCancelProviderBrowserSignIn,
   pendingAuthUrl,
+  activeServerName,
+  activeServerKind,
+  onSubmitManualOAuthCallback,
   onAddProviderAccount,
   onRemoveProviderAccount,
   onSetModelsVisibility,
@@ -728,6 +737,9 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = ({
                 onRemoveAccount={onRemoveProviderAccount}
                 onAddManualAccount={onAddProviderAccount}
                 onSetModelsVisibility={onSetModelsVisibility}
+                activeServerName={activeServerName}
+                activeServerKind={activeServerKind}
+                onSubmitManualOAuthCallback={onSubmitManualOAuthCallback}
                 onShowToast={showToast}
               />
             )}

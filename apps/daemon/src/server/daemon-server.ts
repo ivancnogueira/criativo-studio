@@ -87,6 +87,7 @@ import { tryHandlePhase15Route } from "./phase15-routes.ts";
 import { LicenseClientService } from "../license/license-service.ts";
 import { LocalServerManager } from "../servers/local-server-manager.ts";
 import { RemoteClaimService } from "../servers/remote-claim-service.ts";
+import { RemoteOAuthBridgeService } from "../servers/remote-oauth-bridge.ts";
 import { ServerProxyRouter } from "../servers/server-proxy-router.ts";
 import {
   bootstrapUserDataDirectory,
@@ -334,6 +335,12 @@ export async function createDaemonServer(
         fetchImpl: options.fetchImpl,
       })
     : null;
+  const remoteOAuthBridge = localServerManager
+    ? new RemoteOAuthBridgeService({
+        localServerManager,
+        fetchImpl: options.fetchImpl,
+      })
+    : null;
   const serverProxyRouter = localServerManager
     ? new ServerProxyRouter({
         localServerManager,
@@ -392,15 +399,8 @@ export async function createDaemonServer(
     workspaceRoot: resolvedWorkspaceRoot,
     sharedAuthDir: options.sharedAuthDir ?? null,
   });
-  if (configuredAccessToken) {
-    const currentOnboarding = providerConnection.getOnboardingState();
-    if (!currentOnboarding.onboarding_concluido) {
-      providerConnection.updateOnboardingState({
-        onboarding_concluido: true,
-        setup_assistant_dismissed: true,
-      });
-    }
-  }
+  // Cada servidor (principal, local filho ou VPS) mantém o onboarding da própria marca/workspace;
+  // apenas o certificado Ed25519 da licença e os upgrades são sincronizados automaticamente.
   syncBrandPlaceholdersInDatabase(db, getBrandIdentity(providerConnection));
   const mcpGateway = new McpGateway({
     db,
@@ -902,6 +902,9 @@ export async function createDaemonServer(
     visualPreview,
     uiBlockRegistry,
     apiKeysBridge,
+    licenseService,
+    workspaceRoot: resolvedWorkspaceRoot,
+    productRoot: studioPaths.productRoot,
     isAgentBusy: (agId) => {
       const busy =
         (activeTurnsByAgent.get(agId) ?? 0) > 0 || queueControls.isLaneBusy(agId, null);
@@ -1832,6 +1835,7 @@ export async function createDaemonServer(
         licenseService,
         localServerManager,
         remoteClaimService,
+        remoteOAuthBridge,
         autoUpdateService,
       };
 
@@ -2406,6 +2410,7 @@ function tryServeWebStatic(
     port: resolvedPort,
     async close(): Promise<void> {
       licenseService.stopHeartbeatTimer();
+      remoteOAuthBridge?.closeAll();
       if (localServerManager) {
         await localServerManager.stopAll();
       }

@@ -11,7 +11,9 @@ import type {
   RelatorioAnalyticsHost,
 } from "@criativo/contracts";
 import type { CriativoDatabase } from "../database/client.ts";
+import type { LicenseClientService } from "../license/license-service.ts";
 import type { VaultService } from "../vault/vault-service.ts";
+import { isUpgradeUnlocked, UPGRADE_PACKAGE_SLUGS } from "./studio-tools-bridge.ts";
 
 function parseSkillFrontmatter(content: string): { name?: string; description?: string; body: string } {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/u.exec(content);
@@ -56,26 +58,94 @@ function inferSkillCategory(slug: string): HabilidadeInstaladaInfo["categoria"] 
   return "outros";
 }
 
-function getSkillsRootCandidates(workspaceRoot?: string): string[] {
+export function getSkillUpgradePackage(slug: string): "bonus" | "video" | null {
+  const clean = slug.trim();
+  if ((UPGRADE_PACKAGE_SLUGS.bonus as readonly string[]).includes(clean)) return "bonus";
+  if ((UPGRADE_PACKAGE_SLUGS.video as readonly string[]).includes(clean)) return "video";
+  return null;
+}
+
+export interface SkillsDiscoveryOptions {
+  db?: CriativoDatabase;
+  licenseService?: LicenseClientService;
+  productRoot?: string;
+  includeExternalHome?: boolean;
+}
+
+function getSkillsRootCandidates(
+  workspaceRoot?: string,
+  opts?: SkillsDiscoveryOptions
+): string[] {
   const home = homedir();
   const baseCwd = workspaceRoot ?? process.cwd();
-  return Array.from(
-    new Set([
-      join(baseCwd, ".agents", "skills"),
-      join(baseCwd, "..", "..", ".agents", "skills"),
-      join(home, ".gemini", "config", "skills"),
-      join(home, ".agents", "skills"),
-    ])
+  const basePrefixes = Array.from(
+    new Set(
+      [
+        baseCwd,
+        opts?.productRoot,
+        process.env.CRIATIVO_PRODUCT_ROOT,
+        join(baseCwd, "..", ".."),
+      ].filter((p): p is string => Boolean(p && p.trim()))
+    )
   );
+
+  const roots: string[] = [];
+  for (const prefix of basePrefixes) {
+    roots.push(join(prefix, ".agents", "skills"));
+  }
+
+  if (opts?.db) {
+    const bonusUnlocked = isUpgradeUnlocked(
+      opts.db,
+      baseCwd,
+      "bonus",
+      opts.licenseService,
+      opts.productRoot
+    );
+    const videoUnlocked = isUpgradeUnlocked(
+      opts.db,
+      baseCwd,
+      "video",
+      opts.licenseService,
+      opts.productRoot
+    );
+
+    if (bonusUnlocked) {
+      for (const prefix of basePrefixes) {
+        roots.push(join(prefix, ".agents", "skills-upgrades", "bonus"));
+      }
+    }
+    if (videoUnlocked) {
+      for (const prefix of basePrefixes) {
+        roots.push(join(prefix, ".agents", "skills-upgrades", "video"));
+      }
+    }
+  }
+
+  if (opts?.includeExternalHome !== false && process.env.CRIATIVO_SKIP_LOCAL_PROBE !== "1") {
+    roots.push(join(home, ".gemini", "config", "skills"), join(home, ".agents", "skills"));
+  }
+
+  return Array.from(new Set(roots));
 }
 
 export function loadSkillPromptBySlug(
   slug: string,
   customRoot?: string,
-  workspaceRoot?: string
+  workspaceRoot?: string,
+  opts?: SkillsDiscoveryOptions
 ): { path: string; body: string; tokensEst: number } | null {
   if (!slug || slug.includes("..") || slug.includes("/") || slug.includes("\\")) return null;
-  const roots = customRoot ? [customRoot] : getSkillsRootCandidates(workspaceRoot);
+  if (!customRoot && opts?.db) {
+    const pkg = getSkillUpgradePackage(slug);
+    if (
+      pkg &&
+      !isUpgradeUnlocked(opts.db, workspaceRoot ?? process.cwd(), pkg, opts.licenseService, opts.productRoot)
+    ) {
+      return null;
+    }
+  }
+  const roots = customRoot ? [customRoot] : getSkillsRootCandidates(workspaceRoot, opts);
   for (const root of roots) {
     const filePath = join(root, slug, "SKILL.md");
     if (existsSync(filePath)) {
@@ -97,13 +167,29 @@ export function loadSkillPromptBySlug(
 export function listInstalledSkills(
   db: CriativoDatabase,
   customRoot?: string,
-  workspaceRoot?: string
+  workspaceRoot?: string,
+  licenseService?: LicenseClientService,
+  productRoot?: string
 ): HabilidadeInstaladaInfo[] {
+  const skipLocalProbe = process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1";
+  const baseCwd = workspaceRoot ?? process.cwd();
+  const bonusUnlocked = isUpgradeUnlocked(db, baseCwd, "bonus", licenseService, productRoot);
+  const videoUnlocked = isUpgradeUnlocked(db, baseCwd, "video", licenseService, productRoot);
+  const isSkillAllowed = (slugOrId: string): boolean => {
+    const pkg = getSkillUpgradePackage(slugOrId);
+    if (pkg === "bonus") return bonusUnlocked;
+    if (pkg === "video") return videoUnlocked;
+    return true;
+  };
+
   const roots = customRoot
     ? [customRoot]
-    : process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1"
-      ? []
-      : getSkillsRootCandidates(workspaceRoot);
+    : getSkillsRootCandidates(workspaceRoot, {
+        db,
+        licenseService,
+        productRoot,
+        includeExternalHome: !skipLocalProbe,
+      });
 
   const agentsRows = db.connection
     .prepare(`SELECT agente_id, nome, config_json FROM projecao_agentes ORDER BY ordem_exibicao ASC;`)
@@ -163,6 +249,7 @@ export function listInstalledSkills(
     try {
       const dirs = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory());
       for (const dir of dirs) {
+        if (!customRoot && !isSkillAllowed(dir.name)) continue;
         if (skillsMap.has(dir.name)) continue;
         const skillFile = join(root, dir.name, "SKILL.md");
         if (!existsSync(skillFile)) continue;
@@ -170,6 +257,7 @@ export function listInstalledSkills(
           const content = readFileSync(skillFile, "utf8");
           const parsed = parseSkillFrontmatter(content);
           const id = parsed.name || dir.name;
+          if (!customRoot && !isSkillAllowed(id)) continue;
           skillsMap.set(id, {
             id,
             nome: id,
@@ -208,6 +296,7 @@ export function listInstalledSkills(
       }>;
 
       for (const row of catalogRows) {
+        if (!isSkillAllowed(row.slug)) continue;
         const existing = skillsMap.get(row.slug);
         if (existing) {
           const mergedAgents = new Set([

@@ -52,6 +52,9 @@ export interface OnboardingFlowProps {
   }) => Promise<{ ok: boolean; resumo: string; username?: string | null }>;
   onOpenWhatsAppModal?: () => void;
   onComplete: (patch: Partial<OnboardingEstado>) => Promise<void>;
+  activeServerName?: string;
+  isSecondaryServer?: boolean;
+  onBackToPrimaryServer?: () => void;
 }
 
 const ARCH_MASCOTS = [
@@ -81,6 +84,9 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
   onTestInstagram,
   onOpenWhatsAppModal,
   onComplete,
+  activeServerName,
+  isSecondaryServer,
+  onBackToPrimaryServer,
 }) => {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(initialStep);
   const [providerModeChoice, setProviderModeChoice] = useState<"gratuito" | "assinatura">(
@@ -348,6 +354,28 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = ({
 
   return (
     <div className="min-h-screen w-full bg-[#141414] text-[#FFFFFF] flex flex-col items-center justify-center relative px-4 py-10 overflow-y-auto">
+      {isSecondaryServer && (
+        <div className="fixed top-4 left-4 z-30 flex items-center gap-3 rounded-xl bg-[#212121] border border-white/10 px-3.5 py-2 shadow-xl">
+          <div className="text-left">
+            <p className="text-[11px] uppercase tracking-wider text-[#979797]">
+              Configurando servidor
+            </p>
+            <p className="text-[12.5px] font-semibold text-white truncate max-w-[200px]">
+              {activeServerName || "Novo Servidor"}
+            </p>
+          </div>
+          {onBackToPrimaryServer && (
+            <button
+              type="button"
+              onClick={onBackToPrimaryServer}
+              className="rounded-lg bg-white/10 hover:bg-white/15 px-2.5 py-1 text-[11.5px] font-medium text-white transition-colors"
+            >
+              Voltar ao Principal
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Pílula de status de runtime no canto superior direito (Screenshot 1 & 2) */}
       <div className="fixed top-4 right-4 z-30 w-72 rounded-xl bg-[#212121] border border-white/10 px-3.5 py-2.5 shadow-xl">
         <div className="flex items-start gap-2.5">

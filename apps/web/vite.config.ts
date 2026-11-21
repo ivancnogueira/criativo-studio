@@ -12,7 +12,7 @@ export default defineConfig({
     sourcemap: false,
     chunkSizeWarningLimit: 2000,
     rollupOptions: {
-      maxParallelFileOps: 2,
+      maxParallelFileOps: 1,
       output: {
         manualChunks(id) {
           if (id.includes("node_modules/mermaid") || id.includes("node_modules/cytoscape") || id.includes("node_modules/elkjs")) {

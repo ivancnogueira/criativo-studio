@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -8,6 +9,10 @@ import { CriativoDatabase } from "../src/database/client.ts";
 import { MemoryManager } from "../src/engine/runner/memory-manager.ts";
 import { AntigravityLiveService } from "../src/providers/antigravity-live-service.ts";
 import { RemoteClaimService } from "../src/servers/remote-claim-service.ts";
+import {
+  listInstalledSkills,
+  loadSkillPromptBySlug,
+} from "../src/server/analytics-skills-service.ts";
 import { getUserSettings, updateUserSettings } from "../src/server/settings-storage-service.ts";
 import { createDaemonServer, type DaemonRuntime } from "../src/server/daemon-server.ts";
 import { generateLicenseKeyPair } from "@criativo/contracts/license-crypto-node";
@@ -365,13 +370,13 @@ describe("Fase 24 — Hotfixes RemoteClaim HTML Fallback, Auto-Refresh de Cotas 
         remote_ip: "203.0.113.55",
       });
 
-      // 1. Consulta /api/onboarding na VPS -> já concluído automaticamente no boot
+      // 1. Consulta /api/onboarding na VPS -> cada servidor novo preserva onboarding próprio pendente
       const onbRes = await fetch(`http://127.0.0.1:${desktopRt.port}/api/onboarding`, {
         headers: { "X-Criativo-Server-Id": vpsRec.server_id },
       });
       assert.equal(onbRes.status, 200);
       const onbJson = (await onbRes.json()) as { onboarding: { onboarding_concluido: boolean } };
-      assert.equal(onbJson.onboarding.onboarding_concluido, true);
+      assert.equal(onbJson.onboarding.onboarding_concluido, false);
 
       // 2. Consulta /api/agentes na VPS -> Desktop sincroniza o certificado e VPS desbloqueia os 15 agentes
       const agRes = await fetch(`http://127.0.0.1:${desktopRt.port}/api/agentes?apenas_desbloqueados=1`, {
@@ -536,6 +541,292 @@ describe("Fase 24 — Hotfixes RemoteClaim HTML Fallback, Auto-Refresh de Cotas 
       } catch {
         // ignora erro de fechamento
       }
+    }
+  });
+
+  it("9. (VPS27-01) Skills bonus e video ficam embutidas em .agents/skills-upgrades com gating estrito pela licença Ed25519 (9 -> 12 -> 15)", async () => {
+    const repoRoot = resolve(daemonRoot, "../..");
+    const prevProbeEnv = process.env.CRIATIVO_SKIP_LOCAL_PROBE;
+    process.env.CRIATIVO_SKIP_LOCAL_PROBE = "1";
+    const { createLandingApp } = (await import(landingServerUrl)) as {
+      createLandingApp: (options?: Record<string, unknown>) => {
+        app: { listen: (port: number, host: string, cb: () => void) => import("node:http").Server };
+        licenseHub: {
+          issueOrUpdateLicenseFromSale: (input: Record<string, unknown>) => { license_key: string; id: string };
+          close: () => void;
+        };
+      };
+    };
+
+    const keys = generateLicenseKeyPair();
+    const hubDir = join(tempDir, "hub-vps27-skills");
+    mkdirSync(hubDir, { recursive: true });
+    const { app, licenseHub } = createLandingApp({
+      distDir: join(hubDir, "dist-empty"),
+      bonusDir: join(hubDir, "bonus-empty"),
+      licenseHub: {
+        dbPath: join(hubDir, "licencas.db"),
+        releasesDir: join(hubDir, "releases"),
+        privateKeyPem: keys.privateKeyPem,
+        publicKeyPem: keys.publicKeyPem,
+      },
+    });
+    const hubServer = await new Promise<import("node:http").Server>((r) => {
+      const s = app.listen(0, "127.0.0.1", () => r(s));
+    });
+    const hubPort = (hubServer.address() as { port: number }).port;
+    const hubUrl = `http://127.0.0.1:${hubPort}`;
+
+    const baseOnly = licenseHub.issueOrUpdateLicenseFromSale({
+      email: "base-skills@exemplo.invalid",
+      customerName: "Cliente Base",
+      planTier: "individual",
+      addUpgrades: [],
+      provider: "manual",
+    });
+    const bonusOnly = licenseHub.issueOrUpdateLicenseFromSale({
+      email: "bonus-skills@exemplo.invalid",
+      customerName: "Cliente Bonus",
+      planTier: "agencia_10",
+      addUpgrades: ["bonus"],
+      provider: "manual",
+    });
+    const fullLic = licenseHub.issueOrUpdateLicenseFromSale({
+      email: "full-skills@exemplo.invalid",
+      customerName: "Cliente Completo",
+      planTier: "agencia_ilimitada",
+      addUpgrades: ["bonus", "video"],
+      provider: "manual",
+    });
+
+    const testCases: Array<{
+      licKey: string;
+      email: string;
+      expectedCount: number;
+      expectBonus: boolean;
+      expectVideo: boolean;
+    }> = [
+      { licKey: baseOnly.license_key, email: "base-skills@exemplo.invalid", expectedCount: 9, expectBonus: false, expectVideo: false },
+      { licKey: bonusOnly.license_key, email: "bonus-skills@exemplo.invalid", expectedCount: 12, expectBonus: true, expectVideo: false },
+      { licKey: fullLic.license_key, email: "full-skills@exemplo.invalid", expectedCount: 15, expectBonus: true, expectVideo: true },
+    ];
+
+    try {
+      for (let idx = 0; idx < testCases.length; idx += 1) {
+        const tc = testCases[idx]!;
+        const caseDir = join(tempDir, `skills-case-${idx}`);
+        mkdirSync(caseDir, { recursive: true });
+        const rt = await createDaemonServer({
+          port: 0,
+          host: "127.0.0.1",
+          dbPath: join(caseDir, "criativo.db"),
+          workspaceRoot: repoRoot,
+          productRoot: repoRoot,
+          autoStartLoops: false,
+          autoBootWhatsApp: false,
+          controlSocketPath: null,
+          enforceLicense: true,
+          licenseHubUrl: hubUrl,
+          licensePublicKeyPem: keys.publicKeyPem,
+          machineSeedOverride: `skills-seed-${idx}`,
+        });
+        try {
+          const actRes = await fetch(`http://127.0.0.1:${rt.port}/api/studio/license/activate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ license_key: tc.licKey, email: tc.email }),
+          });
+          assert.equal(actRes.status, 200);
+
+          const habRes = await fetch(`http://127.0.0.1:${rt.port}/api/habilidades`);
+          assert.equal(habRes.status, 200);
+          const habJson = (await habRes.json()) as { habilidades: Array<{ id: string }> };
+          const ids = new Set(habJson.habilidades.map((h) => h.id));
+          assert.equal(ids.size, tc.expectedCount);
+          assert.equal(ids.has("consistencia-personagem"), tc.expectBonus);
+          assert.equal(ids.has("engenharia-reversa-concorrentes"), tc.expectBonus);
+          assert.equal(ids.has("gerador-de-entregaveis"), tc.expectBonus);
+          assert.equal(ids.has("criar-video-reels"), tc.expectVideo);
+          assert.equal(ids.has("roteirista-faceless"), tc.expectVideo);
+          assert.equal(ids.has("roteirista-talking-head"), tc.expectVideo);
+
+          const bonusPrompt = loadSkillPromptBySlug("consistencia-personagem", undefined, repoRoot, {
+            db: rt.db,
+            licenseService: rt.licenseService,
+            productRoot: repoRoot,
+          });
+          assert.equal(Boolean(bonusPrompt), tc.expectBonus);
+
+          const videoPrompt = loadSkillPromptBySlug("criar-video-reels", undefined, repoRoot, {
+            db: rt.db,
+            licenseService: rt.licenseService,
+            productRoot: repoRoot,
+          });
+          assert.equal(Boolean(videoPrompt), tc.expectVideo);
+
+          const directSkills = listInstalledSkills(rt.db, undefined, repoRoot, rt.licenseService, repoRoot);
+          assert.equal(directSkills.length, tc.expectedCount);
+        } finally {
+          await rt.close().catch(() => {});
+        }
+      }
+    } finally {
+      if (prevProbeEnv === undefined) {
+        delete process.env.CRIATIVO_SKIP_LOCAL_PROBE;
+      } else {
+        process.env.CRIATIVO_SKIP_LOCAL_PROBE = prevProbeEnv;
+      }
+      licenseHub.close();
+      await new Promise<void>((r) => hubServer.close(() => r()));
+    }
+  });
+
+  it("10. (VPS27-02) RemoteOAuthBridgeService + oauth-callback-relay encaminham callback loopback 127.0.0.1 do Desktop para a VPS sem ERR_CONNECTION_REFUSED", async () => {
+    const desktopDir = join(tempDir, "desktop-oauth-bridge");
+    const vpsDir = join(tempDir, "vps-oauth-bridge");
+    mkdirSync(desktopDir, { recursive: true });
+    mkdirSync(vpsDir, { recursive: true });
+
+    const desktopRt = await createDaemonServer({
+      port: 0,
+      host: "127.0.0.1",
+      dbPath: join(desktopDir, "criativo.db"),
+      workspaceRoot: desktopDir,
+      autoStartLoops: false,
+      autoBootWhatsApp: false,
+      controlSocketPath: null,
+      bypassLicenseForTests: true,
+    });
+
+    const vpsAccessToken = "vps-oauth-bridge-secret-27";
+    const vpsRt = await createDaemonServer({
+      port: 0,
+      host: "127.0.0.1",
+      dbPath: join(vpsDir, "criativo.db"),
+      workspaceRoot: vpsDir,
+      autoStartLoops: false,
+      autoBootWhatsApp: false,
+      controlSocketPath: null,
+      bypassLicenseForTests: true,
+      accessToken: vpsAccessToken,
+    });
+
+    let receivedCallbackPath: string | null = null;
+    const mockVpsLoopback = createHttpServer((req, res) => {
+      receivedCallbackPath = req.url ?? null;
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end("<html><body>CODEX_LOOPBACK_OK</body></html>");
+    });
+    await new Promise<void>((r) => mockVpsLoopback.listen(0, "127.0.0.1", () => r()));
+    const vpsLoopbackPort = (mockVpsLoopback.address() as { port: number }).port;
+
+    // Encontra uma porta livre no Desktop para a ponte temporária sem colidir com o mock acima
+    const probeBridge = createHttpServer();
+    await new Promise<void>((r) => probeBridge.listen(0, "127.0.0.1", () => r()));
+    const bridgePort = (probeBridge.address() as { port: number }).port;
+    await new Promise<void>((r) => probeBridge.close(() => r()));
+
+    try {
+      const vpsRec = desktopRt.localServerManager!.registerRemoteServer({
+        nome: "VPS OAuth Test",
+        kind: "remote_vps",
+        base_url: `http://127.0.0.1:${vpsRt.port}`,
+        access_token: vpsAccessToken,
+      });
+
+      vpsRt.providerConnection.getCliOAuthService().registerPendingLoopbackPort("openai", vpsLoopbackPort);
+
+      const authUrl = `https://auth.example.invalid/oauth/authorize?client_id=test&redirect_uri=${encodeURIComponent(
+        `http://127.0.0.1:${bridgePort}/auth/callback`
+      )}&state=ST27`;
+
+      const prepRes = await fetch(
+        `http://127.0.0.1:${desktopRt.port}/api/studio/servers/${encodeURIComponent(vpsRec.server_id)}/oauth-bridge`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provedor: "openai", auth_url: authUrl }),
+        }
+      );
+      assert.equal(prepRes.status, 200);
+      const prepJson = (await prepRes.json()) as { ok: boolean; bridged: boolean; port: number };
+      assert.equal(prepJson.ok, true);
+      assert.equal(prepJson.bridged, true);
+      assert.equal(prepJson.port, bridgePort);
+
+      // Simula o redirecionamento final do navegador do PC Desktop para 127.0.0.1:<bridgePort>
+      const browserRedirectRes = await fetch(
+        `http://127.0.0.1:${bridgePort}/auth/callback?code=CODE_VPS_27&state=ST27`
+      );
+      assert.equal(browserRedirectRes.status, 200);
+      const htmlBody = await browserRedirectRes.text();
+      assert.match(htmlBody, /Autenticação concluída/i);
+      assert.equal(receivedCallbackPath, "/auth/callback?code=CODE_VPS_27&state=ST27");
+    } finally {
+      await new Promise<void>((r) => mockVpsLoopback.close(() => r()));
+      await vpsRt.close().catch(() => {});
+      await desktopRt.close().catch(() => {});
+    }
+  });
+
+  it("11. (VPS27-03) Provedores reportam runtime_host/runtime_platform e addManualTokenAccount invalida cache deixando Gemini conectado na VPS", async () => {
+    const provRes = await fetch(
+      `http://127.0.0.1:${(runtime.httpServer.address() as { port: number }).port}/api/provedores/status`
+    );
+    assert.equal(provRes.status, 200);
+    const provJson = (await provRes.json()) as {
+      provedores: Array<{
+        provedor: string;
+        runtime_host?: string | null;
+        runtime_platform?: string | null;
+      }>;
+    };
+    const oc = provJson.provedores.find((p) => p.provedor === "opencode");
+    assert.ok(oc);
+    assert.ok(typeof oc.runtime_host === "string" && oc.runtime_host.length > 0);
+    assert.equal(oc.runtime_platform, process.platform);
+
+    const vpsGeminiDir = join(tempDir, "vps-gemini-acc");
+    mkdirSync(vpsGeminiDir, { recursive: true });
+    const vpsRt = await createDaemonServer({
+      port: 0,
+      host: "127.0.0.1",
+      dbPath: join(vpsGeminiDir, "criativo.db"),
+      workspaceRoot: vpsGeminiDir,
+      autoStartLoops: false,
+      autoBootWhatsApp: false,
+      controlSocketPath: null,
+      bypassLicenseForTests: true,
+    });
+
+    try {
+      // Aquece cache inicial vazio antes da importação
+      const snapEmpty = await vpsRt.providerConnection.getAntigravityService().getLiveSnapshot(false);
+      assert.equal(snapEmpty.contas.length, 0);
+
+      const postRes = await fetch(`http://127.0.0.1:${vpsRt.port}/api/provedores/gemini/contas`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: "gemini-vps27@exemplo.invalid",
+          label: "Conta VPS",
+          access_token: "ya29.vps27-token-valido",
+          refresh_token: "1//vps27-refresh",
+          expiry: new Date(Date.now() + 55 * 60_000).toISOString(),
+        }),
+      });
+      assert.equal(postRes.status, 201);
+      const postJson = (await postRes.json()) as {
+        conta: { email: string };
+        provedores: Array<{ provedor: string; conectado: boolean; modo_conexao: string; contas?: Array<{ email: string }> }>;
+      };
+      assert.equal(postJson.conta.email, "gemini-vps27@exemplo.invalid");
+      const geminiStatus = postJson.provedores.find((p) => p.provedor === "gemini");
+      assert.equal(geminiStatus?.conectado, true);
+      assert.equal(geminiStatus?.modo_conexao, "assinatura");
+      assert.equal(geminiStatus?.contas?.[0]?.email, "gemini-vps27@exemplo.invalid");
+    } finally {
+      await vpsRt.close().catch(() => {});
     }
   });
 });

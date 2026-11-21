@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { extname, join, resolve } from "node:path";
 import type {
   ContaProvedorInfo,
@@ -1001,11 +1002,65 @@ export class AntigravityLiveService {
     }
   }
 
+  /**
+   * Executa login Google OAuth em pasta temporária isolada apenas para exportar os tokens
+   * ao servidor remoto (VPS), sem gravar nem alterar contas no servidor principal do Desktop.
+   */
+  public async signInIsolatedForRemoteExport(
+    label?: string,
+    onAuthUrl?: (url: string) => void
+  ): Promise<{
+    email: string;
+    accessToken: string;
+    refreshToken: string;
+    expiry: string;
+    label?: string;
+  }> {
+    const tempId = `ag-remote-${randomUUID().slice(0, 8)}`;
+    const tempDir = mkdtempSync(join(tmpdir(), "criativo-gemini-remote-"));
+
+    try {
+      const tokenSnap = await this.acpService.signInWithGoogleBrowser({
+        geminiDir: tempDir,
+        onAuthUrl,
+      });
+      const tokenPath = join(tempDir, "antigravity-acp", "antigravity-oauth-token");
+      const raw = safeReadJson<TokenFilePayload>(tokenPath);
+      const accessToken = tokenSnap.accessToken ?? raw?.token?.access_token?.trim() ?? "";
+      const refreshToken = tokenSnap.refreshToken ?? raw?.token?.refresh_token?.trim() ?? "";
+      const email = tokenSnap.email ?? raw?.id_token_email?.trim() ?? "";
+      const expiry =
+        tokenSnap.expiryIso ?? raw?.token?.expiry?.trim() ?? new Date(Date.now() + 55 * 60_000).toISOString();
+
+      if (!accessToken || !email) {
+        throw new Error(
+          "Login Google concluído, porém o token OAuth ou e-mail da conta não puderam ser exportados."
+        );
+      }
+
+      return {
+        email,
+        accessToken,
+        refreshToken,
+        expiry,
+        ...(label?.trim() ? { label: label.trim() } : {}),
+      };
+    } finally {
+      this.acpService.disposeAccount(tempId);
+      try {
+        rmSync(tempDir, { recursive: true, force: true });
+      } catch {
+        // ignora erro na limpeza temporária
+      }
+    }
+  }
+
   public addManualTokenAccount(input: {
     email: string;
     label?: string;
     accessToken: string;
     refreshToken?: string;
+    expiry?: string;
   }): ContaProvedorInfo {
     if (!this.db) throw new Error("Banco indisponível para salvar conta.");
     const id = `ag-${Date.now().toString(36)}`;
@@ -1013,7 +1068,7 @@ export class AntigravityLiveService {
     const acpDir = join(geminiDir, "antigravity-acp");
     mkdirSync(acpDir, { recursive: true });
     const tokenPath = join(acpDir, "antigravity-oauth-token");
-    const expiry = new Date(Date.now() + 55 * 60_000).toISOString();
+    const expiry = input.expiry?.trim() || new Date(Date.now() + 55 * 60_000).toISOString();
 
     writeFileSync(
       tokenPath,
@@ -1048,6 +1103,7 @@ export class AntigravityLiveService {
       },
     ];
     this.saveStudioRecords(nextAccounts);
+    this.snapshotCache = null;
 
     return {
       id,

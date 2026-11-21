@@ -58,6 +58,7 @@ import type { VaultService } from "../vault/vault-service.ts";
 import { LicenseValidationError, type LicenseClientService } from "../license/license-service.ts";
 import type { LocalServerManager } from "../servers/local-server-manager.ts";
 import type { RemoteClaimService } from "../servers/remote-claim-service.ts";
+import type { RemoteOAuthBridgeService } from "../servers/remote-oauth-bridge.ts";
 import { ServerQuotaExceededError } from "../servers/server-quota.ts";
 import type { AutoUpdateService } from "../updater/auto-update-service.ts";
 import {
@@ -199,6 +200,7 @@ export interface StudioRoutesDeps {
   licenseService?: LicenseClientService;
   localServerManager?: LocalServerManager | null;
   remoteClaimService?: RemoteClaimService | null;
+  remoteOAuthBridge?: RemoteOAuthBridgeService | null;
   autoUpdateService?: AutoUpdateService;
 }
 
@@ -1072,7 +1074,11 @@ export async function generateAgentChatReply(
   const loadedSkill =
     !turnPlan.loadFullSkill || process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1"
       ? null
-      : loadSkillPromptBySlug(skillSlug, undefined, workspaceRoot);
+      : loadSkillPromptBySlug(skillSlug, undefined, workspaceRoot, {
+          db: deps.db,
+          licenseService: deps.licenseService,
+          productRoot: deps.productRoot,
+        });
   const linkedSkills = turnPlan.loadFullSkill
     ? new SkillLoader([], workspaceRoot).loadLinkedAgentSkills(deps.db, agente.agente_id)
     : [];
@@ -2992,6 +2998,109 @@ export async function tryHandleStudioRoute(
     return true;
   }
 
+  const oauthBridgeMatch = path.match(/^\/api\/studio\/servers\/([^/]+)\/oauth-bridge$/);
+  if (method === "POST" && oauthBridgeMatch) {
+    if (!deps.remoteOAuthBridge) {
+      sendJson(res, 503, { erro: "RemoteOAuthBridgeService indisponível neste servidor." });
+      return true;
+    }
+    const srvId = decodeURIComponent(oauthBridgeMatch[1]);
+    const body = await readJsonBody(req);
+    const provedor = body.provedor === "claude" || body.provedor === "openai" ? body.provedor : null;
+    const authUrl = typeof body.auth_url === "string" ? body.auth_url.trim() : "";
+    if (!provedor || !authUrl) {
+      sendJson(res, 400, { erro: "Campos obrigatórios: 'provedor' ('claude' | 'openai') e 'auth_url'." });
+      return true;
+    }
+    const prepared = await deps.remoteOAuthBridge.prepareBridgeForAuthUrl({
+      serverId: srvId,
+      provedor,
+      authUrl,
+    });
+    sendJson(res, 200, prepared);
+    return true;
+  }
+
+  const remoteGeminiMatch = path.match(/^\/api\/studio\/servers\/([^/]+)\/connect-gemini-via-desktop$/);
+  if (method === "POST" && remoteGeminiMatch) {
+    if (!deps.localServerManager) {
+      sendJson(res, 503, { erro: "Gerenciador de servidores indisponível." });
+      return true;
+    }
+    const srvId = decodeURIComponent(remoteGeminiMatch[1]);
+    const targetSrv = deps.localServerManager.getServer(srvId);
+    if (!targetSrv) {
+      sendJson(res, 404, { erro: `Servidor '${srvId}' não encontrado.` });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    const label = typeof body.label === "string" ? body.label : undefined;
+
+    try {
+      const exported = await providerConnection
+        .getAntigravityService()
+        .signInIsolatedForRemoteExport(label, (url) => {
+          wsHub.broadcast("provider:auth_url", { provedor: "gemini", url });
+        });
+
+      const accessToken = deps.localServerManager.getServerAccessToken(targetSrv.server_id);
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (accessToken) {
+        headers.Authorization = `Bearer ${accessToken}`;
+      }
+      const syncedCertB64 = deps.licenseService?.exportCertificateForPeerSync();
+      if (syncedCertB64) {
+        headers["X-Criativo-Synced-License"] = syncedCertB64;
+      }
+
+      const upstreamRes = await fetch(
+        `${targetSrv.base_url.replace(/\/+$/, "")}/api/provedores/gemini/contas`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            email: exported.email,
+            label: exported.label,
+            access_token: exported.accessToken,
+            refresh_token: exported.refreshToken,
+            expiry: exported.expiry,
+          }),
+        }
+      );
+      const upstreamPayload = (await upstreamRes.json().catch(() => ({}))) as {
+        conta?: unknown;
+        provedores?: unknown;
+        erro?: string;
+      };
+      if (!upstreamRes.ok) {
+        sendJson(res, upstreamRes.status, {
+          ok: false,
+          erro: upstreamPayload.erro ?? `Falha ao enviar conta Google para '${targetSrv.nome}'.`,
+        });
+        return true;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        conta: upstreamPayload.conta,
+        provedores: upstreamPayload.provedores,
+      });
+    } catch (err) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : "Não foi possível autenticar sua conta Google pelo Desktop para o servidor remoto.";
+      const isCanceled = /cancelad[oa] pelo usuário/i.test(msg);
+      sendJson(res, isCanceled ? 200 : 400, {
+        ok: false,
+        canceled: isCanceled,
+        erro: msg,
+      });
+    }
+    return true;
+  }
+
   const serverSingleMatch = path.match(/^\/api\/studio\/servers\/([^/]+)$/);
   if (serverSingleMatch && (method === "PATCH" || method === "DELETE")) {
     if (!deps.localServerManager) {
@@ -3184,14 +3293,20 @@ export async function tryHandleStudioRoute(
   }
 
   if (method === "GET" && path === "/api/habilidades") {
-    sendJson(res, 200, { habilidades: listInstalledSkills(db, undefined, workspaceRoot) });
+    sendJson(res, 200, {
+      habilidades: listInstalledSkills(db, undefined, workspaceRoot, deps.licenseService, deps.productRoot),
+    });
     return true;
   }
 
   const skillDetailMatch = path.match(/^\/api\/habilidades\/([^/]+)$/);
   if (method === "GET" && skillDetailMatch) {
     const slug = decodeURIComponent(skillDetailMatch[1]);
-    const loaded = loadSkillPromptBySlug(slug, undefined, workspaceRoot);
+    const loaded = loadSkillPromptBySlug(slug, undefined, workspaceRoot, {
+      db,
+      licenseService: deps.licenseService,
+      productRoot: deps.productRoot,
+    });
     if (!loaded) {
       sendJson(res, 404, { erro: `Habilidade '${slug}' não encontrada.` });
       return true;
@@ -3374,6 +3489,35 @@ export async function tryHandleStudioRoute(
     return true;
   }
 
+  const oauthCallbackRelayMatch = path.match(/^\/api\/provedores\/(claude|openai)\/oauth-callback-relay$/);
+  if (method === "POST" && oauthCallbackRelayMatch) {
+    const provId = oauthCallbackRelayMatch[1] as "claude" | "openai";
+    const body = await readJsonBody(req);
+    const rawCallback =
+      typeof body.callback_path === "string"
+        ? body.callback_path
+        : typeof body.callback_url === "string"
+          ? body.callback_url
+          : "";
+    try {
+      const relayRes = await providerConnection
+        .getCliOAuthService()
+        .relayLoopbackCallback(provId, rawCallback);
+      sendJson(res, 200, {
+        ok: true,
+        status: relayRes.status,
+        body: relayRes.body,
+        content_type: relayRes.contentType,
+      });
+    } catch (err) {
+      sendJson(res, 400, {
+        ok: false,
+        erro: err instanceof Error ? err.message : "Falha ao entregar callback OAuth ao provedor.",
+      });
+    }
+    return true;
+  }
+
   const cancelSignInMatch = path.match(/^\/api\/provedores\/(gemini|claude|openai)\/cancelar-login$/);
   if (method === "POST" && cancelSignInMatch) {
     const provId = cancelSignInMatch[1] as "gemini" | "claude" | "openai";
@@ -3433,8 +3577,14 @@ export async function tryHandleStudioRoute(
       label: typeof body.label === "string" ? body.label : undefined,
       accessToken: body.access_token,
       refreshToken: typeof body.refresh_token === "string" ? body.refresh_token : undefined,
+      expiry: typeof body.expiry === "string" ? body.expiry : undefined,
     });
     const provedores = await providerConnection.getProvidersStatus(true);
+    wsHub.broadcast("provider:updated", {
+      provedor: "gemini",
+      conectado: true,
+      modo: "assinatura",
+    });
     sendJson(res, 201, { conta, provedores });
     return true;
   }

@@ -1142,6 +1142,8 @@ export interface ProvedorStatusInfo {
   cli_detectado: boolean;
   cli_versao: string | null;
   cli_executavel?: string | null;
+  runtime_host?: string | null;
+  runtime_platform?: string | null;
   vault_configurado: boolean;
   modo_conexao: "cli" | "api_key" | "local" | "assinatura" | "nenhum";
   modelos: ModeloProvedorInfo[];

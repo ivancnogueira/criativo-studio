@@ -78,13 +78,8 @@ async function bootLocalChild(): Promise<void> {
     runtime.licenseService.importPeerSyncedCertificateBase64(syncedLicenseB64);
   }
 
-  const curOnboarding = runtime.providerConnection.getOnboardingState();
-  if (!curOnboarding.onboarding_concluido) {
-    runtime.providerConnection.updateOnboardingState({
-      onboarding_concluido: true,
-      setup_assistant_dismissed: true,
-    });
-  }
+  // Cada servidor local filho preserva o onboarding próprio da sua marca/workspace;
+  // apenas a licença Ed25519 e os upgrades são sincronizados automaticamente do servidor principal.
 
   if (
     process.env.NODE_ENV !== "test" &&
