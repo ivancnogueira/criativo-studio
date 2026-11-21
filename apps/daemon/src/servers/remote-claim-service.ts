@@ -123,13 +123,14 @@ export class RemoteClaimService {
       message?: string;
       claim_id?: string;
       claim_secret?: string;
+      claim_token?: string;
       server_name?: string;
       expires_at?: string;
       ttl_seconds?: number;
     };
 
     try {
-      const res = await this.#fetchImpl(`${this.#licenseService.hubBaseUrl}/api/server-claims/create`, {
+      let res = await this.#fetchImpl(`${this.#licenseService.hubBaseUrl}/api/server-claims/create`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -140,6 +141,20 @@ export class RemoteClaimService {
           current_servers_count: existing.length,
         }),
       });
+
+      if (res.status === 404) {
+        res = await this.#fetchImpl(`${this.#licenseService.hubBaseUrl}/api/servers/claims`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(headers ?? {}),
+          },
+          body: JSON.stringify({
+            server_name: serverName,
+            current_servers_count: existing.length,
+          }),
+        });
+      }
 
       const { isJson, data } = await this.readJsonSafe<HubCreatePayload>(res);
 
@@ -156,11 +171,12 @@ export class RemoteClaimService {
         return this.createLocalFallbackTicket(serverName);
       }
 
-      if (!isJson || !data.claim_id || !data.claim_secret || !data.expires_at) {
+      const claimSecret = data.claim_secret || data.claim_token;
+      if (!isJson || !data.claim_id || !claimSecret || !data.expires_at) {
         return this.createLocalFallbackTicket(serverName);
       }
 
-      const cmds = this.buildInstallCommands(data.claim_secret, data.server_name || serverName);
+      const cmds = this.buildInstallCommands(claimSecret, data.server_name || serverName);
       const ticket: ServerClaimTicket = {
         claim_id: data.claim_id,
         server_name: data.server_name || serverName,
@@ -205,6 +221,18 @@ export class RemoteClaimService {
         server_api_token: string;
         app_version?: string | null;
       } | null;
+      paired_server?: {
+        nome?: string;
+        server_name?: string;
+        base_url?: string;
+        host_url?: string;
+        remote_ip?: string | null;
+        public_ip?: string | null;
+        access_token?: string | null;
+        server_api_token?: string | null;
+        version?: string | null;
+        app_version?: string | null;
+      } | null;
       error?: string;
     };
 
@@ -219,10 +247,17 @@ export class RemoteClaimService {
           ? { "x-machine-id": rawHeaders["X-Criativo-Machine-Id"] }
           : {}),
       };
-      const res = await this.#fetchImpl(
+      let res = await this.#fetchImpl(
         `${this.#licenseService.hubBaseUrl}/api/server-claims/${encodeURIComponent(claimId)}/status`,
         { method: "GET", headers },
       );
+
+      if (res.status === 404) {
+        res = await this.#fetchImpl(
+          `${this.#licenseService.hubBaseUrl}/api/servers/claims/${encodeURIComponent(claimId)}`,
+          { method: "GET", headers },
+        );
+      }
 
       const { isJson, data } = await this.readJsonSafe<HubPollPayload>(res);
 
@@ -242,14 +277,32 @@ export class RemoteClaimService {
       }
 
       let pairedServer: StudioServerRecord | null = null;
-      if (data.status === "redeemed" && data.paired_info) {
+      const pairedRaw = data.paired_info
+        ? {
+            nome: data.paired_info.server_name,
+            base_url: data.paired_info.host_url,
+            access_token: data.paired_info.server_api_token,
+            remote_ip: data.paired_info.public_ip ?? null,
+            version: data.paired_info.app_version ?? null,
+          }
+        : data.paired_server
+          ? {
+              nome: data.paired_server.nome || data.paired_server.server_name || cached?.server_name || "Servidor VPS",
+              base_url: data.paired_server.base_url || data.paired_server.host_url || "",
+              access_token: data.paired_server.access_token || data.paired_server.server_api_token || "",
+              remote_ip: data.paired_server.remote_ip ?? data.paired_server.public_ip ?? null,
+              version: data.paired_server.version ?? data.paired_server.app_version ?? null,
+            }
+          : null;
+
+      if (data.status === "redeemed" && pairedRaw && pairedRaw.base_url && pairedRaw.access_token) {
         pairedServer = this.#manager.registerRemoteServer({
-          nome: data.paired_info.server_name || cached?.server_name || "Servidor VPS",
+          nome: pairedRaw.nome || cached?.server_name || "Servidor VPS",
           kind: "remote_vps",
-          base_url: data.paired_info.host_url,
-          access_token: data.paired_info.server_api_token,
-          remote_ip: data.paired_info.public_ip ?? null,
-          version: data.paired_info.app_version ?? null,
+          base_url: pairedRaw.base_url,
+          access_token: pairedRaw.access_token,
+          remote_ip: pairedRaw.remote_ip ?? null,
+          version: pairedRaw.version ?? null,
         });
         this.#redeemedServerIds.set(claimId, pairedServer);
       } else if (this.#redeemedServerIds.has(claimId)) {
