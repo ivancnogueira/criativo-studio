@@ -202,8 +202,27 @@ function registerIpcHandlers(userDataDir: string): void {
         side: "right",
         pinned: true,
         peeked: false,
+        scalePercent: 100,
+        alwaysOnTop: true,
+        displayId: "principal",
       }
     );
+  });
+
+  ipcMain.handle("criativo:dock-get-displays", () => {
+    try {
+      const primary = screen.getPrimaryDisplay();
+      return screen.getAllDisplays().map((d, idx) => ({
+        id: d.id === primary.id ? "principal" : String(d.id),
+        label:
+          d.id === primary.id
+            ? "Tela principal"
+            : d.label?.trim() || `Tela ${idx + 1}`,
+        primary: d.id === primary.id,
+      }));
+    } catch {
+      return [{ id: "principal", label: "Tela principal", primary: true }];
+    }
   });
 
   ipcMain.handle("criativo:dock-set-expanded", (_evt, rawPayload: unknown) => {
@@ -265,6 +284,42 @@ function registerIpcHandlers(userDataDir: string): void {
     );
   });
 
+  ipcMain.handle("criativo:dock-configure", async (_evt, rawPayload: unknown) => {
+    const payload =
+      rawPayload && typeof rawPayload === "object"
+        ? (rawPayload as {
+            visible?: unknown;
+            side?: unknown;
+            pinned?: unknown;
+            scalePercent?: unknown;
+            alwaysOnTop?: unknown;
+            displayId?: unknown;
+            pillHeight?: unknown;
+          })
+        : {};
+    if (!floatingDock) {
+      return {
+        visible: typeof payload.visible === "boolean" ? payload.visible : true,
+        expanded: false,
+        side: payload.side === "left" ? "left" : "right",
+        pinned: typeof payload.pinned === "boolean" ? payload.pinned : true,
+        peeked: false,
+        scalePercent: typeof payload.scalePercent === "number" ? payload.scalePercent : 100,
+        alwaysOnTop: typeof payload.alwaysOnTop === "boolean" ? payload.alwaysOnTop : true,
+        displayId: typeof payload.displayId === "string" ? payload.displayId : "principal",
+      };
+    }
+    return await floatingDock.configure({
+      visible: typeof payload.visible === "boolean" ? payload.visible : undefined,
+      side: payload.side === "left" || payload.side === "right" ? payload.side : undefined,
+      pinned: typeof payload.pinned === "boolean" ? payload.pinned : undefined,
+      scalePercent: typeof payload.scalePercent === "number" ? payload.scalePercent : undefined,
+      alwaysOnTop: typeof payload.alwaysOnTop === "boolean" ? payload.alwaysOnTop : undefined,
+      displayId: typeof payload.displayId === "string" ? payload.displayId : undefined,
+      pillHeight: typeof payload.pillHeight === "number" ? payload.pillHeight : undefined,
+    });
+  });
+
   ipcMain.handle("criativo:dock-start-drag", () => {
     floatingDock?.startDrag();
   });
@@ -290,7 +345,7 @@ function registerIpcHandlers(userDataDir: string): void {
     if (mainWindow && !mainWindow.isDestroyed()) {
       const payload =
         rawOpts && typeof rawOpts === "object"
-          ? (rawOpts as { agenteId?: string; action?: "new-agent" })
+          ? (rawOpts as { agenteId?: string; action?: "new-agent" | "open-dock-settings" })
           : {};
       if (payload.agenteId || payload.action) {
         mainWindow.webContents.send("criativo:main-navigate", payload);

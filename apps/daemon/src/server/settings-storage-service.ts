@@ -16,6 +16,7 @@ import type {
   AgentNotificationLevel,
   StorageUsageItem,
   StorageUsageSnapshot,
+  StudioDockSettings,
   StudioUserSettings,
   WhatsNewReleaseInfo,
 } from "@criativo/contracts";
@@ -23,6 +24,19 @@ import type { CriativoDatabase } from "../database/client.ts";
 import type { WebSocketHub } from "./websocket-hub.ts";
 
 export const CONFIG_KEY_USER_SETTINGS = "preferencias_usuario_v1";
+
+export const DEFAULT_STUDIO_DOCK_SETTINGS: StudioDockSettings = {
+  mostrar_dock: true,
+  posicao: "sobre_outros_apps",
+  tela: "principal",
+  borda: "right",
+  tamanho_percentual: 100,
+  ocultar_quando_inativo: false,
+  mostrar_faixa_borda: true,
+  mostrar_trabalho_concluido: true,
+  mostrar_agentes_com_novidades: false,
+  agentes_ids: null,
+};
 
 export const DEFAULT_STUDIO_USER_SETTINGS: StudioUserSettings = {
   geral: {
@@ -47,6 +61,7 @@ export const DEFAULT_STUDIO_USER_SETTINGS: StudioUserSettings = {
     detalhe_dynamic_island: "detalhado",
     habilitar_drawer_rapido: true,
   },
+  dock: structuredClone(DEFAULT_STUDIO_DOCK_SETTINGS),
   notificacoes: {
     web_habilitadas: false,
     mostrar_preview: true,
@@ -90,8 +105,29 @@ function mergeUserSettings(
   const geralRaw = (patch.geral ?? {}) as Partial<StudioUserSettings["geral"]>;
   const aparenciaRaw = (patch.aparencia ?? {}) as Partial<StudioUserSettings["aparencia"]>;
   const compRaw = (patch.comportamento ?? {}) as Partial<StudioUserSettings["comportamento"]>;
+  const dockRaw = (patch.dock ?? {}) as Partial<StudioDockSettings>;
   const notifRaw = (patch.notificacoes ?? {}) as Partial<StudioUserSettings["notificacoes"]>;
   const vozRaw = (patch.voz ?? {}) as Partial<StudioUserSettings["voz"]>;
+  const baseDock = base.dock ?? DEFAULT_STUDIO_DOCK_SETTINGS;
+
+  const rawDockSize = Number(dockRaw.tamanho_percentual ?? baseDock.tamanho_percentual);
+  const dockSize = Number.isFinite(rawDockSize)
+    ? Math.min(150, Math.max(80, Math.round(rawDockSize)))
+    : baseDock.tamanho_percentual;
+
+  const dockAgentsIds: string[] | null =
+    dockRaw.agentes_ids === null
+      ? null
+      : Array.isArray(dockRaw.agentes_ids)
+        ? Array.from(
+            new Set(
+              dockRaw.agentes_ids
+                .filter((id): id is string => typeof id === "string")
+                .map((id) => id.trim())
+                .filter(Boolean),
+            ),
+          )
+        : baseDock.agentes_ids;
 
   const escalaNum = Number(aparenciaRaw.escala ?? base.aparencia.escala);
   const escala = (VALID_SCALES.has(escalaNum) ? escalaNum : base.aparencia.escala) as
@@ -185,6 +221,44 @@ function mergeUserSettings(
         typeof compRaw.habilitar_drawer_rapido === "boolean"
           ? compRaw.habilitar_drawer_rapido
           : base.comportamento.habilitar_drawer_rapido,
+    },
+    dock: {
+      mostrar_dock:
+        typeof dockRaw.mostrar_dock === "boolean"
+          ? dockRaw.mostrar_dock
+          : typeof compRaw.habilitar_drawer_rapido === "boolean"
+            ? compRaw.habilitar_drawer_rapido
+            : baseDock.mostrar_dock,
+      posicao:
+        dockRaw.posicao === "apenas_janela" || dockRaw.posicao === "sobre_outros_apps"
+          ? dockRaw.posicao
+          : baseDock.posicao,
+      tela:
+        typeof dockRaw.tela === "string" && dockRaw.tela.trim().length > 0
+          ? dockRaw.tela.trim().slice(0, 64)
+          : baseDock.tela,
+      borda:
+        dockRaw.borda === "left" || dockRaw.borda === "right"
+          ? dockRaw.borda
+          : baseDock.borda,
+      tamanho_percentual: dockSize,
+      ocultar_quando_inativo:
+        typeof dockRaw.ocultar_quando_inativo === "boolean"
+          ? dockRaw.ocultar_quando_inativo
+          : baseDock.ocultar_quando_inativo,
+      mostrar_faixa_borda:
+        typeof dockRaw.mostrar_faixa_borda === "boolean"
+          ? dockRaw.mostrar_faixa_borda
+          : baseDock.mostrar_faixa_borda,
+      mostrar_trabalho_concluido:
+        typeof dockRaw.mostrar_trabalho_concluido === "boolean"
+          ? dockRaw.mostrar_trabalho_concluido
+          : baseDock.mostrar_trabalho_concluido,
+      mostrar_agentes_com_novidades:
+        typeof dockRaw.mostrar_agentes_com_novidades === "boolean"
+          ? dockRaw.mostrar_agentes_com_novidades
+          : baseDock.mostrar_agentes_com_novidades,
+      agentes_ids: dockAgentsIds,
     },
     notificacoes: {
       web_habilitadas:

@@ -270,7 +270,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
       : null
   );
   const [colorPickerExpanded, setColorPickerExpanded] = useState(false);
-  const [avatarPickerExpanded, setAvatarPickerExpanded] = useState(false);
+  const [avatarPickerExpanded, setAvatarPickerExpanded] = useState(true);
   const [allowedFoldersDraft, setAllowedFoldersDraft] = useState<AgentAllowedFolder[]>(
     Array.isArray(initialCfg.allowed_folders)
       ? (initialCfg.allowed_folders as AgentAllowedFolder[])
@@ -1302,6 +1302,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                 <button
                   type="button"
                   title="Alterar avatar"
+                  aria-expanded={avatarPickerExpanded}
                   onClick={() => setAvatarPickerExpanded((v) => !v)}
                   className="shrink-0 rounded-xl p-1 hover:bg-white/[0.06] transition-colors"
                 >
@@ -1311,7 +1312,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                     shape={shapeDraft}
                     color={colorDraft}
                     imageUrl={styleDraft === "image" ? imageUrlDraft : null}
-                    size={42}
+                    size={52}
                   />
                 </button>
                 <div className="min-w-0 flex-1 space-y-1.5">
@@ -1333,6 +1334,23 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = ({
                   />
                 </div>
               </div>
+
+              <button
+                type="button"
+                aria-expanded={avatarPickerExpanded}
+                onClick={() => setAvatarPickerExpanded((v) => !v)}
+                className="w-full flex items-center justify-between gap-2 rounded-lg bg-[#181818] hover:bg-[#1E1E1E] border border-white/[0.06] px-2.5 py-1.5 text-[11.5px] font-semibold text-[#DCDCDC] transition-colors"
+              >
+                <span className="flex items-center gap-1.5">
+                  <Palette className="h-3.5 w-3.5 text-[#42A0FF]" />
+                  <span>Personalizar avatar</span>
+                </span>
+                <ChevronRight
+                  className={`h-3.5 w-3.5 text-[#787878] transition-transform ${
+                    avatarPickerExpanded ? "rotate-90" : ""
+                  }`}
+                />
+              </button>
 
               {avatarPickerExpanded && (
                 <div className="pt-2 border-t border-white/[0.06]">

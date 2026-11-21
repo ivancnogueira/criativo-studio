@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Bot,
@@ -251,6 +251,25 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = ({
 
   const fallbackPercent = Math.max(5, Math.min(100, quotaPercent));
   const hasAnyConnectedAccount = allAccounts.length > 0;
+  const autoSyncedAccountsKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!onRefreshUsage || allAccounts.length === 0 || providerGroups.length > 0) {
+      return;
+    }
+    const key = allAccounts
+      .map((acc) => `${acc.provedor}:${acc.id}`)
+      .sort()
+      .join("|");
+    if (autoSyncedAccountsKeyRef.current === key) {
+      return;
+    }
+    autoSyncedAccountsKeyRef.current = key;
+    setRefreshing(true);
+    void Promise.resolve(onRefreshUsage()).finally(() => {
+      setRefreshing(false);
+    });
+  }, [allAccounts, onRefreshUsage, providerGroups.length]);
 
   const handleRefresh = async () => {
     if (!onRefreshUsage || refreshing) return;

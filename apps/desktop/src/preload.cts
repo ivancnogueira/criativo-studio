@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 
 export interface CriativoMainNavigatePayload {
   agenteId?: string;
-  action?: "new-agent";
+  action?: "new-agent" | "open-dock-settings";
 }
 
 export interface CriativoDockStatePayload {
@@ -11,6 +11,19 @@ export interface CriativoDockStatePayload {
   side: "left" | "right";
   pinned: boolean;
   peeked: boolean;
+  scalePercent?: number;
+  alwaysOnTop?: boolean;
+  displayId?: string;
+}
+
+export interface CriativoDockConfigurePayload {
+  visible?: boolean;
+  side?: "left" | "right";
+  pinned?: boolean;
+  scalePercent?: number;
+  alwaysOnTop?: boolean;
+  displayId?: string;
+  pillHeight?: number;
 }
 
 export interface CriativoDesktopBridge {
@@ -23,10 +36,12 @@ export interface CriativoDesktopBridge {
   openExternalSafe: (url: string) => Promise<boolean>;
   openUserDataFolder: () => Promise<void>;
   dockGetState: () => Promise<CriativoDockStatePayload>;
+  dockGetDisplays: () => Promise<Array<{ id: string; label: string; primary: boolean }>>;
   dockSetExpanded: (expanded: boolean, pillHeight?: number) => Promise<CriativoDockStatePayload>;
   dockSetVisible: (visible: boolean) => Promise<boolean>;
   dockSetPinned: (pinned: boolean, pillHeight?: number) => Promise<CriativoDockStatePayload>;
   dockSetPeeked: (peeked: boolean, pillHeight?: number) => Promise<CriativoDockStatePayload>;
+  dockConfigure: (config: CriativoDockConfigurePayload) => Promise<CriativoDockStatePayload>;
   dockStartDrag: () => Promise<void>;
   dockMoveDrag: () => Promise<void>;
   dockEndDrag: () => Promise<CriativoDockStatePayload>;
@@ -48,6 +63,7 @@ const bridge: CriativoDesktopBridge = {
   openExternalSafe: (url: string) => ipcRenderer.invoke("criativo:open-external", url),
   openUserDataFolder: () => ipcRenderer.invoke("criativo:open-data-dir"),
   dockGetState: () => ipcRenderer.invoke("criativo:dock-get-state"),
+  dockGetDisplays: () => ipcRenderer.invoke("criativo:dock-get-displays"),
   dockSetExpanded: (expanded: boolean, pillHeight?: number) =>
     ipcRenderer.invoke("criativo:dock-set-expanded", { expanded, pillHeight }),
   dockSetVisible: (visible: boolean) => ipcRenderer.invoke("criativo:dock-set-visible", visible),
@@ -55,6 +71,8 @@ const bridge: CriativoDesktopBridge = {
     ipcRenderer.invoke("criativo:dock-set-pinned", { pinned, pillHeight }),
   dockSetPeeked: (peeked: boolean, pillHeight?: number) =>
     ipcRenderer.invoke("criativo:dock-set-peeked", { peeked, pillHeight }),
+  dockConfigure: (config: CriativoDockConfigurePayload) =>
+    ipcRenderer.invoke("criativo:dock-configure", config ?? {}),
   dockStartDrag: () => ipcRenderer.invoke("criativo:dock-start-drag"),
   dockMoveDrag: () => ipcRenderer.invoke("criativo:dock-move-drag"),
   dockEndDrag: () => ipcRenderer.invoke("criativo:dock-end-drag"),

@@ -120,6 +120,10 @@ import {
   QuickAgentDrawer,
 } from "./features/settings/LiveVoiceAndQuickDrawer";
 import {
+  DEFAULT_FRONTEND_DOCK_SETTINGS,
+  resolveEffectiveDockAgentIds,
+} from "./features/settings/SettingsGeneralTabs";
+import {
   DEFAULT_FRONTEND_USER_SETTINGS,
   SettingsModal,
   type SettingsModalTabId,
@@ -187,6 +191,10 @@ function readCachedUserSettings(): StudioUserSettings {
       comportamento: {
         ...DEFAULT_FRONTEND_USER_SETTINGS.comportamento,
         ...(parsed.comportamento ?? {}),
+      },
+      dock: {
+        ...DEFAULT_FRONTEND_DOCK_SETTINGS,
+        ...(parsed.dock ?? {}),
       },
       notificacoes: {
         ...DEFAULT_FRONTEND_USER_SETTINGS.notificacoes,
@@ -1996,17 +2004,33 @@ export function App() {
     return bridge.onMainNavigate((payload) => {
       if (payload.action === "new-agent") {
         handleOpenNewAgentTab();
+      } else if (payload.action === "open-dock-settings") {
+        openSettings("dock");
       } else if (payload.agenteId) {
         handleSelectAgent(payload.agenteId);
       }
     });
-  }, [handleOpenNewAgentTab, handleSelectAgent]);
+  }, [handleOpenNewAgentTab, handleSelectAgent, openSettings]);
 
   useEffect(() => {
     const bridge = getCriativoDesktopBridge();
-    if (!bridge?.dockSetVisible) return;
-    void bridge.dockSetVisible(userSettings.comportamento.habilitar_drawer_rapido !== false);
-  }, [userSettings.comportamento.habilitar_drawer_rapido]);
+    if (!bridge) return;
+    const dock = userSettings.dock;
+    const visible =
+      (dock?.mostrar_dock ?? true) && userSettings.comportamento.habilitar_drawer_rapido !== false;
+    if (bridge.dockConfigure) {
+      void bridge.dockConfigure({
+        visible,
+        side: dock?.borda ?? "right",
+        pinned: !(dock?.ocultar_quando_inativo ?? false),
+        scalePercent: dock?.tamanho_percentual ?? 100,
+        alwaysOnTop: (dock?.posicao ?? "sobre_outros_apps") === "sobre_outros_apps",
+        displayId: dock?.tela ?? "principal",
+      });
+    } else if (bridge.dockSetVisible) {
+      void bridge.dockSetVisible(visible);
+    }
+  }, [userSettings.comportamento.habilitar_drawer_rapido, userSettings.dock]);
 
   const handleCreateNewTopic = useCallback(async () => {
     const currentAgentId =
@@ -4562,6 +4586,7 @@ export function App() {
                 await daemonApi.triggerUpdateRestart();
               }}
               onResetLayoutWidths={handleResetLayoutWidths}
+              pinnedAgentIds={sidebarLayout?.pins ?? []}
               onReopenSetupAssistant={async () => {
                 const res = await daemonApi.setSetupAssistantState("reopen");
                 setOnboarding(res.onboarding);
@@ -4876,6 +4901,27 @@ export function App() {
           onTogglePinned={handleToggleAgentDockPinned}
           onCreateAgent={handleOpenNewAgentTab}
           onSelectAgent={handleSelectAgent}
+          dockSettings={userSettings.dock ?? null}
+          onOpenDockSettings={() => openSettings("dock")}
+          onToggleAgentInDock={async (agenteId, included) => {
+            const currentDock = {
+              ...DEFAULT_FRONTEND_DOCK_SETTINGS,
+              ...(userSettings.dock ?? {}),
+            };
+            const currentIds = Array.isArray(currentDock.agentes_ids)
+              ? currentDock.agentes_ids
+              : resolveEffectiveDockAgentIds(agentes, currentDock.agentes_ids, sidebarLayout?.pins ?? []);
+            const nextIds = included
+              ? Array.from(new Set([...currentIds, agenteId]))
+              : currentIds.filter((id) => id !== agenteId);
+            const nextSettings: StudioUserSettings = {
+              ...userSettings,
+              dock: { ...currentDock, agentes_ids: nextIds },
+            };
+            setUserSettings(nextSettings);
+            const saved = await daemonApi.updateUserSettings({ dock: nextSettings.dock });
+            setUserSettings(saved);
+          }}
         />
       )}
 

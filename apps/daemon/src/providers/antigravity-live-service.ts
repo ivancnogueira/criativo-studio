@@ -631,8 +631,8 @@ export class AntigravityLiveService {
         let tokenValidNow = entry.tokenValid;
         let expiryIsoNow = entry.expiryIso;
 
-        // Se o token JWT em disco venceu e o motor ACP está disponível, renova silenciosamente
-        if (!tokenValidNow && entry.hasRefreshToken && cliExe && forceRefresh) {
+        // Se o token JWT em disco venceu e o motor ACP está disponível, renova silenciosamente em qualquer leitura
+        if (!tokenValidNow && entry.hasRefreshToken && cliExe) {
           try {
             const refreshed = await this.acpService.refreshAccountToken(entry.id, entry.geminiDir);
             if (refreshed?.accessToken) {
@@ -649,90 +649,107 @@ export class AntigravityLiveService {
           tokenValidNow || (entry.hasRefreshToken && Boolean(cliExe)) ? "conectado" : "desconectado";
         let plano: string | null = cachedAccount?.plano ?? null;
 
+        const fetchLiveQuotaAndModels = async (tokenToUse: string) => {
+          const codeAssistInfo = await this.callCodeAssist<{
+            cloudaicompanionProject?: string;
+            currentTier?: { name?: string };
+          }>(CODE_ASSIST_URL, "loadCodeAssist", tokenToUse, {});
+
+          if (codeAssistInfo.currentTier?.name) {
+            plano = codeAssistInfo.currentTier.name;
+          }
+
+          if (codeAssistInfo.cloudaicompanionProject) {
+            anyFreshLiveSuccess = true;
+            const [quotaRes, modelsRes] = await Promise.all([
+              this.callCodeAssist<{ groups?: CodeAssistQuotaGroup[] }>(
+                DAILY_CODE_ASSIST_URL,
+                "retrieveUserQuotaSummary",
+                tokenToUse,
+                { project: codeAssistInfo.cloudaicompanionProject }
+              ).catch(() => ({ groups: [] as CodeAssistQuotaGroup[] })),
+              this.callCodeAssist<{
+                models?: Record<string, FetchAvailableModelEntry>;
+                defaultAgentModelId?: string;
+                imageGenerationModelIds?: string[];
+              }>(
+                DAILY_CODE_ASSIST_URL,
+                "fetchAvailableModels",
+                tokenToUse,
+                { project: codeAssistInfo.cloudaicompanionProject }
+              ).catch(() => null),
+            ]);
+
+            for (const rawGroup of quotaRes.groups ?? []) {
+              const nome = rawGroup.displayName?.trim();
+              if (!nome) continue;
+              let janela5h: JanelaCotaConta | null = null;
+              let janelaSemanal: JanelaCotaConta | null = null;
+              for (const b of rawGroup.buckets ?? []) {
+                const win = normalizeWindowBucket(b);
+                if (!win) continue;
+                if (win.janela === "5h") {
+                  if (!janela5h || win.restante_percentual < janela5h.restante_percentual) janela5h = win;
+                } else if (win.janela === "semanal") {
+                  if (!janelaSemanal || win.restante_percentual < janelaSemanal.restante_percentual) janelaSemanal = win;
+                }
+              }
+              if (janela5h || janelaSemanal) {
+                grupos.push({
+                  nome,
+                  modelos: parseGroupModelsDescription(rawGroup.description),
+                  janela_5h: janela5h,
+                  janela_semanal: janelaSemanal,
+                });
+              }
+            }
+
+            if (modelsRes?.models) {
+              if (modelsRes.defaultAgentModelId) {
+                defaultModelId = modelsRes.defaultAgentModelId;
+              }
+              for (const imgId of modelsRes.imageGenerationModelIds ?? []) {
+                imageGenerationModelIds.add(imgId);
+              }
+              for (const [mId, mMeta] of Object.entries(modelsRes.models)) {
+                const normalized = normalizeModelFamilyAndEffort(
+                  mId,
+                  mMeta,
+                  imageGenerationModelIds,
+                  defaultModelId
+                );
+                if (!normalized) continue;
+                modelosConta.push(normalized.id);
+                const existing = modelMap.get(normalized.id);
+                if (
+                  !existing ||
+                  (normalized.restante_percentual ?? 0) > (existing.restante_percentual ?? -1)
+                ) {
+                  modelMap.set(normalized.id, normalized);
+                }
+              }
+            }
+          }
+        };
+
         if (activeAccessToken && tokenValidNow) {
           try {
-            const codeAssistInfo = await this.callCodeAssist<{
-              cloudaicompanionProject?: string;
-              currentTier?: { name?: string };
-            }>(CODE_ASSIST_URL, "loadCodeAssist", activeAccessToken, {});
-
-            if (codeAssistInfo.currentTier?.name) {
-              plano = codeAssistInfo.currentTier.name;
-            }
-
-            if (codeAssistInfo.cloudaicompanionProject) {
-              anyFreshLiveSuccess = true;
-              const [quotaRes, modelsRes] = await Promise.all([
-                this.callCodeAssist<{ groups?: CodeAssistQuotaGroup[] }>(
-                  DAILY_CODE_ASSIST_URL,
-                  "retrieveUserQuotaSummary",
-                  activeAccessToken,
-                  { project: codeAssistInfo.cloudaicompanionProject }
-                ).catch(() => ({ groups: [] as CodeAssistQuotaGroup[] })),
-                this.callCodeAssist<{
-                  models?: Record<string, FetchAvailableModelEntry>;
-                  defaultAgentModelId?: string;
-                  imageGenerationModelIds?: string[];
-                }>(
-                  DAILY_CODE_ASSIST_URL,
-                  "fetchAvailableModels",
-                  activeAccessToken,
-                  { project: codeAssistInfo.cloudaicompanionProject }
-                ).catch(() => null),
-              ]);
-
-              for (const rawGroup of quotaRes.groups ?? []) {
-                const nome = rawGroup.displayName?.trim();
-                if (!nome) continue;
-                let janela5h: JanelaCotaConta | null = null;
-                let janelaSemanal: JanelaCotaConta | null = null;
-                for (const b of rawGroup.buckets ?? []) {
-                  const win = normalizeWindowBucket(b);
-                  if (!win) continue;
-                  if (win.janela === "5h") {
-                    if (!janela5h || win.restante_percentual < janela5h.restante_percentual) janela5h = win;
-                  } else if (win.janela === "semanal") {
-                    if (!janelaSemanal || win.restante_percentual < janelaSemanal.restante_percentual) janelaSemanal = win;
-                  }
+            await fetchLiveQuotaAndModels(activeAccessToken);
+          } catch (liveErr) {
+            const msg = liveErr instanceof Error ? liveErr.message : String(liveErr);
+            if (/\b401\b|\b403\b/i.test(msg) && entry.hasRefreshToken && cliExe) {
+              try {
+                const refreshed = await this.acpService.refreshAccountToken(entry.id, entry.geminiDir);
+                if (refreshed?.accessToken) {
+                  activeAccessToken = refreshed.accessToken;
+                  expiryIsoNow = refreshed.expiryIso;
+                  tokenValidNow = true;
+                  await fetchLiveQuotaAndModels(activeAccessToken);
                 }
-                if (janela5h || janelaSemanal) {
-                  grupos.push({
-                    nome,
-                    modelos: parseGroupModelsDescription(rawGroup.description),
-                    janela_5h: janela5h,
-                    janela_semanal: janelaSemanal,
-                  });
-                }
-              }
-
-              if (modelsRes?.models) {
-                if (modelsRes.defaultAgentModelId) {
-                  defaultModelId = modelsRes.defaultAgentModelId;
-                }
-                for (const imgId of modelsRes.imageGenerationModelIds ?? []) {
-                  imageGenerationModelIds.add(imgId);
-                }
-                for (const [mId, mMeta] of Object.entries(modelsRes.models)) {
-                  const normalized = normalizeModelFamilyAndEffort(
-                    mId,
-                    mMeta,
-                    imageGenerationModelIds,
-                    defaultModelId
-                  );
-                  if (!normalized) continue;
-                  modelosConta.push(normalized.id);
-                  const existing = modelMap.get(normalized.id);
-                  if (
-                    !existing ||
-                    (normalized.restante_percentual ?? 0) > (existing.restante_percentual ?? -1)
-                  ) {
-                    modelMap.set(normalized.id, normalized);
-                  }
-                }
+              } catch {
+                // preserva último snapshot da conta caso renovação ou consulta falhe
               }
             }
-          } catch {
-            // preserva último snapshot da conta caso chamada temporariamente falhe
           }
         }
 
@@ -854,8 +871,17 @@ export class AntigravityLiveService {
     }
 
     if (anyFreshLiveSuccess) {
+      const contasForCache = contas.map((c) => {
+        if (c.grupos_cota.length > 0) return c;
+        const prevAcc = cachedPrev?.contas?.find(
+          (p) => p.id === c.id || (c.email && p.email === c.email)
+        );
+        return prevAcc?.grupos_cota?.length
+          ? { ...c, grupos_cota: refreshCachedQuotaGroupCountdowns(prevAcc.grupos_cota) }
+          : c;
+      });
       this.saveLastSnapshotCache({
-        contas,
+        contas: contasForCache,
         modelos,
         defaultModelId,
         imageGenerationModelIds: [...imageGenerationModelIds],

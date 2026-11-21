@@ -1,10 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import type { AgenteRegistro, AvatarShape } from "@criativo/contracts";
-import { Mic, Pin, PinOff, Plus, Radio, Square } from "lucide-react";
+import type { AgenteRegistro, AvatarShape, StudioDockSettings } from "@criativo/contracts";
+import { Check, Mic, Pin, PinOff, Plus, Radio, Settings, Square, X } from "lucide-react";
 import {
   MascoteAvatar,
   resolveAgentAvatarConfig,
 } from "../../components/MascoteAvatar";
+import {
+  DEFAULT_FRONTEND_DOCK_SETTINGS,
+  resolveEffectiveDockAgentIds,
+} from "./SettingsGeneralTabs";
 
 type LiveVoiceState = "ouvindo" | "processando" | "falando";
 
@@ -285,10 +289,13 @@ export interface QuickAgentDrawerProps {
   pinned?: boolean;
   onTogglePinned?: () => void;
   onCreateAgent?: () => void;
+  dockSettings?: StudioDockSettings | null;
+  onToggleAgentInDock?: (agenteId: string, included: boolean) => void | Promise<void>;
+  onOpenDockSettings?: () => void;
 }
 
 /**
- * Ilha / Dock Lateral Vertical ancorado à direita (Fixo ou Recolhível com persistência local).
+ * Ilha / Dock Lateral Vertical ancorado à direita ou esquerda (Fixo ou Recolhível com persistência local).
  */
 export const QuickAgentDrawer: React.FC<QuickAgentDrawerProps> = ({
   enabled,
@@ -300,6 +307,9 @@ export const QuickAgentDrawer: React.FC<QuickAgentDrawerProps> = ({
   pinned,
   onTogglePinned,
   onCreateAgent,
+  dockSettings,
+  onToggleAgentInDock,
+  onOpenDockSettings,
 }) => {
   const [localPinned, setLocalPinned] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
@@ -311,10 +321,17 @@ export const QuickAgentDrawer: React.FC<QuickAgentDrawerProps> = ({
     }
   });
   const [hoveredOrOpen, setHoveredOrOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [customTopPx, setCustomTopPx] = useState<number | null>(null);
   const dragTopStartRef = useRef<{ clientY: number; baseTop: number } | null>(null);
 
-  const isPinned = pinned ?? localPinned;
+  const safeDock: StudioDockSettings = {
+    ...DEFAULT_FRONTEND_DOCK_SETTINGS,
+    ...(dockSettings ?? {}),
+  };
+  const effectiveEnabled = enabled && safeDock.mostrar_dock !== false;
+  const isLeft = safeDock.borda === "left";
+  const isPinned = dockSettings ? !safeDock.ocultar_quando_inativo : (pinned ?? localPinned);
   const handleTogglePin = () => {
     if (onTogglePinned) {
       onTogglePinned();
@@ -341,18 +358,42 @@ export const QuickAgentDrawer: React.FC<QuickAgentDrawerProps> = ({
       : new Set<string>(workingAgentIds);
   }, [workingAgentIds]);
 
+  const eligibleAgents = useMemo(() => {
+    const unlocked = agentes.filter(
+      (a) =>
+        !a.hidden &&
+        (a.config as Record<string, unknown> | undefined)?.upgrade_desbloqueado !== false
+    );
+    return unlocked.length > 0 ? unlocked : agentes;
+  }, [agentes]);
+
+  const includedIds = useMemo(
+    () => resolveEffectiveDockAgentIds(eligibleAgents, safeDock.agentes_ids, pinnedIds),
+    [eligibleAgents, pinnedIds, safeDock.agentes_ids]
+  );
+
   const quickList = useMemo(() => {
-    const byId = new Map(agentes.map((a) => [a.agente_id, a]));
-    const pinnedList = pinnedIds
+    const byId = new Map(eligibleAgents.map((a) => [a.agente_id, a]));
+    const base = includedIds
       .map((id) => byId.get(id))
       .filter((a): a is AgenteRegistro & { nao_lidas?: number } => Boolean(a));
-    if (pinnedList.length > 0) return pinnedList.slice(0, 7);
-    return agentes.slice(0, 7);
-  }, [agentes, pinnedIds]);
+    if (!safeDock.mostrar_agentes_com_novidades) {
+      return base;
+    }
+    const baseSet = new Set(base.map((a) => a.agente_id));
+    const withNews = eligibleAgents.filter(
+      (a) =>
+        !baseSet.has(a.agente_id) &&
+        ((a.nao_lidas ?? 0) > 0 || workingSet.has(a.agente_id) || a.status === "trabalhando")
+    );
+    return [...base, ...withNews];
+  }, [eligibleAgents, includedIds, safeDock.mostrar_agentes_com_novidades, workingSet]);
 
-  if (!enabled || quickList.length === 0) return null;
+  if (!effectiveEnabled || (quickList.length === 0 && !onToggleAgentInDock)) return null;
 
-  const isVisible = isPinned || hoveredOrOpen;
+  const isVisible = isPinned || hoveredOrOpen || pickerOpen;
+  const hasWaitingNews = eligibleAgents.some((a) => (a.nao_lidas ?? 0) > 0);
+  const scaleFactor = Math.max(0.8, Math.min(1.5, (safeDock.tamanho_percentual ?? 100) / 100));
 
   return (
     <div
@@ -361,25 +402,127 @@ export const QuickAgentDrawer: React.FC<QuickAgentDrawerProps> = ({
         if (!isPinned) setHoveredOrOpen(true);
       }}
       onMouseLeave={() => {
-        if (!isPinned) setHoveredOrOpen(false);
+        if (!isPinned && !pickerOpen) setHoveredOrOpen(false);
       }}
-      style={customTopPx !== null ? { top: `${customTopPx}px`, transform: "none" } : undefined}
-      className="fixed right-0 top-1/2 -translate-y-1/2 z-40 flex items-center"
+      style={
+        customTopPx !== null
+          ? {
+              top: `${customTopPx}px`,
+              transform: "none",
+              ...(scaleFactor !== 1 ? { zoom: scaleFactor } : {}),
+            }
+          : scaleFactor !== 1
+            ? { zoom: scaleFactor }
+            : undefined
+      }
+      className={`fixed ${isLeft ? "left-0" : "right-0"} top-1/2 -translate-y-1/2 z-40 flex items-center ${
+        isLeft ? "flex-row-reverse" : "flex-row"
+      } gap-2`}
     >
+      {pickerOpen && (
+        <div
+          data-testid="dock-agent-picker-popover"
+          className="w-[260px] max-h-[360px] rounded-2xl border border-white/[0.1] bg-[#19191C]/98 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden text-left"
+        >
+          <div className="px-3 py-2.5 border-b border-white/[0.06] flex items-center justify-between gap-2">
+            <div>
+              <div className="text-[12.5px] font-semibold text-white">Agentes no dock</div>
+              <div className="text-[10.5px] text-[#8E8E93]">
+                Adicione ou remova agentes existentes
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPickerOpen(false)}
+              aria-label="Fechar seletor de agentes do dock"
+              className="h-6 w-6 rounded-lg flex items-center justify-center text-[#8E8E93] hover:text-white hover:bg-white/[0.06]"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5">
+            {eligibleAgents.map((ag) => {
+              const vis = resolveAgentAvatarConfig(ag);
+              const included = includedIds.includes(ag.agente_id);
+              return (
+                <button
+                  key={ag.agente_id}
+                  type="button"
+                  onClick={() => void onToggleAgentInDock?.(ag.agente_id, !included)}
+                  className="w-full flex items-center justify-between gap-2.5 rounded-xl px-2.5 py-2 hover:bg-white/[0.06] transition-colors text-left"
+                >
+                  <span className="flex items-center gap-2.5 min-w-0">
+                    <MascoteAvatar
+                      avatar={vis}
+                      agentKey={ag.agente_id}
+                      size={24}
+                      hoverAnimate={false}
+                    />
+                    <span className="text-[12px] font-medium text-white truncate">{ag.nome}</span>
+                  </span>
+                  <span
+                    className={`h-4 w-4 rounded-md border flex items-center justify-center shrink-0 transition-colors ${
+                      included
+                        ? "border-[#007CF7] bg-[#007CF7] text-white"
+                        : "border-white/20 bg-transparent text-transparent"
+                    }`}
+                  >
+                    <Check className="h-3 w-3" />
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {onOpenDockSettings && (
+            <button
+              type="button"
+              onClick={() => {
+                setPickerOpen(false);
+                onOpenDockSettings();
+              }}
+              className="px-3 py-2 border-t border-white/[0.06] bg-[#141416] hover:bg-[#1F1F23] text-[11.5px] font-medium text-[#A8A8B2] hover:text-white flex items-center gap-2 transition-colors"
+            >
+              <Settings className="h-3.5 w-3.5" />
+              <span>Configurações do dock</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {!isVisible && (
         <button
           type="button"
           onClick={() => setHoveredOrOpen(true)}
           aria-label="Expandir ilha lateral de agentes"
           title="Expandir ilha lateral de agentes"
-          className="h-24 w-3.5 rounded-l-[24px] border border-r-0 border-[var(--studio-border)] bg-[#1B1B1E]/95 backdrop-blur-xl shadow-2xl flex items-center justify-center hover:w-5 hover:bg-[#242428] transition-all"
+          className={`h-24 transition-all flex items-center justify-center ${
+            isLeft
+              ? "rounded-r-[24px] border border-l-0"
+              : "rounded-l-[24px] border border-r-0"
+          } ${
+            safeDock.mostrar_faixa_borda !== false
+              ? "w-3.5 border-[var(--studio-border)] bg-[#1B1B1E]/95 backdrop-blur-xl shadow-2xl hover:w-5 hover:bg-[#242428]"
+              : "w-2 border-transparent bg-transparent opacity-10 hover:opacity-90 hover:w-4 hover:bg-[#1B1B1E]/90"
+          }`}
         >
-          <span className="h-8 w-1 rounded-full bg-[#42A0FF]/70" />
+          {safeDock.mostrar_faixa_borda !== false && (
+            <span
+              className={`h-9 w-1 rounded-full ${
+                hasWaitingNews ? "bg-[#31CF76] animate-pulse" : "bg-[#42A0FF]/70"
+              }`}
+            />
+          )}
         </button>
       )}
 
       {isVisible && (
-        <div className="rounded-l-[24px] border border-r-0 border-[var(--studio-border)] bg-[#1B1B1E]/95 backdrop-blur-xl shadow-2xl px-2 py-2.5 flex flex-col items-center gap-2">
+        <div
+          className={`${
+            isLeft
+              ? "rounded-r-[24px] border border-l-0"
+              : "rounded-l-[24px] border border-r-0"
+          } border-[var(--studio-border)] bg-[#1B1B1E]/95 backdrop-blur-xl shadow-2xl px-2 py-2.5 flex flex-col items-center gap-2`}
+        >
           <div
             onPointerDown={(e) => {
               const rect = e.currentTarget.parentElement?.getBoundingClientRect();
@@ -453,7 +596,11 @@ export const QuickAgentDrawer: React.FC<QuickAgentDrawerProps> = ({
                       {unread}
                     </span>
                   )}
-                  <span className="pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity absolute right-full mr-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-2.5 py-1 text-[11.5px] font-medium text-white shadow-xl">
+                  <span
+                    className={`pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity absolute ${
+                      isLeft ? "left-full ml-2" : "right-full mr-2"
+                    } top-1/2 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#141414] px-2.5 py-1 text-[11.5px] font-medium text-white shadow-xl`}
+                  >
                     {ag.nome}
                   </span>
                 </button>
@@ -461,13 +608,23 @@ export const QuickAgentDrawer: React.FC<QuickAgentDrawerProps> = ({
             })}
           </div>
 
-          {onCreateAgent && (
+          {(onToggleAgentInDock || onCreateAgent) && (
             <button
               type="button"
-              onClick={onCreateAgent}
-              title="Criar novo agente"
-              aria-label="Criar novo agente"
-              className="mt-0.5 h-8 w-8 rounded-full border border-white/10 bg-[#141414]/90 hover:bg-[#007CF7]/20 hover:border-[#007CF7]/50 flex items-center justify-center text-[#979797] hover:text-white transition-colors"
+              onClick={() => {
+                if (onToggleAgentInDock) {
+                  setPickerOpen((prev) => !prev);
+                } else {
+                  onCreateAgent?.();
+                }
+              }}
+              title="Adicionar agentes ao dock"
+              aria-label="Adicionar agentes ao dock"
+              className={`mt-0.5 h-8 w-8 rounded-full border flex items-center justify-center transition-colors ${
+                pickerOpen
+                  ? "border-[#007CF7] bg-[#007CF7]/20 text-white"
+                  : "border-white/10 bg-[#141414]/90 hover:bg-[#007CF7]/20 hover:border-[#007CF7]/50 text-[#979797] hover:text-white"
+              }`}
             >
               <Plus className="h-4 w-4" />
             </button>

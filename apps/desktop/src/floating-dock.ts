@@ -13,6 +13,9 @@ export interface FloatingDockSavedState {
   visible: boolean;
   side: FloatingDockSide;
   pinned: boolean;
+  scalePercent?: number;
+  alwaysOnTop?: boolean;
+  displayId?: string;
 }
 
 export interface FloatingDockStateSnapshot {
@@ -21,6 +24,19 @@ export interface FloatingDockStateSnapshot {
   side: FloatingDockSide;
   pinned: boolean;
   peeked: boolean;
+  scalePercent: number;
+  alwaysOnTop: boolean;
+  displayId: string;
+}
+
+export interface FloatingDockConfigurePayload {
+  visible?: boolean;
+  side?: FloatingDockSide;
+  pinned?: boolean;
+  scalePercent?: number;
+  alwaysOnTop?: boolean;
+  displayId?: string;
+  pillHeight?: number;
 }
 
 export interface FloatingDockControllerOptions {
@@ -73,18 +89,32 @@ export class FloatingDockController {
     try {
       if (existsSync(this.statePath)) {
         const raw = JSON.parse(readFileSync(this.statePath, "utf8")) as Partial<FloatingDockSavedState>;
+        const scalePercent =
+          typeof raw.scalePercent === "number" && Number.isFinite(raw.scalePercent)
+            ? clamp(raw.scalePercent, 80, 150)
+            : 100;
         return {
           x: typeof raw.x === "number" && Number.isFinite(raw.x) ? Math.round(raw.x) : undefined,
           y: typeof raw.y === "number" && Number.isFinite(raw.y) ? Math.round(raw.y) : undefined,
           visible: typeof raw.visible === "boolean" ? raw.visible : true,
           side: raw.side === "left" ? "left" : "right",
           pinned: typeof raw.pinned === "boolean" ? raw.pinned : true,
+          scalePercent,
+          alwaysOnTop: typeof raw.alwaysOnTop === "boolean" ? raw.alwaysOnTop : true,
+          displayId: typeof raw.displayId === "string" && raw.displayId.trim() ? raw.displayId.trim() : "principal",
         };
       }
     } catch {
       // Usa estado padrão se arquivo estiver corrompido
     }
-    return { visible: true, side: "right", pinned: true };
+    return {
+      visible: true,
+      side: "right",
+      pinned: true,
+      scalePercent: 100,
+      alwaysOnTop: true,
+      displayId: "principal",
+    };
   }
 
   private saveState(): void {
@@ -99,6 +129,9 @@ export class FloatingDockController {
             visible: this.state.visible,
             side: this.state.side,
             pinned: this.state.pinned,
+            scalePercent: this.state.scalePercent ?? 100,
+            alwaysOnTop: this.state.alwaysOnTop !== false,
+            displayId: this.state.displayId ?? "principal",
           },
           null,
           2,
@@ -111,7 +144,22 @@ export class FloatingDockController {
   }
 
   private getCurrentCollapsedWidth(): number {
-    return !this.state.pinned && !this.peeked ? EDGE_PEEK_WIDTH : COLLAPSED_WIDTH;
+    if (!this.state.pinned && !this.peeked) return EDGE_PEEK_WIDTH;
+    const scale = clamp(this.state.scalePercent ?? 100, 80, 150) / 100;
+    return Math.max(54, Math.round(COLLAPSED_WIDTH * scale));
+  }
+
+  private resolveTargetDisplay(fallbackBounds?: Electron.Rectangle): Electron.Display {
+    const displays = screen.getAllDisplays();
+    const pref = this.state.displayId ?? "principal";
+    if (pref !== "principal") {
+      const matched = displays.find((d) => String(d.id) === pref);
+      if (matched) return matched;
+    }
+    if (fallbackBounds) {
+      return screen.getDisplayMatching(fallbackBounds);
+    }
+    return screen.getPrimaryDisplay();
   }
 
   private resolveEdgeX(wa: Electron.Rectangle, width: number, side: FloatingDockSide): number {
@@ -119,10 +167,11 @@ export class FloatingDockController {
   }
 
   private resolveInitialPillBounds(): { x: number; y: number; width: number; height: number } {
-    const primary = screen.getPrimaryDisplay();
-    const wa = primary.workArea;
+    const targetDisplay = this.resolveTargetDisplay();
+    const wa = targetDisplay.workArea;
     const width = this.getCurrentCollapsedWidth();
-    const height = this.pillHeight;
+    const scale = clamp(this.state.scalePercent ?? 100, 80, 150) / 100;
+    const height = clamp(Math.round(this.pillHeight * scale), MIN_PILL_HEIGHT, MAX_PILL_HEIGHT);
 
     let x = this.resolveEdgeX(wa, width, this.state.side);
     let y =
@@ -130,19 +179,23 @@ export class FloatingDockController {
         ? this.state.y
         : Math.round(wa.y + (wa.height - height) / 2);
 
-    const targetDisplay = screen.getDisplayMatching({ x, y, width, height });
-    const dwa = targetDisplay.workArea;
-    x = this.resolveEdgeX(dwa, width, this.state.side);
-    y = clamp(y, dwa.y, Math.max(dwa.y, dwa.y + dwa.height - height));
+    x = this.resolveEdgeX(wa, width, this.state.side);
+    y = clamp(y, wa.y, Math.max(wa.y, wa.y + wa.height - height));
     return { x, y, width, height };
   }
 
   private applyAlwaysOnTop(win: BrowserWindow): void {
+    const onTop = this.state.alwaysOnTop !== false;
     try {
-      win.setAlwaysOnTop(true, process.platform === "darwin" ? "floating" : "screen-saver");
-      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      if (onTop) {
+        win.setAlwaysOnTop(true, process.platform === "darwin" ? "floating" : "screen-saver");
+        win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      } else {
+        win.setAlwaysOnTop(false);
+        win.setVisibleOnAllWorkspaces(false);
+      }
     } catch {
-      win.setAlwaysOnTop(true);
+      win.setAlwaysOnTop(onTop);
     }
   }
 
@@ -177,10 +230,11 @@ export class FloatingDockController {
     if (!win || win.isDestroyed() || this.expanded) return;
 
     const currentBounds = win.getBounds();
-    const display = screen.getDisplayMatching(currentBounds);
+    const display = this.resolveTargetDisplay(currentBounds);
     const wa = display.workArea;
     const width = this.getCurrentCollapsedWidth();
-    const height = this.pillHeight;
+    const scale = clamp(this.state.scalePercent ?? 100, 80, 150) / 100;
+    const height = clamp(Math.round(this.pillHeight * scale), MIN_PILL_HEIGHT, MAX_PILL_HEIGHT);
     const targetX = this.resolveEdgeX(wa, width, this.state.side);
     const targetY = clamp(this.pillY, wa.y, Math.max(wa.y, wa.y + wa.height - height));
 
@@ -281,7 +335,52 @@ export class FloatingDockController {
       side: this.state.side,
       pinned: this.state.pinned,
       peeked: this.peeked,
+      scalePercent: this.state.scalePercent ?? 100,
+      alwaysOnTop: this.state.alwaysOnTop !== false,
+      displayId: this.state.displayId ?? "principal",
     };
+  }
+
+  public async configure(opts: FloatingDockConfigurePayload): Promise<FloatingDockStateSnapshot> {
+    if (typeof opts.pillHeight === "number" && Number.isFinite(opts.pillHeight)) {
+      this.pillHeight = clamp(opts.pillHeight, MIN_PILL_HEIGHT, MAX_PILL_HEIGHT);
+    }
+    if (opts.side === "left" || opts.side === "right") {
+      this.state.side = opts.side;
+    }
+    if (typeof opts.pinned === "boolean") {
+      this.state.pinned = opts.pinned;
+      if (!this.state.pinned) this.peeked = false;
+    }
+    if (typeof opts.scalePercent === "number" && Number.isFinite(opts.scalePercent)) {
+      this.state.scalePercent = clamp(opts.scalePercent, 80, 150);
+    }
+    if (typeof opts.alwaysOnTop === "boolean") {
+      this.state.alwaysOnTop = opts.alwaysOnTop;
+    }
+    if (typeof opts.displayId === "string" && opts.displayId.trim()) {
+      this.state.displayId = opts.displayId.trim();
+    }
+    if (typeof opts.visible === "boolean") {
+      await this.setVisible(opts.visible);
+    } else {
+      this.saveState();
+    }
+    if (this.win && !this.win.isDestroyed()) {
+      if (this.expanded) {
+        const bounds = this.win.getBounds();
+        const display = this.resolveTargetDisplay(bounds);
+        const wa = display.workArea;
+        const targetX = this.resolveEdgeX(wa, bounds.width, this.state.side);
+        const targetY = clamp(bounds.y, wa.y, Math.max(wa.y, wa.y + wa.height - bounds.height));
+        this.safeSetBounds(this.win, { x: targetX, y: targetY, width: bounds.width, height: bounds.height });
+        this.applyAlwaysOnTop(this.win);
+      } else {
+        this.applyCollapsedBounds();
+      }
+      this.notifyRendererState();
+    }
+    return this.getState();
   }
 
   public async setVisible(visible: boolean): Promise<boolean> {

@@ -1520,6 +1520,19 @@ export type SidebarLayoutMutation =
   | { op: "set_hidden"; agentId: string; hidden: boolean }
   | { op: "reorder_pins"; pins: string[] };
 
+export interface StudioDockSettings {
+  mostrar_dock: boolean;
+  posicao: "sobre_outros_apps" | "apenas_janela";
+  tela: string;
+  borda: "right" | "left";
+  tamanho_percentual: number;
+  ocultar_quando_inativo: boolean;
+  mostrar_faixa_borda: boolean;
+  mostrar_trabalho_concluido: boolean;
+  mostrar_agentes_com_novidades: boolean;
+  agentes_ids: string[] | null;
+}
+
 export interface StudioUserSettings {
   geral: {
     atalho_envio: "enter" | "mod_enter";
@@ -1548,6 +1561,7 @@ export interface StudioUserSettings {
     inspector_open?: boolean;
     focus_mode?: boolean;
   };
+  dock?: StudioDockSettings;
   notificacoes: {
     web_habilitadas: boolean;
     mostrar_preview: boolean;

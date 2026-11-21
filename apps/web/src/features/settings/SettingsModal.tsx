@@ -22,16 +22,20 @@ import {
   KeyRound,
   Mic,
   Palette,
+  PanelRight,
   RotateCcw,
   Sliders,
   Sparkles,
   Zap,
   X,
 } from "lucide-react";
+import { getCriativoDesktopBridge } from "../../types/desktop-bridge";
 import { ServerBrowserProfilesPanel } from "../browser/ServerBrowserProfilesPanel";
 import {
+  DEFAULT_FRONTEND_DOCK_SETTINGS,
   SettingsAppearanceTab,
   SettingsBehaviorTab,
+  SettingsDockTab,
   SettingsGeneralTab,
 } from "./SettingsGeneralTabs";
 import { SettingsLicenseTab } from "./SettingsLicenseTab";
@@ -46,6 +50,7 @@ export type SettingsModalTabId =
   | "geral"
   | "aparencia"
   | "comportamento"
+  | "dock"
   | "navegador"
   | "notificacoes"
   | "voz"
@@ -90,6 +95,7 @@ export const DEFAULT_FRONTEND_USER_SETTINGS: StudioUserSettings = {
     detalhe_dynamic_island: "detalhado",
     habilitar_drawer_rapido: true,
   },
+  dock: { ...DEFAULT_FRONTEND_DOCK_SETTINGS },
   notificacoes: {
     web_habilitadas: false,
     mostrar_preview: true,
@@ -164,6 +170,7 @@ const NAV_GROUPS: Array<{
       { id: "geral", label: "Geral", Icon: Sliders },
       { id: "aparencia", label: "Aparência", Icon: Palette },
       { id: "comportamento", label: "Comportamento", Icon: Zap },
+      { id: "dock", label: "Dock de agentes", Icon: PanelRight },
       { id: "navegador", label: "Navegador & Proxies", Icon: Globe },
     ],
   },
@@ -208,6 +215,7 @@ export interface SettingsModalProps {
   onRestartForUpdate?: () => Promise<void>;
   onResetLayoutWidths?: () => void;
   onReopenSetupAssistant?: () => Promise<void>;
+  pinnedAgentIds?: string[];
   deletedNativeAgents?: DeletedNativeAgentInfo[];
   onRestoreDeletedAgent?: (agenteId: string) => Promise<void>;
   onRestoreAllDeletedAgents?: () => Promise<void>;
@@ -264,6 +272,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onRestartForUpdate,
   onResetLayoutWidths,
   onReopenSetupAssistant,
+  pinnedAgentIds = [],
   deletedNativeAgents = [],
   onRestoreDeletedAgent,
   onRestoreAllDeletedAgents,
@@ -313,6 +322,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setSyncMessage("Sincronizando preferências...");
     try {
       applyUserSettingsToDocument(draft);
+      if (draft.dock) {
+        void getCriativoDesktopBridge()?.dockConfigure?.({
+          visible: draft.dock.mostrar_dock,
+          side: draft.dock.borda,
+          pinned: !draft.dock.ocultar_quando_inativo,
+          scalePercent: draft.dock.tamanho_percentual,
+          alwaysOnTop: draft.dock.posicao === "sobre_outros_apps",
+          displayId: draft.dock.tela,
+        });
+      }
       await onSaveSettings({
         ...draft,
         atualizado_em: new Date().toISOString(),
@@ -438,6 +457,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <SettingsBehaviorTab
               comportamento={draft.comportamento}
               onChange={(comportamento) => setDraft((prev) => ({ ...prev, comportamento }))}
+            />
+          )}
+
+          {activeTab === "dock" && (
+            <SettingsDockTab
+              dock={draft.dock ?? DEFAULT_FRONTEND_DOCK_SETTINGS}
+              agentes={agentes}
+              pinnedIds={pinnedAgentIds}
+              activeServerName={activeServerName}
+              onChange={(dock) =>
+                setDraft((prev) => ({
+                  ...prev,
+                  dock,
+                  comportamento: {
+                    ...prev.comportamento,
+                    habilitar_drawer_rapido: dock.mostrar_dock,
+                  },
+                }))
+              }
             />
           )}
 

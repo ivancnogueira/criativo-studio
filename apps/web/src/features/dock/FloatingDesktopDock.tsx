@@ -1,11 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AgenteRegistro, AvatarShape, MensagemChat } from "@criativo/contracts";
+import type {
+  AgenteRegistro,
+  MensagemChat,
+  StudioDockSettings,
+} from "@criativo/contracts";
 import {
   ArrowUp,
+  Check,
   ExternalLink,
   Pin,
   PinOff,
   Plus,
+  Settings,
   Smartphone,
   X,
 } from "lucide-react";
@@ -15,6 +21,10 @@ import {
 } from "../../components/MascoteAvatar";
 import { daemonApi, WebSocketClient } from "../../services/websocket-client";
 import { getCriativoDesktopBridge } from "../../types/desktop-bridge";
+import {
+  DEFAULT_FRONTEND_DOCK_SETTINGS,
+  resolveEffectiveDockAgentIds,
+} from "../settings/SettingsGeneralTabs";
 
 function renderCompactLine(line: string, keyPrefix: string): React.ReactNode {
   const parts = line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
@@ -89,7 +99,11 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
 }) => {
   const [agentes, setAgentes] = useState<AgenteRegistro[]>(initialAgentes);
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
+  const [dockSettings, setDockSettings] = useState<StudioDockSettings>(
+    DEFAULT_FRONTEND_DOCK_SETTINGS,
+  );
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(initialSelectedAgentId);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [side, setSide] = useState<"left" | "right">(initialSide);
   const [dockPinned, setDockPinned] = useState<boolean>(initialPinned);
   const [dockPeeked, setDockPeeked] = useState<boolean>(initialPeeked);
@@ -110,12 +124,16 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
 
   const refreshRoster = useCallback(async () => {
     try {
-      const [ags, layout] = await Promise.all([
+      const [ags, layout, settings] = await Promise.all([
         daemonApi.listAgents(),
         daemonApi.getSidebarLayout().catch(() => null),
+        daemonApi.getUserSettings().catch(() => null),
       ]);
       setAgentes(ags);
       if (layout?.pins) setPinnedIds(layout.pins);
+      if (settings?.dock) {
+        setDockSettings({ ...DEFAULT_FRONTEND_DOCK_SETTINGS, ...settings.dock });
+      }
     } catch {
       // Ignora erro transitório se daemon ainda estiver inicializando
     }
@@ -202,6 +220,17 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
       void refreshRoster();
     });
 
+    const unsubSettings = ws.on("settings:updated", () => {
+      void daemonApi
+        .getUserSettings()
+        .then((settings) => {
+          if (settings?.dock) {
+            setDockSettings({ ...DEFAULT_FRONTEND_DOCK_SETTINGS, ...settings.dock });
+          }
+        })
+        .catch(() => {});
+    });
+
     const unsubStatus = ws.onConnectionChange((connected) => {
       if (connected) {
         void refreshRoster();
@@ -221,6 +250,7 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
       unsubSidebar();
       unsubLicense();
       unsubServers();
+      unsubSettings();
       unsubStatus();
       window.removeEventListener("focus", handleFocus);
       ws.disconnect();
@@ -245,33 +275,54 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messagesByAgent, selectedAgentId]);
 
-  const dockAgents = useMemo(() => {
+  const eligibleAgents = useMemo(() => {
     const visible = agentes.filter(
       (a) =>
         !a.hidden &&
         (a.config as Record<string, unknown> | undefined)?.upgrade_desbloqueado !== false,
     );
-    const pool = visible.length > 0 ? visible : agentes;
-    const byId = new Map(pool.map((a) => [a.agente_id, a]));
-    const pinned = pinnedIds
+    return visible.length > 0 ? visible : agentes;
+  }, [agentes]);
+
+  const includedIds = useMemo(
+    () => resolveEffectiveDockAgentIds(eligibleAgents, dockSettings.agentes_ids, pinnedIds),
+    [eligibleAgents, dockSettings.agentes_ids, pinnedIds],
+  );
+
+  const dockAgents = useMemo(() => {
+    const byId = new Map(eligibleAgents.map((a) => [a.agente_id, a]));
+    const base = includedIds
       .map((id) => byId.get(id))
       .filter((a): a is AgenteRegistro => Boolean(a));
-    if (pinned.length > 0) return pinned.slice(0, 6);
-    return pool.slice(0, 6);
-  }, [agentes, pinnedIds]);
+    if (!dockSettings.mostrar_agentes_com_novidades) {
+      return base;
+    }
+    const baseSet = new Set(base.map((a) => a.agente_id));
+    const withNews = eligibleAgents.filter(
+      (a) =>
+        !baseSet.has(a.agente_id) &&
+        (workingAgentIds.has(a.agente_id) || a.status === "trabalhando"),
+    );
+    return [...base, ...withNews];
+  }, [eligibleAgents, includedIds, dockSettings.mostrar_agentes_com_novidades, workingAgentIds]);
+
+  const scaleFactor = useMemo(
+    () => Math.max(0.8, Math.min(1.5, (dockSettings.tamanho_percentual ?? 100) / 100)),
+    [dockSettings.tamanho_percentual],
+  );
 
   const desiredHeight = useMemo(
-    () => Math.max(180, dockAgents.length * 48 + 76),
-    [dockAgents.length],
+    () => Math.max(180, Math.round((dockAgents.length * 46 + 86) * scaleFactor)),
+    [dockAgents.length, scaleFactor],
   );
 
   useEffect(() => {
     const bridge = getCriativoDesktopBridge();
-    if (!bridge?.dockSetExpanded || selectedAgentId !== null) return;
+    if (!bridge?.dockSetExpanded || selectedAgentId !== null || pickerOpen) return;
     void bridge.dockSetExpanded(false, desiredHeight).then((res) => {
       if (res?.side) setSide(res.side);
     });
-  }, [desiredHeight, selectedAgentId]);
+  }, [desiredHeight, pickerOpen, selectedAgentId]);
 
   const cancelScheduledCollapse = () => {
     if (hidePeekTimerRef.current) {
@@ -290,7 +341,7 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
   };
 
   const handleLeaveDock = () => {
-    if (dockPinned || selectedAgentId !== null || draggingRef.current) return;
+    if (dockPinned || selectedAgentId !== null || pickerOpen || draggingRef.current) return;
     cancelScheduledCollapse();
     hidePeekTimerRef.current = window.setTimeout(() => {
       setDockPeeked(false);
@@ -311,6 +362,7 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
   const handleToggleAgentChat = async (agenteId: string) => {
     if (movedDuringDragRef.current) return;
     cancelScheduledCollapse();
+    setPickerOpen(false);
     const bridge = getCriativoDesktopBridge();
     const isClosing = selectedAgentId === agenteId;
     const nextSelected = isClosing ? null : agenteId;
@@ -325,8 +377,46 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
     }
   };
 
+  const handleToggleAgentPicker = async () => {
+    if (movedDuringDragRef.current) return;
+    cancelScheduledCollapse();
+    const nextOpen = !pickerOpen;
+    setPickerOpen(nextOpen);
+    if (nextOpen) {
+      setSelectedAgentId(null);
+      setDockPeeked(true);
+    }
+    const bridge = getCriativoDesktopBridge();
+    if (bridge?.dockSetExpanded) {
+      const res = await bridge.dockSetExpanded(nextOpen, desiredHeight);
+      if (res?.side) setSide(res.side);
+      if (typeof res?.pinned === "boolean") setDockPinned(res.pinned);
+      if (typeof res?.peeked === "boolean") setDockPeeked(res.peeked);
+    }
+  };
+
+  const handleToggleAgentInDock = async (agenteId: string, included: boolean) => {
+    const baseIds = Array.isArray(dockSettings.agentes_ids)
+      ? [...dockSettings.agentes_ids]
+      : [...includedIds];
+    const nextIds = included
+      ? Array.from(new Set([...baseIds, agenteId]))
+      : baseIds.filter((id) => id !== agenteId);
+    const nextDockSettings: StudioDockSettings = {
+      ...dockSettings,
+      agentes_ids: nextIds,
+    };
+    setDockSettings(nextDockSettings);
+    try {
+      await daemonApi.updateUserSettings({ dock: nextDockSettings });
+    } catch {
+      // mantém estado local até próxima sincronização
+    }
+  };
+
   const handleCloseDrawer = async () => {
     setSelectedAgentId(null);
+    setPickerOpen(false);
     const bridge = getCriativoDesktopBridge();
     if (bridge?.dockSetExpanded) {
       const res = await bridge.dockSetExpanded(false, desiredHeight);
@@ -423,9 +513,11 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
     return resolveAgentAvatarConfig(selectedAgent, selectedAgent?.agente_id ?? "estrategista");
   }, [selectedAgent]);
 
-  const showExpandedPill = dockPinned || dockPeeked || selectedAgent !== null;
+  const showExpandedPill = dockPinned || dockPeeked || selectedAgent !== null || pickerOpen;
   const edgeRoundedClass =
     side === "right" ? "rounded-l-[22px] border-r-0" : "rounded-r-[22px] border-l-0";
+  const avatarSizePx = Math.max(26, Math.min(48, Math.round(34 * scaleFactor)));
+  const pillWidthPx = Math.max(52, Math.min(92, Math.round(62 * scaleFactor)));
 
   return (
     <div
@@ -436,6 +528,95 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
         side === "left" ? "flex-row-reverse" : "flex-row"
       }`}
     >
+      {/* Seletor de agentes existentes no dock (+) */}
+      {pickerOpen && !selectedAgent && (
+        <div
+          data-testid="floating-dock-agent-picker"
+          onPointerDown={(e) => e.stopPropagation()}
+          className="w-[300px] max-h-[440px] rounded-[20px] border border-white/[0.08] bg-[#0F1012] flex flex-col overflow-hidden text-[#F0F0F0]"
+        >
+          <div className="h-[46px] shrink-0 px-3.5 border-b border-white/[0.06] flex items-center justify-between gap-2">
+            <div>
+              <div className="text-[13px] font-semibold text-white leading-tight">
+                Agentes no dock
+              </div>
+              <div className="text-[10.5px] text-[#8E8E93]">
+                Adicionar ou remover agentes existentes
+              </div>
+            </div>
+            <button
+              type="button"
+              title="Fechar seletor"
+              aria-label="Fechar seletor de agentes"
+              onClick={() => void handleCloseDrawer()}
+              className="h-7 w-7 rounded-lg flex items-center justify-center text-[#979797] hover:bg-[#242429] hover:text-white transition-colors"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-2 space-y-1">
+            {eligibleAgents.length === 0 ? (
+              <div className="px-3 py-6 text-center text-[12px] text-[#8E8E93]">
+                Nenhum agente disponível neste servidor.
+              </div>
+            ) : (
+              eligibleAgents.map((ag) => {
+                const vis = resolveAgentAvatarConfig(ag);
+                const included = includedIds.includes(ag.agente_id);
+                return (
+                  <button
+                    key={ag.agente_id}
+                    type="button"
+                    onClick={() => void handleToggleAgentInDock(ag.agente_id, !included)}
+                    className="w-full flex items-center justify-between gap-2.5 rounded-xl px-2.5 py-2 hover:bg-white/[0.06] transition-colors text-left"
+                  >
+                    <span className="flex items-center gap-2.5 min-w-0">
+                      <MascoteAvatar
+                        avatar={vis}
+                        agentKey={ag.agente_id}
+                        size={28}
+                        hoverAnimate={false}
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-[12.5px] font-medium text-white truncate">
+                          {ag.nome}
+                        </span>
+                        <span className="block text-[10.5px] text-[#8E8E93] truncate">
+                          {ag.papel}
+                        </span>
+                      </span>
+                    </span>
+                    <span
+                      className={`h-5 w-5 rounded-md border flex items-center justify-center shrink-0 transition-colors ${
+                        included
+                          ? "border-[#007CF7] bg-[#007CF7] text-white"
+                          : "border-white/20 bg-transparent text-transparent"
+                      }`}
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() =>
+              void getCriativoDesktopBridge()?.openMainWindow?.({ action: "open-dock-settings" })
+            }
+            className="shrink-0 px-3.5 py-2.5 border-t border-white/[0.06] bg-[#141519] hover:bg-[#1D1E24] text-[12px] font-medium text-[#A8A8B2] hover:text-white flex items-center justify-between transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              <Settings className="h-3.5 w-3.5" />
+              <span>Configurações do dock</span>
+            </span>
+            <ExternalLink className="h-3 w-3" />
+          </button>
+        </div>
+      )}
       {/* Card Flutuante de Chat Inline (limpo, sem halo de sombra DWM) */}
       {selectedAgent && (
         <div
@@ -596,19 +777,30 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
           title="Expandir ilha de agentes"
           onMouseEnter={() => void handleExpandPeek()}
           onClick={() => void handleExpandPeek()}
-          className={`h-24 w-4 ${edgeRoundedClass} border border-white/[0.07] bg-[#0E0F12] flex items-center justify-center hover:w-5 transition-all cursor-pointer`}
+          className={`h-24 ${
+            dockSettings.mostrar_faixa_borda !== false
+              ? "w-4 border border-white/[0.07] bg-[#0E0F12] hover:w-5"
+              : "w-2 border-transparent bg-transparent opacity-10 hover:opacity-100 hover:w-4 hover:bg-[#0E0F12]"
+          } ${edgeRoundedClass} flex items-center justify-center transition-all cursor-pointer`}
         >
-          <span className="h-9 w-1 rounded-full bg-[#42A0FF]/70" />
+          {dockSettings.mostrar_faixa_borda !== false && (
+            <span
+              className={`h-9 w-1 rounded-full ${
+                workingAgentIds.size > 0 ? "bg-[#31CF76] animate-pulse" : "bg-[#42A0FF]/70"
+              }`}
+            />
+          )}
         </button>
       ) : (
         /* Aba Lateral Limpa colada à borda (sem barra de nome, sem grip ruidoso e sem sombra difusa) */
         <div
           ref={pillRef}
           data-testid="floating-dock-pill"
+          style={{ width: `${pillWidthPx}px` }}
           onPointerDown={beginDrag}
           onPointerMove={moveDrag}
           onPointerUp={() => void endDrag()}
-          className={`w-[62px] ${edgeRoundedClass} border border-white/[0.06] bg-[#0E0F12] py-2.5 px-1.5 flex flex-col items-center gap-2 cursor-grab active:cursor-grabbing`}
+          className={`${edgeRoundedClass} border border-white/[0.06] bg-[#0E0F12] py-2.5 px-1.5 flex flex-col items-center gap-2 cursor-grab active:cursor-grabbing`}
         >
           <div className="flex flex-col items-center gap-1.5">
             {dockAgents.map((ag) => {
@@ -636,7 +828,7 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
                   <MascoteAvatar
                     avatar={vis}
                     agentKey={ag.agente_id}
-                    size={34}
+                    size={avatarSizePx}
                     animated={working}
                     mood={working ? "working" : "idle"}
                     activity={progressByAgent[ag.agente_id] ?? null}
@@ -648,13 +840,16 @@ export const FloatingDesktopDock: React.FC<FloatingDesktopDockProps> = ({
 
           <button
             type="button"
-            title="Criar novo agente"
-            aria-label="Criar novo agente"
+            data-testid="floating-dock-add-agents-btn"
+            title="Adicionar agentes ao dock"
+            aria-label="Adicionar agentes ao dock"
             onPointerDown={(e) => e.stopPropagation()}
-            onClick={() =>
-              void getCriativoDesktopBridge()?.openMainWindow?.({ action: "new-agent" })
-            }
-            className="h-8 w-8 rounded-xl flex items-center justify-center text-[#9A9AA2] hover:bg-white/[0.06] hover:text-white transition-colors"
+            onClick={() => void handleToggleAgentPicker()}
+            className={`h-8 w-8 rounded-xl flex items-center justify-center transition-colors ${
+              pickerOpen
+                ? "bg-[#007CF7]/25 text-white ring-1 ring-[#007CF7]"
+                : "text-[#9A9AA2] hover:bg-white/[0.06] hover:text-white"
+            }`}
           >
             <Plus className="h-4 w-4" />
           </button>

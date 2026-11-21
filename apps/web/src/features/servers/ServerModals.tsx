@@ -20,6 +20,7 @@ import type {
   StudioServerRecord,
 } from "@criativo/contracts";
 import { daemonApi } from "../../services/websocket-client";
+import { MascoteAvatar } from "../../components/MascoteAvatar";
 
 export const SERVER_ACCENT_COLORS = [
   { hex: "#E88B2D", label: "Âmbar" },
@@ -412,13 +413,10 @@ export const NewRemoteServerClaimModal: React.FC<NewRemoteServerClaimModalProps>
           <X className="w-4 h-4" />
         </button>
 
-        {/* Emblema superior fiel ao Print 4 */}
+        {/* Logo oficial Criativo AI Studio */}
         <div className="flex flex-col items-center text-center pt-1">
-          <div className="w-12 h-12 rounded-2xl bg-white flex items-center justify-center shadow-lg">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <circle cx="8.5" cy="12" r="3" fill="#0D0D0D" />
-              <circle cx="15.5" cy="12" r="3" fill="#0D0D0D" />
-            </svg>
+          <div className="w-14 h-14 rounded-2xl bg-[#141414] border border-white/[0.1] flex items-center justify-center shadow-lg">
+            <MascoteAvatar shape="hex" color="#31cf76" size={40} />
           </div>
           <h2 className="mt-4 text-[21px] font-bold text-white tracking-tight">
             Novo servidor em outro computador

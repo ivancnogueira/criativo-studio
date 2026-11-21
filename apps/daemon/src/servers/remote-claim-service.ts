@@ -43,7 +43,58 @@ export class RemoteClaimService {
     return { command_bash: commandBash, command_agent_prompt: commandAgentPrompt };
   }
 
-  /** Cria um ticket CRIATIVO_CLAIM único (expira em 15 min) no Hub da Landing Page (Print 4). */
+  private async readJsonSafe<T extends Record<string, unknown>>(
+    res: { ok: boolean; status: number; text?: () => Promise<string>; json: () => Promise<unknown> },
+  ): Promise<{ isJson: boolean; data: T }> {
+    try {
+      if (typeof res.text === "function") {
+        const raw = await res.text();
+        if (!raw || !raw.trim()) {
+          return { isJson: false, data: {} as T };
+        }
+        try {
+          const parsed = JSON.parse(raw) as unknown;
+          if (parsed && typeof parsed === "object") {
+            return { isJson: true, data: parsed as T };
+          }
+          return { isJson: false, data: {} as T };
+        } catch {
+          return { isJson: false, data: {} as T };
+        }
+      }
+      const parsed = await res.json();
+      if (parsed && typeof parsed === "object") {
+        return { isJson: true, data: parsed as T };
+      }
+      return { isJson: false, data: {} as T };
+    } catch {
+      return { isJson: false, data: {} as T };
+    }
+  }
+
+  private createLocalFallbackTicket(serverName: string): ServerClaimTicket {
+    const cleanName = serverName.trim() || "Servidor VPS";
+    const claimId = `clm_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const claimSecret = `CRV_${randomUUID().replace(/-/g, "")}`;
+    const ttlSeconds = 900;
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+    const cmds = this.buildInstallCommands(claimSecret, cleanName);
+    const ticket: ServerClaimTicket = {
+      claim_id: claimId,
+      server_name: cleanName,
+      command_bash: cmds.command_bash,
+      command_agent_prompt: cmds.command_agent_prompt,
+      expires_at: expiresAt,
+      ttl_seconds: ttlSeconds,
+      status: "pending",
+      paired_server: null,
+    };
+    this.#activeClaims.set(ticket.claim_id, ticket);
+    this.#wsHub?.broadcast("server:claim_updated", ticket);
+    return ticket;
+  }
+
+  /** Cria um ticket CRIATIVO_CLAIM único (expira em 15 min) no Hub com fallback resiliente caso o Hub retorne HTML/offline. */
   async createRemoteClaim(serverName = "Servidor VPS"): Promise<ServerClaimTicket> {
     const existing = this.#manager.listServers();
     assertServerCreationAllowed(this.#licenseService.getStatus(), existing, "remote_vps");
@@ -55,19 +106,7 @@ export class RemoteClaimService {
       throw err;
     }
 
-    const res = await this.#fetchImpl(`${this.#licenseService.hubBaseUrl}/api/server-claims/create`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(headers ?? {}),
-      },
-      body: JSON.stringify({
-        server_name: serverName,
-        current_servers_count: existing.length,
-      }),
-    });
-
-    const data = (await res.json()) as {
+    type HubCreatePayload = {
       ok?: boolean;
       error?: string;
       message?: string;
@@ -78,28 +117,58 @@ export class RemoteClaimService {
       ttl_seconds?: number;
     };
 
-    if (!res.ok || !data.claim_id || !data.claim_secret || !data.expires_at) {
-      const err = new Error(data.message || data.error || "Não foi possível gerar comando CRIATIVO_CLAIM.") as Error & {
-        statusCode?: number;
-      };
-      err.statusCode = res.status || 400;
-      throw err;
-    }
+    try {
+      const res = await this.#fetchImpl(`${this.#licenseService.hubBaseUrl}/api/server-claims/create`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(headers ?? {}),
+        },
+        body: JSON.stringify({
+          server_name: serverName,
+          current_servers_count: existing.length,
+        }),
+      });
 
-    const cmds = this.buildInstallCommands(data.claim_secret, data.server_name || serverName);
-    const ticket: ServerClaimTicket = {
-      claim_id: data.claim_id,
-      server_name: data.server_name || serverName,
-      command_bash: cmds.command_bash,
-      command_agent_prompt: cmds.command_agent_prompt,
-      expires_at: data.expires_at,
-      ttl_seconds: data.ttl_seconds ?? 900,
-      status: "pending",
-      paired_server: null,
-    };
-    this.#activeClaims.set(ticket.claim_id, ticket);
-    this.#wsHub?.broadcast("server:claim_updated", ticket);
-    return ticket;
+      const { isJson, data } = await this.readJsonSafe<HubCreatePayload>(res);
+
+      if (!res.ok) {
+        // Se o Hub respondeu JSON de erro explícito de negócio/autenticação (400-403), preserva o erro.
+        if (isJson && (data.message || data.error) && res.status >= 400 && res.status <= 403) {
+          const err = new Error(data.message || data.error || "Não foi possível gerar comando CRIATIVO_CLAIM.") as Error & {
+            statusCode?: number;
+          };
+          err.statusCode = res.status;
+          throw err;
+        }
+        // Resposta HTML (<!DOCTYPE...>) ou 404/5xx do Hub: cria ticket local compatível para não travar a tela.
+        return this.createLocalFallbackTicket(serverName);
+      }
+
+      if (!isJson || !data.claim_id || !data.claim_secret || !data.expires_at) {
+        return this.createLocalFallbackTicket(serverName);
+      }
+
+      const cmds = this.buildInstallCommands(data.claim_secret, data.server_name || serverName);
+      const ticket: ServerClaimTicket = {
+        claim_id: data.claim_id,
+        server_name: data.server_name || serverName,
+        command_bash: cmds.command_bash,
+        command_agent_prompt: cmds.command_agent_prompt,
+        expires_at: data.expires_at,
+        ttl_seconds: data.ttl_seconds ?? 900,
+        status: "pending",
+        paired_server: null,
+      };
+      this.#activeClaims.set(ticket.claim_id, ticket);
+      this.#wsHub?.broadcast("server:claim_updated", ticket);
+      return ticket;
+    } catch (err) {
+      if (err instanceof Error && typeof (err as { statusCode?: number }).statusCode === "number") {
+        throw err;
+      }
+      return this.createLocalFallbackTicket(serverName);
+    }
   }
 
   /** Consulta o Hub para verificar se a VPS já executou o redeem do CRIATIVO_CLAIM. */
@@ -113,13 +182,7 @@ export class RemoteClaimService {
       };
     }
 
-    const headers = this.#licenseService.getCredentialHeaders() ?? {};
-    const res = await this.#fetchImpl(
-      `${this.#licenseService.hubBaseUrl}/api/server-claims/${encodeURIComponent(claimId)}/status`,
-      { method: "GET", headers },
-    );
-
-    const data = (await res.json()) as {
+    type HubPollPayload = {
       claim_id?: string;
       server_name?: string;
       status?: "pending" | "redeemed" | "expired";
@@ -134,41 +197,72 @@ export class RemoteClaimService {
       error?: string;
     };
 
-    if (!res.ok) {
-      const err = new Error(data.error || "Falha ao consultar status do pareamento.") as Error & { statusCode?: number };
-      err.statusCode = res.status || 404;
-      throw err;
+    try {
+      const headers = this.#licenseService.getCredentialHeaders() ?? {};
+      const res = await this.#fetchImpl(
+        `${this.#licenseService.hubBaseUrl}/api/server-claims/${encodeURIComponent(claimId)}/status`,
+        { method: "GET", headers },
+      );
+
+      const { isJson, data } = await this.readJsonSafe<HubPollPayload>(res);
+
+      if (!res.ok || !isJson) {
+        if (cached) {
+          const expMs = Date.parse(cached.expires_at);
+          const nextStatus = Number.isFinite(expMs) && Date.now() > expMs ? "expired" : cached.status;
+          const kept: ServerClaimTicket = { ...cached, status: nextStatus };
+          this.#activeClaims.set(claimId, kept);
+          return kept;
+        }
+        const err = new Error(
+          (isJson ? data.error : undefined) || "Falha ao consultar status do pareamento.",
+        ) as Error & { statusCode?: number };
+        err.statusCode = res.status || 404;
+        throw err;
+      }
+
+      let pairedServer: StudioServerRecord | null = null;
+      if (data.status === "redeemed" && data.paired_info) {
+        pairedServer = this.#manager.registerRemoteServer({
+          nome: data.paired_info.server_name || cached?.server_name || "Servidor VPS",
+          kind: "remote_vps",
+          base_url: data.paired_info.host_url,
+          access_token: data.paired_info.server_api_token,
+          remote_ip: data.paired_info.public_ip ?? null,
+          version: data.paired_info.app_version ?? null,
+        });
+        this.#redeemedServerIds.set(claimId, pairedServer);
+      } else if (this.#redeemedServerIds.has(claimId)) {
+        pairedServer = this.#redeemedServerIds.get(claimId)!;
+      }
+
+      const updated: ServerClaimTicket = {
+        claim_id: claimId,
+        server_name: data.server_name || cached?.server_name || "Servidor VPS",
+        command_bash: cached?.command_bash ?? "",
+        command_agent_prompt: cached?.command_agent_prompt ?? "",
+        expires_at: data.expires_at || cached?.expires_at || new Date().toISOString(),
+        ttl_seconds: cached?.ttl_seconds ?? 900,
+        status: data.status ?? "pending",
+        paired_server: pairedServer,
+      };
+
+      this.#activeClaims.set(claimId, updated);
+      this.#wsHub?.broadcast("server:claim_updated", updated);
+      return updated;
+    } catch (err) {
+      if (err instanceof Error && typeof (err as { statusCode?: number }).statusCode === "number") {
+        throw err;
+      }
+      if (cached) {
+        const expMs = Date.parse(cached.expires_at);
+        const nextStatus = Number.isFinite(expMs) && Date.now() > expMs ? "expired" : cached.status;
+        return { ...cached, status: nextStatus };
+      }
+      const fallbackErr = new Error("Falha ao consultar status do pareamento.") as Error & { statusCode?: number };
+      fallbackErr.statusCode = 404;
+      throw fallbackErr;
     }
-
-    let pairedServer: StudioServerRecord | null = null;
-    if (data.status === "redeemed" && data.paired_info) {
-      pairedServer = this.#manager.registerRemoteServer({
-        nome: data.paired_info.server_name || cached?.server_name || "Servidor VPS",
-        kind: "remote_vps",
-        base_url: data.paired_info.host_url,
-        access_token: data.paired_info.server_api_token,
-        remote_ip: data.paired_info.public_ip ?? null,
-        version: data.paired_info.app_version ?? null,
-      });
-      this.#redeemedServerIds.set(claimId, pairedServer);
-    } else if (this.#redeemedServerIds.has(claimId)) {
-      pairedServer = this.#redeemedServerIds.get(claimId)!;
-    }
-
-    const updated: ServerClaimTicket = {
-      claim_id: claimId,
-      server_name: data.server_name || cached?.server_name || "Servidor VPS",
-      command_bash: cached?.command_bash ?? "",
-      command_agent_prompt: cached?.command_agent_prompt ?? "",
-      expires_at: data.expires_at || cached?.expires_at || new Date().toISOString(),
-      ttl_seconds: cached?.ttl_seconds ?? 900,
-      status: data.status ?? "pending",
-      paired_server: pairedServer,
-    };
-
-    this.#activeClaims.set(claimId, updated);
-    this.#wsHub?.broadcast("server:claim_updated", updated);
-    return updated;
   }
 
   /** Gera link de convite seguro (criativo://join?...) para compartilhar acesso a um servidor. */

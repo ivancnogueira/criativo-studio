@@ -155,7 +155,7 @@ export const AvatarAppearancePicker: React.FC<MascoteAppearancePickerProps> = ({
             variant={activeVariant}
             color={color}
             imageUrl={imageUrl}
-            size={compact ? 64 : 74}
+            size={compact ? 88 : 96}
             animated
             trackCursor
             expressionOverride={previewExp}
@@ -356,7 +356,7 @@ export const AvatarAppearancePicker: React.FC<MascoteAppearancePickerProps> = ({
 
           {/* Grade de modelos: 8 no Clássico ou 20 nos novos estilos */}
           {activeStyle === "classic" ? (
-            <div className="flex items-center gap-1.5 flex-wrap justify-center pt-1">
+            <div className="flex items-center gap-2 flex-wrap justify-center pt-1">
               {MASCOT_SHAPES.map((item) => {
                 const active = item.id === shape;
                 return (
@@ -369,22 +369,23 @@ export const AvatarAppearancePicker: React.FC<MascoteAppearancePickerProps> = ({
                     }}
                     title={item.label}
                     aria-label={`Formato ${item.label}`}
-                    className={`h-8 w-8 rounded-lg flex items-center justify-center transition-colors ${
+                    className={`h-11 w-11 rounded-xl flex items-center justify-center transition-colors ${
                       active
                         ? "bg-[#2A2A2A] ring-1 ring-[#42A0FF]"
-                        : "hover:bg-[#242424] opacity-80 hover:opacity-100"
+                        : "hover:bg-[#242424] opacity-85 hover:opacity-100"
                     }`}
                   >
-                    <MascoteAvatar style="classic" shape={item.id} color={color} size={22} />
+                    <MascoteAvatar style="classic" shape={item.id} color={color} size={34} />
                   </button>
                 );
               })}
             </div>
           ) : (
-            <div className="w-full space-y-1.5">
+            <div className="w-full space-y-2">
               <div
-                className={`max-h-[210px] overflow-y-auto pr-1 grid gap-1.5 ${
-                  compact ? "grid-cols-4" : "grid-cols-5"
+                data-testid="avatar-variants-grid"
+                className={`max-h-[300px] overflow-y-auto pr-1 grid gap-2 ${
+                  compact ? "grid-cols-3" : "grid-cols-4"
                 }`}
               >
                 {variants.map((item) => {
@@ -396,10 +397,10 @@ export const AvatarAppearancePicker: React.FC<MascoteAppearancePickerProps> = ({
                       onClick={() => onChangeVariant?.(item.id)}
                       title={item.label}
                       aria-label={item.label}
-                      className={`flex flex-col items-center justify-center gap-0.5 rounded-xl p-1.5 transition-colors ${
+                      className={`flex flex-col items-center justify-center gap-1 rounded-xl p-2 transition-colors ${
                         active
                           ? "bg-[#2A2A2A] ring-1 ring-[#42A0FF]"
-                          : "bg-[#181818]/60 hover:bg-[#242424] opacity-85 hover:opacity-100"
+                          : "bg-[#181818]/60 hover:bg-[#242424] opacity-90 hover:opacity-100"
                       }`}
                     >
                       <MascoteAvatar
@@ -407,7 +408,7 @@ export const AvatarAppearancePicker: React.FC<MascoteAppearancePickerProps> = ({
                         shape={shape}
                         variant={item.id}
                         color={color}
-                        size={compact ? 30 : 34}
+                        size={compact ? 54 : 62}
                         expressionOverride="cute"
                         hoverAnimate={false}
                       />
