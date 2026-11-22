@@ -13,6 +13,8 @@
     "build:all": "npm run build && npm run build:web",
     "typecheck": "tsc -b packages/contracts packages/i18n packages/whatsapp apps/daemon",
     "check:i18n": "node scripts/check-i18n.mjs",
+    "check:migrations": "node scripts/check-frozen-migrations.mjs",
+    "check:ratchets": "node scripts/check-quality-ratchets.mjs",
     "check:sizes": "node scripts/check-file-sizes.mjs",
     "start": "npm run start:daemon",
     "instalar": "node scripts/configurar-local.mjs",

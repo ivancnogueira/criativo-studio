@@ -137,6 +137,7 @@ export async function createDaemonServer(
     loginVault,
     passwordManagerRegistry,
     browserAutofillService,
+    telemetryService,
     workflowEngine,
     workflowTriggers,
     routineResultDispatcher,
@@ -290,6 +291,7 @@ export async function createDaemonServer(
         loginVault,
         passwordManagerRegistry,
         browserAutofillService,
+        telemetryService,
       };
 
       if (

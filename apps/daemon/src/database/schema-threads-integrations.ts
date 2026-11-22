@@ -467,4 +467,41 @@ export const SCHEMA_THREADS_INTEGRATIONS_TABLES: readonly SchemaTableDefinition[
         ON cofre_logins(domain, username);
     `,
   },
+  {
+    nome: "mcp_tool_consents",
+    sql: `
+      CREATE TABLE IF NOT EXISTS mcp_tool_consents (
+        consent_id TEXT PRIMARY KEY,
+        agente_id TEXT NOT NULL,
+        mcp_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('ask', 'allow_once', 'always_allow', 'deny')),
+        arg_pattern TEXT,
+        expires_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(agente_id, mcp_id, tool_name)
+      );
+      CREATE INDEX IF NOT EXISTS idx_mcp_consents_lookup
+        ON mcp_tool_consents(agente_id, mcp_id, tool_name);
+    `,
+  },
+  {
+    nome: "mcp_approval_audit",
+    sql: `
+      CREATE TABLE IF NOT EXISTS mcp_approval_audit (
+        audit_id TEXT PRIMARY KEY,
+        agente_id TEXT NOT NULL,
+        mcp_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('ask', 'allow_once', 'always_allow', 'deny')),
+        outcome TEXT NOT NULL CHECK(outcome IN ('allowed', 'blocked', 'prompted')),
+        reason TEXT NOT NULL,
+        args_preview TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_mcp_audit_agent_date
+        ON mcp_approval_audit(agente_id, created_at DESC);
+    `,
+  },
 ];

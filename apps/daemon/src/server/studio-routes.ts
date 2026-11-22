@@ -20,6 +20,7 @@ import { tryHandlePhase14Routes } from "./routes/phase14-routes.ts";
 import { tryHandleCustomProvidersRoutes } from "./routes/custom-providers-routes.ts";
 import { tryHandleSocialStudioRoutes } from "./social-studio-routes.ts";
 import { tryHandleMessagingAndVaultRoutes } from "./routes/messaging-vault-routes.ts";
+import { tryHandlePhase35GovernanceRoutes } from "./routes/phase35-governance-routes.ts";
 
 export { selectBalancedVisualAssets, type LabeledVisualAsset };
 export type { StudioRoutesDeps } from "./routes/route-helpers.ts";
@@ -91,6 +92,7 @@ export async function tryHandleStudioRoute(
     tryHandleCustomProvidersRoutes,
     tryHandleSocialStudioRoutes,
     tryHandleMessagingAndVaultRoutes,
+    tryHandlePhase35GovernanceRoutes,
   ];
 
   for (const handler of handlers) {

@@ -12,6 +12,7 @@ import {
   stripUrlFragment,
 } from "../../mcp/mcp-probe.ts";
 import { collectSensitiveSecrets, redactMcpSecrets } from "../../mcp/mcp-redaction.ts";
+import { sanitizeChildEnv } from "../sandbox/process-confinement.ts";
 import type { VaultService } from "../../vault/vault-service.ts";
 import type { FetchLike } from "./provider-interface.ts";
 
@@ -223,9 +224,14 @@ export class McpClient {
       }
     }
 
+    const { env: confinedBaseEnv } = sanitizeChildEnv({
+      extraEnv: env,
+      passthroughKeys: this.config.envPassthrough ?? [],
+    });
+
     const child = spawn(spawnCmd, spawnArgs, {
       cwd,
-      env: { ...process.env, ...env },
+      env: confinedBaseEnv,
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
       windowsHide: true,

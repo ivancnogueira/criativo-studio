@@ -23,6 +23,7 @@ import { CarbonSelect } from "../../components/ui/CarbonControls";
 import { PERMISSION_OPTIONS, formatTotalBytes } from "./inspector-types";
 import type { RightInspectorPanelProps } from "./inspector-types";
 import type { RightInspectorController } from "./useRightInspectorController";
+import { InspectorMcpConsentCard } from "./InspectorMcpConsentCard";
 
 export function InspectorAgentConfigTab({
   ctrl,
@@ -455,6 +456,8 @@ export function InspectorAgentConfigTab({
                   <ChevronRight className="h-3.5 w-3.5 text-[#6A6A6A]" />
                 </button>
               </div>
+
+              <InspectorMcpConsentCard agenteId={agente.agente_id} />
 
               {/* Alertas por agente */}
               <div className="rounded-xl bg-[#212121] border border-white/[0.06] p-3 space-y-2">

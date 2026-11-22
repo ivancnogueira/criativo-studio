@@ -15,6 +15,7 @@ import { TelegramNotificationBot } from "../messaging/telegram-bot.ts";
 import { BrowserAutofillService } from "../vault/browser-autofill-service.ts";
 import { LoginVaultService } from "../vault/login-vault-service.ts";
 import { PasswordManagerRegistry } from "../vault/password-managers/registry.ts";
+import { TelemetryService } from "../telemetry/telemetry-service.ts";
 import { WorkflowEngine } from "../workflows/workflow-engine.ts";
 import { WorkflowStore } from "../workflows/workflow-store.ts";
 import { executeWorkflowToolCall } from "../workflows/workflow-tools.ts";
@@ -197,6 +198,7 @@ export async function createDaemonRuntimeServices(
 
   const loginVault = new LoginVaultService(db, vault);
   const passwordManagerRegistry = new PasswordManagerRegistry();
+  const telemetryService = new TelemetryService(db);
   const browserAutofillService = new BrowserAutofillService({
     loginVault,
     passwordManagers: passwordManagerRegistry,
@@ -557,6 +559,7 @@ export async function createDaemonRuntimeServices(
     loginVault,
     passwordManagerRegistry,
     browserAutofillService,
+    telemetryService,
     workflowEngine,
     workflowTriggers,
     routineResultDispatcher,

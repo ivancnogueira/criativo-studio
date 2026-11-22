@@ -56,6 +56,7 @@ import type { MessagingService } from "../../messaging/messaging-service.ts";
 import type { BrowserAutofillService } from "../../vault/browser-autofill-service.ts";
 import type { LoginVaultService } from "../../vault/login-vault-service.ts";
 import type { PasswordManagerRegistry } from "../../vault/password-managers/registry.ts";
+import type { TelemetryService } from "../../telemetry/telemetry-service.ts";
 import {
   activateUpgradePackage,
   computeUnlockedAgentsSummary,
@@ -186,6 +187,7 @@ export interface StudioRoutesDeps {
   loginVault?: LoginVaultService;
   passwordManagerRegistry?: PasswordManagerRegistry;
   browserAutofillService?: BrowserAutofillService;
+  telemetryService?: TelemetryService;
 }
 
 export interface StudioRouteContext {

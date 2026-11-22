@@ -29,6 +29,7 @@ import {
 } from "./mcp-redaction.ts";
 import { isAgentAuthorizedForServer, McpServerStore } from "./mcp-server-store.ts";
 import { sanitizeJsonSchemaForGemini } from "./gemini-schema-sanitizer.ts";
+import { McpApprovalAutomationService } from "./approval-automation.ts";
 
 export interface McpOAuthRequiredNotice {
   ok: false;
@@ -113,6 +114,7 @@ export class McpGateway {
   public readonly store: McpServerStore;
   public readonly oauthProvider: McpOAuthProvider;
   public readonly oauthProxy: McpOAuthProxy;
+  public readonly approvalService: McpApprovalAutomationService;
   private readonly fetchImpl: FetchLike;
   private readonly onOAuthRequired?: McpGatewayOptions["onOAuthRequired"];
   private readonly onServerStatusChanged?: McpGatewayOptions["onServerStatusChanged"];
@@ -137,6 +139,7 @@ export class McpGateway {
         oauthProvider: this.oauthProvider,
         fetchImpl: this.fetchImpl,
       });
+    this.approvalService = new McpApprovalAutomationService(options.db);
   }
 
   /**
@@ -428,6 +431,25 @@ export class McpGateway {
       throw new Error(
         `O agente '${context?.agentId ?? "desconhecido"}' não possui acesso ao servidor MCP '${server.nome}'.`
       );
+    }
+
+    const consentDecision = this.approvalService.evaluateExecution({
+      agenteId: context?.agentId,
+      mcpId: server.mcp_id,
+      toolName: target.remoteToolName,
+      args,
+    });
+    if (!consentDecision.allowed) {
+      if (consentDecision.requiresConsent) {
+        return {
+          ok: false,
+          requiresConsent: true,
+          mcpId: server.mcp_id,
+          toolName: target.remoteToolName,
+          motivo: consentDecision.reason,
+        };
+      }
+      throw new Error(consentDecision.reason);
     }
 
     const hasOAuth = server.transporte === "http" && this.hasOAuthSession(server);

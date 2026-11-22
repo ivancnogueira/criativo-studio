@@ -292,6 +292,7 @@ export interface StudioUserSettings {
     ordenacao_sidebar: "secoes" | "recente" | "alfabetica";
     exibir_passos_agente: boolean;
     acoes_compactas: boolean;
+    telemetry_opt_in?: boolean;
   };
   aparencia: {
     tema: "carbon_dark" | "midnight_contrast" | "light";

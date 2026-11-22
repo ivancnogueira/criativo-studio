@@ -21,6 +21,7 @@ import { filesTablesApi } from "./api/files-browser-whatsapp-api";
 import { marketplaceApi } from "./api/marketplace-api";
 import { phase33Api } from "./api/phase33-api";
 import { phase34Api } from "./api/phase34-api";
+import { phase35Api } from "./api/phase35-api";
 import { providersMcpApi } from "./api/providers-mcp-api";
 import { serversLicenseApi } from "./api/servers-license-api";
 import { socialStudioApi } from "./api/social-studio-api";
@@ -41,4 +42,5 @@ export const daemonApi = {
   ...socialStudioApi,
   ...phase33Api,
   ...phase34Api,
+  ...phase35Api,
 };

@@ -10,6 +10,7 @@ import {
 import {
   type CarbonSelectOption,
 } from "../../components/ui/CarbonControls";
+import { SettingsTelemetryCard } from "./SettingsTelemetryCard";
 
 export const ACCENT_COLORS = [
   { hex: "#007CF7", label: "Azul Carbon" },
@@ -159,6 +160,11 @@ export const SettingsGeneralTab: React.FC<SettingsGeneralTabProps> = ({
         description="Reduz espaçamento dos botões do cabeçalho e ações inline nas conversas."
         checked={geral.acoes_compactas}
         onChange={(next) => onChange({ ...geral, acoes_compactas: next })}
+      />
+
+      <SettingsTelemetryCard
+        optIn={Boolean(geral.telemetry_opt_in)}
+        onChangeOptIn={(next) => onChange({ ...geral, telemetry_opt_in: next })}
       />
 
       {(onReopenSetupAssistant || onResetLayoutWidths) && (

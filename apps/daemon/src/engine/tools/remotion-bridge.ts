@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { spawnConfinedProcess } from "../sandbox/process-confinement.ts";
 
 export type RemotionCompositionId = "ReelsFaceless" | "ReelsTalkingHead";
 
@@ -70,10 +70,13 @@ export async function executeRemotionRender(
   const cwd = params.remotionProjectDir ?? process.cwd();
 
   await new Promise<void>((resolvePromise, rejectPromise) => {
-    const child = spawn("npx", args, {
-      cwd,
+    const { child, dispose } = spawnConfinedProcess({
+      command: "npx",
+      args,
+      workspaceRoot: cwd,
+      requestedCwd: cwd,
       shell: process.platform === "win32",
-      stdio: ["ignore", "pipe", "pipe"],
+      timeoutMs: 10 * 60_000,
     });
 
     let stderrLog = "";
@@ -91,6 +94,7 @@ export async function executeRemotionRender(
     child.stderr.on("data", handleOutput);
 
     child.on("error", (err) => {
+      dispose();
       rejectPromise(
         new Error(`Falha ao iniciar processo Remotion CLI: ${err.message}`)
       );
