@@ -5,6 +5,21 @@ export interface CriativoMainNavigatePayload {
   action?: "new-agent" | "open-dock-settings";
 }
 
+export interface CriativoDeepLinkPayload {
+  kind: "agent" | "workflow" | "oauth_callback" | "server_connect" | "template_install";
+  agenteId?: string;
+  workflowId?: string;
+  provider?: string;
+  code?: string | null;
+  state?: string | null;
+  url?: string;
+  claim?: string | null;
+  name?: string | null;
+  sourceUrl?: string | null;
+  templateJson?: string | null;
+  rawUrl: string;
+}
+
 export interface CriativoDockStatePayload {
   visible: boolean;
   expanded: boolean;
@@ -62,6 +77,11 @@ export interface CriativoDesktopBridge {
   onNotificationClicked: (
     listener: (payload: { id?: string | null; kind?: string; agentId?: string | null }) => void
   ) => () => void;
+  cuaAbort: (reason?: string) => Promise<boolean>;
+  cuaResetAbort: () => Promise<boolean>;
+  cuaPermissionStatus: () => Promise<{ granted: boolean; aborted: boolean }>;
+  setWindowVibrancy: (enabled: boolean) => Promise<boolean>;
+  onDeepLink: (listener: (payload: CriativoDeepLinkPayload) => void) => () => void;
 }
 
 const bridge: CriativoDesktopBridge = {
@@ -133,6 +153,19 @@ const bridge: CriativoDesktopBridge = {
     ipcRenderer.on("criativo:notification-clicked", wrapped);
     return () => {
       ipcRenderer.removeListener("criativo:notification-clicked", wrapped);
+    };
+  },
+  cuaAbort: (reason?: string) => ipcRenderer.invoke("criativo:cua-abort", reason),
+  cuaResetAbort: () => ipcRenderer.invoke("criativo:cua-reset-abort"),
+  cuaPermissionStatus: () => ipcRenderer.invoke("criativo:cua-permission-status"),
+  setWindowVibrancy: (enabled: boolean) => ipcRenderer.invoke("criativo:set-window-vibrancy", enabled),
+  onDeepLink: (listener: (payload: CriativoDeepLinkPayload) => void) => {
+    const wrapped = (_event: unknown, payload: CriativoDeepLinkPayload) => {
+      if (payload) listener(payload);
+    };
+    ipcRenderer.on("criativo:deep-link", wrapped);
+    return () => {
+      ipcRenderer.removeListener("criativo:deep-link", wrapped);
     };
   },
 };

@@ -33,6 +33,7 @@ import { useStudioDerivedData } from "./hooks/useStudioDerivedData";
 import { useChatSendActions } from "./hooks/useChatSendActions";
 import { useThreadQueueAndChannelActions } from "./hooks/useThreadQueueAndChannelActions";
 import { useStudioNotificationCenter } from "./hooks/useStudioNotificationCenter";
+import { usePhase37Ecosystem } from "./hooks/usePhase37Ecosystem";
 import type { StudioUiCtx } from "./components/studio/studio-ui-ctx";
 import { StudioAuthAndOnboardingGate } from "./components/studio/StudioAuthAndOnboardingGate";
 import { StudioAgentSidebarPane } from "./components/studio/StudioAgentSidebarPane";
@@ -51,6 +52,7 @@ export function App() {
   const derived = useStudioDerivedData(state);
   const chatSend = useChatSendActions(state, boot, derived);
   const threadActions = useThreadQueueAndChannelActions(state, boot, derived, nav);
+  const { abortCuaNow } = usePhase37Ecosystem(state, boot, nav);
   const notificationCenter = useStudioNotificationCenter({
     nativeLevel: state.userSettings.notificacoes.notificacao_nativa_nivel ?? "all",
     onSelectAgent: (agId) => {
@@ -178,6 +180,8 @@ export function App() {
                   nav.handleSelectAgent(item.agentId);
                 }
               }}
+              cuaStatus={state.cuaStatus}
+              onAbortCua={abortCuaNow}
             />
           ) : (
             <div className="h-[36px] shrink-0 border-b border-white/[0.06] bg-[#0D0D0D] px-3 flex items-center justify-between gap-2">

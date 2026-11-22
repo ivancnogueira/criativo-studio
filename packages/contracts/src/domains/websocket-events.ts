@@ -5,6 +5,7 @@
 import type { McpOAuthStatus } from "../mcp-contracts.ts";
 import type { BrowserAutofillConsentRequest } from "../phase34-messaging-vault.ts";
 import type { WorkflowPresenceMember } from "../phase36-team-transfer-crm-voice.ts";
+import type { CuaStatusSnapshot, ThemeReloadEventPayload } from "../phase37-ecosystem.ts";
 import type { RoutineOwnerKind, RoutineRunStatus } from "../routines.ts";
 import type { WhatsAppMensagemRegistro, WhatsAppPairingRequest } from "../whatsapp-contracts.ts";
 import type { WorkflowBranch, WorkflowRunStatus, WorkflowStepStatus } from "../workflow-graph.ts";
@@ -360,6 +361,8 @@ export type WebSocketEventMap = {
     workflowId: string;
     members: WorkflowPresenceMember[];
   };
+  "theme:reloaded": ThemeReloadEventPayload;
+  "cua:status": CuaStatusSnapshot;
 };
 
 export interface WebSocketEnvelope<K extends keyof WebSocketEventMap = keyof WebSocketEventMap> {

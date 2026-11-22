@@ -61,6 +61,10 @@ import type { TeamService } from "../../team/team-service.ts";
 import type { InstanceTransferService } from "../../servers/instance-transfer-service.ts";
 import type { CrmService } from "../../crm/crm-service.ts";
 import type { VoiceHostService } from "../../voice/voice-host-service.ts";
+import type { CuaDriverClient } from "../../engine/tools/cua-driver-client.ts";
+import type { ThemePaletteFilesService } from "../../themes/theme-palette-files.ts";
+import type { AgentTemplatePublisher } from "../../marketplace/agent-template-publisher.ts";
+import type { HostResourceMonitorService } from "../resource-monitor.ts";
 import {
   activateUpgradePackage,
   computeUnlockedAgentsSummary,
@@ -196,6 +200,10 @@ export interface StudioRoutesDeps {
   instanceTransferService?: InstanceTransferService;
   crmService?: CrmService;
   voiceHostService?: VoiceHostService;
+  cuaClient?: CuaDriverClient;
+  themePaletteFiles?: ThemePaletteFilesService;
+  agentTemplatePublisher?: AgentTemplatePublisher;
+  resourceMonitor?: HostResourceMonitorService;
 }
 
 export interface StudioRouteContext {

@@ -19,6 +19,7 @@ import type { WorkflowStore } from "../workflows/workflow-store.ts";
 import type { TranscriptionService } from "../voice/transcription-service.ts";
 import type { BrowserAutofillService } from "../vault/browser-autofill-service.ts";
 import type { CrmService } from "../crm/crm-service.ts";
+import type { CuaDriverClient } from "../engine/tools/cua-driver-client.ts";
 import type { Phase13ServicesBundle } from "../server/threads-routes.ts";
 import type { ShowcaseSiteService } from "../server/showcase-service.ts";
 import {
@@ -75,6 +76,7 @@ export interface CriativoStudioMcpBridgeOptions {
   remoteClaimService?: RemoteClaimService | null;
   browserAutofillService?: BrowserAutofillService;
   crmService?: CrmService;
+  cuaClient?: CuaDriverClient;
   authToken?: string;
   fetchImpl?: FetchLike;
 }
@@ -423,6 +425,7 @@ export class CriativoStudioMcpBridge {
           remoteClaimService: this.deps.remoteClaimService ?? undefined,
           browserAutofillService: this.deps.browserAutofillService,
           crmService: this.deps.crmService,
+          cuaClient: this.deps.cuaClient,
         },
       });
     } else if (isPhase10ExtensionTool(toolName)) {

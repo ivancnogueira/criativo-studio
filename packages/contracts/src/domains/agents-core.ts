@@ -134,6 +134,7 @@ export interface AgenteConfigVisual {
   skill_learning_mode?: SkillLearningMode;
   task_limit?: number;
   context_cutoff_at?: string | null;
+  cua_enabled?: boolean;
   [key: string]: unknown;
 }
 
@@ -305,6 +306,9 @@ export interface StudioUserSettings {
     idioma: "pt-BR" | "en" | "es";
     sidebar_width?: number;
     inspector_width?: number;
+    tema_externo_id?: string | null;
+    backdrop_id?: string | null;
+    desktop_vibrancy?: boolean;
   };
   comportamento: {
     restaurar_ultima_aba: boolean;

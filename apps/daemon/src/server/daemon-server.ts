@@ -142,6 +142,10 @@ export async function createDaemonServer(
     instanceTransferService,
     crmService,
     voiceHostService,
+    cuaClient,
+    themePaletteFiles,
+    agentTemplatePublisher,
+    resourceMonitor,
     workflowEngine,
     workflowTriggers,
     routineResultDispatcher,
@@ -300,6 +304,10 @@ export async function createDaemonServer(
         instanceTransferService,
         crmService,
         voiceHostService,
+        cuaClient,
+        themePaletteFiles,
+        agentTemplatePublisher,
+        resourceMonitor,
       };
 
       if (
@@ -544,6 +552,7 @@ export async function createDaemonServer(
       screenCapture.dispose();
       telegramBot.stopPolling();
       voiceHostService.dispose();
+      themePaletteFiles.dispose();
       await browserService.closeAll();
       await workflowEngine.dispose();
       whatsappArchiveService.stopPeriodicCleanup();

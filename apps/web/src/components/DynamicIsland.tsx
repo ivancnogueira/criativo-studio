@@ -2,6 +2,7 @@ import React from "react";
 import type {
   AvatarShape,
   AvatarStyle,
+  CuaStatusSnapshot,
   StatusMensageria,
   StudioNotificationItem,
 } from "@criativo/contracts";
@@ -65,6 +66,8 @@ interface DynamicIslandProps {
   onMarkAllNotificationsRead?: () => void;
   onClearNotifications?: () => void;
   onSelectNotification?: (item: StudioNotificationItem) => void;
+  cuaStatus?: CuaStatusSnapshot | null;
+  onAbortCua?: () => void;
 }
 
 /**
@@ -94,6 +97,8 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   onMarkAllNotificationsRead,
   onClearNotifications,
   onSelectNotification,
+  cuaStatus = null,
+  onAbortCua,
 }) => {
   const islandText = !wsConnected
     ? "Reconectando..."
@@ -244,6 +249,16 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         <span className="text-[11.5px] font-medium text-[#DCDCDC] whitespace-nowrap">
           {islandText}
         </span>
+        {cuaStatus?.running && (
+          <button
+            type="button"
+            onClick={onAbortCua}
+            className="inline-flex items-center gap-1 rounded-full bg-[#FD2F3B]/20 hover:bg-[#FD2F3B]/35 border border-[#FD2F3B]/45 px-2 py-0.5 text-[10.5px] font-semibold text-[#FF6069] transition-colors"
+            title="Interromper controle CUA imediatamente (Ctrl+Shift+Esc)"
+          >
+            <span>Parar Controle</span>
+          </button>
+        )}
         {headerRightContent}
       </div>
 

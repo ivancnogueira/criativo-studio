@@ -8,6 +8,7 @@ import type {
 } from "@criativo/contracts";
 import { ChevronDown, ChevronRight, RefreshCw, Sparkles } from "lucide-react";
 import { ProviderLogo } from "../../components/ProviderLogo";
+import { HostResourcesPanel } from "../../components/HostResourcesPanel";
 
 interface UsageMetricsPageProps {
   uso: UsoProvedoresSnapshot | null;
@@ -695,6 +696,8 @@ export const UsageMetricsPage: React.FC<UsageMetricsPageProps> = ({
             </div>
           </section>
         )}
+
+        <HostResourcesPanel />
 
         {/* Rodapé timestamps + Sobre estas estimativas */}
         <footer className="pt-2 border-t border-white/[0.05] space-y-2 pb-6">

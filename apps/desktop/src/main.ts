@@ -13,6 +13,9 @@ import {
 import { FloatingDockController } from "./floating-dock.ts";
 import { createStudioTray } from "./tray-manager.ts";
 import { showDesktopNotification, type NativeDesktopNotificationPayload } from "./desktop-notifications.ts";
+import { startCuaDesktopRuntime, type CuaDesktopRuntimeHandle } from "./cua-driver-runtime.ts";
+import { extractCriativoDeepLinkFromArgv, parseCriativoDeepLink } from "./deep-link-router.ts";
+import type { DeepLinkRoute } from "@criativo/contracts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -20,6 +23,10 @@ let mainWindow: BrowserWindow | null = null;
 let floatingDock: FloatingDockController | null = null;
 let daemonHandle: EmbeddedDaemonHandle | null = null;
 let trayHandle: Tray | null = null;
+let cuaRuntime: CuaDesktopRuntimeHandle | null = null;
+let pendingDeepLink: DeepLinkRoute | null = extractCriativoDeepLinkFromArgv(process.argv)
+  ? (() => { try { return parseCriativoDeepLink(extractCriativoDeepLinkFromArgv(process.argv)!); } catch { return null; } })()
+  : null;
 let isQuitting = false;
 let updateRestartInProgress = false;
 
@@ -432,6 +439,21 @@ function registerIpcHandlers(userDataDir: string): void {
         : { title: "Criativo AI Studio", body: "" };
     return showDesktopNotification(() => mainWindow, payload);
   });
+
+  ipcMain.handle("criativo:set-window-vibrancy", (_evt, enabled: unknown) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    const on = Boolean(enabled);
+    try {
+      if (process.platform === "darwin") {
+        mainWindow.setVibrancy(on ? "under-window" : null);
+      } else if (process.platform === "win32" && typeof mainWindow.setBackgroundMaterial === "function") {
+        mainWindow.setBackgroundMaterial(on ? "acrylic" : "none");
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 async function handleUpdateRestart(userDataDir: string, payload: UpdateRestartPayload): Promise<void> {
@@ -527,8 +549,35 @@ async function bootstrapDesktop(): Promise<void> {
     return;
   }
 
-  app.on("second-instance", () => {
+  try {
+    app.setAsDefaultProtocolClient("criativo");
+  } catch {
+    // ambiente pode não suportar registro em modo dev
+  }
+
+  const dispatchDeepLinkUrl = (rawUrl: string | null) => {
+    if (!rawUrl) return;
+    try {
+      const route = parseCriativoDeepLink(rawUrl);
+      if (mainWindow && !mainWindow.isDestroyed() && daemonHandle) {
+        focusOrShowMainWindow();
+        mainWindow.webContents.send("criativo:deep-link", route);
+      } else {
+        pendingDeepLink = route;
+      }
+    } catch {
+      // ignora deep link inválido/não autorizado
+    }
+  };
+
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    dispatchDeepLinkUrl(url);
+  });
+
+  app.on("second-instance", (_event, argv) => {
     focusOrShowMainWindow();
+    dispatchDeepLinkUrl(extractCriativoDeepLinkFromArgv(argv));
   });
 
   await app.whenReady();
@@ -631,6 +680,15 @@ async function bootstrapDesktop(): Promise<void> {
 
   const splashElapsedMs = Math.max(0, Date.now() - splashStartedAt);
   await mainWindow.loadURL(`${daemonHandle.baseUrl}/?fromSplash=1&splashElapsed=${splashElapsedMs}`);
+  if (pendingDeepLink) {
+    mainWindow.webContents.send("criativo:deep-link", pendingDeepLink);
+    pendingDeepLink = null;
+  }
+
+  cuaRuntime = await startCuaDesktopRuntime({
+    getDaemonBaseUrl: () => daemonHandle?.baseUrl ?? "",
+    onLog: writeDesktopLog,
+  }).catch(() => null);
 
   floatingDock = new FloatingDockController({
     daemonBaseUrl: daemonHandle.baseUrl,
@@ -647,6 +705,8 @@ app.on("before-quit", () => {
 });
 
 app.on("will-quit", (event: { preventDefault: () => void }) => {
+  void cuaRuntime?.dispose();
+  cuaRuntime = null;
   floatingDock?.destroy();
   floatingDock = null;
   if (!daemonHandle) return;

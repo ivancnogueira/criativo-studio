@@ -74,6 +74,7 @@ import {
   type SettingsModalTabId,
   applyUserSettingsToDocument,
 } from "../../features/settings/SettingsModal";
+import { applyExternalThemePalette } from "../../theme/theme-palette";
 import {
   daemonApi,
   getActiveServerId,
@@ -386,6 +387,17 @@ export function registerSystemWsHandlers(
       void daemonApi.listAgents().then(setAgentes).catch(() => {});
     });
 
+    const unsubCuaStatus = ws.on("cua:status", (nextCua) => {
+      state.setCuaStatus(nextCua);
+    });
+
+    const unsubThemeReloaded = ws.on("theme:reloaded", (evt) => {
+      const selectedId = state.userSettings.aparencia.tema_externo_id;
+      if (!selectedId) return;
+      const found = evt.themes.find((item) => item.id === selectedId);
+      if (found) applyExternalThemePalette(found);
+    });
+
     setOnLicenseRequiredHandler((status) => {
       if (status) {
         setLicenseStatus(status);
@@ -420,5 +432,7 @@ export function registerSystemWsHandlers(
     unsubUpdateStatus();
     unsubOnboardingUpdated();
     unsubVpsAssistantUpdated();
+    unsubCuaStatus();
+    unsubThemeReloaded();
   };
 }

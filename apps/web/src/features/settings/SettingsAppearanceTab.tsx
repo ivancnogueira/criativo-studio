@@ -3,18 +3,25 @@ import React, {
   useState,
 } from "react";
 import type {
+  ExternalThemePalette,
+  StudioBackdropId,
   StudioUserSettings,
 } from "@criativo/contracts";
 import {
   Check,
   Palette,
+  RefreshCw,
+  Upload,
 } from "lucide-react";
 import {
   StudioColorPicker,
 } from "../../components/StudioColorPicker";
 import {
   CarbonSelect,
+  type CarbonSelectOption,
 } from "../../components/ui/CarbonControls";
+import { daemonApi } from "../../services/websocket-client";
+import { applyExternalThemePalette, clearExternalThemeTokens } from "../../theme/theme-palette";
 import {
   getCriativoDesktopBridge,
 } from "../../types/desktop-bridge";
@@ -25,16 +32,27 @@ import {
 import { ACCENT_COLORS, UI_FONT_OPTIONS, CODE_FONT_OPTIONS, LANGUAGE_OPTIONS, ToggleRow } from "./SettingsGeneralTab";
 import { useI18n } from "../../i18n/I18nContext";
 
+const BACKDROP_OPTIONS: CarbonSelectOption<StudioBackdropId>[] = [
+  { value: "none", label: "Sem backdrop (Carbono Puro)" },
+  { value: "nebula", label: "Nebula Azul/Violeta Sutil" },
+  { value: "grid_soft", label: "Grade Técnica Discreta" },
+  { value: "warm_amber", label: "Âmbar Quente Cinematográfico" },
+];
+
 export interface SettingsAppearanceTabProps {
   aparencia: StudioUserSettings["aparencia"];
   onChange: (next: StudioUserSettings["aparencia"]) => void;
+  initialExternalThemes?: ExternalThemePalette[];
 }
 
 export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
   aparencia,
   onChange,
+  initialExternalThemes = [],
 }) => {
   const { t } = useI18n();
+  const [externalThemes, setExternalThemes] = useState<ExternalThemePalette[]>(initialExternalThemes);
+  const [themeFeedback, setThemeFeedback] = useState<string | null>(null);
   const [desktopDockState, setDesktopDockState] = useState<{
     available: boolean;
     visible: boolean;
@@ -43,15 +61,50 @@ export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
 
   useEffect(() => {
     const bridge = getCriativoDesktopBridge();
-    if (!bridge?.dockGetState) return;
-    void bridge.dockGetState().then((st) => {
-      setDesktopDockState({
-        available: true,
-        visible: Boolean(st?.visible),
-        pinned: st?.pinned !== false,
+    if (bridge?.dockGetState) {
+      void bridge.dockGetState().then((st) => {
+        setDesktopDockState({
+          available: true,
+          visible: Boolean(st?.visible),
+          pinned: st?.pinned !== false,
+        });
       });
-    });
-  }, []);
+    }
+    if (initialExternalThemes.length === 0) {
+      void daemonApi
+        .listExternalThemes()
+        .then((res) => setExternalThemes(res.themes ?? []))
+        .catch(() => {});
+    }
+  }, [initialExternalThemes.length]);
+
+  const themeOptions: CarbonSelectOption<string>[] = [
+    { value: "", label: "Usar tema nativo padrão" },
+    ...externalThemes.map((item) => ({
+      value: item.id,
+      label: `${item.name} (${item.base === "light" ? "Claro" : "Escuro"})`,
+    })),
+  ];
+
+  const handleImportThemeFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const content = await file.text();
+      const res = await daemonApi.importExternalTheme(content);
+      setExternalThemes(res.themes);
+      applyExternalThemePalette(res.theme);
+      onChange({
+        ...aparencia,
+        tema_externo_id: res.theme.id,
+        backdrop_id: res.theme.backdrop ?? aparencia.backdrop_id ?? "none",
+      });
+      setThemeFeedback(`Tema '${res.theme.name}' importado e aplicado.`);
+    } catch (err) {
+      setThemeFeedback(err instanceof Error ? err.message : "Falha ao importar JSON de tema.");
+    }
+  };
 
   const opPalette = computeBubbleColors(aparencia.cor_balao_usuario, "#2A2A2A");
 
@@ -264,8 +317,86 @@ export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
         </div>
       </div>
 
+      <div className="rounded-xl border border-white/[0.06] bg-[#212121] p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <div className="text-[13px] font-semibold text-white">
+              Temas Externos JSON (Hot-Reload) & Backdrop
+            </div>
+            <div className="text-[11.5px] text-[#979797]">
+              Carrega arquivos JSON de <code className="text-[#DCDCDC]">dados/themes/</code> com atualização ao vivo.
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                void daemonApi
+                  .reloadExternalThemes()
+                  .then((res) => {
+                    setExternalThemes(res.themes);
+                    setThemeFeedback(`${res.themes.length} tema(s) recarregado(s).`);
+                  })
+                  .catch(() => {});
+              }}
+              className="inline-flex items-center gap-1 rounded-lg bg-[#2A2A2A] hover:bg-[#333336] px-2.5 py-1 text-[11px] text-[#DCDCDC]"
+            >
+              <RefreshCw className="h-3 w-3" />
+              <span>Recarregar</span>
+            </button>
+            <label className="inline-flex items-center gap-1 rounded-lg bg-[#007CF7]/20 hover:bg-[#007CF7]/30 border border-[#007CF7]/40 px-2.5 py-1 text-[11px] font-medium text-[#42A0FF] cursor-pointer">
+              <Upload className="h-3 w-3" />
+              <span>Importar JSON</span>
+              <input
+                type="file"
+                accept=".json,application/json"
+                onChange={(e) => void handleImportThemeFile(e)}
+                className="hidden"
+              />
+            </label>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <span className="block text-[12px] font-medium text-[#DCDCDC]">Tema JSON externo</span>
+            <CarbonSelect
+              ariaLabel="Selecionar tema JSON externo"
+              value={aparencia.tema_externo_id ?? ""}
+              options={themeOptions}
+              onChange={(val) => {
+                const selected = externalThemes.find((x) => x.id === val) ?? null;
+                if (selected) applyExternalThemePalette(selected);
+                else clearExternalThemeTokens();
+                onChange({ ...aparencia, tema_externo_id: val || null });
+              }}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <span className="block text-[12px] font-medium text-[#DCDCDC]">Backdrop do estúdio</span>
+            <CarbonSelect
+              ariaLabel="Selecionar backdrop do estúdio"
+              value={(aparencia.backdrop_id as StudioBackdropId) || "none"}
+              options={BACKDROP_OPTIONS}
+              onChange={(val) => onChange({ ...aparencia, backdrop_id: val })}
+            />
+          </div>
+        </div>
+        {themeFeedback && (
+          <div className="text-[11px] text-[#42A0FF]">{themeFeedback}</div>
+        )}
+      </div>
+
       {desktopDockState.available && (
         <div className="space-y-3" data-testid="desktop-dock-settings-card">
+          <ToggleRow
+            label="Translucidez nativa da janela (Desktop)"
+            description="Aplica efeito acrílico/vibrancy na janela principal do aplicativo Desktop."
+            checked={Boolean(aparencia.desktop_vibrancy)}
+            onChange={(next) => {
+              onChange({ ...aparencia, desktop_vibrancy: next });
+              void getCriativoDesktopBridge()?.setWindowVibrancy?.(next);
+            }}
+          />
           <ToggleRow
             label="Ilha flutuante de agentes na área de trabalho"
             description="Mantém o acesso rápido aos agentes flutuando sobre outros aplicativos no Desktop."

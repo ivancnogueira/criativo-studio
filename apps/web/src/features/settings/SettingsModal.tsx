@@ -47,6 +47,7 @@ import {
 import { SettingsStorageTab } from "./StorageUsageBar";
 import { useI18n } from "../../i18n/I18nContext";
 import type { I18nMessageKey } from "@criativo/i18n";
+import { applyStudioBackdrop, clearExternalThemeTokens } from "../../theme/theme-palette";
 
 export type SettingsModalTabId =
   | "geral"
@@ -156,6 +157,11 @@ export function applyUserSettingsToDocument(settings: StudioUserSettings): void 
 
   const lang = ALLOWED_LANGS.has(aparencia.idioma) ? aparencia.idioma : "pt-BR";
   root.setAttribute("lang", lang);
+
+  applyStudioBackdrop(aparencia.backdrop_id);
+  if (!aparencia.tema_externo_id) {
+    clearExternalThemeTokens();
+  }
 }
 
 const NAV_GROUPS: Array<{

@@ -9,6 +9,7 @@ import { readVideoTool } from "../../engine/tools/video-reader.ts";
 import { executeShowcaseTool, SHOWCASE_AGENT_TOOL_NAMES } from "../showcase-service.ts";
 import { executeSidebarTool, SIDEBAR_AGENT_TOOL_NAMES } from "../sidebar-service.ts";
 import { CRM_TOOL_NAMES, executeCrmTool } from "../../crm/crm-tools.ts";
+import { CUA_TOOL_NAMES, executeCuaTool } from "../../engine/tools/cua-tools.ts";
 import { assertAgentPermissionForPath, readAgentGovernance } from "./phase15-governance.ts";
 import {
   normalizeBrowserTargetInput,
@@ -446,6 +447,18 @@ export async function executePhase15ToolCall(
       return { ok: false, erro: "CrmService não inicializado neste daemon." };
     }
     return executeCrmTool(toolName, args, { agenteId: ctx.agenteId }, services.crmService);
+  }
+
+  if (CUA_TOOL_NAMES.has(toolName)) {
+    if (!services.cuaClient) {
+      return { ok: false, erro: "CuaDriverClient não inicializado neste daemon." };
+    }
+    return executeCuaTool(
+      toolName,
+      args,
+      { agenteId: ctx.agenteId, aprovadoPorHumano: ctx.aprovadoPorHumano },
+      services.cuaClient,
+    );
   }
 
   throw new Error(`Ferramenta da Fase 15 desconhecida: ${toolName}`);

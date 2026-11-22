@@ -51,6 +51,7 @@ import type {
   UsageLimitAskPayload,
   UserBrowsingStep,
   UsoProvedoresSnapshot,
+  CuaStatusSnapshot,
   WhatsAppContaResumo,
   WhatsNewReleaseInfo,
   WorkflowAresta,
@@ -322,6 +323,7 @@ export function useStudioState() {
   const [whatsNew, setWhatsNew] = useState<WhatsNewReleaseInfo | null>(null);
   const [showcaseSites, setShowcaseSites] = useState<ShowcaseSiteSummary[]>([]);
   const [liveVoiceActive, setLiveVoiceActive] = useState(false);
+  const [cuaStatus, setCuaStatus] = useState<CuaStatusSnapshot | null>(null);
   const [licenseStatus, setLicenseStatus] = useState<LicenseActivationStatus | null>(null);
   const isAppBooting = bootLoading;
   useEffect(() => {
@@ -589,6 +591,8 @@ export function useStudioState() {
     setShowcaseSites,
     liveVoiceActive,
     setLiveVoiceActive,
+    cuaStatus,
+    setCuaStatus,
     licenseStatus,
     setLicenseStatus,
     servers,

@@ -3,6 +3,21 @@ export interface CriativoMainNavigatePayload {
   action?: "new-agent" | "open-dock-settings";
 }
 
+export interface CriativoDeepLinkPayload {
+  kind: "agent" | "workflow" | "oauth_callback" | "server_connect" | "template_install";
+  agenteId?: string;
+  workflowId?: string;
+  provider?: string;
+  code?: string | null;
+  state?: string | null;
+  url?: string;
+  claim?: string | null;
+  name?: string | null;
+  sourceUrl?: string | null;
+  templateJson?: string | null;
+  rawUrl: string;
+}
+
 export interface CriativoDockStatePayload {
   visible: boolean;
   expanded: boolean;
@@ -60,6 +75,11 @@ export interface CriativoDesktopWindowBridge {
   onNotificationClicked?: (
     listener: (payload: { id?: string | null; kind?: string; agentId?: string | null }) => void
   ) => () => void;
+  cuaAbort?: (reason?: string) => Promise<boolean>;
+  cuaResetAbort?: () => Promise<boolean>;
+  cuaPermissionStatus?: () => Promise<{ granted: boolean; aborted: boolean }>;
+  setWindowVibrancy?: (enabled: boolean) => Promise<boolean>;
+  onDeepLink?: (listener: (payload: CriativoDeepLinkPayload) => void) => () => void;
 }
 
 export function getCriativoDesktopBridge(): CriativoDesktopWindowBridge | null {

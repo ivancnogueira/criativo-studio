@@ -20,6 +20,10 @@ import { TeamService } from "../team/team-service.ts";
 import { InstanceTransferService } from "../servers/instance-transfer-service.ts";
 import { CrmService } from "../crm/crm-service.ts";
 import { VoiceHostService } from "../voice/voice-host-service.ts";
+import { CuaDriverClient } from "../engine/tools/cua-driver-client.ts";
+import { ThemePaletteFilesService } from "../themes/theme-palette-files.ts";
+import { AgentTemplatePublisher } from "../marketplace/agent-template-publisher.ts";
+import { HostResourceMonitorService } from "./resource-monitor.ts";
 import { WorkflowEngine } from "../workflows/workflow-engine.ts";
 import { WorkflowStore } from "../workflows/workflow-store.ts";
 import { executeWorkflowToolCall } from "../workflows/workflow-tools.ts";
@@ -208,6 +212,19 @@ export async function createDaemonRuntimeServices(
   const crmService = new CrmService(db);
   const voiceHostService = new VoiceHostService({ db });
   transcription.attachVoiceHost(voiceHostService);
+  const cuaClient = new CuaDriverClient({ db, wsHub, fetchImpl: options.fetchImpl });
+  const themePaletteFiles = new ThemePaletteFilesService({
+    themesDir: `${studioPaths.userDataRoot}/dados/themes`,
+    wsHub,
+    autoWatch: true,
+  });
+  const agentTemplatePublisher = new AgentTemplatePublisher({
+    db,
+    fetchImpl: options.fetchImpl,
+  });
+  const resourceMonitor = new HostResourceMonitorService({
+    workspaceRoot: resolvedWorkspaceRoot,
+  });
   const browserAutofillService = new BrowserAutofillService({
     loginVault,
     passwordManagers: passwordManagerRegistry,
@@ -552,6 +569,7 @@ export async function createDaemonRuntimeServices(
     remoteClaimService,
     browserAutofillService,
     crmService,
+    cuaClient,
     fetchImpl: options.fetchImpl,
   });
   providerConnection.attachStudioMcpBridge(studioMcpBridge);
@@ -574,6 +592,10 @@ export async function createDaemonRuntimeServices(
     instanceTransferService,
     crmService,
     voiceHostService,
+    cuaClient,
+    themePaletteFiles,
+    agentTemplatePublisher,
+    resourceMonitor,
     workflowEngine,
     workflowTriggers,
     routineResultDispatcher,
