@@ -10,7 +10,9 @@
   ],
   "scripts": {
     "build": "tsc -b packages/contracts packages/whatsapp apps/daemon",
+    "build:all": "npm run build && npm run build:web",
     "typecheck": "tsc -b packages/contracts packages/whatsapp apps/daemon",
+    "check:sizes": "node scripts/check-file-sizes.mjs",
     "start": "npm run start:daemon",
     "instalar": "node scripts/configurar-local.mjs",
     "configurar": "node scripts/configurar-local.mjs",

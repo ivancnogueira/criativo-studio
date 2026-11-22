@@ -524,11 +524,17 @@ describe("Fase 21 — Fotos Reais, generate_image, ACP Effort, MCP 2025-11-25, W
     const db = initializeDatabase({ dbPath: join(dir, "wpp.sqlite") });
     seedDefaultStudioExperience(db);
     try {
-      const clientSrcPath = resolve(
+      const clientSrcDir = resolve(
         dirname(fileURLToPath(import.meta.url)),
-        "../../../packages/whatsapp/src/client.ts"
+        "../../../packages/whatsapp/src"
       );
-      assert.match(readFileSync(clientSrcPath, "utf8"), /emitOwnEvents:\s*true/);
+      const clientBundleSrc =
+        readFileSync(join(clientSrcDir, "client.ts"), "utf8") +
+        "\n" +
+        readFileSync(join(clientSrcDir, "whatsapp-client-helpers.ts"), "utf8") +
+        "\n" +
+        readFileSync(join(clientSrcDir, "whatsapp-client-connect.ts"), "utf8");
+      assert.match(clientBundleSrc, /emitOwnEvents:\s*true/);
 
       const rules = new WhatsAppSenderRules(db.connection);
       const evalLid = await rules.evaluateIncoming({

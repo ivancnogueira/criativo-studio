@@ -308,10 +308,10 @@ describe("Fase 22 — CDP sem __name, Takeover sem trava, WhatsApp Formatter e F
       join(repoRoot, "apps/daemon/src/providers/opencode-live-service.ts"),
       "utf8"
     );
-    const daemonServerSrc = readFileSync(
-      join(repoRoot, "apps/daemon/src/server/daemon-server.ts"),
-      "utf8"
-    );
+    const daemonServerSrc =
+      readFileSync(join(repoRoot, "apps/daemon/src/server/daemon-server.ts"), "utf8") +
+      "\n" +
+      readFileSync(join(repoRoot, "apps/daemon/src/server/daemon-whatsapp-handler.ts"), "utf8");
 
     assert.match(desktopMainSrc, /desktopCapturer/);
     assert.match(desktopMainSrc, /setDisplayMediaRequestHandler/);

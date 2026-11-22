@@ -202,10 +202,9 @@ describe("Fase 22 — Navegador Integrado, Dock Flutuante Desktop, WhatsApp Sync
     assert.doesNotMatch(peekHtml, /data-testid="floating-dock-pill"/);
 
     // Presença dos controles da ilha retrátil nas configurações
-    const settingsGeneralSrc = readFileSync(
-      join(webRoot, "src", "features", "settings", "SettingsGeneralTabs.tsx"),
-      "utf8"
-    );
+    const settingsGeneralSrc = collectFilesRecursive(join(webRoot, "src", "features", "settings"))
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
     assert.match(settingsGeneralSrc, /desktop-dock-settings-card/);
     assert.match(settingsGeneralSrc, /Recolher ilha flutuante na borda da tela/);
     assert.match(settingsGeneralSrc, /dockSetPinned/);
@@ -302,7 +301,13 @@ describe("Fase 22 — Navegador Integrado, Dock Flutuante Desktop, WhatsApp Sync
     assert.doesNotMatch(chatHtml, /aria-label="Sub-threads da conversa"/);
     assert.match(chatHtml, /WhatsApp/);
 
-    const appSrc = readFileSync(join(webRoot, "src", "App.tsx"), "utf8");
+    const appSrc = [
+      join(webRoot, "src", "App.tsx"),
+      ...collectFilesRecursive(join(webRoot, "src", "components", "studio")),
+      ...collectFilesRecursive(join(webRoot, "src", "hooks")),
+    ]
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
     assert.match(appSrc, /hideInlineThreadTabs=\{true\}/);
     assert.match(appSrc, /onCreateQuickThread=\{\(\) => void handleCreateNewTopic\(\)\}/);
     assert.doesNotMatch(appSrc, /onCreateQuickThread=\{\(\) => setActiveSection\("tarefas"\)\}/);
@@ -372,7 +377,13 @@ describe("Fase 22 — Navegador Integrado, Dock Flutuante Desktop, WhatsApp Sync
       "O effect do Ato 4 não deve cancelar timers no cleanup ao mudar stage para reveal-squash"
     );
 
-    const appSrc = readFileSync(join(webRoot, "src", "App.tsx"), "utf8");
+    const appSrc = [
+      join(webRoot, "src", "App.tsx"),
+      ...collectFilesRecursive(join(webRoot, "src", "components", "studio")),
+      ...collectFilesRecursive(join(webRoot, "src", "hooks")),
+    ]
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
     assert.match(appSrc, /StudioSplashPreloader/);
     assert.doesNotMatch(appSrc, /Iniciando Criativo AI Studio/);
     assert.match(appSrc, /const isAppBooting = bootLoading;/);

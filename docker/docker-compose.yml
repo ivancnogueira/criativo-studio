@@ -13,7 +13,7 @@ services:
       HOST: "0.0.0.0"
       CRIATIVO_DB_PATH: /data/criativo.db
       CRIATIVO_SOCKET_PATH: /tmp/criativo-control.sock
-      CRIATIVO_VAULT_KEY: ${CRIATIVO_VAULT_KEY:-altere-esta-chave-mestra-em-producao}
+      CRIATIVO_VAULT_KEY: ${CRIATIVO_VAULT_KEY:?Defina CRIATIVO_VAULT_KEY no .env ou ambiente antes de iniciar}
     volumes:
       - criativo_dados:/data
 

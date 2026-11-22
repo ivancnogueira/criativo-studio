@@ -1,0 +1,9 @@
+{
+  "meta": {
+    "softTargetLines": 500,
+    "hardMaxLines": 750,
+    "updatedAt": "2026-11-22",
+    "note": "Ratchet de tamanho de arquivos de codigo-fonte. Baseline zerado apos modularizacao completa: nenhum arquivo pode exceder 750 linhas."
+  },
+  "legacyMaxLines": {}
+}

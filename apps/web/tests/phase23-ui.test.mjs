@@ -74,10 +74,12 @@ describe("Fase 23 — UI, Multi-Server, Dock, Identidade Própria, Pastas Autori
     const sliceBetween = html.slice(overflowIdx, listEndIdx);
     assert.ok(sliceBetween.includes("</div>"), "O container overflow-y-auto deve fechar antes do trigger Adicionar servidor");
 
-    const dockSrc = readFileSync(
-      join(webRoot, "src", "features", "dock", "FloatingDesktopDock.tsx"),
-      "utf8",
-    );
+    const dockSrc =
+      readFileSync(join(webRoot, "src", "features", "dock", "FloatingDesktopDock.tsx"), "utf8") +
+      "\n" +
+      readFileSync(join(webRoot, "src", "features", "dock", "useFloatingDockController.ts"), "utf8") +
+      "\n" +
+      readFileSync(join(webRoot, "src", "features", "dock", "FloatingDesktopDockView.tsx"), "utf8");
     assert.match(dockSrc, /license:updated/);
     assert.match(dockSrc, /servers:updated/);
     assert.match(dockSrc, /onConnectionChange/);
@@ -202,7 +204,15 @@ describe("Fase 23 — UI, Multi-Server, Dock, Identidade Própria, Pastas Autori
     assert.match(html, /role="tooltip"[^>]*>Estrategista Editorial<\/span>/);
     assert.match(html, /Equipes/);
 
-    const sidebarSrc = readFileSync(join(webRoot, "src", "components", "Sidebar.tsx"), "utf8");
+    const sidebarSrc = [
+      join(webRoot, "src", "components", "Sidebar.tsx"),
+      join(webRoot, "src", "components", "sidebar", "SidebarAgentContextMenu.tsx"),
+      join(webRoot, "src", "components", "sidebar", "SidebarAgentItems.tsx"),
+      join(webRoot, "src", "components", "sidebar", "SidebarChannelsAndSections.tsx"),
+      join(webRoot, "src", "components", "sidebar", "SidebarModals.tsx"),
+    ]
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
     assert.doesNotMatch(sidebarSrc, /window\.confirm/);
     assert.match(sidebarSrc, /Excluir agente/);
     assert.match(sidebarSrc, /Nova equipe/);

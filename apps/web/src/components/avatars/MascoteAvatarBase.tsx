@@ -609,7 +609,7 @@ export interface ChannelMascoteClusterProps {
 }
 
 /**
- * Cluster horizontal sobreposto de avatares para Canais em Equipe (estilo OpenBot).
+ * Cluster horizontal sobreposto de avatares para Canais em Equipe.
  */
 export const ChannelMascoteCluster: React.FC<ChannelMascoteClusterProps> = ({
   members,

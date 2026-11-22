@@ -388,14 +388,14 @@ describe("Fase 22 — Schemas MCP, Wakeups Reais, Resolução @Apelido, Lazy Loa
       join(repoRoot, "apps/daemon/src/providers/opencode-live-service.ts"),
       "utf8",
     );
-    const cliOAuthSrc = readFileSync(
-      join(repoRoot, "apps/daemon/src/providers/cli-oauth-accounts-service.ts"),
-      "utf8",
-    );
-    const acpSrc = readFileSync(
-      join(repoRoot, "apps/daemon/src/providers/antigravity-acp-service.ts"),
-      "utf8",
-    );
+    const cliOAuthSrc =
+      readFileSync(join(repoRoot, "apps/daemon/src/providers/cli-oauth-accounts-service.ts"), "utf8") +
+      "\n" +
+      readFileSync(join(repoRoot, "apps/daemon/src/providers/cli-oauth/cli-turn-executor.ts"), "utf8");
+    const acpSrc =
+      readFileSync(join(repoRoot, "apps/daemon/src/providers/antigravity-acp-service.ts"), "utf8") +
+      "\n" +
+      readFileSync(join(repoRoot, "apps/daemon/src/providers/antigravity-acp-connection.ts"), "utf8");
 
     assert.equal(openCodeSrc.includes('["acp", "--pure"]'), false);
     assert.match(openCodeSrc, /spawnProviderProcess\(executable,\s*\["acp"\]/);

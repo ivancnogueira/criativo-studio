@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   WORKFLOW_PORTS,
   normalizeNodeKind,
@@ -6,7 +6,6 @@ import {
   type ArquivoStudio,
   type CanalEquipe,
   type ProvedorStatusInfo,
-  type ProviderName,
   type WorkflowBranch,
   type WorkflowNo,
   type WorkflowOutputTarget,
@@ -16,248 +15,31 @@ import {
   type WorkflowTriggerState,
 } from "@criativo/contracts";
 import {
-  Bot,
-  Check,
-  CheckCircle2,
-  ChevronDown,
   Copy,
-  FileText,
-  Film,
-  GitBranch,
-  Image as ImageIcon,
   Lock,
   Play,
   RotateCcw,
-  Send,
-  Settings2,
   SkipForward,
-  Sparkles,
   StickyNote,
   Trash2,
-  Type,
   Unlock,
-  Upload,
-  Zap,
 } from "lucide-react";
-import {
-  MascoteAvatar,
-  resolveAgentAvatarConfig,
-} from "../../components/MascoteAvatar";
-import { ProviderLogo } from "../../components/ProviderLogo";
 import {
   WORKFLOW_PORT_META,
   WORKFLOW_STATUS_META,
   getWorkflowNodeWidth,
   type WorkflowNodeRunView,
 } from "./workflow-canvas-helpers";
-
-interface PopoverOption<T extends string> {
-  value: T;
-  label: string;
-  subtitle?: string;
-}
-
-interface CarbonMenuPickerProps<T extends string> {
-  value: T;
-  options: Array<PopoverOption<T>>;
-  onChange: (next: T) => void;
-  disabled?: boolean;
-  ariaLabel: string;
-  renderTrigger?: (selected: PopoverOption<T> | undefined) => React.ReactNode;
-}
-
-function CarbonMenuPicker<T extends string>({
-  value,
-  options,
-  onChange,
-  disabled = false,
-  ariaLabel,
-  renderTrigger,
-}: CarbonMenuPickerProps<T>) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const selected = options.find((o) => o.value === value) ?? options[0];
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    const onDocDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("mousedown", onDocDown);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("mousedown", onDocDown);
-    };
-  }, [open]);
-
-  return (
-    <div ref={rootRef} className="relative" onPointerDown={(e) => e.stopPropagation()}>
-      <button
-        type="button"
-        disabled={disabled}
-        aria-label={ariaLabel}
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        onClick={() => !disabled && setOpen((v) => !v)}
-        className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/[0.12] bg-[#242424] px-2 py-1 text-left text-[12px] font-normal text-[#DCDCDC] hover:bg-[#2A2A2A] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
-      >
-        <span className="truncate">
-          {renderTrigger ? renderTrigger(selected) : (selected?.label ?? String(value))}
-        </span>
-        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#979797]" />
-      </button>
-
-      {open && (
-        <div
-          role="listbox"
-          aria-label={ariaLabel}
-          className="absolute left-0 top-full z-50 mt-1 max-h-60 w-full min-w-[210px] overflow-y-auto rounded-xl border border-white/[0.12] bg-[#212121] p-1 shadow-2xl"
-        >
-          {options.map((opt) => {
-            const active = opt.value === value;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                role="option"
-                aria-selected={active}
-                onClick={() => {
-                  onChange(opt.value);
-                  setOpen(false);
-                }}
-                className={`flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1 text-left text-[12px] ${
-                  active
-                    ? "bg-[#2A2A2A] font-semibold text-white"
-                    : "font-normal text-[#DCDCDC] hover:bg-[#2A2A2A]/70"
-                }`}
-              >
-                <span className="min-w-0 truncate">
-                  <span className="block truncate">{opt.label}</span>
-                  {opt.subtitle && (
-                    <span className="block truncate text-[12px] text-[#979797]">
-                      {opt.subtitle}
-                    </span>
-                  )}
-                </span>
-                {active && <Check className="h-3.5 w-3.5 shrink-0 text-[#42A0FF]" />}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-const TRIGGER_KIND_OPTIONS: Array<PopoverOption<WorkflowTriggerKind>> = [
-  { value: "schedule", label: "Agendado", subtitle: "Frequência IANA" },
-  { value: "manual", label: "Manual", subtitle: "Disparo sob demanda" },
-  { value: "webhook", label: "Webhook HTTP", subtitle: "Assinado por HMAC-SHA256" },
-  { value: "whatsapp", label: "WhatsApp", subtitle: "Mensagem recebida" },
-  { value: "telegram", label: "Telegram", subtitle: "Bot / comando" },
-  { value: "conector", label: "Conector externo", subtitle: "Eventos integrados" },
-];
-
-const OUTPUT_TARGET_OPTIONS: Array<PopoverOption<WorkflowOutputTarget>> = [
-  { value: "canal", label: "Canal em Equipe" },
-  { value: "whatsapp", label: "WhatsApp" },
-  { value: "telegram", label: "Telegram" },
-  { value: "slack", label: "Slack" },
-  { value: "discord", label: "Discord" },
-  { value: "github", label: "GitHub" },
-  { value: "arquivo", label: "Arquivo no Workspace" },
-  { value: "instagram", label: "Instagram Meta" },
-  { value: "notificacao", label: "Notificação Cockpit" },
-];
-
-const EFFORT_OPTIONS: Array<PopoverOption<"baixo" | "medio" | "alto">> = [
-  { value: "baixo", label: "Baixo" },
-  { value: "medio", label: "Médio" },
-  { value: "alto", label: "Alto" },
-];
-
-const SHAPE_OPTIONS: Array<PopoverOption<WorkflowShapeKind>> = [
-  { value: "rectangle", label: "Retângulo" },
-  { value: "circle", label: "Círculo" },
-  { value: "diamond", label: "Losango" },
-  { value: "triangle", label: "Triângulo" },
-  { value: "inverted", label: "Triângulo invertido" },
-  { value: "oval", label: "Oval" },
-  { value: "star", label: "Estrela" },
-];
-
-const NOTE_PALETTE = [
-  { id: "amber", bg: "bg-[#2A2418] border-[#FF9412]/30 text-[#FDE68A]" },
-  { id: "emerald", bg: "bg-[#192822] border-[#31CF76]/30 text-[#BBF7D0]" },
-  { id: "blue", bg: "bg-[#19222E] border-[#42A0FF]/30 text-[#BFDBFE]" },
-  { id: "neutral", bg: "bg-[#242424] border-white/[0.12] text-[#DCDCDC]" },
-];
-
-function renderShapeSvg(shape: WorkflowShapeKind, color: string) {
-  switch (shape) {
-    case "circle":
-      return <circle cx="50" cy="50" r="42" fill={color} fillOpacity={0.22} stroke={color} strokeWidth="3" />;
-    case "diamond":
-      return <polygon points="50,6 94,50 50,94 6,50" fill={color} fillOpacity={0.22} stroke={color} strokeWidth="3" />;
-    case "triangle":
-      return <polygon points="50,8 92,88 8,88" fill={color} fillOpacity={0.22} stroke={color} strokeWidth="3" />;
-    case "inverted":
-      return <polygon points="8,12 92,12 50,92" fill={color} fillOpacity={0.22} stroke={color} strokeWidth="3" />;
-    case "oval":
-      return <ellipse cx="50" cy="50" rx="44" ry="28" fill={color} fillOpacity={0.22} stroke={color} strokeWidth="3" />;
-    case "star":
-      return (
-        <polygon
-          points="50,6 62,36 94,38 69,58 77,90 50,72 23,90 31,58 6,38 38,36"
-          fill={color}
-          fillOpacity={0.22}
-          stroke={color}
-          strokeWidth="3"
-        />
-      );
-    case "rectangle":
-    default:
-      return <rect x="8" y="14" width="84" height="72" rx="10" fill={color} fillOpacity={0.22} stroke={color} strokeWidth="3" />;
-  }
-}
-
-function NodeHeaderIcon({ tipo }: { tipo: WorkflowNo["tipo"] }) {
-  const kind = normalizeNodeKind(tipo);
-  switch (kind) {
-    case "gatilho":
-      return <Zap className="h-4 w-4 text-[#FF9412]" />;
-    case "prompt":
-      return <FileText className="h-4 w-4 text-[#DCDCDC]" />;
-    case "asset":
-      return <ImageIcon className="h-4 w-4 text-[#42A0FF]" />;
-    case "llm":
-      return <Sparkles className="h-4 w-4 text-[#42A0FF]" />;
-    case "agente":
-      return <Bot className="h-4 w-4 text-[#31CF76]" />;
-    case "gerar_imagem":
-      return <ImageIcon className="h-4 w-4 text-[#42A0FF]" />;
-    case "render_video":
-      return <Film className="h-4 w-4 text-[#FF9412]" />;
-    case "condition":
-      return <GitBranch className="h-4 w-4 text-[#31CF76]" />;
-    case "approval":
-      return <CheckCircle2 className="h-4 w-4 text-[#FF9412]" />;
-    case "output":
-      return <Send className="h-4 w-4 text-[#31CF76]" />;
-    case "nota":
-      return <StickyNote className="h-4 w-4 text-[#FF9412]" />;
-    case "text":
-      return <Type className="h-4 w-4 text-[#DCDCDC]" />;
-    default:
-      return <Sparkles className="h-4 w-4 text-[#DCDCDC]" />;
-  }
-}
+import {
+  CarbonMenuPicker,
+  NOTE_PALETTE,
+  NodeHeaderIcon,
+  SHAPE_OPTIONS,
+  renderShapeSvg,
+  type PopoverOption,
+} from "./workflow-node-helpers";
+import { WorkflowNodeBasicFields } from "./WorkflowNodeBasicFields";
+import { WorkflowNodeActionFields } from "./WorkflowNodeActionFields";
 
 export interface WorkflowNodeCardProps {
   node: WorkflowNo;
@@ -667,578 +449,93 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
       </div>
 
       {/* Corpo especializado por tipo de nó */}
-      {kind === "gatilho" && (
-        <div className="space-y-2" onPointerDown={(e) => e.stopPropagation()}>
-          <CarbonMenuPicker
-            value={triggerKind}
-            disabled={readOnly}
-            options={TRIGGER_KIND_OPTIONS}
-            ariaLabel="Selecionar tipo de gatilho"
-            onChange={(nextKind) =>
-              onPatchNode(node.id, {
-                triggerKind: nextKind,
-                config: { ...cfg, triggerKind: nextKind },
-              })
-            }
-          />
-          {triggerState?.proxima_execucao_em && triggerKind === "schedule" && (
-            <p className="text-[12px] text-[#979797]">
-              Próxima:{" "}
-              <span className="text-[#DCDCDC]">
-                {new Date(triggerState.proxima_execucao_em).toLocaleString("pt-BR")}
-              </span>
-            </p>
-          )}
-          {triggerKind === "webhook" && triggerState?.webhook_url && (
-            <p className="truncate rounded-lg bg-[#242424] px-2 py-1 font-mono text-[12px] text-[#DCDCDC]">
-              {triggerState.webhook_url}
-            </p>
-          )}
-          <div className="flex items-center gap-2 pt-1">
-            {onOpenTriggerModal && !readOnly && (
-              <button
-                type="button"
-                onClick={() => onOpenTriggerModal(node)}
-                className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-white/[0.12] bg-[#242424] px-2 py-1 text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#2A2A2A]"
-              >
-                <Settings2 className="h-3.5 w-3.5" />
-                <span>Configurar gatilho</span>
-              </button>
-            )}
-            {onExecuteStep && !readOnly && (
-              <button
-                type="button"
-                onClick={() => onExecuteStep(node.id)}
-                className="flex items-center gap-1 rounded-lg bg-[#F0F0F0] px-2 py-1 text-[12px] font-semibold text-[#141414] hover:bg-white"
-              >
-                <Play className="h-3 w-3" />
-                <span>Executar etapa</span>
-              </button>
-            )}
-          </div>
-        </div>
-      )}
 
-      {kind === "prompt" && (
-        <div className="space-y-2" onPointerDown={(e) => e.stopPropagation()}>
-          <textarea
-            readOnly={readOnly}
-            rows={4}
-            value={node.prompt ?? (typeof cfg.prompt === "string" ? cfg.prompt : "")}
-            onChange={(e) =>
-              onPatchNode(node.id, {
-                prompt: e.target.value,
-                config: { ...cfg, prompt: e.target.value },
-              })
-            }
-            placeholder="Escreva o texto ou use {{input}} e [NOME_DA_MARCA]"
-            className="w-full resize-none rounded-lg border border-white/[0.06] bg-[#242424] p-2 text-[14px] font-normal text-[#DCDCDC] placeholder:text-[#6A6A6A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
-          />
-          <div className="flex justify-end">
-            <button
-              type="button"
-              onClick={() => {
-                const txt = node.prompt ?? (typeof cfg.prompt === "string" ? cfg.prompt : "");
-                if (typeof navigator !== "undefined" && navigator.clipboard) {
-                  void navigator.clipboard.writeText(txt);
-                }
-                setCopiedNotice(true);
-                setTimeout(() => setCopiedNotice(false), 1500);
-              }}
-              className="flex items-center gap-1 rounded-lg bg-[#242424] px-2 py-1 text-[12px] text-[#DCDCDC] hover:bg-[#2A2A2A]"
-            >
-              <Copy className="h-3 w-3" />
-              <span>{copiedNotice ? "Conteúdo copiado" : "Copiar conteúdo"}</span>
-            </button>
-          </div>
-        </div>
-      )}
+      <WorkflowNodeBasicFields
+        props={{
+          node,
+          selected,
+          readOnly,
+          agentes,
+          canais,
+          arquivos,
+          provedores,
+          nodeRunView,
+          triggerState,
+          connectingFrom,
+          onPointerDownNode,
+          onSelectNode,
+          onPatchNode,
+          onDeleteNode,
+          onDuplicateNode,
+          onToggleLockNode,
+          onStartConnect,
+          onFinishConnect,
+          onExecuteStep,
+          onStartFromNode,
+          onRetryStep,
+          onDecideStep,
+          onOpenTriggerModal,
+          onUploadFile,
+        }}
+        kind={kind}
+        cfg={cfg}
+        triggerKind={triggerKind}
+        modelOptions={modelOptions}
+        selectedAsset={selectedAsset}
+        filteredAssets={filteredAssets}
+        assetMenuOpen={assetMenuOpen}
+        setAssetMenuOpen={setAssetMenuOpen}
+        assetTab={assetTab}
+        setAssetTab={setAssetTab}
+        assetSearch={assetSearch}
+        setAssetSearch={setAssetSearch}
+        copiedNotice={copiedNotice}
+        setCopiedNotice={setCopiedNotice}
+        fileInputRef={fileInputRef}
+        systemPromptOpen={systemPromptOpen}
+        setSystemPromptOpen={setSystemPromptOpen}
+      />
 
-      {kind === "asset" && (
-        <div className="space-y-2" onPointerDown={(e) => e.stopPropagation()}>
-          <input
-            ref={fileInputRef}
-            type="file"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f && onUploadFile) void onUploadFile(f);
-              e.target.value = "";
-            }}
-          />
-          {selectedAsset ? (
-            <div className="overflow-hidden rounded-lg border border-white/[0.06] bg-[#242424]">
-              {selectedAsset.mime_type.startsWith("image/") ? (
-                <img
-                  src={selectedAsset.url}
-                  alt={selectedAsset.nome_original}
-                  className="aspect-[4/3] w-full object-cover"
-                />
-              ) : (
-                <div className="flex items-center gap-2 p-2 text-[12px] text-[#DCDCDC]">
-                  <FileText className="h-4 w-4 text-[#31CF76]" />
-                  <span className="truncate">{selectedAsset.nome_original}</span>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="flex aspect-[4/3] items-center justify-center rounded-lg border border-dashed border-white/[0.12] bg-[#242424] p-2 text-center text-[12px] text-[#979797]">
-              Nenhum arquivo selecionado
-            </div>
-          )}
-
-          {!readOnly && (
-            <div className="relative flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setAssetMenuOpen((v) => !v)}
-                className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-[#242424] px-2 py-1 text-[12px] font-semibold text-[#DCDCDC] hover:bg-[#2A2A2A]"
-              >
-                <ImageIcon className="h-3.5 w-3.5 text-[#42A0FF]" />
-                <span>Selecionar arquivo</span>
-              </button>
-              {onUploadFile && (
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="flex items-center gap-1 rounded-lg bg-[#242424] px-2 py-1 text-[12px] text-[#DCDCDC] hover:bg-[#2A2A2A]"
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  <span>Carregar arquivo</span>
-                </button>
-              )}
-
-              {assetMenuOpen && (
-                <div className="absolute left-0 top-full z-50 mt-1 w-72 rounded-xl border border-white/[0.12] bg-[#212121] p-2 shadow-2xl">
-                  <input
-                    type="text"
-                    value={assetSearch}
-                    onChange={(e) => setAssetSearch(e.target.value)}
-                    placeholder="Buscar na biblioteca..."
-                    className="mb-2 w-full rounded-lg border border-white/[0.06] bg-[#242424] px-2 py-1 text-[12px] text-white placeholder:text-[#6A6A6A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
-                  />
-                  <div className="mb-2 flex gap-1">
-                    {(["recentes", "imagens", "arquivos"] as const).map((tab) => (
-                      <button
-                        key={tab}
-                        type="button"
-                        onClick={() => setAssetTab(tab)}
-                        className={`flex-1 rounded-lg px-2 py-1 text-[12px] font-semibold ${
-                          assetTab === tab
-                            ? "border border-[#007CF7] bg-[#007CF7]/15 text-[#42A0FF]"
-                            : "bg-[#242424] text-[#979797]"
-                        }`}
-                      >
-                        {tab === "recentes" ? "Recentes" : tab === "imagens" ? "Imagens" : "Arquivos"}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="grid max-h-44 grid-cols-3 gap-1 overflow-y-auto">
-                    {filteredAssets.slice(0, 12).map((item) => (
-                      <button
-                        key={item.arquivo_id}
-                        type="button"
-                        onClick={() => {
-                          onPatchNode(node.id, {
-                            fileId: item.arquivo_id,
-                            config: { ...cfg, fileId: item.arquivo_id },
-                          });
-                          setAssetMenuOpen(false);
-                        }}
-                        className="overflow-hidden rounded-lg border border-white/[0.06] bg-[#242424] p-1 text-left hover:border-[#007CF7]"
-                      >
-                        {item.mime_type.startsWith("image/") ? (
-                          <img src={item.url} alt={item.nome_original} className="h-12 w-full rounded object-cover" />
-                        ) : (
-                          <div className="flex h-12 items-center justify-center">
-                            <FileText className="h-4 w-4 text-[#31CF76]" />
-                          </div>
-                        )}
-                        <span className="mt-1 block truncate text-[12px] text-[#DCDCDC]">
-                          {item.nome_original}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {kind === "llm" && (
-        <div className="space-y-2" onPointerDown={(e) => e.stopPropagation()}>
-          <textarea
-            readOnly={readOnly}
-            rows={3}
-            value={node.prompt ?? (typeof cfg.prompt === "string" ? cfg.prompt : "")}
-            onChange={(e) =>
-              onPatchNode(node.id, {
-                prompt: e.target.value,
-                config: { ...cfg, prompt: e.target.value },
-              })
-            }
-            placeholder="Instrução da etapa (recebe automaticamente entradas conectadas)..."
-            className="w-full resize-none rounded-lg border border-white/[0.06] bg-[#242424] p-2 text-[14px] text-[#DCDCDC] placeholder:text-[#6A6A6A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
-          />
-          <button
-            type="button"
-            onClick={() => setSystemPromptOpen((v) => !v)}
-            className="text-[12px] text-[#42A0FF] hover:underline"
-          >
-            {systemPromptOpen ? "Ocultar instruções de sistema" : "Definir instruções de sistema"}
-          </button>
-          {systemPromptOpen && (
-            <textarea
-              readOnly={readOnly}
-              rows={2}
-              value={node.systemPrompt ?? (typeof cfg.systemPrompt === "string" ? cfg.systemPrompt : "")}
-              onChange={(e) =>
-                onPatchNode(node.id, {
-                  systemPrompt: e.target.value,
-                  config: { ...cfg, systemPrompt: e.target.value },
-                })
-              }
-              placeholder="System prompt opcional..."
-              className="w-full resize-none rounded-lg border border-white/[0.06] bg-[#101010] p-2 text-[12px] text-[#DCDCDC] placeholder:text-[#6A6A6A]"
-            />
-          )}
-          <div className="grid grid-cols-3 gap-2">
-            <div className="col-span-2">
-              <CarbonMenuPicker
-                value={node.model ?? ""}
-                disabled={readOnly}
-                options={modelOptions}
-                ariaLabel="Selecionar modelo de IA"
-                onChange={(m) =>
-                  onPatchNode(node.id, { model: m || undefined, config: { ...cfg, model: m } })
-                }
-                renderTrigger={(sel) => (
-                  <span className="flex items-center gap-1.5">
-                    <ProviderLogo provider={(sel?.subtitle as ProviderName) ?? "gemini"} size={14} />
-                    <span className="truncate">{sel?.label ?? "Modelo"}</span>
-                  </span>
-                )}
-              />
-            </div>
-            <CarbonMenuPicker
-              value={(node.effort === "baixo" || node.effort === "alto" ? node.effort : "medio") as "baixo" | "medio" | "alto"}
-              disabled={readOnly}
-              options={EFFORT_OPTIONS}
-              ariaLabel="Selecionar nível de esforço"
-              onChange={(eff) =>
-                onPatchNode(node.id, { effort: eff, config: { ...cfg, effort: eff } })
-              }
-            />
-          </div>
-        </div>
-      )}
-
-      {kind === "agente" && (
-        <div className="space-y-2" onPointerDown={(e) => e.stopPropagation()}>
-          <div className="relative">
-            <button
-              type="button"
-              disabled={readOnly}
-              aria-expanded={agentMenuOpen}
-              aria-haspopup="listbox"
-              aria-label="Selecionar especialista do fluxo"
-              onClick={() => !readOnly && setAgentMenuOpen((v) => !v)}
-              className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/[0.12] bg-[#242424] px-2 py-1 text-left text-[12px] font-semibold text-white hover:bg-[#2A2A2A]"
-            >
-              <span className="flex min-w-0 items-center gap-2">
-                <MascoteAvatar
-                  avatar={resolveAgentAvatarConfig(chosenAgent, chosenAgentId)}
-                  agentKey={chosenAgentId}
-                  size={20}
-                />
-                <span className="truncate">{chosenAgent?.nome ?? chosenAgentId}</span>
-              </span>
-              <ChevronDown className="h-3.5 w-3.5 text-[#979797]" />
-            </button>
-            {agentMenuOpen && (
-              <div
-                role="listbox"
-                className="absolute left-0 top-full z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-white/[0.12] bg-[#212121] p-1 shadow-2xl"
-              >
-                {agentes.map((ag) => {
-                  return (
-                    <button
-                      key={ag.agente_id}
-                      type="button"
-                      role="option"
-                      aria-selected={ag.agente_id === chosenAgentId}
-                      onClick={() => {
-                        onPatchNode(node.id, {
-                          agenteId: ag.agente_id,
-                          config: { ...cfg, agenteId: ag.agente_id },
-                        });
-                        setAgentMenuOpen(false);
-                      }}
-                      className="flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-[12px] text-[#DCDCDC] hover:bg-[#2A2A2A]"
-                    >
-                      <MascoteAvatar
-                        avatar={resolveAgentAvatarConfig(ag)}
-                        agentKey={ag.agente_id}
-                        size={18}
-                      />
-                      <span className="truncate">{ag.nome}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-          <textarea
-            readOnly={readOnly}
-            rows={2}
-            value={node.prompt ?? (typeof cfg.prompt === "string" ? cfg.prompt : "")}
-            onChange={(e) =>
-              onPatchNode(node.id, {
-                prompt: e.target.value,
-                config: { ...cfg, prompt: e.target.value },
-              })
-            }
-            placeholder="Briefing ou tarefa do especialista..."
-            className="w-full resize-none rounded-lg border border-white/[0.06] bg-[#242424] p-2 text-[14px] text-[#DCDCDC] placeholder:text-[#6A6A6A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
-          />
-        </div>
-      )}
-
-      {(kind === "gerar_imagem" || kind === "render_video") && (
-        <div className="space-y-2" onPointerDown={(e) => e.stopPropagation()}>
-          <textarea
-            readOnly={readOnly}
-            rows={2}
-            value={node.prompt ?? (typeof cfg.prompt === "string" ? cfg.prompt : "")}
-            onChange={(e) =>
-              onPatchNode(node.id, {
-                prompt: e.target.value,
-                config: { ...cfg, prompt: e.target.value },
-              })
-            }
-            placeholder={
-              kind === "gerar_imagem"
-                ? "Direção visual / composição para gerar imagem..."
-                : "Instrução / estilo do vídeo Reels MP4..."
-            }
-            className="w-full resize-none rounded-lg border border-white/[0.06] bg-[#242424] p-2 text-[14px] text-[#DCDCDC] placeholder:text-[#6A6A6A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
-          />
-          {nodeRunView?.artifacts[0] && (
-            <div className="overflow-hidden rounded-lg border border-white/[0.06] bg-[#101010] p-1">
-              {kind === "gerar_imagem" ? (
-                <img
-                  src={`/api/arquivos/raw?path=${encodeURIComponent(nodeRunView.artifacts[0])}`}
-                  alt="Arte gerada"
-                  className="max-h-28 w-full rounded object-cover"
-                />
-              ) : (
-                <p className="truncate font-mono text-[12px] text-[#31CF76]">
-                  {nodeRunView.artifacts[0]}
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {kind === "condition" && (
-        <div className="space-y-2" onPointerDown={(e) => e.stopPropagation()}>
-          <textarea
-            readOnly={readOnly}
-            rows={2}
-            value={node.rule ?? (typeof cfg.rule === "string" ? cfg.rule : "")}
-            onChange={(e) =>
-              onPatchNode(node.id, {
-                rule: e.target.value,
-                config: { ...cfg, rule: e.target.value },
-              })
-            }
-            placeholder="Ex.: A legenda tem menos de 2200 caracteres e inclui CTA?"
-            className="w-full resize-none rounded-lg border border-white/[0.06] bg-[#242424] p-2 text-[14px] text-[#DCDCDC] placeholder:text-[#6A6A6A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
-          />
-          <CarbonMenuPicker
-            value={node.model ?? ""}
-            disabled={readOnly}
-            options={modelOptions}
-            ariaLabel="Selecionar modelo da condição"
-            onChange={(m) =>
-              onPatchNode(node.id, { model: m || undefined, config: { ...cfg, model: m } })
-            }
-          />
-          {/* Duas linhas dedicadas de saída Sim / Não à direita */}
-          <div className="space-y-1 pt-1">
-            {(["yes", "no"] as const).map((branchVal) => {
-              const isYes = branchVal === "yes";
-              const chosen = nodeRunView?.branch === branchVal;
-              return (
-                <div
-                  key={branchVal}
-                  className={`relative flex items-center justify-between rounded-lg border px-2 py-1 text-[12px] ${
-                    chosen
-                      ? isYes
-                        ? "border-[#31CF76]/50 bg-[#31CF76]/15 font-semibold text-[#31CF76]"
-                        : "border-[#FD2F3B]/50 bg-[#FD2F3B]/15 font-semibold text-[#FD2F3B]"
-                      : "border-white/[0.06] bg-[#242424] text-[#DCDCDC]"
-                  }`}
-                >
-                  <span className="flex items-center gap-1">
-                    {chosen && <Check className="h-3 w-3" />}
-                    <span>{isYes ? "Sim" : "Não"}</span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (!readOnly) onStartConnect(node.id, branchVal, "text");
-                    }}
-                    title={`Saída ${isYes ? "Sim" : "Não"} (Texto)`}
-                    aria-label={`Conectar saída ${isYes ? "Sim" : "Não"} de ${node.titulo}`}
-                    className={`-mr-4 flex h-4 w-4 items-center justify-center rounded-full border bg-[#141414] ${
-                      connectingFrom?.nodeId === node.id && connectingFrom?.branch === branchVal
-                        ? "border-[#007CF7] ring-2 ring-[#007CF7]"
-                        : isYes
-                          ? "border-[#31CF76]"
-                          : "border-[#FD2F3B]"
-                    }`}
-                  >
-                    <span
-                      className="h-2 w-2 rounded-full"
-                      style={{ backgroundColor: isYes ? "#31CF76" : "#FD2F3B" }}
-                    />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {kind === "approval" && (
-        <div className="space-y-2" onPointerDown={(e) => e.stopPropagation()}>
-          <textarea
-            readOnly={readOnly}
-            rows={2}
-            value={node.question ?? (typeof cfg.question === "string" ? cfg.question : "")}
-            onChange={(e) =>
-              onPatchNode(node.id, {
-                question: e.target.value,
-                config: { ...cfg, question: e.target.value },
-              })
-            }
-            placeholder="Revisar criativo antes da publicação oficial?"
-            className="w-full resize-none rounded-lg border border-white/[0.06] bg-[#242424] p-2 text-[14px] text-[#DCDCDC] placeholder:text-[#6A6A6A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
-          />
-          {isApprovalPaused && nodeRunView && onDecideStep && (
-            <div className="space-y-2 rounded-lg border border-[#FF9412]/50 bg-[#FF9412]/10 p-2">
-              <p className="text-[12px] font-semibold text-[#FF9412]">
-                Aguardando decisão humana
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => onDecideStep(nodeRunView.stepId, true)}
-                  className="flex-1 rounded-lg bg-[#F0F0F0] px-2 py-1 text-[12px] font-semibold text-[#141414] hover:bg-white"
-                >
-                  Aprovar etapa
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onDecideStep(nodeRunView.stepId, false)}
-                  className="flex-1 rounded-lg bg-[#2A2A2A] px-2 py-1 text-[12px] font-semibold text-white hover:bg-[#FD2F3B]/30"
-                >
-                  Rejeitar etapa
-                </button>
-              </div>
-            </div>
-          )}
-          {nodeRunView?.status === "done" && nodeRunView.encerradoEm && (
-            <p className="text-[12px] font-semibold text-[#31CF76]">
-              Aprovado às{" "}
-              {new Date(nodeRunView.encerradoEm).toLocaleTimeString("pt-BR", {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
-            </p>
-          )}
-          {nodeRunView?.status === "stopped" && (
-            <p className="text-[12px] font-semibold text-[#FD2F3B]">Rejeitado</p>
-          )}
-        </div>
-      )}
-
-      {kind === "output" && (
-        <div className="space-y-2" onPointerDown={(e) => e.stopPropagation()}>
-          <CarbonMenuPicker
-            value={outputTarget}
-            disabled={readOnly}
-            options={OUTPUT_TARGET_OPTIONS}
-            ariaLabel="Selecionar destino de saída"
-            onChange={(nextTarget) =>
-              onPatchNode(node.id, {
-                target: nextTarget,
-                config: { ...cfg, target: nextTarget },
-              })
-            }
-          />
-          {outputTarget === "canal" && (
-            <CarbonMenuPicker
-              value={outputTargetRef || (canais[0]?.canal_id ?? "")}
-              disabled={readOnly}
-              options={
-                canais.length > 0
-                  ? canais.map((c) => ({ value: c.canal_id, label: c.nome }))
-                  : [{ value: "canal-geral", label: "Canal Geral" }]
-              }
-              ariaLabel="Selecionar canal de destino"
-              onChange={(refVal) =>
-                onPatchNode(node.id, {
-                  targetRef: refVal,
-                  config: { ...cfg, targetRef: refVal },
-                })
-              }
-            />
-          )}
-          {(outputTarget === "whatsapp" ||
-            outputTarget === "telegram" ||
-            outputTarget === "slack" ||
-            outputTarget === "discord" ||
-            outputTarget === "github" ||
-            outputTarget === "arquivo") && (
-            <input
-              type="text"
-              readOnly={readOnly}
-              value={outputTargetRef}
-              onChange={(e) =>
-                onPatchNode(node.id, {
-                  targetRef: e.target.value,
-                  config: { ...cfg, targetRef: e.target.value },
-                })
-              }
-              placeholder={
-                outputTarget === "whatsapp"
-                  ? "Número ou JID de destino..."
-                  : outputTarget === "telegram"
-                    ? "Chat ID Telegram (ou padrão do Cofre)"
-                    : outputTarget === "slack"
-                      ? "#canal ou Channel ID no Slack..."
-                      : outputTarget === "discord"
-                        ? "Channel ID ou Webhook Discord..."
-                        : outputTarget === "github"
-                          ? "owner/repositorio (ex: org/repo)..."
-                          : "Nome em saidas/workflows/..."
-              }
-              className="w-full rounded-lg border border-white/[0.06] bg-[#242424] px-2 py-1 text-[12px] text-[#DCDCDC] placeholder:text-[#6A6A6A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
-            />
-          )}
-          {outputTarget === "instagram" && (
-            <p className="rounded-lg border border-[#FF9412]/30 bg-[#FF9412]/10 p-2 text-[12px] text-[#FF9412]">
-              Exige nó de aprovação humana aprovado a montante antes de publicar na Meta API.
-            </p>
-          )}
-        </div>
-      )}
+      <WorkflowNodeActionFields
+        props={{
+          node,
+          selected,
+          readOnly,
+          agentes,
+          canais,
+          arquivos,
+          provedores,
+          nodeRunView,
+          triggerState,
+          connectingFrom,
+          onPointerDownNode,
+          onSelectNode,
+          onPatchNode,
+          onDeleteNode,
+          onDuplicateNode,
+          onToggleLockNode,
+          onStartConnect,
+          onFinishConnect,
+          onExecuteStep,
+          onStartFromNode,
+          onRetryStep,
+          onDecideStep,
+          onOpenTriggerModal,
+          onUploadFile,
+        }}
+        kind={kind}
+        cfg={cfg}
+        modelOptions={modelOptions}
+        chosenAgentId={chosenAgentId}
+        chosenAgent={chosenAgent}
+        isApprovalPaused={isApprovalPaused}
+        agentMenuOpen={agentMenuOpen}
+        setAgentMenuOpen={setAgentMenuOpen}
+        systemPromptOpen={systemPromptOpen}
+        setSystemPromptOpen={setSystemPromptOpen}
+        outputTarget={outputTarget}
+        outputTargetRef={outputTargetRef}
+      />
 
       {/* Resumo compacto da última execução do nó (para llm/agente/prompt/output/etc) */}
       {nodeRunView && (nodeRunView.output || nodeRunView.erro) && (

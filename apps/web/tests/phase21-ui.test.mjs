@@ -53,10 +53,9 @@ describe("Fase 21 — UI, Prévia Borrada, Avatares Sincronizados, Fotos Reais, 
       );
     }
 
-    const wppModal = readFileSync(
-      join(srcRoot, "features", "whatsapp", "WhatsAppPairingModal.tsx"),
-      "utf8"
-    );
+    const wppModal = collectFilesRecursive(join(srcRoot, "features", "whatsapp"))
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
     assert.match(wppModal, /Conversa Interna \(Comigo mesmo\)/);
   });
 
@@ -111,10 +110,9 @@ describe("Fase 21 — UI, Prévia Borrada, Avatares Sincronizados, Fotos Reais, 
     );
     assert.match(sidebarHtml, /mascote-working/);
 
-    const chatSource = readFileSync(
-      join(webRoot, "src", "features", "chat", "AgentConversationView.tsx"),
-      "utf8"
-    );
+    const chatSource = collectFilesRecursive(join(webRoot, "src", "features", "chat"))
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
     assert.match(chatSource, /size=\{36\}/);
     assert.match(chatSource, /size=\{38\}/);
     assert.match(chatSource, /size=\{44\}/);
@@ -186,15 +184,16 @@ describe("Fase 21 — UI, Prévia Borrada, Avatares Sincronizados, Fotos Reais, 
   });
 
   it("3. (MEDIA21-01) Exclusão inline sem window.confirm e filtro 'Fotos reais' em FilesVaultPage e RightInspectorPanel", async () => {
-    const wsClientSrc = readFileSync(join(webRoot, "src", "services", "websocket-client.ts"), "utf8");
+    const wsClientSrc = collectFilesRecursive(join(webRoot, "src", "services"))
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
     assert.match(wsClientSrc, /async deleteFile\(/);
     assert.match(wsClientSrc, /async createEmptyTopic\(/);
 
     const vaultSrc = readFileSync(join(webRoot, "src", "features", "pages", "FilesVaultPage.tsx"), "utf8");
-    const inspectorSrc = readFileSync(
-      join(webRoot, "src", "features", "inspector", "RightInspectorPanel.tsx"),
-      "utf8"
-    );
+    const inspectorSrc = collectFilesRecursive(join(webRoot, "src", "features", "inspector"))
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
     assert.doesNotMatch(vaultSrc, /window\.confirm/);
     assert.doesNotMatch(inspectorSrc, /window\.confirm/);
 
@@ -335,7 +334,14 @@ describe("Fase 21 — UI, Prévia Borrada, Avatares Sincronizados, Fotos Reais, 
     assert.match(dockHtml, /Adicionar agentes ao dock/);
     assert.match(dockHtml, /mascote-working/);
 
-    const appSrc = readFileSync(join(webRoot, "src", "App.tsx"), "utf8");
+    const appSrc = [
+      join(webRoot, "src", "App.tsx"),
+      ...collectFilesRecursive(join(webRoot, "src", "components", "studio")),
+      ...collectFilesRecursive(join(webRoot, "src", "hooks")),
+      ...collectFilesRecursive(join(webRoot, "src", "utils")),
+    ]
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
     assert.match(appSrc, /data-testid="routines-right-panel"/);
     assert.match(appSrc, /overflow-y-auto px-5 py-5 pb-12/);
     assert.match(appSrc, /criativo\.agent_dock\.pinned/);
@@ -347,10 +353,12 @@ describe("Fase 21 — UI, Prévia Borrada, Avatares Sincronizados, Fotos Reais, 
     );
     assert.match(dockSrc, /criativo\.agent_dock\.pinned/);
 
-    const connectorsSrc = readFileSync(
+    const connectorsSrc = [
       join(webRoot, "src", "features", "pages", "ConnectorsPage.tsx"),
-      "utf8"
-    );
+      ...collectFilesRecursive(join(webRoot, "src", "features", "pages", "connectors")),
+    ]
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
     assert.match(connectorsSrc, /authError\.provedor === activeDetailProvider\.provedor/);
     assert.match(connectorsSrc, /onActiveProviderChange=\{\(prov\) => \{[\s\S]*setAuthError\(null\)/);
   });

@@ -61,3 +61,21 @@ Quando o usuário pedir para instalar, configurar ou fazer o setup inicial:
 
 - Os agentes do Cockpit colaboram em **Canais em Equipe** (encadeando contribuições de todos os membros na resposta) e em **Handoff 1:1** via `@agente_id` ou marcador `[HANDOFF:agente_id]` gerenciados pelo `HandoffBus`.
 - Nunca prometa ferramentas ou skills dos pacotes **`bonus`** ou **`video`** se `npm run diagnosticar` mostrar que o pacote correspondente ainda não foi instalado; caso o usuário queira ativá-los, oriente usar `npm run instalar-upgrade -- --pacote <bonus|video> --fonte <...>`.
+
+## Contratos de Arquitetura, Modularização e Qualidade
+
+Para manter a base de código sustentável durante refatorações e novas fases (`31`–`37`+):
+
+1. **Orçamento de Tamanho por Arquivo (`.ts` / `.tsx` / `.js` / `.mjs`):**
+   - **Alvo ideal:** até **`500` linhas** para novos arquivos e módulos extraídos.
+   - **Teto rígido (bloqueante):** **`750` linhas** para qualquer arquivo novo ou já modularizado. Arquivos legados registrados em `scripts/file-size-baseline.json` operam sob *ratchet* (nunca podem crescer; só podem diminuir até sair do baseline).
+   - **Verificação automática:** execute `npm run check:sizes` após alterações estruturais.
+2. **Separação de Responsabilidades (SRP) por Camada:**
+   - **Contratos (`packages/contracts/src/`):** tipos e DTOs organizados por domínio em `domains/*.ts` e reexportados via `index.ts`.
+   - **Backend (`apps/daemon/src/server/`):** rotas HTTP isoladas por domínio em `routes/*-routes.ts` (despachadas por `studio-routes.ts` como facade fino) e definições/executores de tools isolados em `tools/*.ts` (agregados por `studio-tools-bridge.ts`).
+   - **Transporte Web (`apps/web/src/services/`):** cliente HTTP (`http-client.ts`), transporte WebSocket (`ws-transport.ts`) e clientes REST por domínio em `api/*.ts`, preservando `websocket-client.ts` como barrel compatível.
+   - **Frontend (`apps/web/src/`):** estado e efeitos em `hooks/use*.ts`, helpers puros em `utils/`, e componentes visuais desacoplados em `features/<dominio>/`.
+3. **Cuidados Obrigatórios na Refatoração:**
+   - **Zero quebra de contrato:** preservar integralmente URLs `/api/*`, payloads, eventos WebSocket, canais IPC do Electron e assinaturas exportadas usando *barrels/facades* durante a transição.
+   - **Execução atômica e validada:** fatiar um módulo por vez, validar imediatamente com `typecheck`, `build:web` (quando tocar `apps/web`), `test:daemon` / testes do workspace e `npm run check:sizes` antes de avançar para o próximo.
+   - **Higiene e segurança:** remover scripts temporários imediatamente após o uso, respeitar a diretriz *clean-room* e manter 100% da Regra Anti-Contaminação.

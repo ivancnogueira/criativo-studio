@@ -63,10 +63,14 @@ describe("Fase 24 — UI: Logo Servidor Remoto, Cotas Auto, Dock Settings & Sele
   });
 
   it("2. (QUOTA24-01) WorkspaceRail possui sincronização automática de cotas para contas conectadas sem janelas", () => {
-    const railSrc = readFileSync(
+    const railSrc = [
       join(webRoot, "src", "components", "WorkspaceRail.tsx"),
-      "utf8",
-    );
+      join(webRoot, "src", "components", "useWorkspaceRailController.ts"),
+      join(webRoot, "src", "components", "WorkspaceRailUsagePopovers.tsx"),
+      join(webRoot, "src", "components", "workspace-rail-quota-rings.tsx"),
+    ]
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
     assert.match(railSrc, /autoSyncedAccountsKeyRef/);
     assert.match(railSrc, /visibleAccounts\.length > 0/);
   });
@@ -271,10 +275,10 @@ describe("Fase 24 — UI: Logo Servidor Remoto, Cotas Auto, Dock Settings & Sele
     assert.match(settingsSrvHtml, /#0BFF5C/);
     assert.match(settingsSrvHtml, /Mais cores/);
 
-    const serverModalsSrc = readFileSync(
-      join(webRoot, "src", "features", "servers", "ServerModals.tsx"),
-      "utf8",
-    );
+    const serverModalsSrc =
+      readFileSync(join(webRoot, "src", "features", "servers", "ServerModals.tsx"), "utf8") +
+      "\n" +
+      readFileSync(join(webRoot, "src", "features", "servers", "server-modals-helpers.ts"), "utf8");
     assert.match(serverModalsSrc, /copyTextToClipboard/);
     assert.match(serverModalsSrc, /execCommand\("copy"\)/);
 
@@ -315,34 +319,53 @@ describe("Fase 24 — UI: Logo Servidor Remoto, Cotas Auto, Dock Settings & Sele
   });
 
   it("6. (DOCK28-01 & QUOTA28-03) Protege WebSocket contra close antigo, sincroniza servidor ativo no Dock, atualiza cotas em provider:updated e evita colisão na porta 1455", () => {
-    const wsClientSrc = readFileSync(
+    const wsClientSrc = [
       join(webRoot, "src", "services", "websocket-client.ts"),
-      "utf8",
-    );
+      join(webRoot, "src", "services", "http-client.ts"),
+      join(webRoot, "src", "services", "ws-transport.ts"),
+      join(webRoot, "src", "services", "api", "providers-mcp-api.ts"),
+      join(webRoot, "src", "services", "api", "servers-license-api.ts"),
+    ]
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
     assert.match(wsClientSrc, /subscribeActiveServerChanges/);
     assert.match(wsClientSrc, /addEventListener\("storage"/);
     assert.match(wsClientSrc, /if \(this\.socket !== ws\) return;/);
     assert.match(wsClientSrc, /conectarOpenAiRemotoViaDesktop/);
 
-    const dockSrc = readFileSync(
+    const dockSrc = [
       join(webRoot, "src", "features", "dock", "FloatingDesktopDock.tsx"),
-      "utf8",
-    );
+      join(webRoot, "src", "features", "dock", "useFloatingDockController.ts"),
+      join(webRoot, "src", "features", "dock", "FloatingDesktopDockView.tsx"),
+    ]
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
     assert.match(dockSrc, /listarServidores/);
     assert.match(dockSrc, /subscribeActiveServerChanges/);
     assert.match(dockSrc, /onDockActiveServerChanged/);
     assert.match(dockSrc, /DEFAULT_FRONTEND_DOCK_SETTINGS/);
     assert.match(dockSrc, /Tentar novamente/);
 
-    const railSrc = readFileSync(
+    const railSrc = [
       join(webRoot, "src", "components", "WorkspaceRail.tsx"),
-      "utf8",
-    );
+      join(webRoot, "src", "components", "useWorkspaceRailController.ts"),
+      join(webRoot, "src", "components", "WorkspaceRailUsagePopovers.tsx"),
+    ]
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
     assert.match(railSrc, /\$\{activeServerId\}::/);
     assert.match(railSrc, /triggerFallbackUsageSync/);
     assert.match(railSrc, /Sincronizando janelas de cota\.\.\./);
 
-    const appSrc = readFileSync(join(webRoot, "src", "App.tsx"), "utf8");
+    const appSrc = [
+      join(webRoot, "src", "App.tsx"),
+      join(webRoot, "src", "hooks", "useStudioWebSocketSync.ts"),
+      join(webRoot, "src", "hooks", "ws", "registerChatWsHandlers.ts"),
+      join(webRoot, "src", "hooks", "useStudioServerActions.ts"),
+      join(webRoot, "src", "hooks", "useStudioBootstrap.ts"),
+    ]
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
     assert.match(appSrc, /ws\.on\("provider:updated"[\s\S]*?getProvidersUsage/);
     assert.match(appSrc, /dockSyncActiveServer/);
     assert.match(appSrc, /desktopAssistedProviderRef\.current !== evt\.provedor/);
@@ -499,10 +522,14 @@ describe("Fase 24 — UI: Logo Servidor Remoto, Cotas Auto, Dock Settings & Sele
       assert.ok(html.includes(`r="${r}"`), `Faltou anel concêntrico com raio r="${r}"`);
     }
 
-    const railSrc = readFileSync(
+    const railSrc = [
       join(webRoot, "src", "components", "WorkspaceRail.tsx"),
-      "utf8",
-    );
+      join(webRoot, "src", "components", "useWorkspaceRailController.ts"),
+      join(webRoot, "src", "components", "WorkspaceRailUsagePopovers.tsx"),
+      join(webRoot, "src", "components", "workspace-rail-quota-rings.tsx"),
+    ]
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
     assert.match(railSrc, /MiniQuotaRing/);
     assert.match(railSrc, /Limite semanal/);
     assert.match(railSrc, /Limite de 5h/);

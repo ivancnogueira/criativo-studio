@@ -1,107 +1,23 @@
-import { randomUUID } from "node:crypto";
+import {
+  randomUUID,
+} from "node:crypto";
 import type {
   AgenteThreadBranch,
   AgenteThreadMensagemNaFila,
   AgenteThreadRegistro,
   AgenteThreadsSnapshot,
   AnexoChat,
-  DesfechoThreadAgente,
-  EstadoThreadAgente,
   FilaChatEntrega,
-  OrigemThread,
   OrigemTituloThread,
-  PassoChat,
 } from "@criativo/contracts";
-import type { CriativoDatabase } from "../database/client.ts";
+import type {
+  CriativoDatabase,
+} from "../database/client.ts";
+import { type AgentThreadStoreDeps, type TailArgs, MAX_OPEN_THREADS_PER_AGENT, type ThreadRow } from "./thread-store-types.ts";
+import * as extOps from "./thread-lifecycle-branch-ops.ts";
 
-export const MAX_OPEN_THREADS_PER_AGENT = 64;
-export const AGENT_STARTED_UNFINISHED_LIMIT = 8;
-export const AGENT_STARTED_FINISHED_KEPT = 8;
+export * from "./thread-store-types.ts";
 
-interface ThreadRow {
-  thread_id: string;
-  agente_id: string;
-  tarefa_id: string | null;
-  origem: OrigemThread;
-  titulo: string;
-  titulo_origem: OrigemTituloThread;
-  estado: EstadoThreadAgente;
-  desfecho: DesfechoThreadAgente | null;
-  erro: string | null;
-  progresso_atual: string | null;
-  turno_ativo_id: string | null;
-  sessao_provedor_id: string | null;
-  branch_origem_thread_id: string | null;
-  branch_origem_mensagem_id: string | null;
-  branch_ate_mensagem_id: string | null;
-  rotina_id: string | null;
-  ultima_mensagem_lida_id: string | null;
-  criado_em: string;
-  atualizado_em: string;
-  arquivada_em: string | null;
-  ultima_sequencia_evento: number;
-}
-
-interface ChatRowForBranch {
-  mensagem_id: string;
-  canal_id: string;
-  agente_id: string | null;
-  autor: "usuario" | "agente" | "sistema";
-  autor_nome: string | null;
-  conteudo_markdown: string;
-  anexos_json: string | null;
-  steps_json: string | null;
-  tarefa_id: string | null;
-  lida: number;
-  criado_em: string;
-  thread_id: string | null;
-  turno_id: string | null;
-  item_type: string | null;
-  status: string | null;
-  resposta_para_mensagem_id: string | null;
-  ordinal: number | null;
-  branch_origem_mensagem_id: string | null;
-  metadados_json: string | null;
-}
-
-export interface CreateThreadInput {
-  threadId?: string;
-  agenteId: string;
-  tarefaId?: string | null;
-  origem: OrigemThread;
-  titulo: string;
-  tituloOrigem?: OrigemTituloThread;
-  estado?: EstadoThreadAgente;
-  desfecho?: DesfechoThreadAgente | null;
-  progressoAtual?: string | null;
-  turnoAtivoId?: string | null;
-  sessaoProvedorId?: string | null;
-  rotinaId?: string | null;
-  bypassOpenLimit?: boolean;
-  comandoId?: string;
-}
-
-export interface UpdateThreadRuntimePatch {
-  estado?: EstadoThreadAgente;
-  desfecho?: DesfechoThreadAgente | null;
-  erro?: string | null;
-  progresso_atual?: string | null;
-  turno_ativo_id?: string | null;
-  sessao_provedor_id?: string | null;
-  arquivada_em?: string | null;
-  ultima_sequencia_evento?: number;
-}
-
-export interface CreateBranchInput {
-  agenteId: string;
-  origemThreadId: string;
-  origemMensagemId: string;
-  requestId: string;
-}
-
-/**
- * Store transacional em node:sqlite para sub-conversas paralelas, branches e threads de rotina.
- */
 export class AgentThreadStore {
   private readonly db: CriativoDatabase;
 
@@ -268,137 +184,16 @@ export class AgentThreadStore {
     };
   }
 
-  public createThread(input: CreateThreadInput): AgenteThreadRegistro {
-    const threadId = input.threadId ?? `thread-${randomUUID()}`;
-    const agora = new Date().toISOString();
-    const titulo = input.titulo.trim().slice(0, 140) || "Nova tarefa";
 
-    return this.db.runInTransaction(() => {
-      if (input.origem === "agente" && !input.rotinaId) {
-        this.archiveOldAgentFinishedThreads(input.agenteId);
-        const unfinished = this.db.connection
-          .prepare(
-            `
-            SELECT COUNT(*) AS total
-            FROM projecao_agente_threads
-            WHERE agente_id = ? AND origem = 'agente' AND rotina_id IS NULL
-              AND estado IN ('executando', 'enfileirada');
-          `,
-          )
-          .get(input.agenteId) as { total: number };
-        if (unfinished.total >= AGENT_STARTED_UNFINISHED_LIMIT) {
-          throw new Error(
-            `Limite de ${AGENT_STARTED_UNFINISHED_LIMIT} sub-tarefas inacabadas iniciado pelo agente atingido.`,
-          );
-        }
-      }
-
-      if (!input.bypassOpenLimit) {
-        const openCount = this.db.connection
-          .prepare(
-            `
-            SELECT COUNT(*) AS total
-            FROM projecao_agente_threads
-            WHERE agente_id = ? AND arquivada_em IS NULL;
-          `,
-          )
-          .get(input.agenteId) as { total: number };
-        if (openCount.total >= MAX_OPEN_THREADS_PER_AGENT) {
-          throw new Error(
-            `Limite de ${MAX_OPEN_THREADS_PER_AGENT} threads abertas atingido para o agente '${input.agenteId}'.`,
-          );
-        }
-      }
-
-      this.db.connection
-        .prepare(
-          `
-          INSERT INTO projecao_agente_threads (
-            thread_id, agente_id, tarefa_id, origem, titulo, titulo_origem,
-            estado, desfecho, erro, progresso_atual, turno_ativo_id, sessao_provedor_id,
-            branch_origem_thread_id, branch_origem_mensagem_id, branch_ate_mensagem_id,
-            rotina_id, ultima_mensagem_lida_id, criado_em, atualizado_em, arquivada_em,
-            ultima_sequencia_evento
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, ?, NULL, ?, ?, NULL, 0);
-        `,
-        )
-        .run(
-          threadId,
-          input.agenteId,
-          input.tarefaId ?? null,
-          input.origem,
-          titulo,
-          input.tituloOrigem ?? "auto",
-          input.estado ?? "ociosa",
-          input.desfecho ?? null,
-          input.progressoAtual ?? null,
-          input.turnoAtivoId ?? null,
-          input.sessaoProvedorId ?? null,
-          input.rotinaId ?? null,
-          agora,
-          agora,
-        );
-
-      this.registrarEvento(input.comandoId ?? randomUUID(), threadId, "thread_criada", {
-        agente_id: input.agenteId,
-        origem: input.origem,
-        titulo,
-        tarefa_id: input.tarefaId ?? null,
-      });
-
-      const created = this.getThread(threadId);
-      if (!created) {
-        throw new Error(`Falha ao recuperar thread recém-criada: ${threadId}`);
-      }
-      return created;
-    });
-  }
-
-  /**
-   * Arquiva automaticamente threads iniciadas pelo agente já finalizadas (exceto usuário, branches e rotinas),
-   * mantendo até AGENT_STARTED_FINISHED_KEPT (8) abertas mais recentes.
-   */
-  public archiveOldAgentFinishedThreads(agenteId: string): string[] {
-    return this.db.runInTransaction(() => {
-      const rows = this.db.connection
-        .prepare(
-          `
-          SELECT thread_id
-          FROM projecao_agente_threads
-          WHERE agente_id = ?
-            AND origem = 'agente'
-            AND rotina_id IS NULL
-            AND branch_origem_thread_id IS NULL
-            AND arquivada_em IS NULL
-            AND estado = 'ociosa'
-            AND desfecho IS NOT NULL
-          ORDER BY atualizado_em DESC, criado_em DESC;
-        `,
-        )
-        .all(agenteId) as Array<{ thread_id: string }>;
-
-      const toArchive = rows.slice(AGENT_STARTED_FINISHED_KEPT);
-      if (toArchive.length === 0) {
-        return [];
-      }
-
-      const agora = new Date().toISOString();
-      const archivedIds: string[] = [];
-      const stmt = this.db.connection.prepare(`
-        UPDATE projecao_agente_threads
-        SET estado = 'arquivada',
-            arquivada_em = ?,
-            atualizado_em = ?
-        WHERE thread_id = ?;
-      `);
-
-      for (const item of toArchive) {
-        stmt.run(agora, agora, item.thread_id);
-        archivedIds.push(item.thread_id);
-      }
-
-      return archivedIds;
-    });
+  private deps(): AgentThreadStoreDeps {
+    return {
+      db: this.db,
+      registrarEvento: this.registrarEvento.bind(this),
+      safeJsonParse: this.safeJsonParse.bind(this),
+      loadQueuedSummaryForThread: this.loadQueuedSummaryForThread.bind(this),
+      mapThreadRow: this.mapThreadRow.bind(this),
+      getThread: this.getThread.bind(this),
+    };
   }
 
   public getThread(threadId: string): AgenteThreadRegistro | null {
@@ -587,225 +382,20 @@ export class AgentThreadStore {
     });
   }
 
-  public updateRuntimeState(threadId: string, patch: UpdateThreadRuntimePatch): AgenteThreadRegistro | null {
-    return this.db.runInTransaction(() => {
-      const existing = this.db.connection
-        .prepare("SELECT * FROM projecao_agente_threads WHERE thread_id = ?;")
-        .get(threadId) as ThreadRow | undefined;
-      if (!existing) {
-        return null;
-      }
-      const agora = new Date().toISOString();
-      this.db.connection
-        .prepare(
-          `
-          UPDATE projecao_agente_threads
-          SET estado = ?,
-              desfecho = ?,
-              erro = ?,
-              progresso_atual = ?,
-              turno_ativo_id = ?,
-              sessao_provedor_id = ?,
-              arquivada_em = ?,
-              ultima_sequencia_evento = ?,
-              atualizado_em = ?
-          WHERE thread_id = ?;
-        `,
-        )
-        .run(
-          patch.estado ?? existing.estado,
-          patch.desfecho !== undefined ? patch.desfecho : existing.desfecho,
-          patch.erro !== undefined ? patch.erro : existing.erro,
-          patch.progresso_atual !== undefined ? patch.progresso_atual : existing.progresso_atual,
-          patch.turno_ativo_id !== undefined ? patch.turno_ativo_id : existing.turno_ativo_id,
-          patch.sessao_provedor_id !== undefined ? patch.sessao_provedor_id : existing.sessao_provedor_id,
-          patch.arquivada_em !== undefined ? patch.arquivada_em : existing.arquivada_em,
-          patch.ultima_sequencia_evento ?? existing.ultima_sequencia_evento,
-          agora,
-          threadId,
-        );
-      return this.getThread(threadId);
-    });
+
+  public createThread(...args: TailArgs<typeof extOps.createThreadOp>): ReturnType<typeof extOps.createThreadOp> {
+    return extOps.createThreadOp(this.deps(), ...args);
   }
 
-  /**
-   * Ramifica uma conversa a partir de qualquer mensagem finalizada preservando o histórico até o fim do turno correspondente.
-   * Idempotente via requestId gravado em eventos_orquestracao.
-   */
-  public createBranch(input: CreateBranchInput): AgenteThreadRegistro {
-    const comandoId = `branch:${input.requestId}`;
+  public archiveOldAgentFinishedThreads(...args: TailArgs<typeof extOps.archiveOldAgentFinishedThreadsOp>): ReturnType<typeof extOps.archiveOldAgentFinishedThreadsOp> {
+    return extOps.archiveOldAgentFinishedThreadsOp(this.deps(), ...args);
+  }
 
-    return this.db.runInTransaction(() => {
-      const existingEvent = this.db.connection
-        .prepare("SELECT agregado_id FROM eventos_orquestracao WHERE comando_id = ? LIMIT 1;")
-        .get(comandoId) as { agregado_id: string } | undefined;
-      if (existingEvent) {
-        const already = this.getThread(existingEvent.agregado_id);
-        if (already) {
-          return already;
-        }
-      }
+  public updateRuntimeState(...args: TailArgs<typeof extOps.updateRuntimeStateOp>): ReturnType<typeof extOps.updateRuntimeStateOp> {
+    return extOps.updateRuntimeStateOp(this.deps(), ...args);
+  }
 
-      const openCount = this.db.connection
-        .prepare(
-          "SELECT COUNT(*) AS total FROM projecao_agente_threads WHERE agente_id = ? AND arquivada_em IS NULL;",
-        )
-        .get(input.agenteId) as { total: number };
-      if (openCount.total >= MAX_OPEN_THREADS_PER_AGENT) {
-        throw new Error(
-          `Limite de ${MAX_OPEN_THREADS_PER_AGENT} threads abertas atingido para criar ramificação.`,
-        );
-      }
-
-      const allMsgs = this.db.connection
-        .prepare(
-          `
-          SELECT * FROM projecao_conversas_chat
-          WHERE thread_id = ? OR (canal_id = ? AND thread_id IS NULL)
-          ORDER BY criado_em ASC, ordinal ASC, mensagem_id ASC;
-        `,
-        )
-        .all(
-          input.origemThreadId,
-          input.origemThreadId.startsWith("main:")
-            ? `agente:${input.agenteId}`
-            : `thread:${input.origemThreadId}`,
-        ) as unknown as ChatRowForBranch[];
-
-      const targetIndex = allMsgs.findIndex((m) => m.mensagem_id === input.origemMensagemId);
-      if (targetIndex < 0) {
-        throw new Error(`Mensagem '${input.origemMensagemId}' não pertence à thread de origem.`);
-      }
-      const targetMsg = allMsgs[targetIndex]!;
-      if ((targetMsg.status ?? "completed") === "streaming") {
-        throw new Error("Aguarde a mensagem concluir o streaming antes de ramificar a conversa.");
-      }
-
-      // Inclui todo o grupo de turno quando o ponto de corte pertence a um turno multi-mensagem
-      let cutIndex = targetIndex;
-      if (targetMsg.turno_id) {
-        for (let i = targetIndex + 1; i < allMsgs.length; i += 1) {
-          if (allMsgs[i]!.turno_id === targetMsg.turno_id) {
-            cutIndex = i;
-          } else {
-            break;
-          }
-        }
-      }
-
-      const slice = allMsgs.slice(0, cutIndex + 1).filter((m) => (m.status ?? "completed") !== "streaming");
-      if (slice.length === 0) {
-        throw new Error("Não há mensagens finalizadas suficientes para ramificar neste ponto.");
-      }
-      const ateMsg = slice[slice.length - 1]!;
-
-      let baseTitle = "Ramificação";
-      if (!input.origemThreadId.startsWith("main:")) {
-        const origemThread = this.getThread(input.origemThreadId);
-        if (origemThread?.titulo) {
-          baseTitle = origemThread.titulo.replace(/\s+#\d+$/, "");
-        }
-      } else {
-        const firstUser = slice.find((m) => m.autor === "usuario" && m.conteudo_markdown.trim().length > 0);
-        if (firstUser) {
-          baseTitle = firstUser.conteudo_markdown.trim().replace(/\s+/g, " ").slice(0, 56);
-        }
-      }
-
-      const branchCountRow = this.db.connection
-        .prepare(
-          `
-          SELECT COUNT(*) AS total
-          FROM projecao_agente_threads
-          WHERE agente_id = ? AND branch_origem_thread_id = ?;
-        `,
-        )
-        .get(input.agenteId, input.origemThreadId) as { total: number };
-      const numberedTitle = `${baseTitle} #${branchCountRow.total + 2}`.slice(0, 140);
-
-      const novaThreadId = `thread-${randomUUID()}`;
-      const agora = new Date().toISOString();
-
-      this.db.connection
-        .prepare(
-          `
-          INSERT INTO projecao_agente_threads (
-            thread_id, agente_id, tarefa_id, origem, titulo, titulo_origem,
-            estado, desfecho, erro, progresso_atual, turno_ativo_id, sessao_provedor_id,
-            branch_origem_thread_id, branch_origem_mensagem_id, branch_ate_mensagem_id,
-            rotina_id, ultima_mensagem_lida_id, criado_em, atualizado_em, arquivada_em,
-            ultima_sequencia_evento
-          ) VALUES (?, ?, NULL, 'usuario', ?, 'auto', 'ociosa', NULL, NULL, NULL, NULL, NULL, ?, ?, ?, NULL, NULL, ?, ?, NULL, 0);
-        `,
-        )
-        .run(
-          novaThreadId,
-          input.agenteId,
-          numberedTitle,
-          input.origemThreadId,
-          input.origemMensagemId,
-          ateMsg.mensagem_id,
-          agora,
-          agora,
-        );
-
-      const oldToNewId = new Map<string, string>();
-      for (const msg of slice) {
-        oldToNewId.set(msg.mensagem_id, `msg-${randomUUID()}`);
-      }
-
-      const insertMsgStmt = this.db.connection.prepare(
-        `
-        INSERT INTO projecao_conversas_chat (
-          mensagem_id, canal_id, agente_id, autor, autor_nome, conteudo_markdown,
-          anexos_json, steps_json, tarefa_id, lida, criado_em,
-          thread_id, turno_id, item_type, status, resposta_para_mensagem_id,
-          ordinal, branch_origem_mensagem_id, metadados_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-      `,
-      );
-
-      for (const [idx, msg] of slice.entries()) {
-        const novoId = oldToNewId.get(msg.mensagem_id)!;
-        const mappedReplyTo = msg.resposta_para_mensagem_id
-          ? (oldToNewId.get(msg.resposta_para_mensagem_id) ?? null)
-          : null;
-        const anx = this.safeJsonParse<AnexoChat[]>(msg.anexos_json, []);
-        const stps = this.safeJsonParse<PassoChat[]>(msg.steps_json, []);
-        insertMsgStmt.run(
-          novoId,
-          `thread:${novaThreadId}`,
-          msg.agente_id ?? input.agenteId,
-          msg.autor,
-          msg.autor_nome ?? null,
-          msg.conteudo_markdown,
-          JSON.stringify(anx),
-          JSON.stringify(stps),
-          msg.tarefa_id ?? null,
-          1,
-          msg.criado_em,
-          novaThreadId,
-          msg.turno_id ?? null,
-          msg.item_type ?? "mensagem",
-          msg.status ?? "completed",
-          mappedReplyTo,
-          msg.ordinal ?? idx,
-          msg.mensagem_id === input.origemMensagemId
-            ? input.origemMensagemId
-            : (msg.branch_origem_mensagem_id ?? null),
-          msg.metadados_json ?? "{}",
-        );
-      }
-
-      this.registrarEvento(comandoId, novaThreadId, "thread_branch_criado", {
-        agente_id: input.agenteId,
-        origem_thread_id: input.origemThreadId,
-        origem_mensagem_id: input.origemMensagemId,
-        ate_mensagem_id: ateMsg.mensagem_id,
-        mensagens_copiadas: slice.length,
-      });
-
-      return this.getThread(novaThreadId)!;
-    });
+  public createBranch(...args: TailArgs<typeof extOps.createBranchOp>): ReturnType<typeof extOps.createBranchOp> {
+    return extOps.createBranchOp(this.deps(), ...args);
   }
 }
