@@ -25,6 +25,7 @@ import {
 } from "../../components/MascoteAvatar";
 import { SlidingTabs } from "../../components/ui/CarbonControls";
 import { daemonApi } from "../../services/websocket-client";
+import { EditorialCalendarPage } from "../social-studio/EditorialCalendarPage";
 import {
   buildCalendarPeriodRange,
   formatRelativeExecutionLabel,
@@ -37,7 +38,7 @@ interface SchedulePageProps {
   refreshNonce?: number;
   initialAgenda?: RoutineCalendar | null;
   onOpenRoutine: (ownerKind: RoutineOwnerKind, ownerId: string, rotinaId: string) => void;
-  onOpenAgentChat: (agenteId: string) => void;
+  onOpenAgentChat: (agenteId: string, prefillPrompt?: string) => void;
   onCreateFirstRoutine: (defaultAgentId: string) => void;
 }
 
@@ -113,6 +114,7 @@ export const SchedulePage: React.FC<SchedulePageProps> = ({
   onCreateFirstRoutine,
 }) => {
   const [viewMode, setViewMode] = useState<CalendarView>("week");
+  const [calendarDomain, setCalendarDomain] = useState<"editorial" | "rotinas">("rotinas");
   const [anchorDate, setAnchorDate] = useState<Date>(() => new Date());
   const [agenda, setAgenda] = useState<RoutineCalendar | null>(initialAgenda);
   const [loading, setLoading] = useState<boolean>(initialAgenda === null);
@@ -282,9 +284,39 @@ export const SchedulePage: React.FC<SchedulePageProps> = ({
 
   return (
     <section
-      aria-label="Agenda de Rotinas"
+      aria-label={calendarDomain === "editorial" ? "Calendário Editorial de Posts" : "Agenda de Rotinas"}
       className="flex-1 h-full overflow-y-auto bg-[#1A1A1A] text-[#F0F0F0] p-6"
     >
+      {/* Alternador limpo de domínios: Editorial (Posts) vs Rotinas (Automações) */}
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/[0.06] bg-[#141414] px-4 py-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-[#979797]">
+            Calendário do Estúdio
+          </p>
+          <p className="text-xs text-[#6A6A6A]">
+            {calendarDomain === "editorial"
+              ? "Pautas e publicações Instagram separadas das automações técnicas."
+              : "Execuções agendadas e recorrências cron dos seus agentes."}
+          </p>
+        </div>
+        <SlidingTabs
+          ariaLabel="Alternar entre Calendário Editorial e Rotinas Técnicas"
+          value={calendarDomain}
+          onChange={(v) => setCalendarDomain(v)}
+          tabs={[
+            { id: "editorial", label: "Editorial (Posts)" },
+            { id: "rotinas", label: "Rotinas (Automações)" },
+          ]}
+        />
+      </div>
+
+      {calendarDomain === "editorial" ? (
+        <EditorialCalendarPage
+          agentes={agentes}
+          onOpenAgentChat={(agenteId) => onOpenAgentChat(agenteId)}
+        />
+      ) : (
+        <>
       {/* Cabeçalho */}
       <header className="flex flex-col gap-4 pb-6 border-b border-white/[0.06]">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -654,6 +686,8 @@ export const SchedulePage: React.FC<SchedulePageProps> = ({
           )}
         </aside>
       </div>
+        </>
+      )}
     </section>
   );
 };

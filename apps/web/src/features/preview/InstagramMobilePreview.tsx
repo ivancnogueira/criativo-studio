@@ -1,5 +1,5 @@
 import { useState, type TouchEvent } from "react";
-import type { TarefaRegistro } from "@criativo/contracts";
+import type { EditorialSlideItem, TarefaRegistro } from "@criativo/contracts";
 import {
   Bookmark,
   ChevronLeft,
@@ -7,9 +7,11 @@ import {
   Film,
   Heart,
   Image as ImageIcon,
+  Layers,
   MessageCircle,
   Send,
 } from "lucide-react";
+import { CarouselStoriesStudioEditor } from "../social-studio/CarouselStoriesStudioEditor";
 
 interface InstagramMobilePreviewProps {
   tarefa: TarefaRegistro | null;
@@ -19,6 +21,7 @@ export function InstagramMobilePreview({ tarefa }: InstagramMobilePreviewProps) 
   const [slideIndex, setSlideIndex] = useState(0);
   const [captionExpanded, setCaptionExpanded] = useState(false);
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
+  const [visualEditorOpen, setVisualEditorOpen] = useState(false);
 
   if (!tarefa) {
     return (
@@ -172,10 +175,10 @@ export function InstagramMobilePreview({ tarefa }: InstagramMobilePreviewProps) 
         <Bookmark className="h-4 w-4" />
       </div>
 
-      {/* Legenda expansível */}
+      {/* Legenda expansível + botão para Editor Visual 4:5 / Safe Zones */}
       <div className="px-3 pb-3 text-xs text-[#DCDCDC]">
         <p className={captionExpanded ? "whitespace-pre-wrap" : "line-clamp-3"}>
-          <span className="mr-1 font-semibold text-white">@SEU_PERFIL</span>
+          <span className="mr-1 font-semibold text-white">[@SEU_PERFIL]</span>
           {copyText}
         </p>
         {copyText.length > 110 && (
@@ -187,7 +190,33 @@ export function InstagramMobilePreview({ tarefa }: InstagramMobilePreviewProps) 
             {captionExpanded ? "Ver menos" : "Ver legenda completa"}
           </button>
         )}
+
+        <button
+          type="button"
+          onClick={() => setVisualEditorOpen(true)}
+          className="mt-2.5 inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-[#1D1D1D] px-3 py-1.5 text-[11px] font-medium text-[#DCDCDC] hover:bg-[#272727] hover:text-white transition-colors"
+        >
+          <Layers className="h-3.5 w-3.5 text-[#31CF76]" />
+          <span>Abrir no Editor Visual (4:5 / Safe Zones)</span>
+        </button>
       </div>
+
+      {visualEditorOpen && (
+        <CarouselStoriesStudioEditor
+          open={true}
+          onClose={() => setVisualEditorOpen(false)}
+          title={`Editor Visual · ${tarefa.titulo}`}
+          initialMode={isReels || tarefa.tipo === "story" ? "stories_9_16" : "carousel_4_5"}
+          initialSlides={rawPreviews.map(
+            (url, idx): EditorialSlideItem => ({
+              id: `${tarefa.tarefa_id}-slide-${idx + 1}`,
+              url,
+              ordem: idx,
+            })
+          )}
+          initialCaption={copyText}
+        />
+      )}
     </div>
   );
 }

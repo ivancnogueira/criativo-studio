@@ -17,3 +17,4 @@ export * from "./marketplace-contracts.ts";
 export * from "./routines.ts";
 export * from "./workflow-graph.ts";
 export * from "./license-crypto.ts";
+export * from "./social-studio.ts";

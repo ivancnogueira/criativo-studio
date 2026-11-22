@@ -359,6 +359,7 @@ export async function executeAgentToolCall(
       const args = call.arguments as unknown as MetaPublishParams;
       return await metaPublishTool(args, {
         vault: deps.vault,
+        db: deps.db,
         nativeStore: deps.catalogService?.nativeStore,
       });
     }

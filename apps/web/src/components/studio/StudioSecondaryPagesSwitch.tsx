@@ -66,6 +66,7 @@ import { FilesVaultPage } from "../../features/pages/FilesVaultPage";
 import { TasksQueuePage } from "../../features/pages/TasksQueuePage";
 import { UsageMetricsPage } from "../../features/pages/UsageMetricsPage";
 import { SchedulePage } from "../../features/schedule/SchedulePage";
+import { PublishedGalleryMetricsPage } from "../../features/social-studio/PublishedGalleryMetricsPage";
 import {
   DEFAULT_FRONTEND_USER_SETTINGS,
   SettingsModal,
@@ -127,6 +128,7 @@ export function StudioSecondaryPagesSwitch({ ctx }: { ctx: StudioUiCtx }) {
     whatsappStatus,
     setWhatsappModalOpen,
     lojaInitialAppSlug,
+    setLojaInitialAppSlug,
     setPrefilledChatPrompt,
     pendingAuthLink,
     setSidebarViewMode,
@@ -318,10 +320,13 @@ export function StudioSecondaryPagesSwitch({ ctx }: { ctx: StudioUiCtx }) {
                   nonce: Date.now(),
                 });
               }}
-              onOpenAgentChat={(agenteId) => {
+              onOpenAgentChat={(agenteId: string, prefillPrompt?: string) => {
                 setActiveSection("agentes");
                 setSidebarViewMode("agents");
                 handleSelectAgent(agenteId);
+                if (prefillPrompt) {
+                  setPrefilledChatPrompt(prefillPrompt);
+                }
               }}
               onCreateFirstRoutine={(defaultAgentId) => {
                 setSidebarViewMode("agents");
@@ -329,6 +334,25 @@ export function StudioSecondaryPagesSwitch({ ctx }: { ctx: StudioUiCtx }) {
                 setRoutinesSelectedRoutineId("__new__");
                 setRoutinesRightOpen(true);
                 setActiveSection("rotinas");
+              }}
+            />
+          )}
+
+          {activeSection === "galeria_ig" && (
+            <PublishedGalleryMetricsPage
+              onOpenInstagramConfig={() => {
+                setLojaInitialAppSlug("instagram");
+                setActiveSection("loja");
+              }}
+              onAnalyzeWithAgent={(prompt) => {
+                const analystId =
+                  agentes.find((a) => a.agente_id === "estrategista")?.agente_id ??
+                  agentes[0]?.agente_id ??
+                  "estrategista";
+                setActiveSection("agentes");
+                setSidebarViewMode("agents");
+                handleSelectAgent(analystId);
+                setPrefilledChatPrompt(prompt);
               }}
             />
           )}

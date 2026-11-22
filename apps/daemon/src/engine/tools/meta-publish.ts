@@ -1,5 +1,7 @@
 import { resolveMetaGraphApiBase } from "@criativo/contracts";
+import type { CriativoDatabase } from "../../database/client.ts";
 import type { NativeAppConnectionsStore } from "../../marketplace/native-app-connections-store.ts";
+import { EditorialCalendarService } from "../../social/editorial-calendar-service.ts";
 import type { FetchLike } from "../providers/provider-interface.ts";
 import type { VaultService } from "../../vault/vault-service.ts";
 import { resolveMetaCredentials } from "./meta-insights.ts";
@@ -10,12 +12,14 @@ export interface MetaPublishParams {
   caption: string;
   approved_by_human: boolean;
   conta_id?: string;
+  editorial_post_id?: string;
 }
 
 export interface MetaPublishResult {
   published: boolean;
   media_id: string;
   permalink: string;
+  editorial_post_id?: string | null;
 }
 
 /**
@@ -25,7 +29,12 @@ export interface MetaPublishResult {
  */
 export async function metaPublishTool(
   params: MetaPublishParams,
-  deps: { vault: VaultService; nativeStore?: NativeAppConnectionsStore; fetchImpl?: FetchLike }
+  deps: {
+    vault: VaultService;
+    db?: CriativoDatabase;
+    nativeStore?: NativeAppConnectionsStore;
+    fetchImpl?: FetchLike;
+  }
 ): Promise<MetaPublishResult> {
   if (params.approved_by_human !== true) {
     throw new Error(
@@ -92,9 +101,19 @@ export async function metaPublishTool(
     );
   }
 
+  let linkedEditorialId: string | null = null;
+  if (params.editorial_post_id && deps.db) {
+    const updated = new EditorialCalendarService(deps.db).markPublished(
+      params.editorial_post_id,
+      publishData.id
+    );
+    linkedEditorialId = updated?.id ?? null;
+  }
+
   return {
     published: true,
     media_id: publishData.id,
     permalink: `https://www.instagram.com/p/${publishData.id}/`,
+    ...(linkedEditorialId ? { editorial_post_id: linkedEditorialId } : {}),
   };
 }

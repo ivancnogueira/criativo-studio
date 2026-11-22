@@ -21,6 +21,7 @@ import { filesTablesApi } from "./api/files-browser-whatsapp-api";
 import { marketplaceApi } from "./api/marketplace-api";
 import { providersMcpApi } from "./api/providers-mcp-api";
 import { serversLicenseApi } from "./api/servers-license-api";
+import { socialStudioApi } from "./api/social-studio-api";
 import { threadsQueueUiApi } from "./api/threads-queue-api";
 import { whatsappApi } from "./api/whatsapp-api";
 import { workflowsRoutinesApi } from "./api/workflows-routines-api";
@@ -35,4 +36,5 @@ export const daemonApi = {
   ...browserApi,
   ...whatsappApi,
   ...serversLicenseApi,
+  ...socialStudioApi,
 };

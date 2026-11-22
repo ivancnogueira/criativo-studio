@@ -335,6 +335,7 @@ export const PHASE10_TOOL_DEFINITIONS: ToolDefinition[] = [
         caption: { type: "string" },
         approved_by_human: { type: "boolean" },
         conta_id: { type: "string" },
+        editorial_post_id: { type: "string" },
       },
       required: ["media_type", "media_urls", "caption", "approved_by_human"],
     },

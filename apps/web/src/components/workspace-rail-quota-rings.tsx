@@ -1,6 +1,7 @@
 import React from "react";
 import {
   Activity,
+  BarChart3,
   Bot,
   CalendarClock,
   FolderOpen,
@@ -28,6 +29,7 @@ export type StudioNavSection =
   | "fluxos"
   | "tarefas"
   | "agenda"
+  | "galeria_ig"
   | "uso"
   | "arquivos"
   | "loja"
@@ -65,6 +67,7 @@ export const RAIL_ITEMS: Array<{
   { id: "fluxos", label: "Automações", Icon: GitBranch },
   { id: "tarefas", label: "Tarefas", Icon: WalletCards },
   { id: "agenda", label: "Calendário", Icon: CalendarClock },
+  { id: "galeria_ig", label: "Galeria IG", Icon: BarChart3 },
   { id: "uso", label: "Consumo", Icon: Activity },
   { id: "arquivos", label: "Biblioteca", Icon: FolderOpen },
   { id: "loja", label: "Catálogo", Icon: Store },

@@ -341,6 +341,11 @@ export type WebSocketEventMap = {
     site_id: string;
     slug: string;
   };
+  "editorial:updated": {
+    acao: "criado" | "atualizado" | "excluido" | "em_producao";
+    id: string;
+    tarefa_id?: string;
+  };
   "license:updated": LicenseActivationStatus;
   "servers:updated": {
     servers: StudioServerRecord[];

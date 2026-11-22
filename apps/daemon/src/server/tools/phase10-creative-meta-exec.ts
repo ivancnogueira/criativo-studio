@@ -78,9 +78,11 @@ export async function executePhase10CreativeMetaTool(
           caption: readStringArg(args, "caption") ?? "",
           approved_by_human: args.approved_by_human === true,
           conta_id: readStringArg(args, "conta_id", "contaId"),
+          editorial_post_id: readStringArg(args, "editorial_post_id", "editorialPostId"),
         },
         {
           vault: deps.vault,
+          db: deps.db,
           nativeStore: nativeStore ?? undefined,
           fetchImpl: deps.fetchImpl,
         }

@@ -349,4 +349,44 @@ export const SCHEMA_THREADS_INTEGRATIONS_TABLES: readonly SchemaTableDefinition[
         ON projecao_agente_wakeups(status, proximo_disparo_em);
     `,
   },
+  {
+    nome: "calendario_editorial_posts",
+    sql: `
+      CREATE TABLE IF NOT EXISTS calendario_editorial_posts (
+        id TEXT PRIMARY KEY,
+        titulo TEXT NOT NULL,
+        formato TEXT NOT NULL CHECK(formato IN ('feed_4_5', 'carrossel', 'reels', 'story')),
+        status TEXT NOT NULL DEFAULT 'ideia' CHECK(status IN ('ideia', 'rascunho', 'em_producao', 'aprovacao', 'agendado', 'publicado')),
+        pilar TEXT,
+        data_agendada TEXT,
+        agente_id TEXT,
+        tarefa_id TEXT,
+        legenda TEXT NOT NULL DEFAULT '',
+        slides_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(slides_json)),
+        meta_media_id TEXT,
+        criado_em TEXT NOT NULL,
+        atualizado_em TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_editorial_posts_data
+        ON calendario_editorial_posts(data_agendada, atualizado_em DESC);
+      CREATE INDEX IF NOT EXISTS idx_editorial_posts_status
+        ON calendario_editorial_posts(status, formato);
+      CREATE INDEX IF NOT EXISTS idx_editorial_posts_meta_media
+        ON calendario_editorial_posts(meta_media_id)
+        WHERE meta_media_id IS NOT NULL;
+    `,
+  },
+  {
+    nome: "meta_posts_cache",
+    sql: `
+      CREATE TABLE IF NOT EXISTS meta_posts_cache (
+        media_id TEXT PRIMARY KEY,
+        conta_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL CHECK(json_valid(payload_json)),
+        sincronizado_em TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_meta_posts_cache_sync
+        ON meta_posts_cache(conta_id, sincronizado_em DESC);
+    `,
+  },
 ];

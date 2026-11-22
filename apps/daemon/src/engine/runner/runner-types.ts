@@ -209,6 +209,7 @@ export const NATIVE_TOOLS_SCHEMA: ToolDefinition[] = [
         media_urls: { type: "array", items: { type: "string" } },
         caption: { type: "string" },
         approved_by_human: { type: "boolean" },
+        editorial_post_id: { type: "string" },
       },
       required: ["media_type", "media_urls", "caption", "approved_by_human"],
     },
