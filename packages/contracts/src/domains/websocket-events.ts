@@ -332,6 +332,15 @@ export type WebSocketEventMap = {
     startedAt: number | null;
     stepsCount: number;
   };
+  "browser:challenge_detected": {
+    tabId: string;
+    agenteId: string | null;
+    kind: "recaptcha" | "hcaptcha" | "turnstile" | "2fa" | "login_wall" | "anti_bot";
+    url: string;
+    title: string;
+    reason: string;
+    detectedAt: string;
+  };
   "browser:autofill_requested": BrowserAutofillConsentRequest;
   "screen:capture_requested": CaptureScreenConsentRequest;
   "sidebar:updated": {

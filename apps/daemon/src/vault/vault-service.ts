@@ -30,11 +30,23 @@ export class VaultService {
 
   constructor(db: CriativoDatabase, masterSecret?: string) {
     this.db = db;
-    this.masterSecret =
-      masterSecret ??
-      process.env.CRIATIVO_VAULT_KEY ??
-      process.env.VAULT_MASTER_KEY ??
-      "criativo-os-chave-padrao-desenvolvimento-trocar-em-producao";
+    const resolvedSecret =
+      masterSecret?.trim() ||
+      process.env.CRIATIVO_VAULT_KEY?.trim() ||
+      process.env.VAULT_MASTER_KEY?.trim() ||
+      "";
+
+    if (!resolvedSecret) {
+      if (process.env.NODE_ENV === "production") {
+        throw new Error(
+          "[CRV-VAULT-001] Chave mestra do Cofre ausente em produção. Defina CRIATIVO_VAULT_KEY no ambiente ou inicie via aplicativo Desktop com safeStorage."
+        );
+      }
+      this.masterSecret = "criativo-os-chave-padrao-desenvolvimento-trocar-em-producao";
+      return;
+    }
+
+    this.masterSecret = resolvedSecret;
   }
 
   private deriveKey(salt: Buffer): Buffer {

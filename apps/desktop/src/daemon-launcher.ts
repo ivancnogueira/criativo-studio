@@ -39,6 +39,7 @@ export interface EmbeddedDaemonOptions {
   preferredPort?: number;
   isPackaged?: boolean;
   appVersion?: string;
+  vaultKey?: string;
   onUpdateRestartRequested?: (payload: UpdateRestartPayload) => void;
   onDaemonRestarted?: (port: number, attempt: number) => void;
   onDaemonCrashed?: (code: number | null, signal: string | null) => void;
@@ -186,6 +187,7 @@ export async function startEmbeddedDaemon(options: EmbeddedDaemonOptions): Promi
         CRIATIVO_DESKTOP_PACKAGED: "1",
         CRIATIVO_PRODUCT_ROOT: productRoot,
         CRIATIVO_USER_DATA_DIR: userDataDir,
+        ...(options.vaultKey ? { CRIATIVO_VAULT_KEY: options.vaultKey } : {}),
         ...(options.appVersion ? { CRIATIVO_APP_VERSION: options.appVersion } : {}),
       },
     });

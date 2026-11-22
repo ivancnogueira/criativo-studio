@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import { globalShortcut, ipcMain, screen, systemPreferences } from "electron";
+import { globalShortcut, screen, systemPreferences } from "electron";
 import type { CuaActionRequest, CuaActionResult } from "@criativo/contracts";
 import { CuaOverlayController } from "./cua-overlay.ts";
+import { registerTrustedIpcHandle } from "./desktop-security.ts";
 
 export interface CuaDesktopRuntimeHandle {
   bridgeUrl: string;
@@ -17,6 +18,7 @@ export interface CuaDesktopRuntimeHandle {
  */
 export async function startCuaDesktopRuntime(options: {
   getDaemonBaseUrl: () => string;
+  getDaemonPort?: () => number | null | undefined;
   onLog?: (msg: string) => void;
 }): Promise<CuaDesktopRuntimeHandle> {
   const bridgeToken = randomBytes(24).toString("hex");
@@ -124,12 +126,13 @@ export async function startCuaDesktopRuntime(options: {
     options.onLog?.(`[CUA] Falha ao registrar atalho global de emergência: ${String(err)}`);
   }
 
-  ipcMain.handle("criativo:cua-abort", async (_evt, reason: unknown) => {
+  const getPort = () => options.getDaemonPort?.();
+  registerTrustedIpcHandle("criativo:cua-abort", getPort, async (_evt, reason: unknown) => {
     await abortNow(typeof reason === "string" && reason.trim() ? reason.trim() : undefined);
     return true;
   });
 
-  ipcMain.handle("criativo:cua-reset-abort", async () => {
+  registerTrustedIpcHandle("criativo:cua-reset-abort", getPort, async () => {
     aborted = false;
     const daemonBaseUrl = options.getDaemonBaseUrl();
     if (daemonBaseUrl) {
@@ -138,7 +141,7 @@ export async function startCuaDesktopRuntime(options: {
     return true;
   });
 
-  ipcMain.handle("criativo:cua-permission-status", () => ({
+  registerTrustedIpcHandle("criativo:cua-permission-status", getPort, () => ({
     granted: checkAccessibilityGranted(),
     aborted,
   }));

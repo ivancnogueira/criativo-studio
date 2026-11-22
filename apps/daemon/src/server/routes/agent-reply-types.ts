@@ -7,6 +7,7 @@ import type {
   UsageLimitAskPayload,
 } from "@criativo/contracts";
 import type { LabeledVisualAsset } from "../studio-tools-bridge.ts";
+import type { LazyToolRouter } from "../../engine/tools/lazy-tool-router.ts";
 import type { StudioRoutesDeps } from "./route-helpers.ts";
 import type { ChatProgressReport } from "./agent-enrichment-helpers.ts";
 
@@ -48,6 +49,7 @@ export interface PreparedAgentReplySetup {
   graphVersion: string;
   promptBase: string;
   availableChatTools: ToolDefinition[];
+  lazyToolRouter?: LazyToolRouter;
   studioToolsPromptGuidance: string;
   turnAcpMcpServers: ReturnType<StudioRoutesDeps["providerConnection"]["buildCombinedAcpMcpServers"]>;
   turnCliMcpConfig: ReturnType<StudioRoutesDeps["providerConnection"]["buildClaudeMcpConfig"]>;
@@ -98,4 +100,5 @@ export interface ModelAttemptContext {
   targetVaultOrLocal: boolean;
   targetOpenCode: boolean;
   targetAntigravity: boolean;
+  handoffNote?: string | null;
 }

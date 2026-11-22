@@ -15,6 +15,7 @@ import {
   Minimize2,
   PanelLeft,
   Plus,
+  Search,
   Smartphone,
   X,
 } from "lucide-react";
@@ -68,6 +69,7 @@ interface DynamicIslandProps {
   onSelectNotification?: (item: StudioNotificationItem) => void;
   cuaStatus?: CuaStatusSnapshot | null;
   onAbortCua?: () => void;
+  onOpenCommandPalette?: () => void;
 }
 
 /**
@@ -99,6 +101,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   onSelectNotification,
   cuaStatus = null,
   onAbortCua,
+  onOpenCommandPalette,
 }) => {
   const islandText = !wsConnected
     ? "Reconectando..."
@@ -262,8 +265,22 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         {headerRightContent}
       </div>
 
-      {/* Direita: Atalhos rápidos WhatsApp & Cofre */}
+      {/* Direita: Busca Ctrl+K, WhatsApp & Cofre */}
       <div className="flex items-center gap-1.5 shrink-0">
+        {onOpenCommandPalette && (
+          <button
+            type="button"
+            onClick={onOpenCommandPalette}
+            title="Busca Global e Comandos (Ctrl+K)"
+            className="inline-flex items-center gap-1.5 h-[28px] px-2.5 rounded-full bg-[#212121] hover:bg-[#2A2A2A] border border-white/10 text-[11.5px] font-medium text-[#DCDCDC] transition-colors"
+          >
+            <Search className="h-3 w-3 text-[#42A0FF]" />
+            <span className="hidden lg:inline">Buscar</span>
+            <kbd className="hidden xl:inline rounded bg-[#141414] px-1 py-0.5 font-mono text-[9.5px] text-[#979797]">
+              Ctrl+K
+            </kbd>
+          </button>
+        )}
         <button
           type="button"
           onClick={onOpenWhatsAppModal}

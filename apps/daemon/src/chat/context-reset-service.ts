@@ -268,10 +268,178 @@ export class ContextResetService {
       mensagem: mensagemDivisor,
     });
 
-    return {
+      return {
       cutoff_at: cutoffAt,
       mensagem_divisor: mensagemDivisor,
       memorias_salvas: memoriasSalvas,
+    };
+  }
+
+  /**
+   * Auto-compacta automaticamente entre turnos quando o consumo estimado atinge o limiar (padrão 80%),
+   * gravando síntese estruturada e marco `context_cutoff_at` sem apagar o histórico visual do SQLite.
+   */
+  public autoCompactIfNeeded(input: {
+    agenteId: string;
+    threadId?: string | null;
+    estimatedTokens: number;
+    maxContextTokens: number;
+    thresholdRatio?: number;
+  }): {
+    compacted: boolean;
+    ratio: number;
+    cutoff_at?: string;
+    memorias_salvas: number;
+    summaryText: string | null;
+    mensagem_divisor?: MensagemChat;
+  } {
+    const threshold = Math.max(0.4, Math.min(0.95, input.thresholdRatio ?? 0.8));
+    const budget = Math.max(1024, input.maxContextTokens || 128_000);
+    const ratio = input.estimatedTokens / budget;
+
+    const row = this.db.connection
+      .prepare("SELECT config_json FROM projecao_agentes WHERE agente_id = ? LIMIT 1;")
+      .get(input.agenteId) as { config_json?: string } | undefined;
+    if (!row) {
+      return { compacted: false, ratio, memorias_salvas: 0, summaryText: null };
+    }
+
+    let cfg: Record<string, unknown> = {};
+    try {
+      cfg = row.config_json ? (JSON.parse(row.config_json) as Record<string, unknown>) : {};
+    } catch {
+      cfg = {};
+    }
+    if (cfg.auto_compact_enabled === false || ratio < threshold) {
+      return { compacted: false, ratio, memorias_salvas: 0, summaryText: null };
+    }
+
+    const threadId = input.threadId?.trim() || `main:${input.agenteId}`;
+    const canalId = threadId.startsWith("main:") ? `agente:${input.agenteId}` : `thread:${threadId}`;
+    const previousCutoff = typeof cfg.context_cutoff_at === "string" ? cfg.context_cutoff_at : null;
+
+    const recentMessages = this.db.connection
+      .prepare(
+        `
+        SELECT autor, conteudo_markdown, criado_em
+        FROM projecao_conversas_chat
+        WHERE (thread_id = ? OR (thread_id IS NULL AND canal_id = ?))
+          AND COALESCE(item_type, 'mensagem') = 'mensagem'
+          AND COALESCE(status, 'completed') != 'streaming'
+          AND (? IS NULL OR criado_em > ?)
+        ORDER BY criado_em DESC, COALESCE(ordinal, 0) DESC
+        LIMIT 24;
+      `
+      )
+      .all(threadId, canalId, previousCutoff, previousCutoff) as Array<{
+      autor: string;
+      conteudo_markdown: string;
+      criado_em: string;
+    }>;
+
+    const userGoals = recentMessages
+      .filter((m) => m.autor === "usuario" && m.conteudo_markdown.trim().length > 4)
+      .slice(0, 3)
+      .map((m) => m.conteudo_markdown.trim().replace(/\s+/g, " ").slice(0, 160));
+    const agentDecisions = recentMessages
+      .filter((m) => m.autor === "agente" && m.conteudo_markdown.trim().length > 4)
+      .slice(0, 2)
+      .map((m) => m.conteudo_markdown.trim().replace(/\s+/g, " ").slice(0, 160));
+
+    const summaryLines = [
+      userGoals.length > 0 ? `Objetivos recentes: ${userGoals.join(" | ")}` : null,
+      agentDecisions.length > 0 ? `Decisões/entregas: ${agentDecisions.join(" | ")}` : null,
+    ].filter((v): v is string => Boolean(v));
+    const summaryText = summaryLines.join(" — ") || "Sessão longa compactada entre turnos.";
+
+    let memoriasSalvas = 0;
+    for (const line of summaryLines) {
+      if (this.memoryManager.addMemory(input.agenteId, `[Auto-compactação]: ${line}`, "automatica")) {
+        memoriasSalvas += 1;
+      }
+    }
+
+    const cutoffAt = new Date().toISOString();
+    const dividerMsgId = `msg-autocompact-${randomUUID().slice(0, 8)}`;
+    const pctLabel = Math.round(ratio * 100);
+    const dividerText = `Contexto compactado automaticamente (${pctLabel}% da janela) · histórico visual preservado`;
+
+    const mensagemDivisor: MensagemChat = {
+      mensagem_id: dividerMsgId,
+      canal_id: canalId,
+      agente_id: input.agenteId,
+      autor: "sistema",
+      autor_nome: "Sistema",
+      conteudo_markdown: dividerText,
+      anexos: [],
+      steps: [],
+      tarefa_id: null,
+      thread_id: threadId,
+      item_type: "context_reset",
+      status: "completed",
+      ordinal: 0,
+      metadados: {
+        auto_compact: true,
+        badge: "Contexto compactado automaticamente",
+        cutoff_at: cutoffAt,
+        memorias_salvas: memoriasSalvas,
+        usage_ratio: Number(ratio.toFixed(3)),
+      },
+      lida: true,
+      criado_em: cutoffAt,
+    };
+
+    this.db.runInTransaction(() => {
+      const updatedConfig = {
+        ...cfg,
+        context_cutoff_at: cutoffAt,
+        sessao_provedor_id: null,
+      };
+      this.db.connection
+        .prepare("UPDATE projecao_agentes SET config_json = ?, atualizado_em = ? WHERE agente_id = ?;")
+        .run(JSON.stringify(updatedConfig), cutoffAt, input.agenteId);
+
+      this.db.connection
+        .prepare(
+          `
+          INSERT INTO projecao_conversas_chat (
+            mensagem_id, canal_id, agente_id, autor, autor_nome, conteudo_markdown,
+            anexos_json, steps_json, tarefa_id, lida, criado_em,
+            thread_id, turno_id, item_type, status, resposta_para_mensagem_id,
+            ordinal, branch_origem_mensagem_id, metadados_json
+          ) VALUES (?, ?, ?, 'sistema', 'Sistema', ?, '[]', '[]', NULL, 1, ?, ?, NULL, 'context_reset', 'completed', NULL, 0, NULL, ?);
+        `
+        )
+        .run(
+          dividerMsgId,
+          canalId,
+          input.agenteId,
+          dividerText,
+          cutoffAt,
+          threadId,
+          JSON.stringify(mensagemDivisor.metadados)
+        );
+    });
+
+    this.wsHub.broadcast("context:reset", {
+      agente_id: input.agenteId,
+      thread_id: threadId,
+      cutoff_at: cutoffAt,
+      mensagem_divisor: mensagemDivisor,
+    });
+    this.wsHub.broadcast("chat:message", {
+      canal_id: canalId,
+      agente_id: input.agenteId,
+      mensagem: mensagemDivisor,
+    });
+
+    return {
+      compacted: true,
+      ratio,
+      cutoff_at: cutoffAt,
+      memorias_salvas: memoriasSalvas,
+      summaryText,
+      mensagem_divisor: mensagemDivisor,
     };
   }
 }

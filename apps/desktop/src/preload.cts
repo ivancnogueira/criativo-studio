@@ -82,6 +82,10 @@ export interface CriativoDesktopBridge {
   cuaPermissionStatus: () => Promise<{ granted: boolean; aborted: boolean }>;
   setWindowVibrancy: (enabled: boolean) => Promise<boolean>;
   onDeepLink: (listener: (payload: CriativoDeepLinkPayload) => void) => () => void;
+  onOpenCommandPalette: (listener: () => void) => () => void;
+  setGlobalShortcut: (accelerator: string) => Promise<boolean>;
+  openBrowserPip: (payload?: { tabId?: string | null; agenteId?: string | null }) => Promise<boolean>;
+  closeBrowserPip: () => Promise<boolean>;
 }
 
 const bridge: CriativoDesktopBridge = {
@@ -168,6 +172,18 @@ const bridge: CriativoDesktopBridge = {
       ipcRenderer.removeListener("criativo:deep-link", wrapped);
     };
   },
+  onOpenCommandPalette: (listener: () => void) => {
+    const wrapped = () => listener();
+    ipcRenderer.on("criativo:open-command-palette", wrapped);
+    return () => {
+      ipcRenderer.removeListener("criativo:open-command-palette", wrapped);
+    };
+  },
+  setGlobalShortcut: (accelerator: string) =>
+    ipcRenderer.invoke("criativo:set-global-shortcut", accelerator),
+  openBrowserPip: (payload?: { tabId?: string | null; agenteId?: string | null }) =>
+    ipcRenderer.invoke("criativo:browser-pip-open", payload ?? {}),
+  closeBrowserPip: () => ipcRenderer.invoke("criativo:browser-pip-close"),
 };
 
 contextBridge.exposeInMainWorld("criativoDesktop", bridge);

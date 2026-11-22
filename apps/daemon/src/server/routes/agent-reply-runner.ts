@@ -71,6 +71,7 @@ import {
   MAX_BACKUP_MODELS,
   parseBackupModelsJson,
 } from "../../engine/runner/backup-models-resolver.ts";
+import { buildPortableChatMessages } from "../../engine/runner/handoff-history-builder.ts";
 import type { StudioRoutesDeps } from "./route-helpers.ts";
 import { mapChatRow, safeJsonParse } from "./route-helpers.ts";
 import { syncTurnGeneratedMediaAttachments, type ChatProgressReport } from "./agent-enrichment-helpers.ts";
@@ -139,6 +140,7 @@ export async function generateAgentChatReply(
   const invokeModelAttempt = async (
     targetModel: string,
     preferredAccId: string | null,
+    handoffNote?: string | null,
   ): Promise<string | null> => {
     const targetProvider = deps.providers.resolveProviderName(targetModel);
     const targetProvStatus = statusList.find((item) => item.provedor === targetProvider);
@@ -168,6 +170,7 @@ export async function generateAgentChatReply(
       targetVaultOrLocal,
       targetOpenCode,
       targetAntigravity,
+      handoffNote,
     };
     const cliRes = await tryCliOrOpenCodeAttempt(attemptCtx);
     if (cliRes !== null) return cliRes;
@@ -230,7 +233,16 @@ export async function generateAgentChatReply(
           step: failoverStep,
         });
 
-        const backupText = await invokeModelAttempt(candidate.modelo, candidate.conta_id ?? null);
+        const portableHandoff = buildPortableChatMessages(
+          history,
+          initialModel,
+          candidate.modelo,
+        );
+        const backupText = await invokeModelAttempt(
+          candidate.modelo,
+          candidate.conta_id ?? null,
+          portableHandoff.handoffNotice,
+        );
         if (backupText !== null) {
           return { markdown: backupText, steps, tarefaCriadaId, anexosGerados: finalizeTurnAnexos() };
         }

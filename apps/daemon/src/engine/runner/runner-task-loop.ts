@@ -70,6 +70,12 @@ import { UiBlockRegistry } from "./ui-block-registry.ts";
 import { ApiKeysBridge } from "../../vault/api-keys-bridge.ts";
 import { seedDefaultAgents } from "./roster-defaults.ts";
 import { SkillLoader } from "./skill-loader.ts";
+import { buildPortableHandoffHistory } from "./handoff-history-builder.ts";
+import { LAZY_META_TOOL_NAMES, LazyToolRouter } from "../tools/lazy-tool-router.ts";
+import {
+  estimateTurnContextTokens,
+  resolveModelContextBudget,
+} from "../../server/turn-context-planner.ts";
 
 import {
   NATIVE_TOOLS_SCHEMA,
@@ -199,6 +205,21 @@ export async function executeAgentRunTask(
         }
       }
       const availableTools = Array.from(availableToolsMap.values());
+      const agentRowCfg = (() => {
+        try {
+          const r = deps.db.connection
+            .prepare("SELECT config_json FROM projecao_agentes WHERE agente_id = ? LIMIT 1;")
+            .get(agenteId) as { config_json?: string } | undefined;
+          return r?.config_json ? (JSON.parse(r.config_json) as Record<string, unknown>) : {};
+        } catch {
+          return {};
+        }
+      })();
+      const lazyToolRouter = new LazyToolRouter(availableTools, {
+        enabled: agentRowCfg.lazy_tools_enabled !== false,
+        threshold: 20,
+      });
+      const exposedTools = lazyToolRouter.selectExposedTools();
 
       let routineHistoryBlock = "";
       if (rotinaExecucaoId) {
@@ -245,12 +266,27 @@ export async function executeAgentRunTask(
         }
       }
 
-      const messages: ConversationMessage[] = [
+      let messages: ConversationMessage[] = [
         {
           role: "user",
           content: `Tarefa #${tarefa.tarefa_id} (${tarefa.tipo} via ${tarefa.canal_origem}): ${tarefa.titulo}\nPayload:\n${JSON.stringify(tarefa.payload, null, 2)}${routineHistoryBlock}`,
         },
       ];
+
+      if (deps.phase13Services?.contextReset && agentRowCfg.auto_compact_enabled !== false) {
+        const estTokens = estimateTurnContextTokens({
+          systemPrompt,
+          historyTexts: messages.map((m) => m.content),
+          toolsCount: exposedTools.length,
+        });
+        deps.phase13Services.contextReset.autoCompactIfNeeded({
+          agenteId,
+          threadId: effectiveThreadId,
+          estimatedTokens: estTokens,
+          maxContextTokens: resolveModelContextBudget(activeModel),
+          thresholdRatio: 0.8,
+        });
+      }
 
       let finalText = "";
       let turnsExecuted = 0;
@@ -258,6 +294,7 @@ export async function executeAgentRunTask(
       const runSingleModelAttempt = async (
         targetModel: string,
         preferredAccountId?: string | null,
+        attemptMessages: ConversationMessage[] = messages,
       ): Promise<
         | { mode: "provider"; result: Awaited<ReturnType<ReturnType<ProviderRegistry["getClientForModel"]>["streamTurn"]>> }
         | { mode: "cli"; text: string }
@@ -274,8 +311,8 @@ export async function executeAgentRunTask(
             {
               model: targetModel,
               systemPrompt,
-              messages,
-              tools: availableTools,
+              messages: attemptMessages,
+              tools: exposedTools,
             },
             (evt) => {
               if (evt.type === "thought" && evt.tokenChunk) {
@@ -302,7 +339,7 @@ export async function executeAgentRunTask(
 
         if (deps.providerConnection) {
           const provName = deps.providers.resolveProviderName(targetModel);
-          const promptMessages = messages.map((m) => ({
+          const promptMessages = attemptMessages.map((m) => ({
             role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
             text: m.content,
           }));
@@ -424,7 +461,17 @@ export async function executeAgentRunTask(
             });
 
             try {
-              const res = await runSingleModelAttempt(candidate.modelo, candidate.conta_id ?? null);
+              const portableHandoff = buildPortableHandoffHistory(
+                messages,
+                activeModel,
+                candidate.modelo,
+              );
+              const res = await runSingleModelAttempt(
+                candidate.modelo,
+                candidate.conta_id ?? null,
+                portableHandoff.messages,
+              );
+              messages = portableHandoff.messages;
               activeModel = candidate.modelo;
               return res;
             } catch (candidateErr) {
@@ -480,14 +527,26 @@ export async function executeAgentRunTask(
             artefatos: generatedArtifacts,
           });
 
-          const output = await executeAgentToolCall(deps, call, {
-            tarefa,
-            agenteId,
-            generatedArtifacts,
-            routineCtx,
-            runtimeContext,
-            wokenWaitsBlock,
-          });
+          const dispatchRunnerTool = async (
+            targetName: string,
+            targetArgs: Record<string, unknown>
+          ) =>
+            await executeAgentToolCall(
+              deps,
+              { id: call.id, name: targetName, arguments: targetArgs },
+              {
+                tarefa,
+                agenteId,
+                generatedArtifacts,
+                routineCtx,
+                runtimeContext,
+                wokenWaitsBlock,
+              }
+            );
+
+          const output = LAZY_META_TOOL_NAMES.has(call.name)
+            ? await lazyToolRouter.executeMetaTool(call.name, call.arguments, dispatchRunnerTool)
+            : await dispatchRunnerTool(call.name, call.arguments);
 
           messages.push({
             role: "tool",

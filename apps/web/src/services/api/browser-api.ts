@@ -261,4 +261,33 @@ export const browserApi = {
       }
     );
   },
+
+  async startBrowserSessionRecording(tabId: string): Promise<{
+    ok: boolean;
+    state: { tabId: string; recording: boolean; framesCount: number; lastVideoPath: string | null; lastError: string | null };
+  }> {
+    return await requestJson(
+      `/api/navegador/tabs/${encodeURIComponent(tabId)}/gravacao/iniciar`,
+      { method: "POST" }
+    );
+  },
+
+  async stopBrowserSessionRecording(tabId: string): Promise<{
+    ok: boolean;
+    state: { tabId: string; recording: boolean; framesCount: number; lastVideoPath: string | null; lastError: string | null };
+  }> {
+    return await requestJson(
+      `/api/navegador/tabs/${encodeURIComponent(tabId)}/gravacao/parar`,
+      { method: "POST" }
+    );
+  },
+
+  async getBrowserSessionRecordingStatus(tabId: string): Promise<{
+    ok: boolean;
+    state: { tabId: string; recording: boolean; framesCount: number; lastVideoPath: string | null; lastError: string | null };
+  }> {
+    return await requestJson(
+      `/api/navegador/tabs/${encodeURIComponent(tabId)}/gravacao/status`
+    );
+  },
 };

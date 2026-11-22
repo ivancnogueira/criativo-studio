@@ -17,6 +17,7 @@ export { WebSocketClient } from "./ws-transport";
 
 import { agentsChatApi } from "./api/agents-chat-api";
 import { browserApi } from "./api/browser-api";
+import { diagnosticsApi } from "./api/diagnostics-api";
 import { filesTablesApi } from "./api/files-browser-whatsapp-api";
 import { marketplaceApi } from "./api/marketplace-api";
 import { phase33Api } from "./api/phase33-api";
@@ -42,6 +43,7 @@ export const daemonApi = {
   ...whatsappApi,
   ...serversLicenseApi,
   ...socialStudioApi,
+  ...diagnosticsApi,
   ...phase33Api,
   ...phase34Api,
   ...phase35Api,

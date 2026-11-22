@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, screen, session, shell, type Tray } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, safeStorage, screen, session, shell, type Tray } from "electron";
 import {
   resolveDesktopProductRoot,
   resolveSafeUpdateArtifactPath,
@@ -10,9 +10,12 @@ import {
   type EmbeddedDaemonHandle,
   type UpdateRestartPayload,
 } from "./daemon-launcher.ts";
+import { BrowserPipWindowController } from "./browser-pip-window.ts";
+import { installDesktopCsp } from "./desktop-security.ts";
+import { registerDesktopIpcHandlers } from "./main-ipc-handlers.ts";
+import { loadOrCreateSafeVaultMasterKey } from "./safe-vault-key.ts";
 import { FloatingDockController } from "./floating-dock.ts";
 import { createStudioTray } from "./tray-manager.ts";
-import { showDesktopNotification, type NativeDesktopNotificationPayload } from "./desktop-notifications.ts";
 import { startCuaDesktopRuntime, type CuaDesktopRuntimeHandle } from "./cua-driver-runtime.ts";
 import { extractCriativoDeepLinkFromArgv, parseCriativoDeepLink } from "./deep-link-router.ts";
 import type { DeepLinkRoute } from "@criativo/contracts";
@@ -24,6 +27,29 @@ let floatingDock: FloatingDockController | null = null;
 let daemonHandle: EmbeddedDaemonHandle | null = null;
 let trayHandle: Tray | null = null;
 let cuaRuntime: CuaDesktopRuntimeHandle | null = null;
+const browserPipController = new BrowserPipWindowController();
+let activeGlobalPaletteShortcut = "CommandOrControl+Shift+Space";
+
+function registerCommandPaletteGlobalShortcut(accelerator: string): boolean {
+  try {
+    if (activeGlobalPaletteShortcut && globalShortcut.isRegistered(activeGlobalPaletteShortcut)) {
+      globalShortcut.unregister(activeGlobalPaletteShortcut);
+    }
+    const clean = accelerator.trim() || "CommandOrControl+Shift+Space";
+    const ok = globalShortcut.register(clean, () => {
+      focusOrShowMainWindow();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("criativo:open-command-palette");
+      }
+    });
+    if (ok) {
+      activeGlobalPaletteShortcut = clean;
+    }
+    return ok;
+  } catch {
+    return false;
+  }
+}
 let pendingDeepLink: DeepLinkRoute | null = extractCriativoDeepLinkFromArgv(process.argv)
   ? (() => { try { return parseCriativoDeepLink(extractCriativoDeepLinkFromArgv(process.argv)!); } catch { return null; } })()
   : null;
@@ -161,298 +187,19 @@ function createWindow(daemonPort: number, iconPath?: string): BrowserWindow {
 }
 
 function registerIpcHandlers(userDataDir: string): void {
-  ipcMain.handle("criativo:get-info", () => ({
-    version: app.getVersion(),
-    daemonUrl: daemonHandle?.baseUrl ?? "",
+  registerDesktopIpcHandlers({
     userDataDir,
-  }));
-
-  ipcMain.handle("criativo:open-external", (_evt, url: unknown) => {
-    if (typeof url !== "string") return false;
-    return openExternalValidated(url);
-  });
-
-  ipcMain.handle("criativo:open-data-dir", async () => {
-    await shell.openPath(userDataDir);
-  });
-
-  ipcMain.handle("criativo:check-updates", async () => {
-    if (!daemonHandle) return null;
-    const res = await fetch(`${daemonHandle.baseUrl}/api/studio/updates/check`, { method: "POST" });
-    return await res.json();
-  });
-
-  ipcMain.handle("criativo:trigger-update", async (_evt, targetServerId: unknown) => {
-    if (!daemonHandle) return null;
-    const res = await fetch(`${daemonHandle.baseUrl}/api/studio/updates/apply`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        target_server_id: typeof targetServerId === "string" ? targetServerId : undefined,
-      }),
-    });
-    return await res.json();
-  });
-
-  ipcMain.handle("criativo:restart-for-update", async () => {
-    if (!daemonHandle) return null;
-    const res = await fetch(`${daemonHandle.baseUrl}/api/studio/updates/restart`, {
-      method: "POST",
-    });
-    return await res.json();
-  });
-
-  ipcMain.handle("criativo:dock-get-state", () => {
-    return (
-      floatingDock?.getState() ?? {
-        visible: false,
-        expanded: false,
-        side: "right",
-        pinned: true,
-        peeked: false,
-        scalePercent: 100,
-        alwaysOnTop: true,
-        displayId: "principal",
-      }
-    );
-  });
-
-  ipcMain.handle("criativo:dock-get-displays", () => {
-    try {
-      const primary = screen.getPrimaryDisplay();
-      return screen.getAllDisplays().map((d, idx) => ({
-        id: d.id === primary.id ? "principal" : String(d.id),
-        label:
-          d.id === primary.id
-            ? "Tela principal"
-            : d.label?.trim() || `Tela ${idx + 1}`,
-        primary: d.id === primary.id,
-      }));
-    } catch {
-      return [{ id: "principal", label: "Tela principal", primary: true }];
-    }
-  });
-
-  ipcMain.handle("criativo:dock-set-expanded", (_evt, rawPayload: unknown) => {
-    const payload =
-      rawPayload && typeof rawPayload === "object"
-        ? (rawPayload as { expanded?: unknown; pillHeight?: unknown })
-        : {};
-    const expanded = Boolean(payload.expanded);
-    const pillHeight = typeof payload.pillHeight === "number" ? payload.pillHeight : undefined;
-    return (
-      floatingDock?.setExpanded(expanded, pillHeight) ?? {
-        visible: false,
-        expanded,
-        side: "right",
-        pinned: true,
-        peeked: false,
-      }
-    );
-  });
-
-  ipcMain.handle("criativo:dock-set-visible", async (_evt, visible: unknown) => {
-    if (!floatingDock) return false;
-    return await floatingDock.setVisible(Boolean(visible));
-  });
-
-  ipcMain.handle("criativo:dock-set-pinned", (_evt, rawPayload: unknown) => {
-    const payload =
-      rawPayload && typeof rawPayload === "object"
-        ? (rawPayload as { pinned?: unknown; pillHeight?: unknown })
-        : {};
-    const pinned = Boolean(payload.pinned);
-    const pillHeight = typeof payload.pillHeight === "number" ? payload.pillHeight : undefined;
-    return (
-      floatingDock?.setPinned(pinned, pillHeight) ?? {
-        visible: true,
-        expanded: false,
-        side: "right",
-        pinned,
-        peeked: false,
-      }
-    );
-  });
-
-  ipcMain.handle("criativo:dock-set-peeked", (_evt, rawPayload: unknown) => {
-    const payload =
-      rawPayload && typeof rawPayload === "object"
-        ? (rawPayload as { peeked?: unknown; pillHeight?: unknown })
-        : {};
-    const peeked = Boolean(payload.peeked);
-    const pillHeight = typeof payload.pillHeight === "number" ? payload.pillHeight : undefined;
-    return (
-      floatingDock?.setPeeked(peeked, pillHeight) ?? {
-        visible: true,
-        expanded: false,
-        side: "right",
-        pinned: false,
-        peeked,
-      }
-    );
-  });
-
-  ipcMain.handle("criativo:dock-configure", async (_evt, rawPayload: unknown) => {
-    const payload =
-      rawPayload && typeof rawPayload === "object"
-        ? (rawPayload as {
-            visible?: unknown;
-            side?: unknown;
-            pinned?: unknown;
-            scalePercent?: unknown;
-            alwaysOnTop?: unknown;
-            displayId?: unknown;
-            pillHeight?: unknown;
-          })
-        : {};
-    if (!floatingDock) {
-      return {
-        visible: typeof payload.visible === "boolean" ? payload.visible : true,
-        expanded: false,
-        side: payload.side === "left" ? "left" : "right",
-        pinned: typeof payload.pinned === "boolean" ? payload.pinned : true,
-        peeked: false,
-        scalePercent: typeof payload.scalePercent === "number" ? payload.scalePercent : 100,
-        alwaysOnTop: typeof payload.alwaysOnTop === "boolean" ? payload.alwaysOnTop : true,
-        displayId: typeof payload.displayId === "string" ? payload.displayId : "principal",
-      };
-    }
-    return await floatingDock.configure({
-      visible: typeof payload.visible === "boolean" ? payload.visible : undefined,
-      side: payload.side === "left" || payload.side === "right" ? payload.side : undefined,
-      pinned: typeof payload.pinned === "boolean" ? payload.pinned : undefined,
-      scalePercent: typeof payload.scalePercent === "number" ? payload.scalePercent : undefined,
-      alwaysOnTop: typeof payload.alwaysOnTop === "boolean" ? payload.alwaysOnTop : undefined,
-      displayId: typeof payload.displayId === "string" ? payload.displayId : undefined,
-      pillHeight: typeof payload.pillHeight === "number" ? payload.pillHeight : undefined,
-    });
-  });
-
-  ipcMain.handle("criativo:dock-start-drag", () => {
-    floatingDock?.startDrag();
-  });
-
-  ipcMain.handle("criativo:dock-move-drag", () => {
-    floatingDock?.moveDrag();
-  });
-
-  ipcMain.handle("criativo:dock-end-drag", () => {
-    return (
-      floatingDock?.endDrag() ?? {
-        visible: true,
-        expanded: false,
-        side: "right",
-        pinned: true,
-        peeked: false,
-      }
-    );
-  });
-
-  ipcMain.handle("criativo:dock-sync-active-server", (_evt, rawServerId: unknown) => {
-    const serverId = typeof rawServerId === "string" && rawServerId.trim() ? rawServerId.trim() : "primary";
-    floatingDock?.notifyActiveServerChanged(serverId);
-    return true;
-  });
-
-  ipcMain.handle("criativo:open-main-window", (_evt, rawOpts: unknown) => {
-    focusOrShowMainWindow();
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      const payload =
-        rawOpts && typeof rawOpts === "object"
-          ? (rawOpts as { agenteId?: string; action?: "new-agent" | "open-dock-settings" })
-          : {};
-      if (payload.agenteId || payload.action) {
-        mainWindow.webContents.send("criativo:main-navigate", payload);
-      }
-    }
-  });
-
-  ipcMain.handle("criativo:pick-folder", async () => {
-    const parentWin =
-      mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
-    const opts: Electron.OpenDialogOptions = {
-      title: "Selecionar Pasta Autorizada",
-      properties: ["openDirectory"],
-    };
-    const result = parentWin
-      ? await dialog.showOpenDialog(parentWin, opts)
-      : await dialog.showOpenDialog(opts);
-    if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
-      return { canceled: true, path: null };
-    }
-    return { canceled: false, path: result.filePaths[0]! };
-  });
-
-  ipcMain.handle("criativo:open-agent-window", async (_evt, rawPayload: unknown) => {
-    if (!daemonHandle) return false;
-    const payload =
-      rawPayload && typeof rawPayload === "object"
-        ? (rawPayload as { agenteId?: unknown })
-        : {};
-    const agenteId = typeof payload.agenteId === "string" ? payload.agenteId.trim() : "";
-    if (!agenteId) return false;
-
-    const productRoot = resolveDesktopProductRoot({
-      isPackaged: app.isPackaged,
-      resourcesPath: (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath,
-    });
-    const iconPath = resolveWindowIconPath(productRoot);
-    const childWin = new BrowserWindow({
-      width: 1120,
-      height: 760,
-      minWidth: 780,
-      minHeight: 560,
-      title: "Criativo AI Studio Online",
-      backgroundColor: "#0D0D0D",
-      ...(iconPath ? { icon: iconPath } : {}),
-      autoHideMenuBar: true,
-      webPreferences: {
-        preload: join(__dirname, "preload.cjs"),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-      },
-    });
-    const port = daemonHandle.port;
-    childWin.webContents.setWindowOpenHandler(({ url }) => {
-      if (!isLocalDaemonOrigin(url, port)) {
-        openExternalValidated(url);
-        return { action: "deny" };
-      }
-      return { action: "allow" };
-    });
-    childWin.webContents.on("will-navigate", (event: { preventDefault: () => void }, url: string) => {
-      if (url.startsWith("data:text/html")) return;
-      if (!isLocalDaemonOrigin(url, port)) {
-        event.preventDefault();
-        openExternalValidated(url);
-      }
-    });
-    await childWin.loadURL(`${daemonHandle.baseUrl}/?agent=${encodeURIComponent(agenteId)}`);
-    return true;
-  });
-
-  ipcMain.handle("criativo:notify-native", async (_evt, rawPayload: unknown) => {
-    const payload =
-      rawPayload && typeof rawPayload === "object"
-        ? (rawPayload as NativeDesktopNotificationPayload)
-        : { title: "Criativo AI Studio", body: "" };
-    return showDesktopNotification(() => mainWindow, payload);
-  });
-
-  ipcMain.handle("criativo:set-window-vibrancy", (_evt, enabled: unknown) => {
-    if (!mainWindow || mainWindow.isDestroyed()) return false;
-    const on = Boolean(enabled);
-    try {
-      if (process.platform === "darwin") {
-        mainWindow.setVibrancy(on ? "under-window" : null);
-      } else if (process.platform === "win32" && typeof mainWindow.setBackgroundMaterial === "function") {
-        mainWindow.setBackgroundMaterial(on ? "acrylic" : "none");
-      }
-      return true;
-    } catch {
-      return false;
-    }
+    preloadPath: join(__dirname, "preload.cjs"),
+    getDaemonHandle: () => daemonHandle,
+    getMainWindow: () => mainWindow,
+    getFloatingDock: () => floatingDock,
+    browserPipController,
+    registerCommandPaletteShortcut: registerCommandPaletteGlobalShortcut,
+    resolveIconPath: resolveWindowIconPath,
+    isLocalDaemonOrigin,
+    openExternalValidated,
+    focusOrShowMainWindow,
+    onLog: writeDesktopLog,
   });
 }
 
@@ -606,6 +353,15 @@ async function bootstrapDesktop(): Promise<void> {
   activeBootLogPath = join(userDataDir, "logs", "desktop-boot.log");
   writeDesktopLog(`Iniciando Criativo AI Studio v${app.getVersion()} (packaged=${app.isPackaged})`);
 
+  installDesktopCsp(session.defaultSession, (rawUrl) => {
+    if (daemonHandle) {
+      return isLocalDaemonOrigin(rawUrl, daemonHandle.port);
+    }
+    return isAllowedLoopbackOrigin(rawUrl);
+  });
+
+  const vaultKey = loadOrCreateSafeVaultMasterKey(userDataDir, safeStorage, writeDesktopLog);
+
   const productRoot = resolveDesktopProductRoot({
     isPackaged: app.isPackaged,
     resourcesPath: (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath,
@@ -614,6 +370,7 @@ async function bootstrapDesktop(): Promise<void> {
 
   const iconPath = resolveWindowIconPath(productRoot);
   registerIpcHandlers(userDataDir);
+  registerCommandPaletteGlobalShortcut(activeGlobalPaletteShortcut);
 
   // Inicia janela imediata com Splash enquanto Daemon sobe silenciosamente em background
   mainWindow = createWindow(3000, iconPath);
@@ -626,6 +383,7 @@ async function bootstrapDesktop(): Promise<void> {
     preferredPort: 3000,
     isPackaged: app.isPackaged,
     appVersion: app.getVersion(),
+    vaultKey,
     onUpdateRestartRequested: (payload) => {
       void handleUpdateRestart(userDataDir, payload);
     },
@@ -687,6 +445,7 @@ async function bootstrapDesktop(): Promise<void> {
 
   cuaRuntime = await startCuaDesktopRuntime({
     getDaemonBaseUrl: () => daemonHandle?.baseUrl ?? "",
+    getDaemonPort: () => daemonHandle?.port ?? null,
     onLog: writeDesktopLog,
   }).catch(() => null);
 
@@ -705,6 +464,12 @@ app.on("before-quit", () => {
 });
 
 app.on("will-quit", (event: { preventDefault: () => void }) => {
+  try {
+    globalShortcut.unregisterAll();
+  } catch {
+    // ignore
+  }
+  browserPipController.close();
   void cuaRuntime?.dispose();
   cuaRuntime = null;
   floatingDock?.destroy();

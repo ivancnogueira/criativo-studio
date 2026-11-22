@@ -7,7 +7,58 @@ import {
   isSensitiveFieldHint,
   resolveBrowserTarget,
 } from "../browser-snapshot.ts";
+import { detectPageChallenge } from "../browser-challenge-detector.ts";
+import {
+  BrowserPolicyGuard,
+  looksLikePaymentSubmitHint,
+  type BrowserNavigationPolicy,
+} from "../browser-policy-guard.ts";
 import { BROWSER_FILL_FIELDS_MAX_FIELDS, BROWSER_FILL_FIELDS_MAX_TEXT_BYTES, type BrowserAutomationRuntimeContext, type BrowserExecuteActionInput } from "./browser-types.ts";
+
+function loadAgentBrowserPolicy(
+  db: BrowserAutomationRuntimeContext["db"],
+  agenteId?: string | null
+): BrowserPolicyGuard {
+  if (!agenteId) return new BrowserPolicyGuard();
+  try {
+    const row = db.connection
+      .prepare("SELECT config_json FROM projecao_agentes WHERE agente_id = ? LIMIT 1;")
+      .get(agenteId) as { config_json?: string } | undefined;
+    if (!row?.config_json) return new BrowserPolicyGuard();
+    const cfg = JSON.parse(row.config_json) as { browser_policy?: BrowserNavigationPolicy };
+    return new BrowserPolicyGuard(cfg.browser_policy ?? {});
+  } catch {
+    return new BrowserPolicyGuard();
+  }
+}
+
+async function pauseIfChallengeDetected(
+  ctx: BrowserAutomationRuntimeContext,
+  entry: Parameters<BrowserAutomationRuntimeContext["captureTabSnapshot"]>[0],
+  snap: Awaited<ReturnType<BrowserAutomationRuntimeContext["captureTabSnapshot"]>>
+) {
+  if (!entry.page) return snap;
+  const challenge = await detectPageChallenge(entry.page);
+  if (!challenge.detected) return snap;
+
+  entry.userControl = true;
+  ctx.getWsHub()?.broadcast("browser:challenge_detected", {
+    tabId: entry.tabId,
+    agenteId: entry.agenteId,
+    kind: challenge.kind ?? "anti_bot",
+    url: challenge.url,
+    title: challenge.title,
+    reason: challenge.reason ?? "Verificação anti-bot/CAPTCHA detectada.",
+    detectedAt: new Date().toISOString(),
+  });
+  ctx.broadcastTabsAndFrame(entry);
+  return {
+    ...snap,
+    challengeDetected: true,
+    pausedForHuman: true,
+    challenge,
+  };
+}
 
 export async function executeBrowserCdpAction(
   ctx: BrowserAutomationRuntimeContext,
@@ -23,6 +74,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
 
       case "open": {
         const safeUrl = assertSafeNavigationUrl(input.url ?? "");
+        loadAgentBrowserPolicy(ctx.db, input.agenteId).assertUrlAllowed(safeUrl.toString());
         const { profile, proxy } = ctx.resolveProfileAndLaunchProxy(input.perfilId, input.agenteId);
 
         const tab = await ctx.sessionManager.openTab({
@@ -51,12 +103,13 @@ input: BrowserExecuteActionInput): Promise<unknown> {
 
         const snap = await ctx.captureTabSnapshot(tab, Boolean(input.image));
         ctx.broadcastTabsAndFrame(tab);
-        return snap;
+        return await pauseIfChallengeDetected(ctx, tab, snap);
       }
 
       case "navigate": {
         const entry = ctx.requireRealTab(input.tabId);
         const safeUrl = assertSafeNavigationUrl(input.url ?? "");
+        loadAgentBrowserPolicy(ctx.db, input.agenteId ?? entry.agenteId).assertUrlAllowed(safeUrl.toString());
         await entry.page!.goto(safeUrl.toString(), {
           waitUntil: "domcontentloaded",
           timeout: Math.min(Math.max(input.timeoutMs ?? 25_000, 1000), 60_000),
@@ -64,7 +117,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
         entry.revision += 1;
         const snap = await ctx.captureTabSnapshot(entry, Boolean(input.image));
         ctx.broadcastTabsAndFrame(entry);
-        return snap;
+        return await pauseIfChallengeDetected(ctx, entry, snap);
       }
 
       case "go_back": {
@@ -126,6 +179,13 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       case "click": {
         const entry = ctx.requireRealTab(input.tabId);
         if (!input.target) throw new Error("Informe 'target' em click.");
+        const targetHint = JSON.stringify(input.target);
+        if (looksLikePaymentSubmitHint(targetHint)) {
+          loadAgentBrowserPolicy(ctx.db, input.agenteId ?? entry.agenteId).assertSensitiveActionAllowed(
+            "payment_submit",
+            targetHint
+          );
+        }
         const resolved = resolveBrowserTarget(
           entry.page!,
           input.target,
@@ -140,7 +200,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
         entry.revision += 1;
         const snap = await ctx.captureTabSnapshot(entry, false);
         ctx.broadcastTabsAndFrame(entry);
-        return snap;
+        return await pauseIfChallengeDetected(ctx, entry, snap);
       }
 
       case "type": {

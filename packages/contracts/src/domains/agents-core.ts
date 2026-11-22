@@ -134,6 +134,8 @@ export interface AgenteConfigVisual {
   skill_learning_mode?: SkillLearningMode;
   task_limit?: number;
   context_cutoff_at?: string | null;
+  auto_compact_enabled?: boolean;
+  lazy_tools_enabled?: boolean;
   cua_enabled?: boolean;
   [key: string]: unknown;
 }

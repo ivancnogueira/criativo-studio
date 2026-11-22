@@ -405,6 +405,35 @@ export async function handlePhase15BrowserRoutes(
     return true;
   }
 
+  const recStartMatch = path.match(/^\/api\/navegador\/tabs\/([^/]+)\/gravacao\/iniciar$/);
+  if (method === "POST" && recStartMatch) {
+    try {
+      const tabId = decodeURIComponent(recStartMatch[1]!);
+      sendJson(res, 200, { ok: true, state: browserService.startSessionRecording(tabId) });
+    } catch (err) {
+      sendJson(res, mapHttpErrorStatus(err), { erro: err instanceof Error ? err.message : String(err) });
+    }
+    return true;
+  }
+
+  const recStopMatch = path.match(/^\/api\/navegador\/tabs\/([^/]+)\/gravacao\/parar$/);
+  if (method === "POST" && recStopMatch) {
+    try {
+      const tabId = decodeURIComponent(recStopMatch[1]!);
+      sendJson(res, 200, { ok: true, state: browserService.stopSessionRecording(tabId) });
+    } catch (err) {
+      sendJson(res, mapHttpErrorStatus(err), { erro: err instanceof Error ? err.message : String(err) });
+    }
+    return true;
+  }
+
+  const recStatusMatch = path.match(/^\/api\/navegador\/tabs\/([^/]+)\/gravacao\/status$/);
+  if (method === "GET" && recStatusMatch) {
+    const tabId = decodeURIComponent(recStatusMatch[1]!);
+    sendJson(res, 200, { ok: true, state: browserService.getSessionRecordingStatus(tabId) });
+    return true;
+  }
+
 
   return false;
 }

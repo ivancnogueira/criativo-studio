@@ -4,6 +4,7 @@ FROM node:22-bookworm-slim AS builder
 WORKDIR /app
 COPY package.json package-lock.json* tsconfig.base.json ./
 COPY packages/contracts/package.json ./packages/contracts/
+COPY packages/i18n/package.json ./packages/i18n/
 COPY packages/whatsapp/package.json ./packages/whatsapp/
 COPY apps/daemon/package.json ./apps/daemon/
 COPY apps/web/package.json ./apps/web/

@@ -24,6 +24,7 @@ import {
   Palette,
   PanelRight,
   RotateCcw,
+  ShieldAlert,
   Sliders,
   Sparkles,
   Zap,
@@ -38,6 +39,7 @@ import {
   SettingsDockTab,
   SettingsGeneralTab,
 } from "./SettingsGeneralTabs";
+import { SettingsDiagnosticsTab } from "./SettingsDiagnosticsTab";
 import { SettingsLicenseTab } from "./SettingsLicenseTab";
 import { SettingsUpdatesTab } from "./SettingsUpdatesTab";
 import {
@@ -59,7 +61,8 @@ export type SettingsModalTabId =
   | "voz"
   | "armazenamento"
   | "licenca"
-  | "atualizacoes";
+  | "atualizacoes"
+  | "diagnostico";
 
 const ALLOWED_THEMES = new Set(["carbon_dark", "midnight_contrast", "light"]);
 const ALLOWED_SCALES = new Set([80, 90, 100, 110, 120]);
@@ -169,7 +172,7 @@ const NAV_GROUPS: Array<{
   items: Array<{
     id: SettingsModalTabId;
     label: string;
-    labelKey: I18nMessageKey;
+    labelKey?: I18nMessageKey;
     Icon: React.FC<{ className?: string }>;
   }>;
 }> = [
@@ -196,6 +199,7 @@ const NAV_GROUPS: Array<{
       { id: "licenca", label: "Licença & Plano", labelKey: "settings.tab.licenca", Icon: KeyRound },
       { id: "armazenamento", label: "Armazenamento", labelKey: "settings.tab.armazenamento", Icon: HardDrive },
       { id: "atualizacoes", label: "Atualizações & Novidades", labelKey: "settings.tab.atualizacoes", Icon: Sparkles },
+      { id: "diagnostico", label: "Diagnóstico & Logs", Icon: ShieldAlert },
     ],
   },
 ];
@@ -400,7 +404,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-[#6A6A6A]">
               {group.grupo}
             </div>
-            {group.items.map(({ id, labelKey, Icon }) => {
+            {group.items.map(({ id, label, labelKey, Icon }) => {
               const active = activeTab === id;
               return (
                 <button
@@ -414,7 +418,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   }`}
                 >
                   <Icon className={`h-4 w-4 shrink-0 ${active ? "text-[#42A0FF]" : ""}`} />
-                  <span className="truncate">{t(labelKey)}</span>
+                  <span className="truncate">{labelKey ? t(labelKey) : label}</span>
                 </button>
               );
             })}
@@ -428,7 +432,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     <div className={isPageVariant ? "flex-1 min-w-0 bg-[#141414] flex flex-col" : "flex-1 min-w-0 bg-[#1A1A1A] flex flex-col"}>
       <header className="h-[52px] shrink-0 px-[24px] border-b border-white/[0.06] flex items-center justify-between gap-3 bg-[#141414]/60">
         <h2 className="text-[20px] font-semibold text-white truncate">
-          {activeMeta ? t(activeMeta.labelKey) : t("settings.title")}
+          {activeMeta ? (activeMeta.labelKey ? t(activeMeta.labelKey) : activeMeta.label) : t("settings.title")}
         </h2>
         {!isPageVariant && (
           <button
@@ -561,6 +565,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               onRestartForUpdate={onRestartForUpdate}
             />
           )}
+
+          {activeTab === "diagnostico" && <SettingsDiagnosticsTab />}
         </div>
       </div>
 

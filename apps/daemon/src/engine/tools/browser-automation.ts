@@ -21,6 +21,7 @@ import {
   type ManagedTabEntry,
 } from "./browser-cdp-session.ts";
 import { assertSafeNavigationUrl, buildSemanticSnapshot } from "./browser-snapshot.ts";
+import { BrowserSessionRecorder } from "./browser-session-recorder.ts";
 import { UserBrowsingLogService } from "./user-browsing-log.ts";
 import {
   BROWSER_FILL_FIELDS_MAX_FIELDS,
@@ -82,6 +83,7 @@ export class BrowserAutomationService {
   private readonly workspaceRoot: string;
   public readonly sessionManager: BrowserCdpSessionManager;
   public readonly browsingLog: UserBrowsingLogService;
+  public readonly sessionRecorder: BrowserSessionRecorder;
   private readonly activeTakeovers = new Map<string, PendingTakeoverEntry>();
 
   constructor(
@@ -96,6 +98,7 @@ export class BrowserAutomationService {
     this.workspaceRoot = resolve(workspaceRoot ?? process.cwd());
     this.sessionManager = new BrowserCdpSessionManager(this.workspaceRoot);
     this.browsingLog = new UserBrowsingLogService(db);
+    this.sessionRecorder = new BrowserSessionRecorder(this.workspaceRoot);
   }
 
   public setWebSocketHub(wsHub: WebSocketHub): void {
@@ -300,6 +303,9 @@ export class BrowserAutomationService {
       title: string;
       userControl: boolean;
     }) => {
+      if (this.sessionRecorder.getStatus(tab.tabId).recording) {
+        this.sessionRecorder.appendDataUrlFrame(tab.tabId, frame.dataUrl);
+      }
       this.wsHub?.broadcast("browser:frame", {
         ...frame,
         agenteId: tab.agenteId,
@@ -395,6 +401,23 @@ export class BrowserAutomationService {
 
   public stopTeachRecording(tabId: string, action: "save" | "discard" = "save") {
     return stopBrowserTeachRecording(this.getCtx(), tabId, action);
+  }
+
+  public startSessionRecording(tabId: string) {
+    const tab = this.sessionManager.getTab(tabId);
+    const state = this.sessionRecorder.startRecording(tabId);
+    if (tab && tab.page) {
+      this.ensureTabPreviewStream(tab);
+    }
+    return state;
+  }
+
+  public stopSessionRecording(tabId: string) {
+    return this.sessionRecorder.stopRecording(tabId);
+  }
+
+  public getSessionRecordingStatus(tabId: string) {
+    return this.sessionRecorder.getStatus(tabId);
   }
 
 

@@ -19,6 +19,7 @@ import {
   type AgentAvatarVisual,
 } from "../../components/MascoteAvatar";
 import { BrowserTeachBar } from "./BrowserTeachBar";
+import { InAppBrowserRecorderPipControls } from "./InAppBrowserRecorderPipControls";
 
 export interface BrowserLiveFrame {
   tabId: string;
@@ -435,8 +436,9 @@ export const InAppBrowserPanel: React.FC<InAppBrowserPanelProps> = ({
             ))}
         </div>
 
-        {/* Direita: Voltar ao chat */}
+        {/* Direita: Gravar + PiP + Ensinar + Voltar ao chat */}
         <div className="flex items-center gap-2 shrink-0 flex-1 justify-end">
+          <InAppBrowserRecorderPipControls tabId={resolvedTabId} />
           {onStartTeach && onStopTeach && (
             <button
               type="button"

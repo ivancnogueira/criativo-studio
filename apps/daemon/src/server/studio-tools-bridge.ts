@@ -91,3 +91,10 @@ export {
   type Phase15ToolServices,
 } from "./tools/phase15-tools-schema.ts";
 export { executePhase15ChatTool, executePhase15ToolCall } from "./tools/phase15-tools-exec.ts";
+export {
+  DEFAULT_CORE_EXPOSED_TOOLS,
+  LAZY_META_TOOL_NAMES,
+  LAZY_META_TOOLS_SCHEMA,
+  LazyToolRouter,
+  type IndexedToolSummary,
+} from "../engine/tools/lazy-tool-router.ts";

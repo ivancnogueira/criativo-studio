@@ -74,6 +74,7 @@ import { AutoUpdateService } from "../updater/auto-update-service.ts";
 import { IdleWaitCoordinator } from "../updater/idle-wait-coordinator.ts";
 import { MediaProviderCatalog } from "../workflows/media-provider-catalog.ts";
 import type { DaemonServerOptions } from "./daemon-http-utils.ts";
+import { StructuredLogger } from "./structured-logger.ts";
 
 export interface DaemonLateCallbacks {
   getActivePort: () => number;
@@ -106,6 +107,9 @@ export async function createDaemonInfraServices(
   }
 
   const queue = new FifoQueueManager(db);
+  const structuredLogger = new StructuredLogger({
+    logsDir: join(studioPaths.userDataRoot, "logs"),
+  });
   const vault = new VaultService(db, options.vaultMasterKey);
   const wsHub = new WebSocketHub();
   const licenseService = new LicenseClientService({
@@ -550,6 +554,7 @@ export async function createDaemonInfraServices(
     studioPaths,
     resolvedWorkspaceRoot,
     db,
+    structuredLogger,
     recoveryReport,
     queue,
     vault,

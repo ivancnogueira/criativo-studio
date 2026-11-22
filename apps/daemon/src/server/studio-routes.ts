@@ -26,6 +26,7 @@ import { tryHandleServersTransferRoutes } from "./routes/servers-transfer-routes
 import { tryHandleCrmRoutes } from "./routes/crm-routes.ts";
 import { tryHandleVoiceHostRoutes } from "./routes/voice-host-routes.ts";
 import { tryHandlePhase37EcosystemRoutes } from "./routes/phase37-ecosystem-routes.ts";
+import { tryHandleDiagnosticsSearchRoutes } from "./routes/diagnostics-search-routes.ts";
 
 export { selectBalancedVisualAssets, type LabeledVisualAsset };
 export type { StudioRoutesDeps } from "./routes/route-helpers.ts";
@@ -103,6 +104,7 @@ export async function tryHandleStudioRoute(
     tryHandleCrmRoutes,
     tryHandleVoiceHostRoutes,
     tryHandlePhase37EcosystemRoutes,
+    tryHandleDiagnosticsSearchRoutes,
   ];
 
   for (const handler of handlers) {

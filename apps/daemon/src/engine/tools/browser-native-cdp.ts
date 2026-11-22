@@ -6,8 +6,9 @@ import {
   findFreeLoopbackTcpPort,
 } from "./browser-cdp-websocket.ts";
 import { NativeCdpPage } from "./browser-cdp-page.ts";
+import { detectPageChallenge } from "./browser-challenge-detector.ts";
 
-export { assertLoopbackCdpEndpoint, CdpWebSocketClient, NativeCdpPage };
+export { assertLoopbackCdpEndpoint, CdpWebSocketClient, NativeCdpPage, detectPageChallenge };
 
 export class NativeCdpBrowserSession {
   private readonly httpBaseUrl: string;

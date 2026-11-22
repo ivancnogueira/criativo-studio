@@ -371,4 +371,201 @@ export class HistorySearchService {
 
     return { mensagens, hasMore };
   }
+
+  /**
+   * Busca global unificada no estúdio para a Paleta Ctrl+K (`G-04`).
+   * Aplica redação prévia de segredos em mensagens antes do match para evitar vazamento ou oráculo de segredos.
+   */
+  public searchGlobalStudio(query: string, limitPerGroup = 5): {
+    query: string;
+    total: number;
+    grupos: {
+      agentes: Array<{ id: string; titulo: string; subtitulo: string; section: "agentes" }>;
+      equipes: Array<{ id: string; titulo: string; subtitulo: string; section: "agentes" }>;
+      threads: Array<{ id: string; titulo: string; subtitulo: string; agente_id: string; section: "agentes" }>;
+      mensagens: Array<{ id: string; titulo: string; subtitulo: string; agente_id: string | null; section: "agentes" }>;
+      workflows: Array<{ id: string; titulo: string; subtitulo: string; section: "fluxos" }>;
+      rotinas: Array<{ id: string; titulo: string; subtitulo: string; section: "agenda" }>;
+      arquivos: Array<{ id: string; titulo: string; subtitulo: string; section: "arquivos" }>;
+    };
+  } {
+    const cleanQ = String(query ?? "").trim().toLowerCase();
+    const limit = Math.max(1, Math.min(20, Number(limitPerGroup) || 5));
+    const likePattern = `%${cleanQ}%`;
+
+    const agentes: Array<{ id: string; titulo: string; subtitulo: string; section: "agentes" }> = [];
+    const equipes: Array<{ id: string; titulo: string; subtitulo: string; section: "agentes" }> = [];
+    const threads: Array<{ id: string; titulo: string; subtitulo: string; agente_id: string; section: "agentes" }> = [];
+    const mensagens: Array<{ id: string; titulo: string; subtitulo: string; agente_id: string | null; section: "agentes" }> = [];
+    const workflows: Array<{ id: string; titulo: string; subtitulo: string; section: "fluxos" }> = [];
+    const rotinas: Array<{ id: string; titulo: string; subtitulo: string; section: "agenda" }> = [];
+    const arquivos: Array<{ id: string; titulo: string; subtitulo: string; section: "arquivos" }> = [];
+
+    if (!cleanQ) {
+      return {
+        query: "",
+        total: 0,
+        grupos: { agentes, equipes, threads, mensagens, workflows, rotinas, arquivos },
+      };
+    }
+
+    try {
+      const agRows = this.db.connection
+        .prepare(
+          `SELECT agente_id, nome, papel FROM projecao_agentes
+           WHERE LOWER(nome) LIKE ? OR LOWER(papel) LIKE ? OR LOWER(agente_id) LIKE ?
+           ORDER BY ordem_exibicao ASC LIMIT ?;`
+        )
+        .all(likePattern, likePattern, likePattern, limit) as Array<{ agente_id: string; nome: string; papel: string }>;
+      for (const r of agRows) {
+        agentes.push({ id: r.agente_id, titulo: r.nome, subtitulo: r.papel, section: "agentes" });
+      }
+    } catch {
+      // tabela opcional
+    }
+
+    try {
+      const teamRows = this.db.connection
+        .prepare(
+          `SELECT canal_id, nome, COALESCE(descricao, '') AS descricao FROM projecao_grupos_equipe
+           WHERE LOWER(nome) LIKE ? OR LOWER(COALESCE(descricao, '')) LIKE ?
+           LIMIT ?;`
+        )
+        .all(likePattern, likePattern, limit) as Array<{ canal_id: string; nome: string; descricao: string }>;
+      for (const r of teamRows) {
+        equipes.push({
+          id: r.canal_id,
+          titulo: r.nome,
+          subtitulo: r.descricao || "Equipe multi-agente",
+          section: "agentes",
+        });
+      }
+    } catch {
+      // tabela opcional
+    }
+
+    if (this.hasAgentThreadsTable()) {
+      try {
+        const thRows = this.db.connection
+          .prepare(
+            `SELECT thread_id, agente_id, titulo, estado FROM projecao_agente_threads
+             WHERE LOWER(titulo) LIKE ? AND arquivada_em IS NULL
+             ORDER BY atualizado_em DESC LIMIT ?;`
+          )
+          .all(likePattern, limit) as Array<{ thread_id: string; agente_id: string; titulo: string; estado: string }>;
+        for (const r of thRows) {
+          threads.push({
+            id: r.thread_id,
+            titulo: r.titulo,
+            subtitulo: `Thread (${r.agente_id}) · ${r.estado}`,
+            agente_id: r.agente_id,
+            section: "agentes",
+          });
+        }
+      } catch {
+        // tabela opcional
+      }
+    }
+
+    try {
+      // Inspeciona apenas janela recente de mensagens e redige segredos ANTES de testar correspondência
+      const msgRows = this.db.connection
+        .prepare(
+          `SELECT mensagem_id, agente_id, canal_id, conteudo_markdown
+           FROM projecao_conversas_chat
+           WHERE COALESCE(item_type, 'mensagem') = 'mensagem'
+           ORDER BY criado_em DESC LIMIT 250;`
+        )
+        .all() as Array<{ mensagem_id: string; agente_id: string | null; canal_id: string; conteudo_markdown: string }>;
+      for (const m of msgRows) {
+        if (mensagens.length >= limit) break;
+        const safeText = this.redactSecrets(String(m.conteudo_markdown ?? ""));
+        if (!safeText.toLowerCase().includes(cleanQ)) continue;
+        mensagens.push({
+          id: m.mensagem_id,
+          titulo: safeText.replace(/\s+/g, " ").trim().slice(0, 90),
+          subtitulo: m.agente_id ? `Conversa com ${m.agente_id}` : m.canal_id,
+          agente_id: m.agente_id,
+          section: "agentes",
+        });
+      }
+    } catch {
+      // tabela opcional
+    }
+
+    try {
+      const wfRows = this.db.connection
+        .prepare(
+          `SELECT workflow_id, nome, COALESCE(descricao, '') AS descricao FROM projecao_workflows
+           WHERE LOWER(nome) LIKE ? OR LOWER(COALESCE(descricao, '')) LIKE ?
+           ORDER BY atualizado_em DESC LIMIT ?;`
+        )
+        .all(likePattern, likePattern, limit) as Array<{ workflow_id: string; nome: string; descricao: string }>;
+      for (const w of wfRows) {
+        workflows.push({
+          id: w.workflow_id,
+          titulo: w.nome,
+          subtitulo: w.descricao || "Workflow em grafo",
+          section: "fluxos",
+        });
+      }
+    } catch {
+      // tabela opcional
+    }
+
+    try {
+      const rtRows = this.db.connection
+        .prepare(
+          `SELECT rotina_id, nome, owner_id FROM projecao_agente_rotinas
+           WHERE LOWER(nome) LIKE ?
+           ORDER BY atualizado_em DESC LIMIT ?;`
+        )
+        .all(likePattern, limit) as Array<{ rotina_id: string; nome: string; owner_id: string }>;
+      for (const r of rtRows) {
+        rotinas.push({
+          id: r.rotina_id,
+          titulo: r.nome,
+          subtitulo: `Rotina · ${r.owner_id}`,
+          section: "agenda",
+        });
+      }
+    } catch {
+      // tabela opcional
+    }
+
+    try {
+      const fileRows = this.db.connection
+        .prepare(
+          `SELECT arquivo_id, nome, caminho_relativo FROM projecao_arquivos
+           WHERE LOWER(nome) LIKE ? OR LOWER(caminho_relativo) LIKE ?
+           ORDER BY criado_em DESC LIMIT ?;`
+        )
+        .all(likePattern, likePattern, limit) as Array<{ arquivo_id: string; nome: string; caminho_relativo: string }>;
+      for (const f of fileRows) {
+        arquivos.push({
+          id: f.arquivo_id,
+          titulo: f.nome,
+          subtitulo: f.caminho_relativo,
+          section: "arquivos",
+        });
+      }
+    } catch {
+      // tabela opcional
+    }
+
+    const total =
+      agentes.length +
+      equipes.length +
+      threads.length +
+      mensagens.length +
+      workflows.length +
+      rotinas.length +
+      arquivos.length;
+
+    return {
+      query: query.trim(),
+      total,
+      grupos: { agentes, equipes, threads, mensagens, workflows, rotinas, arquivos },
+    };
+  }
 }

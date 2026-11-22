@@ -52,6 +52,8 @@ import {
   parseBackupModelsJson,
 } from "../../engine/runner/backup-models-resolver.ts";
 import { compactRecentHistory } from "./chat-routing-helpers.ts";
+import { LAZY_META_TOOL_NAMES } from "../../engine/tools/lazy-tool-router.ts";
+import { buildPortableChatMessages } from "../../engine/runner/handoff-history-builder.ts";
 import type { ModelAttemptContext } from "./agent-reply-types.ts";
 
 export async function tryApiKeyOrOllamaAttempt(ctx: ModelAttemptContext): Promise<string | null> {
@@ -91,10 +93,18 @@ export async function tryApiKeyOrOllamaAttempt(ctx: ModelAttemptContext): Promis
       const t0 = Date.now();
       try {
         const client = deps.providers.getClientForModel(targetModel);
-        const turnMessages: ConversationMessage[] = compactRecentHistory(history, 6, 1200).map((item) => ({
-          role: item.role,
-          content: item.text,
-        }));
+        const turnMessages: ConversationMessage[] = ctx.handoffNote
+          ? buildPortableChatMessages(history, agente.modelo_padrao, targetModel).messages
+          : compactRecentHistory(history, 6, 1200).map((item) => ({
+              role: item.role,
+              content: item.text,
+            }));
+        if (ctx.handoffNote) {
+          turnMessages.push({
+            role: "user",
+            content: `[Handoff de contexto]: ${ctx.handoffNote}`,
+          });
+        }
         turnMessages.push({
           role: "user",
           content:
@@ -156,108 +166,128 @@ export async function tryApiKeyOrOllamaAttempt(ctx: ModelAttemptContext): Promis
                 options?.threadId && !options.threadId.startsWith("main:")
                   ? `thread:${options.threadId}`
                   : `agente:${agente.agente_id}`;
-              if (isPhase15ToolName(call.name)) {
-                toolOutput = await executePhase15ChatTool({
-                  toolName: call.name,
-                  args: call.arguments,
-                  agenteId: agente.agente_id,
-                  canalId: effectiveCanal,
-                  deps: {
+              const dispatchChatTool = async (
+                tName: string,
+                tArgs: Record<string, unknown>
+              ): Promise<unknown> => {
+                if (isPhase15ToolName(tName)) {
+                  return await executePhase15ChatTool({
+                    toolName: tName,
+                    args: tArgs,
+                    agenteId: agente.agente_id,
+                    canalId: effectiveCanal,
+                    deps: {
+                      db: deps.db,
+                      wsHub: deps.wsHub,
+                      workspaceRoot,
+                      browserService: deps.browserService,
+                      screenCapture: deps.screenCapture,
+                      showcaseService: deps.showcaseService,
+                      transcription: deps.transcription,
+                      remoteClaimService: deps.remoteClaimService ?? undefined,
+                    },
+                  });
+                }
+                if (isPhase10ExtensionTool(tName)) {
+                  return await executeStudioExtensionTool(tName, tArgs, {
                     db: deps.db,
+                    vault: deps.vault,
                     wsHub: deps.wsHub,
                     workspaceRoot,
-                    browserService: deps.browserService,
-                    screenCapture: deps.screenCapture,
-                    showcaseService: deps.showcaseService,
-                    transcription: deps.transcription,
-                    remoteClaimService: deps.remoteClaimService ?? undefined,
-                  },
-                });
-              } else if (isPhase10ExtensionTool(call.name)) {
-                toolOutput = await executeStudioExtensionTool(call.name, call.arguments, {
-                  db: deps.db,
-                  vault: deps.vault,
-                  wsHub: deps.wsHub,
-                  workspaceRoot,
-                  agenteId: agente.agente_id,
-                  canalId: `agente:${agente.agente_id}`,
-                  mcpGateway: deps.mcpGateway,
-                  catalogService: deps.catalogService,
-                  nativeStore: deps.catalogService?.nativeStore,
-                  providerConnection: deps.providerConnection,
-                  skillsManager: deps.skillsManager,
-                  whatsappManager: deps.whatsappManager,
-                  whatsappOrchestrator: deps.whatsappOrchestrator,
-                });
-              } else if (isRoutineToolName(call.name)) {
-                toolOutput = await executeStudioRoutineTool(call.name, call.arguments, {
-                  agenteId: agente.agente_id,
-                  turnOrigin: "human",
-                  routineToolsDeps: deps.routineToolsDeps,
-                });
-              } else if (isWorkflowToolName(call.name)) {
-                toolOutput = await executeChatWorkflowTool(call.name, call.arguments, {
-                  store: deps.workflowStore,
-                  engine: deps.workflowEngine,
-                  wsHub: deps.wsHub,
-                  agenteId: agente.agente_id,
-                  requestSeed: turnId,
-                });
-              } else if (isPhase14ToolName(call.name) && deps.phase14) {
-                toolOutput = await executePhase14ToolCall(
-                  call.name,
-                  call.arguments,
-                  {
                     agenteId: agente.agente_id,
-                    canalId: effectiveCanal,
-                    threadId: options?.threadId ?? `main:${agente.agente_id}`,
-                    tarefaId: tarefaCriadaId,
-                    turnId,
-                    origemTurno: options?.isRoutine
-                      ? "rotina"
-                      : options?.isHandoff
-                        ? "inter_agente"
-                        : "usuario_local",
-                    isOneToOneUserChat:
-                      !options?.isRoutine &&
-                      !options?.isHandoff &&
-                      effectiveCanal === `agente:${agente.agente_id}`,
-                    lastUserMessageId: options?.entregaOrigemId ?? null,
-                    generatedAnexos: anexosGerados,
-                  },
-                  deps.phase14,
-                );
-              } else if (isPhase13ToolName(call.name) && deps.phase13) {
-                const p13 = await executePhase13Tool(
-                  call.name,
-                  call.arguments,
-                  {
+                    canalId: `agente:${agente.agente_id}`,
+                    mcpGateway: deps.mcpGateway,
+                    catalogService: deps.catalogService,
+                    nativeStore: deps.catalogService?.nativeStore,
+                    providerConnection: deps.providerConnection,
+                    skillsManager: deps.skillsManager,
+                    whatsappManager: deps.whatsappManager,
+                    whatsappOrchestrator: deps.whatsappOrchestrator,
+                  });
+                }
+                if (isRoutineToolName(tName)) {
+                  return await executeStudioRoutineTool(tName, tArgs, {
                     agenteId: agente.agente_id,
-                    turnoId: turnId,
-                    callId: call.id,
-                    threadId: options?.threadId ?? `main:${agente.agente_id}`,
-                    canalId: effectiveCanal,
-                    entregaOrigemId: options?.entregaOrigemId ?? turnId,
-                    pedidoTexto: userPrompt,
-                    isRoutine: options?.isRoutine,
-                    isResumingWait: Boolean(options?.wokenWaitsBlock),
-                    channelOrigin: options?.channelOrigin,
-                    whatsappContaId: options?.whatsappContaId ?? null,
-                    whatsappChatJid: options?.whatsappChatJid ?? null,
-                  },
-                  {
-                    ...deps.phase13,
-                    db: deps.db,
-                  },
-                );
-                toolOutput = p13.result;
-              } else if (deps.mcpGateway && call.name.startsWith("mcp_")) {
-                toolOutput = await deps.mcpGateway.callMcpTool(call.name, call.arguments, {
-                  agentId: agente.agente_id,
-                });
-              } else {
+                    turnOrigin: "human",
+                    routineToolsDeps: deps.routineToolsDeps,
+                  });
+                }
+                if (isWorkflowToolName(tName)) {
+                  return await executeChatWorkflowTool(tName, tArgs, {
+                    store: deps.workflowStore,
+                    engine: deps.workflowEngine,
+                    wsHub: deps.wsHub,
+                    agenteId: agente.agente_id,
+                    requestSeed: turnId,
+                  });
+                }
+                if (isPhase14ToolName(tName) && deps.phase14) {
+                  return await executePhase14ToolCall(
+                    tName,
+                    tArgs,
+                    {
+                      agenteId: agente.agente_id,
+                      canalId: effectiveCanal,
+                      threadId: options?.threadId ?? `main:${agente.agente_id}`,
+                      tarefaId: tarefaCriadaId,
+                      turnId,
+                      origemTurno: options?.isRoutine
+                        ? "rotina"
+                        : options?.isHandoff
+                          ? "inter_agente"
+                          : "usuario_local",
+                      isOneToOneUserChat:
+                        !options?.isRoutine &&
+                        !options?.isHandoff &&
+                        effectiveCanal === `agente:${agente.agente_id}`,
+                      lastUserMessageId: options?.entregaOrigemId ?? null,
+                      generatedAnexos: anexosGerados,
+                    },
+                    deps.phase14,
+                  );
+                }
+                if (isPhase13ToolName(tName) && deps.phase13) {
+                  const p13 = await executePhase13Tool(
+                    tName,
+                    tArgs,
+                    {
+                      agenteId: agente.agente_id,
+                      turnoId: turnId,
+                      callId: call.id,
+                      threadId: options?.threadId ?? `main:${agente.agente_id}`,
+                      canalId: effectiveCanal,
+                      entregaOrigemId: options?.entregaOrigemId ?? turnId,
+                      pedidoTexto: userPrompt,
+                      isRoutine: options?.isRoutine,
+                      isResumingWait: Boolean(options?.wokenWaitsBlock),
+                      channelOrigin: options?.channelOrigin,
+                      whatsappContaId: options?.whatsappContaId ?? null,
+                      whatsappChatJid: options?.whatsappChatJid ?? null,
+                    },
+                    {
+                      ...deps.phase13,
+                      db: deps.db,
+                    },
+                  );
+                  return p13.result;
+                }
+                if (deps.mcpGateway && tName.startsWith("mcp_")) {
+                  return await deps.mcpGateway.callMcpTool(tName, tArgs, {
+                    agentId: agente.agente_id,
+                  });
+                }
                 toolFailed = true;
-                toolOutput = { erro: `Ferramenta '${call.name}' indisponível no contexto atual.` };
+                return { erro: `Ferramenta '${tName}' indisponível no contexto atual.` };
+              };
+
+              if (setup.lazyToolRouter && LAZY_META_TOOL_NAMES.has(call.name)) {
+                toolOutput = await setup.lazyToolRouter.executeMetaTool(
+                  call.name,
+                  call.arguments,
+                  dispatchChatTool
+                );
+              } else {
+                toolOutput = await dispatchChatTool(call.name, call.arguments);
               }
             } catch (toolErr) {
               toolFailed = true;

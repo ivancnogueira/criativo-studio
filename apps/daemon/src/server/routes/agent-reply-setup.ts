@@ -75,7 +75,13 @@ import {
   type LabeledVisualAsset,
   type Phase14ToolServices,
 } from "../studio-tools-bridge.ts";
-import { planTurnContext, toolBelongsToScopes } from "../turn-context-planner.ts";
+import {
+  estimateTurnContextTokens,
+  planTurnContext,
+  resolveModelContextBudget,
+  toolBelongsToScopes,
+} from "../turn-context-planner.ts";
+import { LazyToolRouter } from "../../engine/tools/lazy-tool-router.ts";
 import type { StudioRoutesDeps } from "./route-helpers.ts";
 import { safeJsonParse } from "./route-helpers.ts";
 import type { ChatProgressReport } from "./agent-enrichment-helpers.ts";
@@ -309,11 +315,17 @@ export async function prepareAgentReplySetup(
       }
     }
   }
-  const availableChatTools = Array.from(availableChatToolsMap.values());
+  const rawAvailableChatTools = Array.from(availableChatToolsMap.values());
+  const lazyToolsEnabled = config.lazy_tools_enabled !== false;
+  const lazyToolRouter = new LazyToolRouter(rawAvailableChatTools, {
+    enabled: lazyToolsEnabled,
+    threshold: 20,
+  });
+  const availableChatTools = lazyToolRouter.selectExposedTools();
   const toolFallbackNames = availableChatTools.map((t) => t.name);
   const studioToolsPromptGuidance =
     availableChatTools.length > 0
-      ? `\n\n## Ferramentas Nativas & MCP (${toolFallbackNames.length})\nFerramentas autorizadas: ${toolFallbackNames.join(", ")}.\nPrefira chamar diretamente via MCP \`criativo_studio\` quando expostas no runtime; se apenas texto estiver ativo, emita \`<tool_call>{"name":"nome","arguments":{...}}</tool_call>\`. Nunca invente dados ou negue acesso a uma ferramenta listada acima.`
+      ? `\n\n## Ferramentas Nativas & MCP (${toolFallbackNames.length}${lazyToolRouter.isLazyActive() ? ` expostas de ${lazyToolRouter.getTotalIndexed()} indexadas` : ""})\nFerramentas autorizadas: ${toolFallbackNames.join(", ")}.${lazyToolRouter.isLazyActive() ? "\nUse `tool_search`, `tool_describe` e `tool_call` para descobrir e invocar ferramentas secundárias sob demanda." : ""}\nPrefira chamar diretamente via MCP \`criativo_studio\` quando expostas no runtime; se apenas texto estiver ativo, emita \`<tool_call>{"name":"nome","arguments":{...}}</tool_call>\`. Nunca invente dados ou negue acesso a uma ferramenta listada acima.`
       : "";
 
   const turnMcpEndpointOpts = {
@@ -342,6 +354,26 @@ export async function prepareAgentReplySetup(
   const governance = readAgentGovernance(deps.db, agente.agente_id);
   const initialModel = options?.overrideModel?.trim() || agente.modelo_padrao;
   const providerName = deps.providers.resolveProviderName(initialModel);
+
+  let effectivePromptBase = promptBase;
+  if (deps.phase13?.contextReset && config.auto_compact_enabled !== false) {
+    const estTokens = estimateTurnContextTokens({
+      systemPrompt: promptBase,
+      historyTexts: history.map((m) => m.conteudo_markdown ?? ""),
+      userPrompt,
+      toolsCount: availableChatTools.length,
+    });
+    const compactOutcome = deps.phase13.contextReset.autoCompactIfNeeded({
+      agenteId: agente.agente_id,
+      threadId: options?.threadId ?? null,
+      estimatedTokens: estTokens,
+      maxContextTokens: resolveModelContextBudget(initialModel),
+      thresholdRatio: 0.8,
+    });
+    if (compactOutcome.compacted && compactOutcome.summaryText) {
+      effectivePromptBase = `${promptBase}\n\n[Resumo da Auto-Compactação]: ${compactOutcome.summaryText}`;
+    }
+  }
   const agService = deps.providerConnection.getAntigravityService();
   const [statusList, agSnapshot] = await Promise.all([
     deps.providerConnection.getProvidersStatus(false),
@@ -435,8 +467,9 @@ export async function prepareAgentReplySetup(
     loadedSkill,
     metaValidationSummary,
     graphVersion,
-    promptBase,
+    promptBase: effectivePromptBase,
     availableChatTools,
+    lazyToolRouter,
     studioToolsPromptGuidance,
     turnAcpMcpServers,
     turnCliMcpConfig,

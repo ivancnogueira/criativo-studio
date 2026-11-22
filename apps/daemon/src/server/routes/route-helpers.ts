@@ -140,10 +140,12 @@ import type { TelegramNotificationBot } from "../../messaging/telegram-bot.ts";
 import type { WorkflowEngine } from "../../workflows/workflow-engine.ts";
 import { WorkflowStore, WorkflowValidationError } from "../../workflows/workflow-store.ts";
 import type { WorkflowTriggers } from "../../workflows/workflow-triggers.ts";
+import type { StructuredLogger } from "../structured-logger.ts";
 import type { WebSocketHub } from "../websocket-hub.ts";
 
 export interface StudioRoutesDeps {
   db: CriativoDatabase;
+  structuredLogger?: StructuredLogger;
   queue: FifoQueueManager;
   vault?: VaultService;
   providers: ProviderRegistry;

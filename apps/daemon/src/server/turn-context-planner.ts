@@ -362,3 +362,39 @@ export function planTurnContext(input: TurnContextPlannerInput): TurnContextPlan
     includeExternalMcps,
   };
 }
+
+/**
+ * Estima a janela máxima de contexto (em tokens) a partir do identificador do modelo.
+ */
+export function resolveModelContextBudget(modelId: string): number {
+  const lower = String(modelId ?? "").toLowerCase();
+  if (lower.includes("gemini-2") || lower.includes("gemini-3") || lower.includes("gemini-4")) {
+    return 200_000;
+  }
+  if (lower.includes("claude")) {
+    return 180_000;
+  }
+  if (lower.includes("gpt-4") || lower.includes("gpt-5") || lower.includes("o1") || lower.includes("o3")) {
+    return 128_000;
+  }
+  if (lower.includes("ollama") || lower.includes("llama") || lower.includes("qwen")) {
+    return 32_768;
+  }
+  return 100_000;
+}
+
+/**
+ * Estima de forma determinística e barata (~4 chars/token) o uso atual de contexto antes de um turno.
+ */
+export function estimateTurnContextTokens(input: {
+  systemPrompt?: string;
+  historyTexts?: string[];
+  userPrompt?: string;
+  toolsCount?: number;
+}): number {
+  const sysChars = String(input.systemPrompt ?? "").length;
+  const userChars = String(input.userPrompt ?? "").length;
+  const histChars = (input.historyTexts ?? []).reduce((acc, s) => acc + String(s ?? "").length, 0);
+  const toolsOverheadTokens = Math.max(0, Number(input.toolsCount ?? 0)) * 180;
+  return Math.ceil((sysChars + userChars + histChars) / 4) + toolsOverheadTokens;
+}

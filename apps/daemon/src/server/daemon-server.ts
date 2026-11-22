@@ -28,6 +28,7 @@ import { createDaemonInfraServices } from "./daemon-infra-services.ts";
 import { createDaemonRuntimeServices } from "./daemon-runtime-services.ts";
 import { createWhatsAppAuthorizedTurnHandler } from "./daemon-whatsapp-handler.ts";
 import { createDaemonLaneScheduler } from "./daemon-lane-scheduler.ts";
+import { mapErrorToCatalog } from "./error-catalog-mapper.ts";
 
 export {
   type TaskExecutorHook,
@@ -73,6 +74,7 @@ export async function createDaemonServer(
     studioPaths,
     resolvedWorkspaceRoot,
     db,
+    structuredLogger,
     recoveryReport,
     queue,
     vault,
@@ -248,6 +250,7 @@ export async function createDaemonServer(
 
       const studioDepsForRequest = {
         db,
+        structuredLogger,
         queue,
         vault,
         providers,
@@ -366,7 +369,12 @@ export async function createDaemonServer(
 
       sendJson(res, 404, { erro: `Rota não encontrada: ${method} ${path}` });
     } catch (error) {
-      const mensagem = error instanceof Error ? error.message : String(error);
+      const mapped = mapErrorToCatalog(error);
+      structuredLogger.error(mapped.domain, mapped.rawSummary ?? mapped.userMessage, {
+        code: mapped.code,
+        traceId: mapped.traceId,
+        metadata: { method: req.method ?? "GET", url: req.url ?? "/" },
+      });
       const statusCode =
         error &&
         typeof error === "object" &&
@@ -374,7 +382,14 @@ export async function createDaemonServer(
         typeof (error as { statusCode?: unknown }).statusCode === "number"
           ? (error as { statusCode: number }).statusCode
           : 500;
-      sendJson(res, statusCode, { erro: mensagem });
+      sendJson(res, statusCode, {
+        erro: mapped.userMessage,
+        errorCode: mapped.code,
+        title: mapped.title,
+        suggestedAction: mapped.suggestedAction,
+        traceId: mapped.traceId,
+        detalhe: mapped.rawSummary,
+      });
     }
   });
 

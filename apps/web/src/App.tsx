@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import {
   Crown,
   MessageSquare,
@@ -41,6 +42,8 @@ import { StudioAgentCenterPane } from "./components/studio/StudioAgentCenterPane
 import { StudioAgentInspectorPane } from "./components/studio/StudioAgentInspectorPane";
 import { StudioSecondaryPagesSwitch } from "./components/studio/StudioSecondaryPagesSwitch";
 import { StudioModalsHost } from "./components/studio/StudioModalsHost";
+import { CommandPaletteModal } from "./components/CommandPaletteModal";
+import { getCriativoDesktopBridge } from "./types/desktop-bridge";
 import { I18nProvider } from "./i18n/I18nContext";
 
 export function App() {
@@ -101,6 +104,25 @@ export function App() {
     splashStage,
     setSplashDismissed,
   } = state;
+
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setCommandPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    const unsubDesktop = getCriativoDesktopBridge()?.onOpenCommandPalette?.(() => {
+      setCommandPaletteOpen(true);
+    });
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      unsubDesktop?.();
+    };
+  }, []);
 
   if (isAppBooting || (licenseStatus && !licenseStatus.valid) || (onboarding && !onboarding.onboarding_concluido)) {
     return (
@@ -182,6 +204,7 @@ export function App() {
               }}
               cuaStatus={state.cuaStatus}
               onAbortCua={abortCuaNow}
+              onOpenCommandPalette={() => setCommandPaletteOpen(true)}
             />
           ) : (
             <div className="h-[36px] shrink-0 border-b border-white/[0.06] bg-[#0D0D0D] px-3 flex items-center justify-between gap-2">
@@ -220,6 +243,17 @@ export function App() {
         </div>
 
         <StudioModalsHost ctx={ctx} />
+        <CommandPaletteModal
+          open={commandPaletteOpen}
+          onClose={() => setCommandPaletteOpen(false)}
+          onSelectSection={setActiveSection}
+          onSelectAgent={(agenteId) => {
+            setActiveSection("agentes");
+            nav.handleSelectAgent(agenteId);
+          }}
+          onOpenSettings={() => openSettings()}
+          onToggleFocusMode={serverActions.handleToggleFocusMode}
+        />
       </div>
       {!splashDismissed && (
         <StudioSplashPreloader

@@ -80,6 +80,10 @@ export interface CriativoDesktopWindowBridge {
   cuaPermissionStatus?: () => Promise<{ granted: boolean; aborted: boolean }>;
   setWindowVibrancy?: (enabled: boolean) => Promise<boolean>;
   onDeepLink?: (listener: (payload: CriativoDeepLinkPayload) => void) => () => void;
+  onOpenCommandPalette?: (listener: () => void) => () => void;
+  setGlobalShortcut?: (accelerator: string) => Promise<boolean>;
+  openBrowserPip?: (payload?: { tabId?: string | null; agenteId?: string | null }) => Promise<boolean>;
+  closeBrowserPip?: () => Promise<boolean>;
 }
 
 export function getCriativoDesktopBridge(): CriativoDesktopWindowBridge | null {
