@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@criativo/contracts": "*",
+    "@criativo/i18n": "*",
     "katex": "^0.19.1",
     "lucide-react": "^0.483.0",
     "mermaid": "^12.3.0",

@@ -36,7 +36,14 @@ export type AvatarStyle =
   | "monsters"
   | "image";
 
-export type CanalOrigem = "web" | "whatsapp" | "telegram" | "rotina_cron" | "webhook";
+export type CanalOrigem =
+  | "web"
+  | "whatsapp"
+  | "telegram"
+  | "slack"
+  | "discord"
+  | "rotina_cron"
+  | "webhook";
 
 export type StatusTarefa =
   | "pendente"

@@ -12,6 +12,7 @@ import {
 import { WorkspaceRailProps, RAIL_ITEMS, ConcentricQuotaRings, flattenAccountBars, providerDisplayTitle, MAX_VISIBLE_ACCOUNT_RINGS, summarizeRingPercentages } from "./workspace-rail-quota-rings";
 import { useWorkspaceRailController } from "./useWorkspaceRailController";
 import { WorkspaceRailUsagePopovers } from "./WorkspaceRailUsagePopovers";
+import { useI18n } from "../i18n/I18nContext";
 
 export {
   type StudioNavSection,
@@ -21,6 +22,7 @@ export {
 } from "./workspace-rail-quota-rings";
 
 export const WorkspaceRail: React.FC<WorkspaceRailProps> = (props) => {
+  const { t } = useI18n();
   const ctrl = useWorkspaceRailController(props);
   const {
     activeSection,
@@ -72,7 +74,8 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = (props) => {
           <MascoteAvatar shape="hex" color="#31cf76" size={24} />
         </button>
 
-        {RAIL_ITEMS.map(({ id, label, Icon }) => {
+        {RAIL_ITEMS.map(({ id, labelKey, Icon }) => {
+          const label = t(labelKey);
           const isActive = activeSection === id;
           return (
             <button
@@ -225,8 +228,8 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = (props) => {
         <button
           type="button"
           onClick={onOpenHelp}
-          title="Guia rápido & Atalhos"
-          aria-label="Ajuda"
+          title={t("nav.help")}
+          aria-label={t("nav.help")}
           className="h-9 w-9 rounded-xl flex items-center justify-center text-[#979797] hover:text-white hover:bg-[#1A1A1A] transition-colors"
         >
           <HelpCircle className="h-[17px] w-[17px]" />
@@ -235,8 +238,8 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = (props) => {
         <button
           type="button"
           onClick={onOpenSettings}
-          title="Configurações do Studio e Onboarding"
-          aria-label="Configurações"
+          title={t("nav.settings")}
+          aria-label={t("nav.settings")}
           aria-current={activeSection === "configuracoes" ? "page" : undefined}
           className={`h-9 w-9 rounded-xl flex items-center justify-center transition-colors ${
             activeSection === "configuracoes"

@@ -23,6 +23,7 @@ import {
   OPERATOR_BUBBLE_SWATCHES,
 } from "../chat/chat-bubble-theme";
 import { ACCENT_COLORS, UI_FONT_OPTIONS, CODE_FONT_OPTIONS, LANGUAGE_OPTIONS, ToggleRow } from "./SettingsGeneralTab";
+import { useI18n } from "../../i18n/I18nContext";
 
 export interface SettingsAppearanceTabProps {
   aparencia: StudioUserSettings["aparencia"];
@@ -33,6 +34,7 @@ export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
   aparencia,
   onChange,
 }) => {
+  const { t } = useI18n();
   const [desktopDockState, setDesktopDockState] = useState<{
     available: boolean;
     visible: boolean;
@@ -58,7 +60,7 @@ export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
       <div className="rounded-xl border border-white/[0.06] bg-[#212121] p-4 space-y-3">
         <div className="flex items-center gap-2 text-[13px] font-semibold text-white">
           <Palette className="h-4 w-4 text-[#42A0FF]" />
-          <span>Tema da interface</span>
+          <span>{t("settings.appearance.theme")}</span>
         </div>
         <div className="grid grid-cols-3 gap-2.5">
           {[
@@ -92,7 +94,7 @@ export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
       </div>
 
       <div className="rounded-xl border border-white/[0.06] bg-[#212121] p-4 space-y-3">
-        <div className="text-[13px] font-semibold text-white">Cor de destaque do estúdio</div>
+        <div className="text-[13px] font-semibold text-white">{t("settings.appearance.accent")}</div>
         <div className="flex flex-wrap items-center gap-2.5">
           {ACCENT_COLORS.map((c) => {
             const active = aparencia.cor_acento.toUpperCase() === c.hex.toUpperCase();
@@ -247,15 +249,18 @@ export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
           />
         </div>
         <div className="space-y-1.5">
-          <span className="block text-[12px] font-medium text-[#DCDCDC]">Idioma</span>
+          <span className="block text-[12px] font-medium text-[#DCDCDC]">{t("settings.appearance.language")}</span>
           <CarbonSelect
-            ariaLabel="Selecionar idioma da interface"
+            ariaLabel={t("settings.appearance.language")}
             value={aparencia.idioma}
             options={LANGUAGE_OPTIONS}
             onChange={(v) =>
               onChange({ ...aparencia, idioma: v as StudioUserSettings["aparencia"]["idioma"] })
             }
           />
+          <span className="block text-[10.5px] text-[#8E8E8E]">
+            {t("settings.appearance.languageDesc")}
+          </span>
         </div>
       </div>
 

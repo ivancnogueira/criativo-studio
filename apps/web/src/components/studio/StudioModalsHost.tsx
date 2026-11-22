@@ -1,4 +1,5 @@
 import { BrowserTakeoverModal } from "../../features/browser/BrowserTakeoverModal";
+import { BrowserAutofillConsentModal } from "../../features/browser/BrowserAutofillConsentModal";
 import { UserBrowsingLogInspector } from "../../features/browser/BrowserTeachBar";
 import {
   JoinServerModal,
@@ -26,6 +27,8 @@ export function StudioModalsHost({ ctx }: { ctx: StudioUiCtx }) {
     browserProfiles,
     activeTakeoverModal,
     setActiveTakeoverModal,
+    pendingAutofillRequest,
+    setPendingAutofillRequest,
     activeTakeoverFrame,
     teachStatusByTab,
     setTeachStatusByTab,
@@ -208,6 +211,14 @@ export function StudioModalsHost({ ctx }: { ctx: StudioUiCtx }) {
         onRemoved={async (nextList, nextActiveId) => {
           setServers(nextList);
           await handleSwitchServer(nextActiveId);
+        }}
+      />
+
+      <BrowserAutofillConsentModal
+        request={pendingAutofillRequest}
+        onResolve={async (payload) => {
+          await daemonApi.resolveAutofillConsent(payload);
+          setPendingAutofillRequest(null);
         }}
       />
     </>

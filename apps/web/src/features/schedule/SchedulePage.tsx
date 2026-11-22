@@ -24,6 +24,7 @@ import {
   resolveAgentAvatarConfig,
 } from "../../components/MascoteAvatar";
 import { SlidingTabs } from "../../components/ui/CarbonControls";
+import { useI18n } from "../../i18n/I18nContext";
 import { daemonApi } from "../../services/websocket-client";
 import { EditorialCalendarPage } from "../social-studio/EditorialCalendarPage";
 import { RoutineIcsSubscribeModal } from "./RoutineIcsSubscribeModal";
@@ -114,6 +115,7 @@ export const SchedulePage: React.FC<SchedulePageProps> = ({
   onOpenAgentChat,
   onCreateFirstRoutine,
 }) => {
+  const { t } = useI18n();
   const [viewMode, setViewMode] = useState<CalendarView>("week");
   const [calendarDomain, setCalendarDomain] = useState<"editorial" | "rotinas">("rotinas");
   const [icsModalOpen, setIcsModalOpen] = useState(false);
@@ -286,19 +288,19 @@ export const SchedulePage: React.FC<SchedulePageProps> = ({
 
   return (
     <section
-      aria-label={calendarDomain === "editorial" ? "Calendário Editorial de Posts" : "Agenda de Rotinas"}
+      aria-label={calendarDomain === "editorial" ? t("schedule.domain.editorial") : t("schedule.routinesTitle")}
       className="flex-1 h-full overflow-y-auto bg-[#1A1A1A] text-[#F0F0F0] p-6"
     >
       {/* Alternador limpo de domínios: Editorial (Posts) vs Rotinas (Automações) */}
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/[0.06] bg-[#141414] px-4 py-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-[#979797]">
-            Calendário do Estúdio
+            {t("schedule.domain.title")}
           </p>
           <p className="text-xs text-[#6A6A6A]">
             {calendarDomain === "editorial"
-              ? "Pautas e publicações Instagram separadas das automações técnicas."
-              : "Execuções agendadas e recorrências cron dos seus agentes."}
+              ? t("schedule.domain.editorialDesc")
+              : t("schedule.domain.routinesDesc")}
           </p>
         </div>
         <SlidingTabs
@@ -306,8 +308,8 @@ export const SchedulePage: React.FC<SchedulePageProps> = ({
           value={calendarDomain}
           onChange={(v) => setCalendarDomain(v)}
           tabs={[
-            { id: "editorial", label: "Editorial (Posts)" },
-            { id: "rotinas", label: "Rotinas (Automações)" },
+            { id: "editorial", label: t("schedule.domain.editorial") },
+            { id: "rotinas", label: t("schedule.domain.routines") },
           ]}
         />
       </div>
@@ -324,7 +326,7 @@ export const SchedulePage: React.FC<SchedulePageProps> = ({
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-[28px] font-semibold leading-tight text-[#F0F0F0]">
-              Agenda de Rotinas
+              {t("schedule.routinesTitle")}
             </h1>
             <p className="mt-1 text-[12px] font-normal text-[#979797]">
               Fuso horário local: {localTimeZone}
@@ -341,7 +343,7 @@ export const SchedulePage: React.FC<SchedulePageProps> = ({
               className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-[#212121] hover:bg-[#2A2A2A] px-3 py-2 text-[12.5px] font-medium text-[#DCDCDC] transition-colors"
             >
               <CalendarClock className="h-3.5 w-3.5 text-[#31CF76]" />
-              <span>Assinar Calendário (.ics)</span>
+              <span>{t("schedule.subscribeIcs")}</span>
             </button>
             <button
               type="button"
@@ -349,7 +351,7 @@ export const SchedulePage: React.FC<SchedulePageProps> = ({
               className="inline-flex items-center gap-2 rounded-xl bg-[#F0F0F0] hover:bg-white px-4 py-2 text-[14px] font-semibold text-[#141414] transition-colors"
             >
               <Plus className="h-4 w-4" />
-              <span>Criar rotina</span>
+              <span>{t("schedule.createRoutine")}</span>
             </button>
           </div>
         </div>

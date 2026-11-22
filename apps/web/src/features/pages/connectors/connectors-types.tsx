@@ -104,7 +104,14 @@ export interface ConnectorsPageProps {
   onDeleteShowcase?: (siteId: string) => Promise<void>;
 }
 
-export type HubSectionTab = "provedores" | "apps" | "habilidades" | "showcase" | "cofre";
+export type HubSectionTab =
+  | "provedores"
+  | "apps"
+  | "mensageria"
+  | "habilidades"
+  | "showcase"
+  | "cofre"
+  | "logins";
 
 export const BrandTile: React.FC<{ id: ConectorIntegracaoInfo["id"]; color: string }> = ({ id, color }) => {
   const iconMap: Record<ConectorIntegracaoInfo["id"], React.ReactNode> = {

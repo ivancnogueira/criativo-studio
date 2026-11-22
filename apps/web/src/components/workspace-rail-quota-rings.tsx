@@ -20,6 +20,7 @@ import type {
   StudioServerRecord,
   UsoProvedoresSnapshot,
 } from "@criativo/contracts";
+import type { I18nMessageKey } from "@criativo/i18n";
 import {
   ProviderLogo,
 } from "./ProviderLogo";
@@ -62,17 +63,18 @@ export interface WorkspaceRailProps {
 export const RAIL_ITEMS: Array<{
   id: StudioNavSection;
   label: string;
+  labelKey: I18nMessageKey;
   Icon: React.FC<{ className?: string }>;
 }> = [
-  { id: "agentes", label: "Estúdio", Icon: Bot },
-  { id: "fluxos", label: "Automações", Icon: GitBranch },
-  { id: "tarefas", label: "Tarefas", Icon: WalletCards },
-  { id: "agenda", label: "Calendário", Icon: CalendarClock },
-  { id: "galeria_ig", label: "Galeria IG", Icon: BarChart3 },
-  { id: "uso", label: "Consumo", Icon: Activity },
-  { id: "arquivos", label: "Biblioteca", Icon: FolderOpen },
-  { id: "loja", label: "Catálogo", Icon: Store },
-  { id: "conexoes", label: "Integrações", Icon: Plug },
+  { id: "agentes", label: "Estúdio", labelKey: "nav.studio", Icon: Bot },
+  { id: "fluxos", label: "Automações", labelKey: "nav.automations", Icon: GitBranch },
+  { id: "tarefas", label: "Tarefas", labelKey: "nav.tasks", Icon: WalletCards },
+  { id: "agenda", label: "Calendário", labelKey: "nav.calendar", Icon: CalendarClock },
+  { id: "galeria_ig", label: "Galeria IG", labelKey: "nav.igGallery", Icon: BarChart3 },
+  { id: "uso", label: "Consumo", labelKey: "nav.usage", Icon: Activity },
+  { id: "arquivos", label: "Biblioteca", labelKey: "nav.library", Icon: FolderOpen },
+  { id: "loja", label: "Catálogo", labelKey: "nav.catalog", Icon: Store },
+  { id: "conexoes", label: "Integrações", labelKey: "nav.integrations", Icon: Plug },
 ];
 
 export function ringStrokeColor(percent: number): string {

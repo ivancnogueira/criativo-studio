@@ -41,6 +41,41 @@ export class VaultService {
     return scryptSync(this.masterSecret, salt, 32);
   }
 
+  public encryptString(plainValue: string): { cipherBase64: string; ivEnvelope: string } {
+    const salt = randomBytes(16);
+    const iv = randomBytes(12);
+    const derivedKey = this.deriveKey(salt);
+    const cipher = createCipheriv("aes-256-gcm", derivedKey, iv);
+    const encrypted = Buffer.concat([cipher.update(plainValue, "utf8"), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+    const ivEnvelope = `${salt.toString("hex")}:${iv.toString("hex")}:${authTag.toString("hex")}`;
+    return {
+      cipherBase64: encrypted.toString("base64"),
+      ivEnvelope,
+    };
+  }
+
+  public decryptString(cipherBase64: string, ivEnvelope: string): string {
+    const parts = ivEnvelope.split(":");
+    if (parts.length !== 3) {
+      throw new Error("Envelope criptográfico corrompido no Cofre de Segredos.");
+    }
+    const [saltHex, ivHex, tagHex] = parts as [string, string, string];
+    const salt = Buffer.from(saltHex, "hex");
+    const iv = Buffer.from(ivHex, "hex");
+    const authTag = Buffer.from(tagHex, "hex");
+
+    const derivedKey = this.deriveKey(salt);
+    const decipher = createDecipheriv("aes-256-gcm", derivedKey, iv);
+    decipher.setAuthTag(authTag);
+
+    const decrypted = Buffer.concat([
+      decipher.update(Buffer.from(cipherBase64, "base64")),
+      decipher.final(),
+    ]);
+    return decrypted.toString("utf8");
+  }
+
   /**
    * Criptografa e persiste (ou atualiza) um segredo no SQLite.
    */

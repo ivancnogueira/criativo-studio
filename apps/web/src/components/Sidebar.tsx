@@ -19,6 +19,7 @@ import { useSidebarController } from "./sidebar/useSidebarController";
 import { SidebarPinnedTile, SidebarAgentRow } from "./sidebar/SidebarAgentItems";
 import { SidebarChannelsAndSections } from "./sidebar/SidebarChannelsAndSections";
 import { SidebarModals } from "./sidebar/SidebarModals";
+import { useI18n } from "../i18n/I18nContext";
 
 export type { SidebarProps };
 
@@ -27,6 +28,7 @@ export type { SidebarProps };
  * badges #74B9FF em Não lidas e card inferior 'Criativo no WhatsApp'.
  */
 export const Sidebar: React.FC<SidebarProps> = (props) => {
+  const { t } = useI18n();
   const ctrl = useSidebarController(props);
   const {
     agentes,
@@ -95,7 +97,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Buscar"
+            placeholder={t("sidebar.searchAgents")}
             className="w-full h-[32px] rounded-xl bg-[#242424] border border-white/[0.05] pl-8 pr-3 text-[12.5px] text-white placeholder-[#6A6A6A] focus:outline-none focus:border-white/20"
           />
         </div>
@@ -126,7 +128,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
                 className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-[12px] text-white hover:bg-white/[0.06] text-left"
               >
                 <Sparkles className="h-3.5 w-3.5 text-[#38bdf8]" />
-                <span>Novo agente IA</span>
+                <span>{t("sidebar.newAgent")}</span>
               </button>
             )}
             {onCreateChannel && (
@@ -139,7 +141,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
                 className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-[12px] text-white hover:bg-white/[0.06] text-left"
               >
                 <Users className="h-3.5 w-3.5 text-[#31cf76]" />
-                <span>Nova equipe</span>
+                <span>{t("sidebar.newTeam")}</span>
               </button>
             )}
             {onMutateSidebar && (
@@ -194,7 +196,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
               }`}
             >
               <Bot className="h-3.5 w-3.5" />
-              <span>Agentes</span>
+              <span>{t("sidebar.agentsTab")}</span>
             </button>
             <button
               type="button"
@@ -208,7 +210,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
               }`}
             >
               <Workflow className="h-3.5 w-3.5" />
-              <span>Rotinas</span>
+              <span>{t("sidebar.routinesTab")}</span>
             </button>
           </div>
         </div>

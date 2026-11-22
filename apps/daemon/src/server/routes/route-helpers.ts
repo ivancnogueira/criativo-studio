@@ -52,6 +52,10 @@ import type { AutoUpdateService } from "../../updater/auto-update-service.ts";
 import type { CustomEndpointsService } from "../../providers/custom-endpoints-service.ts";
 import type { LocalProviderDetector } from "../../providers/local-provider-detector.ts";
 import type { MediaProviderCatalog } from "../../workflows/media-provider-catalog.ts";
+import type { MessagingService } from "../../messaging/messaging-service.ts";
+import type { BrowserAutofillService } from "../../vault/browser-autofill-service.ts";
+import type { LoginVaultService } from "../../vault/login-vault-service.ts";
+import type { PasswordManagerRegistry } from "../../vault/password-managers/registry.ts";
 import {
   activateUpgradePackage,
   computeUnlockedAgentsSummary,
@@ -178,6 +182,10 @@ export interface StudioRoutesDeps {
   customEndpoints?: CustomEndpointsService;
   localProviderDetector?: LocalProviderDetector;
   mediaCatalog?: MediaProviderCatalog;
+  messagingService?: MessagingService;
+  loginVault?: LoginVaultService;
+  passwordManagerRegistry?: PasswordManagerRegistry;
+  browserAutofillService?: BrowserAutofillService;
 }
 
 export interface StudioRouteContext {

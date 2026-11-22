@@ -45,6 +45,8 @@ import {
   SettingsVoiceTab,
 } from "./SettingsNotificationsVoiceTabs";
 import { SettingsStorageTab } from "./StorageUsageBar";
+import { useI18n } from "../../i18n/I18nContext";
+import type { I18nMessageKey } from "@criativo/i18n";
 
 export type SettingsModalTabId =
   | "geral"
@@ -161,32 +163,33 @@ const NAV_GROUPS: Array<{
   items: Array<{
     id: SettingsModalTabId;
     label: string;
+    labelKey: I18nMessageKey;
     Icon: React.FC<{ className?: string }>;
   }>;
 }> = [
   {
     grupo: "Estúdio",
     items: [
-      { id: "geral", label: "Geral", Icon: Sliders },
-      { id: "aparencia", label: "Aparência", Icon: Palette },
-      { id: "comportamento", label: "Comportamento", Icon: Zap },
-      { id: "dock", label: "Dock de agentes", Icon: PanelRight },
-      { id: "navegador", label: "Navegador & Proxies", Icon: Globe },
+      { id: "geral", label: "Geral", labelKey: "settings.tab.geral", Icon: Sliders },
+      { id: "aparencia", label: "Aparência", labelKey: "settings.tab.aparencia", Icon: Palette },
+      { id: "comportamento", label: "Comportamento", labelKey: "settings.tab.comportamento", Icon: Zap },
+      { id: "dock", label: "Dock de agentes", labelKey: "settings.tab.dock", Icon: PanelRight },
+      { id: "navegador", label: "Navegador & Proxies", labelKey: "settings.tab.navegador", Icon: Globe },
     ],
   },
   {
     grupo: "Comunicação",
     items: [
-      { id: "notificacoes", label: "Notificações & Sons", Icon: Bell },
-      { id: "voz", label: "Voz & Live Voice", Icon: Mic },
+      { id: "notificacoes", label: "Notificações & Sons", labelKey: "settings.tab.notificacoes", Icon: Bell },
+      { id: "voz", label: "Voz & Live Voice", labelKey: "settings.tab.voz", Icon: Mic },
     ],
   },
   {
     grupo: "Sistema",
     items: [
-      { id: "licenca", label: "Licença & Plano", Icon: KeyRound },
-      { id: "armazenamento", label: "Armazenamento", Icon: HardDrive },
-      { id: "atualizacoes", label: "Atualizações & Novidades", Icon: Sparkles },
+      { id: "licenca", label: "Licença & Plano", labelKey: "settings.tab.licenca", Icon: KeyRound },
+      { id: "armazenamento", label: "Armazenamento", labelKey: "settings.tab.armazenamento", Icon: HardDrive },
+      { id: "atualizacoes", label: "Atualizações & Novidades", labelKey: "settings.tab.atualizacoes", Icon: Sparkles },
     ],
   },
 ];
@@ -287,6 +290,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSaveBrowserProxy,
   onDeleteBrowserProxy,
 }) => {
+  const { t } = useI18n();
   const [activeTab, setActiveTab] = useState<SettingsModalTabId>(initialTab);
   const [draft, setDraft] = useState<StudioUserSettings>(settings);
   const [saving, setSaving] = useState(false);
@@ -379,8 +383,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <span>Voltar</span>
           </button>
           <div>
-            <h1 className="text-[16px] font-semibold text-white">Configurações</h1>
-            <p className="text-[11px] text-[#8E8E8E]">Preferências e sistema do estúdio</p>
+            <h1 className="text-[16px] font-semibold text-white">{t("settings.title")}</h1>
+            <p className="text-[11px] text-[#8E8E8E]">{t("settings.subtitle")}</p>
           </div>
         </div>
       )}
@@ -390,7 +394,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-[#6A6A6A]">
               {group.grupo}
             </div>
-            {group.items.map(({ id, label, Icon }) => {
+            {group.items.map(({ id, labelKey, Icon }) => {
               const active = activeTab === id;
               return (
                 <button
@@ -404,7 +408,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   }`}
                 >
                   <Icon className={`h-4 w-4 shrink-0 ${active ? "text-[#42A0FF]" : ""}`} />
-                  <span className="truncate">{label}</span>
+                  <span className="truncate">{t(labelKey)}</span>
                 </button>
               );
             })}
@@ -418,7 +422,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     <div className={isPageVariant ? "flex-1 min-w-0 bg-[#141414] flex flex-col" : "flex-1 min-w-0 bg-[#1A1A1A] flex flex-col"}>
       <header className="h-[52px] shrink-0 px-[24px] border-b border-white/[0.06] flex items-center justify-between gap-3 bg-[#141414]/60">
         <h2 className="text-[20px] font-semibold text-white truncate">
-          {activeMeta?.label ?? "Configurações"}
+          {activeMeta ? t(activeMeta.labelKey) : t("settings.title")}
         </h2>
         {!isPageVariant && (
           <button

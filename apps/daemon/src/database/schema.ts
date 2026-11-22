@@ -75,4 +75,6 @@ export const SCHEMA_TABLE_NAMES = [
   "meta_posts_cache",
   "projecao_agent_mailbox",
   "projecao_custom_providers",
+  "projecao_messaging_policies",
+  "cofre_logins",
 ] as const;

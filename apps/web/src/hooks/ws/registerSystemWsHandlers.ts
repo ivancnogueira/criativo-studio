@@ -114,6 +114,7 @@ export function registerSystemWsHandlers(
     setTakeoverByAgent,
     setCaptureByAgent,
     setActiveTakeoverModal,
+    setPendingAutofillRequest,
     setActiveTakeoverFrame,
     setTeachStatusByTab,
     setShowcaseSites,
@@ -330,6 +331,10 @@ export function registerSystemWsHandlers(
       setCaptureByAgent((prev) => ({ ...prev, [evt.agenteId]: evt }));
     });
 
+    const unsubAutofillRequested = ws.on("browser:autofill_requested", (evt) => {
+      setPendingAutofillRequest(evt);
+    });
+
     const unsubSidebarUpdated = ws.on("sidebar:updated", () => {
       void daemonApi.getSidebarLayout().then(setSidebarLayout).catch(() => {});
       void daemonApi.listAgents().then(setAgentes).catch(() => {});
@@ -406,6 +411,7 @@ export function registerSystemWsHandlers(
     unsubTakeoverRes();
     unsubTeachStatus();
     unsubScreenCapture();
+    unsubAutofillRequested();
     unsubSidebarUpdated();
     unsubSettingsUpdated();
     unsubShowcaseUpdated();

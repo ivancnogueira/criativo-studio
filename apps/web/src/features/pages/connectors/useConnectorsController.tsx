@@ -11,6 +11,8 @@ import {
   Cpu,
   Globe,
   KeyRound,
+  LockKeyhole,
+  MessageSquare,
   Plug,
   Sparkles,
 } from "lucide-react";
@@ -315,6 +317,13 @@ export function useConnectorsController(props: ConnectorsPageProps) {
       icone: <Plug className="h-4 w-4 shrink-0" />,
     },
     {
+      key: "mensageria",
+      rotulo: "Políticas Conversacionais",
+      keywords: "mensageria telegram slack discord allowlist threads mencoes router",
+      contagem: 3,
+      icone: <MessageSquare className="h-4 w-4 shrink-0" />,
+    },
+    {
       key: "habilidades",
       rotulo: "Habilidades (Skills)",
       keywords: "habilidades skills carrossel reels copywriter criativo gsd",
@@ -334,6 +343,13 @@ export function useConnectorsController(props: ConnectorsPageProps) {
       keywords: "cofre vault chaves api secrets aes-256-gcm tokens",
       contagem: vaultKeys.length,
       icone: <KeyRound className="h-4 w-4 shrink-0" />,
+    },
+    {
+      key: "logins",
+      rotulo: "Cofre de Logins",
+      keywords: "logins senhas csv 1password bitwarden protonpass autofill dominio",
+      contagem: 0,
+      icone: <LockKeyhole className="h-4 w-4 shrink-0" />,
     },
   ];
 

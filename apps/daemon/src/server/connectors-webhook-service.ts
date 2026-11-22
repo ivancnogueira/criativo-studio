@@ -2,11 +2,19 @@
  * Serviço de conectores diretos opcionais (Slack, Discord e GitHub) com tokens
  * armazenados no VaultService (AES-256-GCM) e validação criptográfica de webhooks (UX-04 / D-07).
  */
-import { createHmac, createPublicKey, timingSafeEqual, verify as cryptoVerify } from "node:crypto";
+import { createHmac } from "node:crypto";
 import type { OptionalConnectorWebhookEvent } from "@criativo/contracts";
 import type { CriativoDatabase } from "../database/client.ts";
 import type { VaultService } from "../vault/vault-service.ts";
 import type { WebSocketHub } from "./websocket-hub.ts";
+import {
+  maskSecretValue,
+  postDiscordChannelMessage,
+  postSlackChatMessage,
+  safeEqualStrings,
+  verifyDiscordEd25519Signature,
+  verifySlackHmacSignature,
+} from "./connectors-webhook-helpers.ts";
 
 export interface ConnectorsWebhookServiceDeps {
   db: CriativoDatabase;
@@ -28,21 +36,8 @@ const CONFIG_SLACK_META = "conector_slack_meta";
 const CONFIG_DISCORD_META = "conector_discord_meta";
 const CONFIG_GITHUB_META = "conector_github_meta";
 
-const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
-
 function maskValue(value: string | null): string | null {
-  if (!value) return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  if (trimmed.length <= 8) return "••••••••";
-  return `${trimmed.slice(0, 4)}••••${trimmed.slice(-4)}`;
-}
-
-function safeEqualStrings(expected: string, provided: string): boolean {
-  const a = Buffer.from(expected, "utf8");
-  const b = Buffer.from(provided, "utf8");
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
+  return maskSecretValue(value);
 }
 
 export class ConnectorsWebhookService {
@@ -52,12 +47,22 @@ export class ConnectorsWebhookService {
   private readonly onTriggerWorkflow?: (
     event: OptionalConnectorWebhookEvent,
   ) => Promise<void> | void;
+  private onSlackVerifiedPayload?: (payload: Record<string, unknown>) => Promise<unknown> | unknown;
+  private onDiscordVerifiedPayload?: (payload: Record<string, unknown>) => Promise<unknown> | unknown;
 
   constructor(deps: ConnectorsWebhookServiceDeps) {
     this.db = deps.db;
     this.vault = deps.vault;
     this.wsHub = deps.wsHub;
     this.onTriggerWorkflow = deps.onTriggerWorkflow;
+  }
+
+  public attachMessagingHandlers(handlers: {
+    onSlackEvent?: (payload: Record<string, unknown>) => Promise<unknown> | unknown;
+    onDiscordEvent?: (payload: Record<string, unknown>) => Promise<unknown> | unknown;
+  }): void {
+    this.onSlackVerifiedPayload = handlers.onSlackEvent;
+    this.onDiscordVerifiedPayload = handlers.onDiscordEvent;
   }
 
   private readMeta(chave: string): Record<string, unknown> {
@@ -236,20 +241,13 @@ export class ConnectorsWebhookService {
     signatureHeader: string | undefined,
     nowMs = Date.now(),
   ): boolean {
-    const secret = this.vault.getSecret(VAULT_KEY_SLACK_SIGNING_SECRET);
-    if (!secret || !timestampHeader || !signatureHeader) return false;
-
-    const tsSeconds = Number(timestampHeader.trim());
-    if (!Number.isFinite(tsSeconds)) return false;
-    const diffSeconds = Math.abs(Math.floor(nowMs / 1000) - tsSeconds);
-    if (diffSeconds > 300) return false;
-
-    const sig = signatureHeader.trim();
-    if (!sig.startsWith("v0=")) return false;
-
-    const baseString = `v0:${timestampHeader.trim()}:${rawBody}`;
-    const expected = `v0=${createHmac("sha256", secret).update(baseString, "utf8").digest("hex")}`;
-    return safeEqualStrings(expected, sig);
+    return verifySlackHmacSignature(
+      this.vault.getSecret(VAULT_KEY_SLACK_SIGNING_SECRET),
+      rawBody,
+      timestampHeader,
+      signatureHeader,
+      nowMs,
+    );
   }
 
   public async handleSlackWebhook(params: {
@@ -311,13 +309,17 @@ export class ConnectorsWebhookService {
     if ((evento === "app_mention" || evento === "message") && this.onTriggerWorkflow) {
       await this.onTriggerWorkflow(event);
     }
+    if ((evento === "app_mention" || evento === "message") && this.onSlackVerifiedPayload) {
+      await this.onSlackVerifiedPayload(payload);
+    }
 
     return { ok: true, statusCode: 200, body: { ok: true, evento }, event };
   }
 
-  public async sendSlackMessage(params: {
+  public async sendSlackMessageWithThread(params: {
     channel?: string;
     text: string;
+    threadTs?: string | null;
     fetchImpl?: typeof fetch;
   }): Promise<{ ok: boolean; ts?: string; erro?: string }> {
     const token = this.vault.getSecret(VAULT_KEY_SLACK_BOT_TOKEN);
@@ -328,20 +330,21 @@ export class ConnectorsWebhookService {
     if (!token || !channel) {
       return { ok: false, erro: "Token ou canal padrão do Slack não configurados." };
     }
-    const fetchFn = params.fetchImpl ?? fetch;
-    const resp = await fetchFn("https://slack.com/api/chat.postMessage", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json; charset=utf-8",
-      },
-      body: JSON.stringify({ channel, text: params.text }),
-      signal: AbortSignal.timeout(10_000),
+    return postSlackChatMessage({
+      token,
+      channel,
+      text: params.text,
+      threadTs: params.threadTs,
+      fetchImpl: params.fetchImpl,
     });
-    const data = (await resp.json()) as { ok?: boolean; ts?: string; error?: string };
-    return data.ok
-      ? { ok: true, ts: data.ts }
-      : { ok: false, erro: data.error ?? `HTTP ${resp.status}` };
+  }
+
+  public async sendSlackMessage(params: {
+    channel?: string;
+    text: string;
+    fetchImpl?: typeof fetch;
+  }): Promise<{ ok: boolean; ts?: string; erro?: string }> {
+    return this.sendSlackMessageWithThread(params);
   }
 
   // --------------------------------------------------------------------------
@@ -440,22 +443,12 @@ export class ConnectorsWebhookService {
     signatureHex: string | undefined,
     timestamp: string | undefined,
   ): boolean {
-    const pubKeyRaw = this.vault.getSecret(VAULT_KEY_DISCORD_PUBLIC_KEY);
-    if (!pubKeyRaw || !signatureHex || !timestamp) return false;
-    try {
-      const keyObj = pubKeyRaw.includes("BEGIN PUBLIC KEY")
-        ? createPublicKey(pubKeyRaw)
-        : createPublicKey({
-            key: Buffer.concat([ED25519_SPKI_PREFIX, Buffer.from(pubKeyRaw.trim(), "hex")]),
-            format: "der",
-            type: "spki",
-          });
-      const message = Buffer.from(`${timestamp}${rawBody}`, "utf8");
-      const signature = Buffer.from(signatureHex.trim(), "hex");
-      return cryptoVerify(null, message, keyObj, signature);
-    } catch {
-      return false;
-    }
+    return verifyDiscordEd25519Signature(
+      this.vault.getSecret(VAULT_KEY_DISCORD_PUBLIC_KEY),
+      rawBody,
+      signatureHex,
+      timestamp,
+    );
   }
 
   public async handleDiscordWebhook(params: {
@@ -514,6 +507,9 @@ export class ConnectorsWebhookService {
     if (this.onTriggerWorkflow) {
       await this.onTriggerWorkflow(event);
     }
+    if (this.onDiscordVerifiedPayload) {
+      await this.onDiscordVerifiedPayload(payload);
+    }
 
     return {
       ok: true,
@@ -524,6 +520,25 @@ export class ConnectorsWebhookService {
       },
       event,
     };
+  }
+
+  public async sendDiscordReply(params: {
+    channelId?: string;
+    content: string;
+    replyToMessageId?: string | null;
+    fetchImpl?: typeof fetch;
+  }): Promise<{ ok: boolean; erro?: string }> {
+    const token = this.vault.getSecret(VAULT_KEY_DISCORD_BOT_TOKEN);
+    if (!token || !params.channelId) {
+      return this.sendDiscordMessage(params);
+    }
+    return postDiscordChannelMessage({
+      token,
+      channelId: params.channelId,
+      content: params.content,
+      replyToMessageId: params.replyToMessageId,
+      fetchImpl: params.fetchImpl,
+    });
   }
 
   public async sendDiscordMessage(params: {

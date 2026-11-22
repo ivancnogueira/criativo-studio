@@ -10,6 +10,7 @@ import type {
   AvatarShape,
   BackupModelChoice,
   BibliotecasPastasSnapshot,
+  BrowserAutofillConsentRequest,
   BrowserProfileInfo,
   BrowserProfileProxyPayload,
   BrowserProxyConfig,
@@ -296,6 +297,7 @@ export function useStudioState() {
   const [captureByAgent, setCaptureByAgent] = useState<Record<string, CaptureScreenConsentRequest>>({});
   const [usageLimitAskByAgent, setUsageLimitAskByAgent] = useState<Record<string, UsageLimitAskPayload>>({});
   const [activeTakeoverModal, setActiveTakeoverModal] = useState<BrowserTakeoverSession | null>(null);
+  const [pendingAutofillRequest, setPendingAutofillRequest] = useState<BrowserAutofillConsentRequest | null>(null);
   const [activeTakeoverFrame, setActiveTakeoverFrame] = useState<{
     tabId: string;
     dataUrl: string;
@@ -571,6 +573,8 @@ export function useStudioState() {
     setUsageLimitAskByAgent,
     activeTakeoverModal,
     setActiveTakeoverModal,
+    pendingAutofillRequest,
+    setPendingAutofillRequest,
     activeTakeoverFrame,
     setActiveTakeoverFrame,
     teachStatusByTab,

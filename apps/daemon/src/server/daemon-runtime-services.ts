@@ -8,7 +8,13 @@ import { RoutineExecutionService } from "../routines/routine-execution-service.t
 import { WebhookRoutineService } from "../routines/webhook-routine-service.ts";
 import { RoutineFlowsEngine } from "../routines/routine-flows-engine.ts";
 import type { RoutineToolsDeps } from "../routines/routine-agent-tools.ts";
+import { DiscordMessagingAdapter } from "../messaging/discord-adapter.ts";
+import { MessagingService } from "../messaging/messaging-service.ts";
+import { SlackMessagingAdapter } from "../messaging/slack-adapter.ts";
 import { TelegramNotificationBot } from "../messaging/telegram-bot.ts";
+import { BrowserAutofillService } from "../vault/browser-autofill-service.ts";
+import { LoginVaultService } from "../vault/login-vault-service.ts";
+import { PasswordManagerRegistry } from "../vault/password-managers/registry.ts";
 import { WorkflowEngine } from "../workflows/workflow-engine.ts";
 import { WorkflowStore } from "../workflows/workflow-store.ts";
 import { executeWorkflowToolCall } from "../workflows/workflow-tools.ts";
@@ -120,9 +126,88 @@ export async function createDaemonRuntimeServices(
   const routineFlowStore = new RoutineFlowStore(db);
   const workflowStore = new WorkflowStore({ db, vault });
   let workflowEngineRef: WorkflowEngine | null = null;
+  let messagingDepsReady = false;
+  const messagingService = new MessagingService({
+    db,
+    agentExecutor: async ({ agentId, prompt, event }) => {
+      if (!messagingDepsReady) {
+        return "Serviço do estúdio ainda inicializando; tente novamente em instantes.";
+      }
+      const agRow = (db.connection
+        .prepare("SELECT * FROM projecao_agentes WHERE agente_id = ? LIMIT 1;")
+        .get(agentId) ??
+        db.connection
+          .prepare("SELECT * FROM projecao_agentes WHERE agente_id = 'orquestrador_estrategista' LIMIT 1;")
+          .get()) as
+        | {
+            agente_id: string;
+            nome: string;
+            papel: string;
+            modelo_padrao: string;
+            config_json: string;
+          }
+        | undefined;
+      if (!agRow) {
+        return "Nenhum agente configurado no estúdio para processar esta mensagem.";
+      }
+      const res = await executeAgentConversationTurn({
+        deps: {
+          ...baseStudioDepsForLanes,
+          phase13: phase13Bundle,
+          sharedTables,
+          memoryManager,
+          memoryReview,
+          skillLearning,
+          historySearch,
+          libraryFolders,
+          handoffBus,
+          visualPreview,
+          uiBlockRegistry,
+          apiKeysBridge,
+          phase14: phase14Services,
+          messagingService,
+          loginVault,
+          passwordManagerRegistry,
+          browserAutofillService,
+        },
+        agente: agRow,
+        userPrompt: `[Canal externo ${event.platform} · ${event.senderName ?? event.senderId}]\n${prompt}`,
+        threadId: `msg:${event.platform}:${event.channelId}:${event.threadId ?? "root"}`,
+        turnoId: `msg-${randomUUID().slice(0, 8)}`,
+        originalUserPrompt: prompt,
+      });
+      return res.agentMsg.conteudo_markdown;
+    },
+  });
+
+  const slackAdapter = new SlackMessagingAdapter({
+    connectorsWebhook,
+    messagingService,
+    fetchImpl: options.fetchImpl,
+  });
+  const discordAdapter = new DiscordMessagingAdapter({
+    connectorsWebhook,
+    messagingService,
+    fetchImpl: options.fetchImpl,
+  });
+  connectorsWebhook.attachMessagingHandlers({
+    onSlackEvent: (payload) => slackAdapter.handleVerifiedEventPayload(payload),
+    onDiscordEvent: (payload) => discordAdapter.handleVerifiedInteractionOrMessage(payload),
+  });
+
+  const loginVault = new LoginVaultService(db, vault);
+  const passwordManagerRegistry = new PasswordManagerRegistry();
+  const browserAutofillService = new BrowserAutofillService({
+    loginVault,
+    passwordManagers: passwordManagerRegistry,
+    browserService,
+    wsHub,
+  });
+
   const telegramBot = new TelegramNotificationBot({
     vault,
     fetchImpl: options.fetchImpl,
+    messagingService,
     onApproveTask: async (tarefaId) => {
       if (options.onApproveAndPublishHook) {
         const tarefa = queue.getTask(tarefaId);
@@ -425,7 +510,12 @@ export async function createDaemonRuntimeServices(
     connectorsWebhook,
     transcription,
     backupResolver,
+    messagingService,
+    loginVault,
+    passwordManagerRegistry,
+    browserAutofillService,
   };
+  messagingDepsReady = true;
 
   const studioMcpBridge = new CriativoStudioMcpBridge({
     db,
@@ -449,6 +539,7 @@ export async function createDaemonRuntimeServices(
     showcaseService,
     transcription,
     remoteClaimService,
+    browserAutofillService,
     fetchImpl: options.fetchImpl,
   });
   providerConnection.attachStudioMcpBridge(studioMcpBridge);
@@ -460,6 +551,12 @@ export async function createDaemonRuntimeServices(
     routineFlowStore,
     workflowStore,
     telegramBot,
+    messagingService,
+    slackAdapter,
+    discordAdapter,
+    loginVault,
+    passwordManagerRegistry,
+    browserAutofillService,
     workflowEngine,
     workflowTriggers,
     routineResultDispatcher,

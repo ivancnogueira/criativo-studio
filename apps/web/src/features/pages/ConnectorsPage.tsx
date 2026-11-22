@@ -13,6 +13,8 @@ import { ConnectorsAppsTab } from "./connectors/ConnectorsAppsTab";
 import { ConnectorsSkillsTab } from "./connectors/ConnectorsSkillsTab";
 import { ConnectorsShowcaseTab } from "./connectors/ConnectorsShowcaseTab";
 import { ConnectorsVaultTab } from "./connectors/ConnectorsVaultTab";
+import { ConnectorsMessagingPoliciesTab } from "./connectors/ConnectorsMessagingPoliciesTab";
+import { ConnectorsLoginVaultTab } from "./connectors/ConnectorsLoginVaultTab";
 
 export const ConnectorsPage: React.FC<ConnectorsPageProps> = (props) => {
   const ctrl = useConnectorsController(props);
@@ -250,9 +252,18 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = (props) => {
               />
             )}
             <ConnectorsAppsTab ctrl={ctrl} props={props} />
+            {hubTab === "mensageria" && (
+              <ConnectorsMessagingPoliciesTab
+                agentes={props.agentes ?? []}
+                onToast={showToast}
+              />
+            )}
             <ConnectorsSkillsTab ctrl={ctrl} props={props} />
             <ConnectorsShowcaseTab ctrl={ctrl} props={props} />
             <ConnectorsVaultTab ctrl={ctrl} props={props} />
+            {hubTab === "logins" && (
+              <ConnectorsLoginVaultTab onToast={showToast} />
+            )}
           </div>
         </div>
       </div>

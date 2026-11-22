@@ -17,6 +17,7 @@ import type { VaultService } from "../vault/vault-service.ts";
 import type { WorkflowEngine } from "../workflows/workflow-engine.ts";
 import type { WorkflowStore } from "../workflows/workflow-store.ts";
 import type { TranscriptionService } from "../voice/transcription-service.ts";
+import type { BrowserAutofillService } from "../vault/browser-autofill-service.ts";
 import type { Phase13ServicesBundle } from "../server/threads-routes.ts";
 import type { ShowcaseSiteService } from "../server/showcase-service.ts";
 import {
@@ -71,6 +72,7 @@ export interface CriativoStudioMcpBridgeOptions {
   showcaseService?: ShowcaseSiteService;
   transcription?: TranscriptionService;
   remoteClaimService?: RemoteClaimService | null;
+  browserAutofillService?: BrowserAutofillService;
   authToken?: string;
   fetchImpl?: FetchLike;
 }
@@ -417,6 +419,7 @@ export class CriativoStudioMcpBridge {
           showcaseService: this.deps.showcaseService,
           transcription: this.deps.transcription,
           remoteClaimService: this.deps.remoteClaimService ?? undefined,
+          browserAutofillService: this.deps.browserAutofillService,
         },
       });
     } else if (isPhase10ExtensionTool(toolName)) {

@@ -40,6 +40,7 @@ import { StudioAgentCenterPane } from "./components/studio/StudioAgentCenterPane
 import { StudioAgentInspectorPane } from "./components/studio/StudioAgentInspectorPane";
 import { StudioSecondaryPagesSwitch } from "./components/studio/StudioSecondaryPagesSwitch";
 import { StudioModalsHost } from "./components/studio/StudioModalsHost";
+import { I18nProvider } from "./i18n/I18nContext";
 
 export function App() {
   const state = useStudioState();
@@ -100,11 +101,15 @@ export function App() {
   } = state;
 
   if (isAppBooting || (licenseStatus && !licenseStatus.valid) || (onboarding && !onboarding.onboarding_concluido)) {
-    return <StudioAuthAndOnboardingGate ctx={ctx} />;
+    return (
+      <I18nProvider locale={userSettings.aparencia.idioma}>
+        <StudioAuthAndOnboardingGate ctx={ctx} />
+      </I18nProvider>
+    );
   }
 
   return (
-    <>
+    <I18nProvider locale={userSettings.aparencia.idioma}>
       <div className="h-screen w-screen overflow-hidden bg-[#0D0D0D] text-white flex">
         <WorkspaceRail
           activeSection={activeSection}
@@ -219,6 +224,6 @@ export function App() {
           onRevealComplete={() => setSplashDismissed(true)}
         />
       )}
-    </>
+    </I18nProvider>
   );
 }

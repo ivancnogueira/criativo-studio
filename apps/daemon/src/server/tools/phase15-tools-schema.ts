@@ -8,6 +8,7 @@ import type { BrowserAutomationService } from "../../engine/tools/browser-automa
 import type { ScreenCaptureBridge } from "../../engine/tools/screen-capture-bridge.ts";
 import type { RemoteClaimService } from "../../servers/remote-claim-service.ts";
 import type { TranscriptionService } from "../../voice/transcription-service.ts";
+import type { BrowserAutofillService } from "../../vault/browser-autofill-service.ts";
 import type { ShowcaseSiteService } from "../showcase-service.ts";
 import type { WebSocketHub } from "../websocket-hub.ts";
 export const BROWSER_DIRECT_ALIASES = [
@@ -37,6 +38,7 @@ export const BROWSER_DIRECT_ALIASES = [
   "browser_request_takeover",
   "browser_release_takeover",
   "browser_submit_secret",
+  "browser_autofill_login",
   "browser_close_tab",
 ] as const;
 
@@ -226,6 +228,7 @@ export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
             "request_takeover",
             "release_takeover",
             "submit_secret",
+            "autofill_login",
             "close_tab",
           ],
         },
@@ -532,6 +535,7 @@ export interface Phase15ToolServices {
   showcaseService?: ShowcaseSiteService;
   transcription?: TranscriptionService;
   remoteClaimService?: RemoteClaimService;
+  browserAutofillService?: BrowserAutofillService;
 }
 
 export interface Phase15ToolContext {

@@ -431,4 +431,40 @@ export const SCHEMA_THREADS_INTEGRATIONS_TABLES: readonly SchemaTableDefinition[
         ON projecao_custom_providers(enabled, name);
     `,
   },
+  {
+    nome: "projecao_messaging_policies",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_messaging_policies (
+        channel_kind TEXT PRIMARY KEY CHECK(channel_kind IN ('telegram', 'slack', 'discord')),
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+        orchestrator_agent_id TEXT NOT NULL DEFAULT 'estrategista',
+        reply_in_threads INTEGER NOT NULL DEFAULT 1 CHECK(reply_in_threads IN (0, 1)),
+        allowlist_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(allowlist_json)),
+        allowed_channels_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(allowed_channels_json)),
+        updated_at TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    nome: "cofre_logins",
+    sql: `
+      CREATE TABLE IF NOT EXISTS cofre_logins (
+        login_id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        domain TEXT NOT NULL,
+        username TEXT NOT NULL,
+        password_encrypted TEXT NOT NULL,
+        iv_envelope TEXT NOT NULL,
+        totp_encrypted TEXT,
+        totp_iv TEXT,
+        autofill_policy TEXT NOT NULL DEFAULT 'exact' CHECK(autofill_policy IN ('anywhere', 'exact', 'never')),
+        notes_encrypted TEXT,
+        notes_iv TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_cofre_logins_domain
+        ON cofre_logins(domain, username);
+    `,
+  },
 ];

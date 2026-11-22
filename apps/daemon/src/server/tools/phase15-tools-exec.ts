@@ -36,7 +36,27 @@ export async function executePhase15ToolCall(
     if (!rawAction) {
       throw new Error("Informe 'action' para criativo_browser.");
     }
-    const action = rawAction as BrowserCdpActionName;
+    const action = rawAction as BrowserCdpActionName | "autofill_login";
+
+    if (action === "autofill_login") {
+      const tabId = readStringArg(args, "tabId");
+      if (!tabId) {
+        throw new Error("Informe 'tabId' em browser_autofill_login.");
+      }
+      if (!services.browserAutofillService) {
+        throw new Error("BrowserAutofillService não inicializado neste daemon.");
+      }
+      return await services.browserAutofillService.requestAutofill({
+        tabId,
+        agenteId: ctx.agenteId,
+        url: readStringArg(args, "url"),
+        targetUser: normalizeBrowserTargetInput(args.target) ?? null,
+        targetPassword: normalizeBrowserTargetInput(args.toTarget) ?? null,
+        submitTarget: normalizeBrowserTargetInput(args.submitTarget) ?? null,
+        submission:
+          args.submission === "click" || args.submission === "enter" ? args.submission : "none",
+      });
+    }
 
     if (action === "upload_files") {
       const paths = readStringArrayArg(args, "paths", "files");

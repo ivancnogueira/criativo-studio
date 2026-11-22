@@ -3,6 +3,7 @@
  */
 
 import type { McpOAuthStatus } from "../mcp-contracts.ts";
+import type { BrowserAutofillConsentRequest } from "../phase34-messaging-vault.ts";
 import type { RoutineOwnerKind, RoutineRunStatus } from "../routines.ts";
 import type { WhatsAppMensagemRegistro, WhatsAppPairingRequest } from "../whatsapp-contracts.ts";
 import type { WorkflowBranch, WorkflowRunStatus, WorkflowStepStatus } from "../workflow-graph.ts";
@@ -329,6 +330,7 @@ export type WebSocketEventMap = {
     startedAt: number | null;
     stepsCount: number;
   };
+  "browser:autofill_requested": BrowserAutofillConsentRequest;
   "screen:capture_requested": CaptureScreenConsentRequest;
   "sidebar:updated": {
     revision: number;
