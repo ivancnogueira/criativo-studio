@@ -8,6 +8,8 @@ import type { CriativoDatabase } from "../../database/client.ts";
 import type { FifoQueueManager } from "../../queue/fifo-queue.ts";
 import { resolveAgentIdFromDb } from "../../server/agent-resolver.ts";
 import type { WebSocketHub } from "../../server/websocket-hub.ts";
+import type { MailboxDeliveryGate } from "../../waits/mailbox-delivery-gate.ts";
+import type { MailboxStore } from "../../waits/mailbox-store.ts";
 import { ROSTER_15_AGENTES } from "./roster-defaults.ts";
 
 export const MAX_SEND_MESSAGE_RECIPIENTS = 32;
@@ -61,6 +63,8 @@ export class HandoffBus {
   private readonly db: CriativoDatabase;
   private readonly queue: FifoQueueManager;
   private wsHub?: WebSocketHub;
+  private mailboxStore?: MailboxStore;
+  private mailboxGate?: MailboxDeliveryGate;
 
   constructor(db: CriativoDatabase, queue: FifoQueueManager, wsHub?: WebSocketHub) {
     this.db = db;
@@ -70,6 +74,11 @@ export class HandoffBus {
 
   public setWebSocketHub(wsHub: WebSocketHub): void {
     this.wsHub = wsHub;
+  }
+
+  public attachMailbox(store: MailboxStore, gate?: MailboxDeliveryGate): void {
+    this.mailboxStore = store;
+    this.mailboxGate = gate;
   }
 
   private agentExists(agenteId: string): boolean {
@@ -391,6 +400,31 @@ export class HandoffBus {
         reply_to_message_id: replyTo,
         expects_reply: expectsReply,
       });
+
+      if (this.mailboxStore) {
+        const { item } = this.mailboxStore.enqueue({
+          agente_id: recipientId,
+          source_kind: "handoff",
+          idempotency_key: `handoff:${row.mensagem_id}:${recipientId}`,
+          payload: {
+            mensagem_id: row.mensagem_id,
+            de_agente_id: input.senderAgentId,
+            para_agente_id: recipientId,
+            conteudo: cleanText,
+            thread_origem_id: effectiveOriginThread,
+          },
+          priority: 3,
+        });
+        if (!canSteer && !busyState.busy && this.mailboxGate) {
+          void this.mailboxGate.tryDispatchNext(recipientId, async () => {
+            input.onDispatchQueued?.(recipientId, row, hopDepth + 1);
+          });
+          continue;
+        }
+        if (canSteer) {
+          this.mailboxStore.markDelivered(item.mailbox_id);
+        }
+      }
 
       if (canSteer) {
         input.onSteerMessage?.(recipientId, row);

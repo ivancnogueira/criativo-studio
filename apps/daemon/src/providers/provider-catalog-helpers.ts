@@ -291,7 +291,7 @@ export interface ProviderConnectionDeps {
   opencodeLive: import("./opencode-live-service.ts").OpenCodeLiveService;
   mcpGateway?: import("../mcp/mcp-gateway.ts").McpGateway;
   studioMcpBridge?: import("../mcp/studio-mcp-bridge.ts").CriativoStudioMcpBridge;
-  getCliProbeCache: () => Promise<Record<import("@criativo/contracts").ProviderName, { found: boolean; version: string | null; executable: string | null }>>;
+  getCliProbeCache: () => Promise<Record<import("@criativo/contracts").KnownProviderName, { found: boolean; version: string | null; executable: string | null }>>;
   getAgentsByProvider: () => Record<string, string[]>;
   invalidateCliProbeCache: () => void;
   getStudioConfig: <T>(chave: string, fallback: T) => T;

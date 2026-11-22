@@ -26,6 +26,11 @@ import { GithubImporter } from "../marketplace/github-importer.ts";
 import { SkillsManager } from "../marketplace/skills-manager.ts";
 import { McpGateway } from "../mcp/mcp-gateway.ts";
 import { ProviderConnectionService } from "../providers/provider-connection-service.ts";
+import { CustomEndpointsService } from "../providers/custom-endpoints-service.ts";
+import { LocalProviderDetector } from "../providers/local-provider-detector.ts";
+import { MailboxDeliveryGate } from "../waits/mailbox-delivery-gate.ts";
+import { MailboxReconciler } from "../waits/mailbox-reconciler.ts";
+import { MailboxStore } from "../waits/mailbox-store.ts";
 import { TranscriptionService } from "../voice/transcription-service.ts";
 import { importExternalTelemetryIfAvailable } from "./analytics-skills-service.ts";
 import { getBrandIdentity, syncBrandPlaceholdersInDatabase } from "./brand-onboarding-service.ts";
@@ -66,6 +71,8 @@ import {
   type StudioResolvedPaths,
 } from "../config/app-paths.ts";
 import { AutoUpdateService } from "../updater/auto-update-service.ts";
+import { IdleWaitCoordinator } from "../updater/idle-wait-coordinator.ts";
+import { MediaProviderCatalog } from "../workflows/media-provider-catalog.ts";
 import type { DaemonServerOptions } from "./daemon-http-utils.ts";
 
 export interface DaemonLateCallbacks {
@@ -144,11 +151,28 @@ export async function createDaemonInfraServices(
         fetchImpl: options.fetchImpl,
       })
     : null;
+  const idleWaitCoordinator = new IdleWaitCoordinator(() => {
+    const runningTask = db.connection
+      .prepare("SELECT titulo FROM projecao_tarefas WHERE status = 'executando' LIMIT 1;")
+      .get() as { titulo?: string } | undefined;
+    if (runningTask) {
+      return { busy: true, reason: `Tarefa em execução: ${runningTask.titulo ?? "ativa"}` };
+    }
+    const runningWf = db.connection
+      .prepare("SELECT run_id FROM projecao_workflow_execucoes WHERE status = 'running' LIMIT 1;")
+      .get() as { run_id?: string } | undefined;
+    if (runningWf) {
+      return { busy: true, reason: `Workflow em andamento (${runningWf.run_id})` };
+    }
+    return { busy: false };
+  });
+
   const autoUpdateService = new AutoUpdateService({
     licenseService,
     paths: studioPaths,
     wsHub,
     fetchImpl: options.fetchImpl,
+    idleWaitCoordinator,
     serverId: options.isChildServer ? (process.env.CRIATIVO_CHILD_SERVER_ID ?? "local_child") : "primary",
     serverKind: options.isChildServer ? "local_child" : "primary",
     onRestartRequested: async (ctx) => {
@@ -185,6 +209,16 @@ export async function createDaemonInfraServices(
   };
 
   const providers = new ProviderRegistry({ vault });
+  const customEndpoints = new CustomEndpointsService({
+    db,
+    vault,
+    registry: providers,
+    fetchImpl: options.fetchImpl,
+  });
+  customEndpoints.syncAllIntoRegistry();
+  const localProviderDetector = new LocalProviderDetector({
+    fetchImpl: options.fetchImpl,
+  });
   seedDefaultStudioExperience(db);
   if (process.env.CRIATIVO_IMPORT_EXTERNAL_DB === "1") {
     importExternalTelemetryIfAvailable(db);
@@ -224,6 +258,15 @@ export async function createDaemonInfraServices(
   });
   await mcpGateway.start();
   providerConnection.attachMcpGateway(mcpGateway);
+  const mediaCatalog = new MediaProviderCatalog({
+    vault,
+    fetchImpl: options.fetchImpl,
+    mcpGateway: {
+      listAvailableTools: () => mcpGateway.listDiscoveredTools(),
+      callTool: (mcpId, toolName, args) =>
+        mcpGateway.callMcpTool(`mcp_${mcpId}_${toolName}`, args),
+    },
+  });
 
   const skillsManager = new SkillsManager({
     db,
@@ -461,6 +504,17 @@ export async function createDaemonInfraServices(
   const queueStore = new ChatQueueStore(db);
   const tasksService = new AgentTasksService({ db, threadStore, queue, queueStore, wsHub });
   const waitsService = new AgentWaitsService({ db, waitStore, wsHub });
+  const mailboxStore = new MailboxStore(db);
+  const mailboxReconciler = new MailboxReconciler(db);
+  const mailboxRecoveryReport = mailboxReconciler.reconcileOnStartup({ recoverAllLeased: true });
+  if (mailboxRecoveryReport.recovered > 0 || mailboxRecoveryReport.deadLettered > 0) {
+    console.info("[Daemon] Mailbox reconciliado no startup:", mailboxRecoveryReport);
+  }
+  const mailboxDeliveryGate = new MailboxDeliveryGate({
+    store: mailboxStore,
+  });
+  handoffBus.attachMailbox(mailboxStore, mailboxDeliveryGate);
+  waitsService.attachMailbox(mailboxStore);
   const wakeupService = new AgentWakeupService({ db, wsHub });
   const queueControls = new QueueControlsService({ db, queueStore, tasksService, wsHub });
   const sideQuestion = new SideQuestionService({ db, providers, providerConnection, wsHub });
@@ -510,7 +564,14 @@ export async function createDaemonInfraServices(
     isAuthorizedByAccessToken,
     providers,
     providerConnection,
+    customEndpoints,
+    localProviderDetector,
+    mailboxStore,
+    mailboxDeliveryGate,
+    mailboxReconciler,
     mcpGateway,
+    mediaCatalog,
+    idleWaitCoordinator,
     skillsManager,
     catalogService,
     githubImporter,

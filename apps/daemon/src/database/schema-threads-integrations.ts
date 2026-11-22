@@ -389,4 +389,46 @@ export const SCHEMA_THREADS_INTEGRATIONS_TABLES: readonly SchemaTableDefinition[
         ON meta_posts_cache(conta_id, sincronizado_em DESC);
     `,
   },
+  {
+    nome: "projecao_agent_mailbox",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_agent_mailbox (
+        mailbox_id TEXT PRIMARY KEY,
+        agente_id TEXT NOT NULL,
+        source_kind TEXT NOT NULL CHECK(source_kind IN ('handoff', 'wakeup', 'wait_event', 'webhook', 'channel_message')),
+        idempotency_key TEXT NOT NULL UNIQUE,
+        payload_json TEXT NOT NULL CHECK(json_valid(payload_json)),
+        priority INTEGER NOT NULL DEFAULT 5,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'leased', 'delivered', 'acked', 'dead_letter')),
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 5,
+        lease_owner TEXT,
+        lease_expires_at TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        delivered_at TEXT,
+        acked_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_mailbox_claim
+        ON projecao_agent_mailbox(agente_id, status, priority ASC, created_at ASC);
+    `,
+  },
+  {
+    nome: "projecao_custom_providers",
+    sql: `
+      CREATE TABLE IF NOT EXISTS projecao_custom_providers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        base_url TEXT NOT NULL,
+        models_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(models_json)),
+        vault_secret_key TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+        headers_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_custom_providers_enabled
+        ON projecao_custom_providers(enabled, name);
+    `,
+  },
 ];

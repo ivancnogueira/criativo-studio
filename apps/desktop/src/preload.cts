@@ -52,6 +52,16 @@ export interface CriativoDesktopBridge {
   onMainNavigate: (listener: (payload: CriativoMainNavigatePayload) => void) => () => void;
   pickFolder: () => Promise<{ canceled: boolean; path: string | null }>;
   openAgentWindow: (agenteId: string) => Promise<boolean>;
+  notifyNative: (payload: {
+    id?: string;
+    kind?: "approval" | "error" | "completion" | "update" | "info";
+    title: string;
+    body: string;
+    agentId?: string | null;
+  }) => Promise<{ shown: boolean; reason?: string }>;
+  onNotificationClicked: (
+    listener: (payload: { id?: string | null; kind?: string; agentId?: string | null }) => void
+  ) => () => void;
 }
 
 const bridge: CriativoDesktopBridge = {
@@ -112,6 +122,19 @@ const bridge: CriativoDesktopBridge = {
   pickFolder: () => ipcRenderer.invoke("criativo:pick-folder"),
   openAgentWindow: (agenteId: string) =>
     ipcRenderer.invoke("criativo:open-agent-window", { agenteId }),
+  notifyNative: (payload) => ipcRenderer.invoke("criativo:notify-native", payload),
+  onNotificationClicked: (listener) => {
+    const wrapped = (
+      _event: unknown,
+      payload: { id?: string | null; kind?: string; agentId?: string | null }
+    ) => {
+      listener(payload ?? {});
+    };
+    ipcRenderer.on("criativo:notification-clicked", wrapped);
+    return () => {
+      ipcRenderer.removeListener("criativo:notification-clicked", wrapped);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld("criativoDesktop", bridge);

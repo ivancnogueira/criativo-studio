@@ -145,7 +145,10 @@ export async function tryHandleLicenseAndUpdatesRoutes(ctx: StudioRouteContext):
       sendJson(res, 503, { erro: "AutoUpdateService indisponível." });
       return true;
     }
-    const restartInfo = await deps.autoUpdateService.triggerRestart();
+    const body = await readJsonBody(req).catch(() => ({} as Record<string, unknown>));
+    const restartInfo = await deps.autoUpdateService.triggerRestart({
+      force: body.force === true,
+    });
     sendJson(res, 200, restartInfo);
     return true;
   }

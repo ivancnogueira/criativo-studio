@@ -14,6 +14,12 @@ import {
   validateRoutineSchedule,
 } from "../routines/routine-schedule-calc.ts";
 import {
+  buildRoutinesIcsFeed,
+  getIcsFeedConfig,
+  rotateIcsFeedToken,
+  verifyIcsFeedToken,
+} from "../routines/routine-feed-ics.ts";
+import {
   MAX_WEBHOOK_BODY_BYTES,
   PayloadTooLargeError,
   readRawBodyWithLimit,
@@ -465,6 +471,47 @@ export async function tryHandleRoutineRoute(
     } catch (error) {
       buildErrorResponse(res, sendJson, error);
     }
+    return true;
+  }
+
+  // 12. Feed iCalendar (.ics) das rotinas + gestão de token (G-13)
+  if (method === "GET" && path === "/api/rotinas/feed.ics") {
+    const token = url.searchParams.get("token");
+    if (!verifyIcsFeedToken(deps.db, token)) {
+      sendJson(res, 401, { erro: "Token do feed iCalendar ausente ou inválido." });
+      return true;
+    }
+    const routines = routineStore.listAll();
+    const ics = buildRoutinesIcsFeed(routines);
+    res.writeHead(200, {
+      "Content-Type": "text/calendar; charset=utf-8",
+      "Content-Disposition": 'inline; filename="criativo-rotinas.ics"',
+      "Cache-Control": "no-cache",
+    });
+    res.end(ics);
+    return true;
+  }
+
+  if (method === "GET" && path === "/api/rotinas/feed-config") {
+    const config = getIcsFeedConfig(deps.db);
+    sendJson(res, 200, {
+      ok: true,
+      enabled: config.enabled,
+      feedPath: config.feedPath,
+      updatedAt: config.updatedAt,
+    });
+    return true;
+  }
+
+  if (method === "POST" && path === "/api/rotinas/feed-token/rotate") {
+    rotateIcsFeedToken(deps.db);
+    const config = getIcsFeedConfig(deps.db);
+    sendJson(res, 200, {
+      ok: true,
+      enabled: config.enabled,
+      feedPath: config.feedPath,
+      updatedAt: config.updatedAt,
+    });
     return true;
   }
 

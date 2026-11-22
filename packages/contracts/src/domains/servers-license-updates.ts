@@ -137,6 +137,7 @@ export type UpdatePhaseState =
   | "downloading"
   | "verifying"
   | "applying"
+  | "waiting_idle"
   | "ready_to_restart"
   | "up_to_date"
   | "error"

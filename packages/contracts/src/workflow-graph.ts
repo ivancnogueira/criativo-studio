@@ -25,6 +25,17 @@ export type TipoNoWorkflow =
   | TipoNoWorkflowLegado;
 
 export type WorkflowPortType = "text" | "image" | "file";
+
+export interface MediaProviderDescriptor {
+  id: string;
+  label: string;
+  kind: "image" | "video";
+  source: "native" | "http_custom" | "mcp";
+  models: string[];
+  requiresVaultKey?: string;
+  mcpServerId?: string;
+  mcpToolName?: string;
+}
 export type WorkflowBranch = "yes" | "no";
 export type WorkflowShapeKind =
   | "rectangle"
@@ -105,6 +116,8 @@ export interface WorkflowNo {
   systemPrompt?: string;
   model?: string;
   provider?: string;
+  mediaProviderId?: string;
+  mediaModelId?: string;
   effort?: "baixo" | "medio" | "alto" | "maximo";
   agenteId?: string;
   fileId?: string;

@@ -3,6 +3,7 @@ import type {
   AgentNotificationLevel,
   AgenteRegistro,
   CanalEquipe,
+  NativeNotificationLevel,
   StudioUserSettings,
 } from "@criativo/contracts";
 import { Bell, Mic, Volume2 } from "lucide-react";
@@ -27,6 +28,13 @@ const TTS_OPTIONS: CarbonSelectOption[] = [
   { value: "edge_tts", label: "Edge TTS", description: "Rápido e gratuito em pt-BR" },
   { value: "elevenlabs", label: "ElevenLabs", description: "Síntese expressiva configurada no Cofre" },
   { value: "fish_audio", label: "Fish Audio", description: "Baixa latência configurada no Cofre" },
+];
+
+const NATIVE_LEVEL_OPTIONS: CarbonSelectOption<NativeNotificationLevel>[] = [
+  { value: "all", label: "Todas as notificações", description: "Aprovações, erros e entregas concluídas" },
+  { value: "approvals_only", label: "Apenas aprovações", description: "Somente quando um agente aguarda revisão" },
+  { value: "errors_only", label: "Apenas erros", description: "Falhas críticas e quedas de integração" },
+  { value: "muted", label: "Silenciado", description: "Desativar notificações nativas do sistema" },
 ];
 
 /**
@@ -237,6 +245,21 @@ export const SettingsNotificationsTab: React.FC<SettingsNotificationsTabProps> =
         checked={notificacoes.mostrar_preview}
         onChange={(next) => onChange({ ...notificacoes, mostrar_preview: next })}
       />
+
+      <div className="rounded-xl border border-white/[0.06] bg-[#212121] p-4 space-y-2">
+        <div className="text-[13px] font-semibold text-white">Notificações nativas do sistema (Desktop)</div>
+        <div className="text-[11.5px] text-[#979797]">
+          Define quando o app Electron envia alertas nativos com foco automático ao clicar.
+        </div>
+        <CarbonSelect<NativeNotificationLevel>
+          ariaLabel="Nível de notificações nativas do sistema"
+          value={notificacoes.notificacao_nativa_nivel ?? "all"}
+          options={NATIVE_LEVEL_OPTIONS}
+          onChange={(nextLevel) =>
+            onChange({ ...notificacoes, notificacao_nativa_nivel: nextLevel })
+          }
+        />
+      </div>
 
       <div className="rounded-xl border border-white/[0.06] bg-[#212121] p-4 space-y-3">
         <div className="flex items-center justify-between gap-2">

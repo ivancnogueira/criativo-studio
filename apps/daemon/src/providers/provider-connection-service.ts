@@ -6,6 +6,7 @@ import {
   resolve,
 } from "node:path";
 import type {
+  KnownProviderName,
   OnboardingEstado,
   ProviderName,
 } from "@criativo/contracts";
@@ -49,7 +50,7 @@ export class ProviderConnectionService {
   private studioMcpBridge?: CriativoStudioMcpBridge;
   private cliCache: {
     expiresAt: number;
-    data: Record<ProviderName, { found: boolean; version: string | null; executable: string | null }>;
+    data: Record<KnownProviderName, { found: boolean; version: string | null; executable: string | null }>;
   } | null = null;
 
   constructor(options: {
@@ -210,7 +211,7 @@ export class ProviderConnectionService {
   }
 
   private async getCliProbeCache(): Promise<
-    Record<ProviderName, { found: boolean; version: string | null; executable: string | null }>
+    Record<KnownProviderName, { found: boolean; version: string | null; executable: string | null }>
   > {
     const now = Date.now();
     if (this.cliCache && this.cliCache.expiresAt > now) {

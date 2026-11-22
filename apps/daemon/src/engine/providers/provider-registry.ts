@@ -41,7 +41,19 @@ export class ProviderRegistry {
   }
 
   public resolveProviderName(modelName: string): ProviderName {
-    const normalized = modelName.trim().toLowerCase();
+    const raw = modelName.trim();
+    const normalized = raw.toLowerCase();
+    if (normalized.startsWith("custom/")) {
+      const rest = raw.slice("custom/".length);
+      const slashIdx = rest.indexOf("/");
+      const customId = (slashIdx >= 0 ? rest.slice(0, slashIdx) : rest).trim();
+      if (customId) {
+        return `custom:${customId}` as ProviderName;
+      }
+    }
+    if (normalized.startsWith("lmstudio/") || normalized.startsWith("lmstudio:")) {
+      return "lmstudio";
+    }
     if (
       normalized.startsWith("opencode/") ||
       normalized.endsWith("-free") ||

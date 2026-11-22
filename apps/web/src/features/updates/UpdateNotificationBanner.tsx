@@ -6,6 +6,7 @@ export interface UpdateNotificationBannerProps {
   status: UpdateStatusSnapshot | null;
   applying?: boolean;
   onApplyUpdate?: () => void;
+  onForceRestart?: () => void;
   onOpenDetails?: () => void;
 }
 
@@ -13,6 +14,7 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
   status,
   applying = false,
   onApplyUpdate,
+  onForceRestart,
   onOpenDetails,
 }) => {
   if (!status) return null;
@@ -22,8 +24,9 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
     status.state === "downloading" ||
     status.state === "verifying" ||
     status.state === "applying";
+  const isWaitingIdle = status.state === "waiting_idle";
   const isReady = status.state === "ready_to_restart";
-  const show = status.update_available || isInProgress || isReady;
+  const show = status.update_available || isInProgress || isWaitingIdle || isReady;
   if (!show) return null;
 
   const targetVersion = status.latest_version || status.current_version;
@@ -42,9 +45,11 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
             <Sparkles className="h-4 w-4 text-[#31CF76] shrink-0" />
           )}
           <span>
-            {isReady
-              ? `Atualização v${targetVersion} aplicada`
-              : `Nova versão v${targetVersion}`}
+            {isWaitingIdle
+              ? `Atualização v${targetVersion} aguardando ociosidade`
+              : isReady
+                ? `Atualização v${targetVersion} aplicada`
+                : `Nova versão v${targetVersion}`}
           </span>
         </div>
 
@@ -60,15 +65,17 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
       </div>
 
       <p className="mt-1 text-[11px] text-[#B8D8C5] leading-snug">
-        {isReady
-          ? "Dados preservados. Reinicie o servidor para ativar a nova versão."
-          : isInProgress
-            ? status.state === "verifying"
-              ? "Validando assinatura SHA-256 do pacote..."
-              : status.state === "applying"
-                ? "Aplicando atualização sem tocar nos seus dados..."
-                : `Baixando atualização (${Math.round(status.progress_percent)}%)...`
-            : "Clique para atualizar mantendo agentes, conversas e banco seguros."}
+        {isWaitingIdle
+          ? "Aguardando a conclusão do turno/renderização atual antes de reiniciar o servidor."
+          : isReady
+            ? "Dados preservados. Reinicie o servidor para ativar a nova versão."
+            : isInProgress
+              ? status.state === "verifying"
+                ? "Validando assinatura SHA-256 do pacote..."
+                : status.state === "applying"
+                  ? "Aplicando atualização sem tocar nos seus dados..."
+                  : `Baixando atualização (${Math.round(status.progress_percent)}%)...`
+              : "Clique para atualizar mantendo agentes, conversas e banco seguros."}
       </p>
 
       {isInProgress && (
@@ -83,10 +90,15 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
       <button
         type="button"
         disabled={isInProgress}
-        onClick={() => onApplyUpdate?.()}
+        onClick={() => (isWaitingIdle && onForceRestart ? onForceRestart() : onApplyUpdate?.())}
         className="mt-2.5 w-full rounded-lg bg-[#31CF76] hover:bg-[#3EE086] disabled:opacity-60 text-[#081A0F] py-1.5 px-2.5 text-[12px] font-semibold flex items-center justify-center gap-1.5 transition-colors"
       >
-        {isInProgress ? (
+        {isWaitingIdle ? (
+          <>
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <span>Reiniciar agora (forçar)</span>
+          </>
+        ) : isInProgress ? (
           <>
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             <span>Atualizando...</span>

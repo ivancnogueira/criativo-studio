@@ -2,7 +2,11 @@
  * Contratos base de agentes, provedores, tarefas, sidebar, dock e configuracoes do usuario.
  */
 
-export type ProviderName = "gemini" | "claude" | "openai" | "grok" | "opencode" | "ollama";
+import type { NativeNotificationLevel } from "../phase33-automation-media.ts";
+
+export type KnownProviderName = "gemini" | "claude" | "openai" | "grok" | "opencode" | "ollama";
+
+export type ProviderName = KnownProviderName | `custom:${string}` | "lmstudio";
 
 export type FrenteAgente = "conteudo" | "bonus" | "video" | "custom";
 
@@ -307,6 +311,7 @@ export interface StudioUserSettings {
   notificacoes: {
     web_habilitadas: boolean;
     mostrar_preview: boolean;
+    notificacao_nativa_nivel?: NativeNotificationLevel;
     som_tarefa: "cristal" | "suave" | "pulso" | "silencio";
     som_feedback: "cristal" | "suave" | "pulso" | "silencio";
     matriz: Record<string, AgentNotificationLevel>;

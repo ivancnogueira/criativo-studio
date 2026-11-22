@@ -45,6 +45,7 @@ export async function createDaemonRuntimeServices(
     providers,
     providerConnection,
     mcpGateway,
+    mediaCatalog,
     skillsManager,
     catalogService,
     githubImporter,
@@ -146,6 +147,7 @@ export async function createDaemonRuntimeServices(
     telegramBot,
     workspaceRoot: resolvedWorkspaceRoot,
     fetchImpl: options.fetchImpl,
+    mediaCatalog,
   });
   workflowEngineRef = workflowEngine;
   workflowEngine.setRunner(runner);

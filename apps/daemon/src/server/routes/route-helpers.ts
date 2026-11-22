@@ -49,6 +49,9 @@ import type { LocalServerManager } from "../../servers/local-server-manager.ts";
 import type { RemoteClaimService } from "../../servers/remote-claim-service.ts";
 import type { RemoteOAuthBridgeService } from "../../servers/remote-oauth-bridge.ts";
 import type { AutoUpdateService } from "../../updater/auto-update-service.ts";
+import type { CustomEndpointsService } from "../../providers/custom-endpoints-service.ts";
+import type { LocalProviderDetector } from "../../providers/local-provider-detector.ts";
+import type { MediaProviderCatalog } from "../../workflows/media-provider-catalog.ts";
 import {
   activateUpgradePackage,
   computeUnlockedAgentsSummary,
@@ -172,6 +175,9 @@ export interface StudioRoutesDeps {
   remoteClaimService?: RemoteClaimService | null;
   remoteOAuthBridge?: RemoteOAuthBridgeService | null;
   autoUpdateService?: AutoUpdateService;
+  customEndpoints?: CustomEndpointsService;
+  localProviderDetector?: LocalProviderDetector;
+  mediaCatalog?: MediaProviderCatalog;
 }
 
 export interface StudioRouteContext {

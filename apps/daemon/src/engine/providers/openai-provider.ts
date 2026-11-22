@@ -39,6 +39,7 @@ export interface OpenAIProviderOptions extends ProviderAdapterOptions {
   providerName?: ProviderName;
   secretKeys?: string[];
   requireApiKey?: boolean;
+  customHeaders?: Record<string, string>;
 }
 
 /**
@@ -168,7 +169,10 @@ export class OpenAIProvider implements AIProviderClient {
 
   public async executeTurn(turnContext: AgentTurnContext): Promise<AgentTurnResult> {
     const apiKey = this.getApiKey();
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const headers: Record<string, string> = {
+      ...(this.options.customHeaders ?? {}),
+      "Content-Type": "application/json",
+    };
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
     try {

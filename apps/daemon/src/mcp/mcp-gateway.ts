@@ -215,6 +215,26 @@ export class McpGateway {
     );
   }
 
+  public listDiscoveredTools(): Array<{
+    mcpId: string;
+    serverName: string;
+    name: string;
+    description?: string;
+  }> {
+    const out: Array<{ mcpId: string; serverName: string; name: string; description?: string }> = [];
+    for (const entry of this.pool.values()) {
+      for (const t of entry.discoveredTools) {
+        out.push({
+          mcpId: t.mcpId,
+          serverName: t.serverName ?? t.mcpId,
+          name: t.name,
+          description: t.description,
+        });
+      }
+    }
+    return out;
+  }
+
   /**
    * Retorna `AcpMcpServer[]` pronto para injeção em `AntigravityAcpService` e `OpenCodeLiveService`,
    * omitindo STDIO com `workingDirectory` e usando URLs do `McpOAuthProxy` para servidores OAuth.

@@ -87,6 +87,9 @@ export async function createDaemonServer(
     isAuthorizedByAccessToken,
     providers,
     providerConnection,
+    customEndpoints,
+    localProviderDetector,
+    mediaCatalog,
     mcpGateway,
     skillsManager,
     catalogService,
@@ -174,7 +177,7 @@ export async function createDaemonServer(
 
       if (
         configuredAccessToken &&
-        !(method === "GET" && (path === "/health" || path === "/api/health")) &&
+        !(method === "GET" && (path === "/health" || path === "/api/health" || path === "/api/rotinas/feed.ics")) &&
         path.startsWith("/api/") &&
         !hasValidServerToken
       ) {
@@ -192,7 +195,7 @@ export async function createDaemonServer(
 
       const isLicenseExemptRoute =
         hasValidServerToken ||
-        (method === "GET" && (path === "/health" || path === "/api/health")) ||
+        (method === "GET" && (path === "/health" || path === "/api/health" || path === "/api/rotinas/feed.ics")) ||
         path.startsWith("/api/studio/license/") ||
         (method === "GET" && !path.startsWith("/api/") && path !== "/ws");
 
@@ -276,6 +279,9 @@ export async function createDaemonServer(
         remoteClaimService,
         remoteOAuthBridge,
         autoUpdateService,
+        customEndpoints,
+        localProviderDetector,
+        mediaCatalog,
       };
 
       if (

@@ -12,6 +12,7 @@ import {
 } from "./daemon-launcher.ts";
 import { FloatingDockController } from "./floating-dock.ts";
 import { createStudioTray } from "./tray-manager.ts";
+import { showDesktopNotification, type NativeDesktopNotificationPayload } from "./desktop-notifications.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -422,6 +423,14 @@ function registerIpcHandlers(userDataDir: string): void {
     });
     await childWin.loadURL(`${daemonHandle.baseUrl}/?agent=${encodeURIComponent(agenteId)}`);
     return true;
+  });
+
+  ipcMain.handle("criativo:notify-native", async (_evt, rawPayload: unknown) => {
+    const payload =
+      rawPayload && typeof rawPayload === "object"
+        ? (rawPayload as NativeDesktopNotificationPayload)
+        : { title: "Criativo AI Studio", body: "" };
+    return showDesktopNotification(() => mainWindow, payload);
   });
 }
 

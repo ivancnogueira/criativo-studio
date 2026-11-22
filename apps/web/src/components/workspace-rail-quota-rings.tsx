@@ -13,6 +13,7 @@ import {
 import type {
   ContaProvedorInfo,
   GrupoCotaConta,
+  KnownProviderName,
   ProviderName,
   ServerQuotaSummary,
   StatusMensageria,
@@ -229,7 +230,7 @@ export const ConcentricQuotaRings: React.FC<{
  * com anéis concêntricos reais por conta conectada e popover de cotas ao vivo.
  */
 export const MAX_VISIBLE_ACCOUNT_RINGS = 5;
-export const PROVIDER_DISPLAY_ORDER: Record<ProviderName, number> = {
+export const PROVIDER_DISPLAY_ORDER: Partial<Record<ProviderName, number>> & Record<KnownProviderName, number> = {
   openai: 0,
   claude: 1,
   gemini: 2,

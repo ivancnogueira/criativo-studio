@@ -32,6 +32,7 @@ import { useStudioTabsAndNavigation } from "./hooks/useStudioTabsAndNavigation";
 import { useStudioDerivedData } from "./hooks/useStudioDerivedData";
 import { useChatSendActions } from "./hooks/useChatSendActions";
 import { useThreadQueueAndChannelActions } from "./hooks/useThreadQueueAndChannelActions";
+import { useStudioNotificationCenter } from "./hooks/useStudioNotificationCenter";
 import type { StudioUiCtx } from "./components/studio/studio-ui-ctx";
 import { StudioAuthAndOnboardingGate } from "./components/studio/StudioAuthAndOnboardingGate";
 import { StudioAgentSidebarPane } from "./components/studio/StudioAgentSidebarPane";
@@ -49,6 +50,13 @@ export function App() {
   const derived = useStudioDerivedData(state);
   const chatSend = useChatSendActions(state, boot, derived);
   const threadActions = useThreadQueueAndChannelActions(state, boot, derived, nav);
+  const notificationCenter = useStudioNotificationCenter({
+    nativeLevel: state.userSettings.notificacoes.notificacao_nativa_nivel ?? "all",
+    onSelectAgent: (agId) => {
+      state.setActiveSection("agentes");
+      nav.handleSelectAgent(agId);
+    },
+  });
 
   const ctx: StudioUiCtx = {
     state,
@@ -156,6 +164,15 @@ export function App() {
               onToggleFocusMode={serverActions.handleToggleFocusMode}
               onNavigateBack={() => nav.stepHistoryTab(-1)}
               onNavigateForward={() => nav.stepHistoryTab(1)}
+              notifications={notificationCenter.notifications}
+              onMarkAllNotificationsRead={notificationCenter.markAllRead}
+              onClearNotifications={notificationCenter.clearAll}
+              onSelectNotification={(item) => {
+                if (item.agentId) {
+                  setActiveSection("agentes");
+                  nav.handleSelectAgent(item.agentId);
+                }
+              }}
             />
           ) : (
             <div className="h-[36px] shrink-0 border-b border-white/[0.06] bg-[#0D0D0D] px-3 flex items-center justify-between gap-2">

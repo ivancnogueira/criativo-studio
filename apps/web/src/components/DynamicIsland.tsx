@@ -1,5 +1,10 @@
 import React from "react";
-import type { AvatarShape, AvatarStyle, StatusMensageria } from "@criativo/contracts";
+import type {
+  AvatarShape,
+  AvatarStyle,
+  StatusMensageria,
+  StudioNotificationItem,
+} from "@criativo/contracts";
 import {
   ChevronLeft,
   ChevronRight,
@@ -17,6 +22,7 @@ import {
   type AvatarTaskContext,
   type MascotEyeMood,
 } from "./MascoteAvatar";
+import { NotificationCenterPopover } from "./NotificationCenterPopover";
 
 export interface StudioTabItem {
   id: string;
@@ -55,6 +61,10 @@ interface DynamicIslandProps {
   onNavigateBack?: () => void;
   onNavigateForward?: () => void;
   headerRightContent?: React.ReactNode;
+  notifications?: StudioNotificationItem[];
+  onMarkAllNotificationsRead?: () => void;
+  onClearNotifications?: () => void;
+  onSelectNotification?: (item: StudioNotificationItem) => void;
 }
 
 /**
@@ -80,6 +90,10 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   onNavigateBack,
   onNavigateForward,
   headerRightContent,
+  notifications = [],
+  onMarkAllNotificationsRead,
+  onClearNotifications,
+  onSelectNotification,
 }) => {
   const islandText = !wsConnected
     ? "Reconectando..."
@@ -263,6 +277,13 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
           <KeyRound className="h-3 w-3 text-[#42A0FF]" />
           <span className="hidden lg:inline">Cofre</span>
         </button>
+
+        <NotificationCenterPopover
+          items={notifications}
+          onMarkAllRead={() => onMarkAllNotificationsRead?.()}
+          onClearAll={() => onClearNotifications?.()}
+          onSelectNotification={onSelectNotification}
+        />
 
         {/* Indicador acessível silencioso para leitores de tela / testes SSR */}
         <span className="sr-only">{wsConnected ? "Daemon Live" : "Reconectando"}</span>

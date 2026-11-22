@@ -26,6 +26,7 @@ import {
 import { SlidingTabs } from "../../components/ui/CarbonControls";
 import { daemonApi } from "../../services/websocket-client";
 import { EditorialCalendarPage } from "../social-studio/EditorialCalendarPage";
+import { RoutineIcsSubscribeModal } from "./RoutineIcsSubscribeModal";
 import {
   buildCalendarPeriodRange,
   formatRelativeExecutionLabel,
@@ -115,6 +116,7 @@ export const SchedulePage: React.FC<SchedulePageProps> = ({
 }) => {
   const [viewMode, setViewMode] = useState<CalendarView>("week");
   const [calendarDomain, setCalendarDomain] = useState<"editorial" | "rotinas">("rotinas");
+  const [icsModalOpen, setIcsModalOpen] = useState(false);
   const [anchorDate, setAnchorDate] = useState<Date>(() => new Date());
   const [agenda, setAgenda] = useState<RoutineCalendar | null>(initialAgenda);
   const [loading, setLoading] = useState<boolean>(initialAgenda === null);
@@ -332,14 +334,24 @@ export const SchedulePage: React.FC<SchedulePageProps> = ({
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={() => onCreateFirstRoutine(defaultAgentId)}
-            className="inline-flex items-center gap-2 rounded-xl bg-[#F0F0F0] hover:bg-white px-4 py-2 text-[14px] font-semibold text-[#141414] transition-colors"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Criar rotina</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIcsModalOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-[#212121] hover:bg-[#2A2A2A] px-3 py-2 text-[12.5px] font-medium text-[#DCDCDC] transition-colors"
+            >
+              <CalendarClock className="h-3.5 w-3.5 text-[#31CF76]" />
+              <span>Assinar Calendário (.ics)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onCreateFirstRoutine(defaultAgentId)}
+              className="inline-flex items-center gap-2 rounded-xl bg-[#F0F0F0] hover:bg-white px-4 py-2 text-[14px] font-semibold text-[#141414] transition-colors"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Criar rotina</span>
+            </button>
+          </div>
         </div>
 
         {/* Barra de controles do período */}
@@ -688,6 +700,7 @@ export const SchedulePage: React.FC<SchedulePageProps> = ({
       </div>
         </>
       )}
+      <RoutineIcsSubscribeModal open={icsModalOpen} onClose={() => setIcsModalOpen(false)} />
     </section>
   );
 };

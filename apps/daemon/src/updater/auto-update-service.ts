@@ -13,6 +13,7 @@ import { DADOS_DA_INSTANCIA_ITEMS, type StudioResolvedPaths } from "../config/ap
 import type { FetchLike } from "../engine/providers/provider-interface.ts";
 import type { LicenseClientService } from "../license/license-service.ts";
 import type { WebSocketHub } from "../server/websocket-hub.ts";
+import type { IdleWaitCoordinator } from "./idle-wait-coordinator.ts";
 
 export interface UpdateRestartContext {
   mode: "hot_bundle" | "native_installer";
@@ -28,6 +29,7 @@ export interface AutoUpdateServiceOptions {
   currentVersion?: string;
   serverId?: string;
   serverKind?: ServerConnectionKind;
+  idleWaitCoordinator?: IdleWaitCoordinator;
   onRestartRequested?: (ctx?: UpdateRestartContext) => Promise<void> | void;
 }
 
@@ -99,6 +101,7 @@ export class AutoUpdateService {
   readonly #fetchImpl: FetchLike;
   readonly #serverId: string;
   readonly #serverKind: ServerConnectionKind;
+  readonly #idleWaitCoordinator?: IdleWaitCoordinator;
   readonly #onRestartRequested?: (ctx?: UpdateRestartContext) => Promise<void> | void;
 
   #currentVersion: string;
@@ -118,6 +121,7 @@ export class AutoUpdateService {
     this.#fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
     this.#serverId = options.serverId ?? "primary";
     this.#serverKind = options.serverKind ?? "primary";
+    this.#idleWaitCoordinator = options.idleWaitCoordinator;
     this.#onRestartRequested = options.onRestartRequested;
     this.#currentVersion = options.currentVersion ?? readProductVersion(options.paths.productRoot);
   }
@@ -152,13 +156,37 @@ export class AutoUpdateService {
     };
   }
 
-  async triggerRestart(): Promise<{
+  async triggerRestart(options: { force?: boolean; timeoutMs?: number } = {}): Promise<{
     ok: boolean;
     triggered: boolean;
+    waiting_idle?: boolean;
     mode: "hot_bundle" | "native_installer";
     stagedArtifactPath: string | null;
     version: string;
   }> {
+    if (this.#idleWaitCoordinator && !options.force) {
+      const waitRes = await this.#idleWaitCoordinator.waitUntilIdle({
+        timeoutMs: options.timeoutMs ?? 60_000,
+        onWaiting: () => {
+          this.#state = "waiting_idle";
+          this.emitStatus();
+        },
+      });
+      if (!waitRes.proceeded) {
+        this.#state = "ready_to_restart";
+        this.emitStatus();
+        const mode = this.#installMode ?? (this.#stagedArtifactPath && !this.#stagedArtifactPath.endsWith(".json") ? "native_installer" : "hot_bundle");
+        return {
+          ok: false,
+          triggered: false,
+          waiting_idle: true,
+          mode,
+          stagedArtifactPath: this.#stagedArtifactPath,
+          version: this.#currentVersion,
+        };
+      }
+    }
+
     const mode = this.#installMode ?? (this.#stagedArtifactPath && !this.#stagedArtifactPath.endsWith(".json") ? "native_installer" : "hot_bundle");
     const ctx: UpdateRestartContext = {
       mode,

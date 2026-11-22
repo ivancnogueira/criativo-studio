@@ -73,4 +73,6 @@ export const SCHEMA_TABLE_NAMES = [
   "projecao_agente_wakeups",
   "calendario_editorial_posts",
   "meta_posts_cache",
+  "projecao_agent_mailbox",
+  "projecao_custom_providers",
 ] as const;

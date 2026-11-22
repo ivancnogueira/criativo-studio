@@ -50,6 +50,16 @@ export interface CriativoDesktopWindowBridge {
   onMainNavigate?: (listener: (payload: CriativoMainNavigatePayload) => void) => () => void;
   pickFolder?: () => Promise<{ canceled: boolean; path: string | null }>;
   openAgentWindow?: (agenteId: string) => Promise<boolean>;
+  notifyNative?: (payload: {
+    id?: string;
+    kind?: "approval" | "error" | "completion" | "update" | "info";
+    title: string;
+    body: string;
+    agentId?: string | null;
+  }) => Promise<{ shown: boolean; reason?: string }>;
+  onNotificationClicked?: (
+    listener: (payload: { id?: string | null; kind?: string; agentId?: string | null }) => void
+  ) => () => void;
 }
 
 export function getCriativoDesktopBridge(): CriativoDesktopWindowBridge | null {

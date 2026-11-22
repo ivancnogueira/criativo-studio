@@ -262,13 +262,31 @@ export async function executeWorkflowCoreOrAiNode(
           const outputPath = resolve(ctx.deps.workspaceRoot, relPath);
           mkdirSync(resolve(outputPath, ".."), { recursive: true });
 
+          const providerId =
+            node.mediaProviderId ??
+            (typeof cfg.mediaProviderId === "string" ? cfg.mediaProviderId : undefined);
+          const modelId =
+            node.mediaModelId ??
+            (typeof cfg.mediaModelId === "string" ? cfg.mediaModelId : undefined);
+
           const hasImgApiKey =
             Boolean(ctx.deps.vault.getSecret("gemini_api_key")) ||
             Boolean(ctx.deps.vault.getSecret("google_api_key")) ||
             Boolean(ctx.deps.vault.getSecret("openai_api_key")) ||
             Boolean(ctx.deps.vault.getSecret("fal_api_key"));
 
-          if (hasImgApiKey) {
+          if (ctx.deps.mediaCatalog && (providerId || hasImgApiKey)) {
+            await ctx.deps.mediaCatalog.executeImageStep({
+              providerId,
+              modelId,
+              generateParams: {
+                aspect_ratio: aspect,
+                prompt: promptFinal,
+                image_paths: safeRefs,
+                output_path: outputPath,
+              },
+            });
+          } else if (hasImgApiKey) {
             await generateImageTool(
               {
                 aspect_ratio: aspect,
@@ -282,7 +300,7 @@ export async function executeWorkflowCoreOrAiNode(
             const agRes = await ctx.deps.providerConnection
               .getAntigravityService()
               .executeCodeAssistGenerate({
-                model: "gemini-3.1-flash-image",
+                model: modelId || "gemini-3.1-flash-image",
                 messages: [{ role: "user", text: promptFinal }],
                 generateImage: true,
                 imagePaths: safeRefs,
@@ -328,18 +346,51 @@ export async function executeWorkflowCoreOrAiNode(
               ? ctx.resolveWithinRoot(cfg.audioPath)
               : "";
 
-          await executeRemotionRender({
-            composicao,
-            audio_path: audioAbs,
-            output_path: outputPath,
-            remotionProjectDir: ctx.deps.workspaceRoot,
-            props: {
-              roteiroTexto: inputs.inputText,
-              imagens: inputs.mediaInputs
-                .filter((m) => m.portType === "image")
-                .map((m) => m.path),
-            },
-          });
+          const mediaProviderId =
+            node.mediaProviderId ??
+            (typeof cfg.mediaProviderId === "string" ? cfg.mediaProviderId : undefined);
+          const mediaModelId =
+            node.mediaModelId ??
+            (typeof cfg.mediaModelId === "string" ? cfg.mediaModelId : undefined);
+
+          if (ctx.deps.mediaCatalog) {
+            await ctx.deps.mediaCatalog.executeVideoStep({
+              providerId: mediaProviderId,
+              modelId: mediaModelId,
+              videoParams: {
+                prompt: inputs.inputText || node.prompt || "Vídeo Reels profissional",
+                output_path: outputPath,
+                image_paths: inputs.mediaInputs
+                  .filter((m) => m.portType === "image")
+                  .map((m) => m.path),
+              },
+              remotionArgs: {
+                composicao,
+                audio_path: audioAbs,
+                output_path: outputPath,
+                remotionProjectDir: ctx.deps.workspaceRoot,
+                props: {
+                  roteiroTexto: inputs.inputText,
+                  imagens: inputs.mediaInputs
+                    .filter((m) => m.portType === "image")
+                    .map((m) => m.path),
+                },
+              },
+            });
+          } else {
+            await executeRemotionRender({
+              composicao,
+              audio_path: audioAbs,
+              output_path: outputPath,
+              remotionProjectDir: ctx.deps.workspaceRoot,
+              props: {
+                roteiroTexto: inputs.inputText,
+                imagens: inputs.mediaInputs
+                  .filter((m) => m.portType === "image")
+                  .map((m) => m.path),
+              },
+            });
+          }
 
           const sizeBytes = existsSync(outputPath) ? readFileSync(outputPath).length : 0;
           ctx.deps.db.connection

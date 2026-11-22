@@ -19,6 +19,7 @@ import { agentsChatApi } from "./api/agents-chat-api";
 import { browserApi } from "./api/browser-api";
 import { filesTablesApi } from "./api/files-browser-whatsapp-api";
 import { marketplaceApi } from "./api/marketplace-api";
+import { phase33Api } from "./api/phase33-api";
 import { providersMcpApi } from "./api/providers-mcp-api";
 import { serversLicenseApi } from "./api/servers-license-api";
 import { socialStudioApi } from "./api/social-studio-api";
@@ -37,4 +38,5 @@ export const daemonApi = {
   ...whatsappApi,
   ...serversLicenseApi,
   ...socialStudioApi,
+  ...phase33Api,
 };

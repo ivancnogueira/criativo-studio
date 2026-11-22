@@ -24,6 +24,7 @@ import type { ProviderConnectionService } from "../../providers/provider-connect
 import type { FifoQueueManager } from "../../queue/fifo-queue.ts";
 import type { WebSocketHub } from "../../server/websocket-hub.ts";
 import type { VaultService } from "../../vault/vault-service.ts";
+import type { MediaProviderCatalog } from "../media-provider-catalog.ts";
 import { WorkflowStore, WorkflowValidationError } from "../workflow-store.ts";
 import {
   buildNodeInputs,
@@ -110,6 +111,7 @@ export interface WorkflowEngineDeps {
   telegramBot?: TelegramNotificationBot;
   workspaceRoot: string;
   fetchImpl?: FetchLike;
+  mediaCatalog?: MediaProviderCatalog;
 }
 
 export const VAULT_KEYS_BY_PROVIDER: Record<string, string[]> = {

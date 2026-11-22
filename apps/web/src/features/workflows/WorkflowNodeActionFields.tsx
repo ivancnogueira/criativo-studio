@@ -1,9 +1,11 @@
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import type {
   AgenteRegistro,
+  MediaProviderDescriptor,
   ProviderName,
   WorkflowOutputTarget,
 } from "@criativo/contracts";
+import { daemonApi } from "../../services/websocket-client";
 import {
   Check,
   ChevronDown,
@@ -39,6 +41,51 @@ export interface WorkflowNodeActionFieldsProps {
 }
 
 export function WorkflowNodeActionFields(ctx: WorkflowNodeActionFieldsProps) {
+  const [mediaCatalog, setMediaCatalog] = useState<MediaProviderDescriptor[]>([]);
+
+  useEffect(() => {
+    if (ctx.kind !== "gerar_imagem" && ctx.kind !== "render_video") return;
+    let active = true;
+    daemonApi
+      .listWorkflowMediaProviders()
+      .then((list) => {
+        if (active && Array.isArray(list)) {
+          setMediaCatalog(list);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [ctx.kind]);
+
+  const mediaOptions = useMemo(() => {
+    const desiredKind = ctx.kind === "render_video" ? "video" : "image";
+    const matching = mediaCatalog.filter((m) => m.kind === desiredKind);
+    const defaults: Array<PopoverOption<string>> =
+      desiredKind === "video"
+        ? [
+            { value: "", label: "Padrão (Remotion)" },
+            { value: "native:remotion", label: "Remotion Cinematográfico (Nativo)" },
+            { value: "native:gemini-video", label: "Gemini Video Interactions (Nativo)" },
+          ]
+        : [
+            { value: "", label: "Padrão (Automático)" },
+            { value: "native:gemini", label: "Gemini Imagen / Nano (Nativo)" },
+            { value: "native:openai", label: "OpenAI GPT Image (Nativo)" },
+            { value: "native:flux", label: "Flux / Fal.ai (Nativo)" },
+          ];
+    if (matching.length === 0) return defaults;
+    return [
+      { value: "", label: "Padrão (Automático)" },
+      ...matching.map((m) => ({
+        value: m.id,
+        label: m.label,
+        hint: m.models[0],
+      })),
+    ];
+  }, [ctx.kind, mediaCatalog]);
+
   const {
     node,
     readOnly = false,
@@ -140,6 +187,25 @@ export function WorkflowNodeActionFields(ctx: WorkflowNodeActionFieldsProps) {
 
       {(kind === "gerar_imagem" || kind === "render_video") && (
         <div className="space-y-2" onPointerDown={(e) => e.stopPropagation()}>
+          <CarbonMenuPicker
+            value={
+              node.mediaProviderId ??
+              (typeof cfg.mediaProviderId === "string" ? cfg.mediaProviderId : "")
+            }
+            disabled={readOnly}
+            options={mediaOptions}
+            ariaLabel={
+              kind === "gerar_imagem"
+                ? "Selecionar provedor de imagem"
+                : "Selecionar provedor de vídeo"
+            }
+            onChange={(provId) =>
+              onPatchNode(node.id, {
+                mediaProviderId: provId || undefined,
+                config: { ...cfg, mediaProviderId: provId || undefined },
+              })
+            }
+          />
           <textarea
             readOnly={readOnly}
             rows={2}

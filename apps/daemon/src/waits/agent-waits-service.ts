@@ -7,6 +7,7 @@ import {
   MAX_OPEN_WAITS_PER_AGENT,
   NEAR_WAIT_LIMIT_THRESHOLD,
 } from "./agent-wait-store.ts";
+import type { MailboxStore } from "./mailbox-store.ts";
 
 export interface AgentWaitsServiceDeps {
   db: CriativoDatabase;
@@ -23,11 +24,16 @@ export class AgentWaitsService {
   private readonly waitStore: AgentWaitStore;
   private readonly wsHub: WebSocketHub;
   private readonly resumingByAgent = new Map<string, Set<string>>();
+  private mailboxStore?: MailboxStore;
 
   constructor(deps: AgentWaitsServiceDeps) {
     this.db = deps.db;
     this.waitStore = deps.waitStore;
     this.wsHub = deps.wsHub;
+  }
+
+  public attachMailbox(store: MailboxStore): void {
+    this.mailboxStore = store;
   }
 
   private resolveExistingAgentId(rawAgentId: string): string {
@@ -266,6 +272,21 @@ export class AgentWaitsService {
 
     const woken = this.waitStore.markWoken(targetIds, params.entregaDespertarId);
     if (woken.length > 0) {
+      if (this.mailboxStore) {
+        for (const w of woken) {
+          this.mailboxStore.enqueue({
+            agente_id: params.agenteId,
+            source_kind: "wait_event",
+            idempotency_key: `wait:${params.entregaDespertarId}:${w.espera_id}`,
+            payload: {
+              espera_id: w.espera_id,
+              rotina_id: params.rotinaId ?? null,
+              nota: w.nota,
+            },
+            priority: 2,
+          });
+        }
+      }
       this.markResuming(
         params.agenteId,
         woken.map((w) => w.espera_id),

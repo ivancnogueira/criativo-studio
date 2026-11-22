@@ -17,6 +17,7 @@ import { tryHandleWorkflowsWebhooksAndRunsRoutes } from "./routes/workflows-webh
 import { tryHandleWorkflowsCrudRoutes } from "./routes/workflows-crud-routes.ts";
 import { tryHandleFilesRoutes } from "./routes/files-routes.ts";
 import { tryHandlePhase14Routes } from "./routes/phase14-routes.ts";
+import { tryHandleCustomProvidersRoutes } from "./routes/custom-providers-routes.ts";
 import { tryHandleSocialStudioRoutes } from "./social-studio-routes.ts";
 
 export { selectBalancedVisualAssets, type LabeledVisualAsset };
@@ -86,6 +87,7 @@ export async function tryHandleStudioRoute(
     tryHandleWorkflowsCrudRoutes,
     tryHandleFilesRoutes,
     tryHandlePhase14Routes,
+    tryHandleCustomProvidersRoutes,
     tryHandleSocialStudioRoutes,
   ];
 

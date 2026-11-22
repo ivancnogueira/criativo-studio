@@ -9,6 +9,7 @@ import {
 } from "../../components/ProviderLogo";
 import { formatAccountSummary } from "./providers-catalog-helpers";
 import type { ProvidersCatalogController } from "./useProvidersCatalogController";
+import { CustomAndLocalProvidersSection } from "./CustomAndLocalProvidersSection";
 
 export function ProvidersMasterView({ ctrl }: { ctrl: ProvidersCatalogController }) {
   const {
@@ -182,6 +183,8 @@ export function ProvidersMasterView({ ctrl }: { ctrl: ProvidersCatalogController
           </div>
         </section>
       )}
+
+      <CustomAndLocalProvidersSection onShowToast={onShowToast} />
     </div>
   );
 }

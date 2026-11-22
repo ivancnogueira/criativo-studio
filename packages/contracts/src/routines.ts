@@ -431,6 +431,12 @@ export function isRoutineSchedule(value: unknown): value is RoutineSchedule {
   }
 }
 
+export interface RoutineCalendarFeedInfo {
+  enabled: boolean;
+  feedPath: string;
+  updatedAt: string | null;
+}
+
 export function isEventFilter(value: unknown): value is EventFilter {
   if (!isRecord(value) || typeof value.pointer !== "string") return false;
   const pointer = value.pointer;
@@ -476,4 +482,10 @@ export function isRoutineResultDestination(
     default:
       return false;
   }
+}
+
+export interface RoutineCalendarFeedInfo {
+  enabled: boolean;
+  feedPath: string;
+  updatedAt: string | null;
 }

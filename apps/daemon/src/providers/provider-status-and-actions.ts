@@ -60,7 +60,7 @@ export async function getProvidersStatusOp(deps: ProviderConnectionDeps, forcePr
 
   return await Promise.all(
     PROVIDER_CATALOG.map(async (meta) => {
-      const cli = cliData[meta.provedor] ?? { found: false, version: null, executable: null };
+      const cli = (cliData as Record<string, { found: boolean; version: string | null; executable: string | null }>)[meta.provedor] ?? { found: false, version: null, executable: null };
       const vaultConfigured = meta.vaultKeys.some((k) => secretSet.has(k));
 
       let contas: ContaProvedorInfo[] = [];
