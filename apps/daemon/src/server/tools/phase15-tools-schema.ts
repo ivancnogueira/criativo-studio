@@ -9,6 +9,8 @@ import type { ScreenCaptureBridge } from "../../engine/tools/screen-capture-brid
 import type { RemoteClaimService } from "../../servers/remote-claim-service.ts";
 import type { TranscriptionService } from "../../voice/transcription-service.ts";
 import type { BrowserAutofillService } from "../../vault/browser-autofill-service.ts";
+import type { CrmService } from "../../crm/crm-service.ts";
+import { CRM_TOOL_DEFINITIONS } from "../../crm/crm-tools.ts";
 import type { ShowcaseSiteService } from "../showcase-service.ts";
 import type { WebSocketHub } from "../websocket-hub.ts";
 export const BROWSER_DIRECT_ALIASES = [
@@ -516,6 +518,7 @@ export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
       },
     },
   },
+  ...CRM_TOOL_DEFINITIONS,
 ];
 
 export const PHASE15_TOOL_NAMES: ReadonlySet<string> = new Set(
@@ -536,6 +539,7 @@ export interface Phase15ToolServices {
   transcription?: TranscriptionService;
   remoteClaimService?: RemoteClaimService;
   browserAutofillService?: BrowserAutofillService;
+  crmService?: CrmService;
 }
 
 export interface Phase15ToolContext {

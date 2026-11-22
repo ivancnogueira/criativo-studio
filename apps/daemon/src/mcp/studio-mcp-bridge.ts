@@ -18,6 +18,7 @@ import type { WorkflowEngine } from "../workflows/workflow-engine.ts";
 import type { WorkflowStore } from "../workflows/workflow-store.ts";
 import type { TranscriptionService } from "../voice/transcription-service.ts";
 import type { BrowserAutofillService } from "../vault/browser-autofill-service.ts";
+import type { CrmService } from "../crm/crm-service.ts";
 import type { Phase13ServicesBundle } from "../server/threads-routes.ts";
 import type { ShowcaseSiteService } from "../server/showcase-service.ts";
 import {
@@ -73,6 +74,7 @@ export interface CriativoStudioMcpBridgeOptions {
   transcription?: TranscriptionService;
   remoteClaimService?: RemoteClaimService | null;
   browserAutofillService?: BrowserAutofillService;
+  crmService?: CrmService;
   authToken?: string;
   fetchImpl?: FetchLike;
 }
@@ -420,6 +422,7 @@ export class CriativoStudioMcpBridge {
           transcription: this.deps.transcription,
           remoteClaimService: this.deps.remoteClaimService ?? undefined,
           browserAutofillService: this.deps.browserAutofillService,
+          crmService: this.deps.crmService,
         },
       });
     } else if (isPhase10ExtensionTool(toolName)) {

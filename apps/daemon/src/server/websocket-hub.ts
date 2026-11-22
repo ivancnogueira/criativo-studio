@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
-import type { WebSocketEnvelope, WebSocketEventMap } from "@criativo/contracts";
+import type { WebSocketEnvelope, WebSocketEventMap, WorkflowPresenceMember } from "@criativo/contracts";
 
 const WS_MAGIC_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -98,13 +98,40 @@ export class WebSocketHub {
     onClose?: () => void;
   }>();
 
-  private readonly sseListeners = new Set<{
+  public readonly sseListeners = new Set<{
     res: ServerResponse;
     agenteId?: string | null;
     threadId?: string | null;
     canalId?: string | null;
     keepalive: NodeJS.Timeout;
   }>();
+  private readonly workflowPresence = new Map<string, Map<string, WorkflowPresenceMember>>();
+
+  public upsertWorkflowPresence(member: Omit<WorkflowPresenceMember, "updatedAt">): WorkflowPresenceMember[] {
+    const room = this.workflowPresence.get(member.workflowId) ?? new Map<string, WorkflowPresenceMember>();
+    room.set(member.memberId, {
+      ...member,
+      updatedAt: new Date().toISOString(),
+    });
+    this.workflowPresence.set(member.workflowId, room);
+    const members = Array.from(room.values());
+    this.broadcast("workflow:presence", { workflowId: member.workflowId, members });
+    return members;
+  }
+
+  public leaveWorkflowPresence(workflowId: string, memberId: string): WorkflowPresenceMember[] {
+    const room = this.workflowPresence.get(workflowId);
+    if (!room) return [];
+    room.delete(memberId);
+    const members = Array.from(room.values());
+    this.broadcast("workflow:presence", { workflowId, members });
+    return members;
+  }
+
+  public listWorkflowPresence(workflowId: string): WorkflowPresenceMember[] {
+    const room = this.workflowPresence.get(workflowId);
+    return room ? Array.from(room.values()) : [];
+  }
 
   public registerSseClient(
     res: ServerResponse,

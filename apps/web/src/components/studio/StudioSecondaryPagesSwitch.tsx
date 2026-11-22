@@ -67,6 +67,7 @@ import { TasksQueuePage } from "../../features/pages/TasksQueuePage";
 import { UsageMetricsPage } from "../../features/pages/UsageMetricsPage";
 import { SchedulePage } from "../../features/schedule/SchedulePage";
 import { PublishedGalleryMetricsPage } from "../../features/social-studio/PublishedGalleryMetricsPage";
+import { CrmPage } from "../../features/crm/CrmPage";
 import {
   DEFAULT_FRONTEND_USER_SETTINGS,
   SettingsModal,
@@ -237,6 +238,8 @@ export function StudioSecondaryPagesSwitch({ ctx }: { ctx: StudioUiCtx }) {
               }}
             />
           )}
+
+          {activeSection === "crm" && <CrmPage />}
 
           {activeSection === "tarefas" && (
             <TasksQueuePage

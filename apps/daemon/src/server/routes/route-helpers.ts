@@ -57,6 +57,10 @@ import type { BrowserAutofillService } from "../../vault/browser-autofill-servic
 import type { LoginVaultService } from "../../vault/login-vault-service.ts";
 import type { PasswordManagerRegistry } from "../../vault/password-managers/registry.ts";
 import type { TelemetryService } from "../../telemetry/telemetry-service.ts";
+import type { TeamService } from "../../team/team-service.ts";
+import type { InstanceTransferService } from "../../servers/instance-transfer-service.ts";
+import type { CrmService } from "../../crm/crm-service.ts";
+import type { VoiceHostService } from "../../voice/voice-host-service.ts";
 import {
   activateUpgradePackage,
   computeUnlockedAgentsSummary,
@@ -188,6 +192,10 @@ export interface StudioRoutesDeps {
   passwordManagerRegistry?: PasswordManagerRegistry;
   browserAutofillService?: BrowserAutofillService;
   telemetryService?: TelemetryService;
+  teamService?: TeamService;
+  instanceTransferService?: InstanceTransferService;
+  crmService?: CrmService;
+  voiceHostService?: VoiceHostService;
 }
 
 export interface StudioRouteContext {

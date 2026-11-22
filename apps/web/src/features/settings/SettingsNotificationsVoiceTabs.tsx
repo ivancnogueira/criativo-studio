@@ -1,13 +1,16 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import type {
   AgentNotificationLevel,
   AgenteRegistro,
   CanalEquipe,
   NativeNotificationLevel,
   StudioUserSettings,
+  VoiceExecutionMode,
+  VoiceHostStatusSnapshot,
 } from "@criativo/contracts";
 import { Bell, Mic, Volume2 } from "lucide-react";
 import { CarbonSelect, type CarbonSelectOption } from "../../components/ui/CarbonControls";
+import { daemonApi } from "../../services/websocket-client";
 
 type SoundPreset = StudioUserSettings["notificacoes"]["som_tarefa"];
 
@@ -341,9 +344,86 @@ export interface SettingsVoiceTabProps {
   onChange: (next: StudioUserSettings["voz"]) => void;
 }
 
+const VOICE_MODE_OPTIONS: CarbonSelectOption[] = [
+  { value: "auto", label: "Automático (Local com fallback Nuvem)" },
+  { value: "local", label: "Local Isolado (Privado / Offline)" },
+  { value: "cloud", label: "Nuvem (OpenAI / Gemini / ElevenLabs)" },
+];
+
 export const SettingsVoiceTab: React.FC<SettingsVoiceTabProps> = ({ voz, onChange }) => {
+  const [hostStatus, setHostStatus] = useState<VoiceHostStatusSnapshot | null>(null);
+
+  const reloadHost = () => {
+    void daemonApi
+      .getVoiceHostStatus()
+      .then(setHostStatus)
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    reloadHost();
+  }, []);
+
   return (
     <div className="space-y-4">
+      <div className="rounded-xl border border-white/[0.06] bg-[#212121] p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <div className="text-[13px] font-semibold text-white">
+              Motor de Voz Local Isolado (STT/TTS Host)
+            </div>
+            <div className="text-[11.5px] text-[#979797]">
+              Executa inferência local em processo filho dedicado com fallback automático para a nuvem.
+            </div>
+          </div>
+          <span className="rounded-full bg-white/[0.06] px-2.5 py-0.5 text-[10.5px] text-[#DCDCDC]">
+            {hostStatus?.running ? `Worker PID ${hostStatus.pid}` : "Sob demanda"}
+          </span>
+        </div>
+
+        <CarbonSelect
+          ariaLabel="Modo de execução do motor de voz"
+          value={hostStatus?.mode ?? "auto"}
+          options={VOICE_MODE_OPTIONS}
+          onChange={(val) => {
+            void daemonApi
+              .updateVoiceHostMode({ mode: val as VoiceExecutionMode })
+              .then(setHostStatus)
+              .catch(() => {});
+          }}
+        />
+
+        {hostStatus && hostStatus.models.length > 0 && (
+          <div className="space-y-1.5 pt-1">
+            {hostStatus.models.map((m) => (
+              <div
+                key={m.modelId}
+                className="flex items-center justify-between gap-2 rounded-lg bg-[#141414] border border-white/[0.05] px-3 py-2 text-[11.5px]"
+              >
+                <div className="min-w-0">
+                  <span className="text-white font-medium">{m.label}</span>
+                  <span className="text-[#8E8E93] ml-2">
+                    ({m.kind.toUpperCase()} · {m.sizeMb} MB)
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const op = m.installed
+                      ? daemonApi.removeLocalVoiceModel(m.modelId)
+                      : daemonApi.installLocalVoiceModel(m.modelId);
+                    void op.then(() => reloadHost());
+                  }}
+                  className="rounded-md bg-[#2A2A2E] hover:bg-[#34343A] px-2.5 py-1 text-[11px] font-medium text-white"
+                >
+                  {m.installed ? "Remover" : "Instalar"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-xl border border-white/[0.06] bg-[#212121] p-4">
         <div className="space-y-1.5">
           <span className="block text-[12px] font-medium text-[#DCDCDC]">Provedor de ditado</span>

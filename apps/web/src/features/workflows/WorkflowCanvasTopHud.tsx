@@ -1,3 +1,4 @@
+import React, { useEffect, useState } from "react";
 import {
   Activity,
   ChevronDown,
@@ -9,8 +10,10 @@ import {
   Square,
   Trash2,
   Undo2,
+  Users,
 } from "lucide-react";
-import { normalizeWorkflowGraph } from "@criativo/contracts";
+import { normalizeWorkflowGraph, type WorkflowPresenceMember } from "@criativo/contracts";
+import { daemonApi } from "../../services/websocket-client";
 import { WorkflowSwitcher } from "./WorkflowSwitcher";
 import { WorkflowVersionBar } from "./WorkflowVersionBar";
 import { WORKFLOW_STATUS_META } from "./workflow-canvas-helpers";
@@ -76,6 +79,16 @@ export function WorkflowCanvasTopHud({
     doneCount,
     totalExecCount,
   } = ctrl;
+
+  const [presenceMembers, setPresenceMembers] = useState<WorkflowPresenceMember[]>([]);
+
+  useEffect(() => {
+    if (!currentWf?.workflow_id) return;
+    void daemonApi
+      .listWorkflowPresence(currentWf.workflow_id)
+      .then(setPresenceMembers)
+      .catch(() => {});
+  }, [currentWf?.workflow_id]);
 
   return (
     <>
@@ -217,6 +230,16 @@ export function WorkflowCanvasTopHud({
               <Trash2 className="h-3.5 w-3.5" />
               <span>Remover conexão</span>
             </button>
+          )}
+
+          {presenceMembers.length > 0 && (
+            <div
+              data-testid="workflow-presence-badge"
+              className="flex items-center gap-1.5 rounded-xl border border-white/[0.12] bg-[#212121] px-2.5 py-2 text-[12px] text-[#31CF76]"
+            >
+              <Users className="h-3.5 w-3.5" />
+              <span>{presenceMembers.length} ativo(s)</span>
+            </div>
           )}
 
           <div className="relative">

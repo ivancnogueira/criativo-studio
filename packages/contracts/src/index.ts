@@ -21,3 +21,4 @@ export * from "./social-studio.ts";
 export * from "./phase33-automation-media.ts";
 export * from "./phase34-messaging-vault.ts";
 export * from "./phase35-governance-telemetry.ts";
+export * from "./phase36-team-transfer-crm-voice.ts";

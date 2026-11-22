@@ -15,6 +15,8 @@ import type {
 } from "@criativo/contracts";
 import { daemonApi } from "../../services/websocket-client";
 import { StudioColorPicker } from "../../components/StudioColorPicker";
+import { TeamManagementModal } from "./TeamManagementModal";
+import { InstanceTransferModal } from "./InstanceTransferModal";
 import {
   SERVER_ACCENT_COLORS,
   copyTextToClipboard,
@@ -44,6 +46,8 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
   const [restarting, setRestarting] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [copiedInvite, setCopiedInvite] = useState(false);
+  const [teamModalOpen, setTeamModalOpen] = useState(false);
+  const [transferModalOpen, setTransferModalOpen] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
   useEffect(() => {
@@ -292,6 +296,23 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
             </div>
           )}
 
+          <div className="flex flex-wrap gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => setTeamModalOpen(true)}
+              className="flex-1 rounded-xl border border-white/10 bg-[#141414] hover:bg-white/[0.06] px-3 py-2 text-[12px] font-medium text-white"
+            >
+              Equipe, RBAC & Auditoria
+            </button>
+            <button
+              type="button"
+              onClick={() => setTransferModalOpen(true)}
+              className="flex-1 rounded-xl border border-white/10 bg-[#141414] hover:bg-white/[0.06] px-3 py-2 text-[12px] font-medium text-white"
+            >
+              Migrar / Transferir Instância
+            </button>
+          </div>
+
           {erro && (
             <div className="rounded-xl bg-red-500/10 border border-red-500/30 p-3 text-[12.5px] text-red-200">
               {erro}
@@ -357,6 +378,15 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
           </div>
         )}
       </div>
+      <TeamManagementModal
+        open={teamModalOpen}
+        serverName={server.nome}
+        onClose={() => setTeamModalOpen(false)}
+      />
+      <InstanceTransferModal
+        open={transferModalOpen}
+        onClose={() => setTransferModalOpen(false)}
+      />
     </div>
   );
 };

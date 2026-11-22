@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import type { FetchLike } from "../engine/providers/provider-interface.ts";
 import { sanitizeProviderError } from "../engine/providers/provider-interface.ts";
 import type { VaultService } from "../vault/vault-service.ts";
+import type { VoiceHostService } from "./voice-host-service.ts";
 
 export interface TtsGenerateInput {
   text: string;
@@ -14,24 +15,49 @@ export interface TtsGenerateInput {
 
 export interface TtsGenerateResult {
   outputPath: string;
-  providerUsed: "elevenlabs" | "openai" | "edge-tts";
+  providerUsed: "elevenlabs" | "openai" | "edge-tts" | "local-voice-host";
   bytesWritten: number;
 }
 
 /**
- * Serviço de geração de locução MP3 (Voice Engine) para vídeos Reels via ElevenLabs, OpenAI TTS ou edge-tts.
+ * Serviço de geração de locução MP3 (Voice Engine) para vídeos Reels via Host Local Isolado, ElevenLabs, OpenAI TTS ou edge-tts.
  */
 export class TtsService {
   private readonly vault: VaultService;
   private readonly fetchFn: FetchLike;
+  private voiceHost?: VoiceHostService;
 
-  constructor(options: { vault: VaultService; fetchImpl?: FetchLike }) {
+  constructor(options: { vault: VaultService; fetchImpl?: FetchLike; voiceHost?: VoiceHostService }) {
     this.vault = options.vault;
     this.fetchFn = options.fetchImpl ?? fetch;
+    this.voiceHost = options.voiceHost;
+  }
+
+  public attachVoiceHost(host: VoiceHostService): void {
+    this.voiceHost = host;
   }
 
   public async generateNarration(input: TtsGenerateInput): Promise<TtsGenerateResult> {
     mkdirSync(dirname(input.outputPath), { recursive: true });
+
+    if (this.voiceHost) {
+      const cfg = this.voiceHost.getSettings();
+      if (cfg.mode === "local" || cfg.mode === "auto") {
+        try {
+          const audioBuf = await this.voiceHost.synthesizeLocal(input.text);
+          writeFileSync(input.outputPath, audioBuf);
+          return {
+            outputPath: input.outputPath,
+            providerUsed: "local-voice-host",
+            bytesWritten: audioBuf.length,
+          };
+        } catch (err) {
+          if (cfg.mode === "local") {
+            throw err;
+          }
+        }
+      }
+    }
 
     const elevenKey = this.vault.getSecret("ELEVENLABS_API_KEY");
     const openaiKey = this.vault.getSecret("OPENAI_API_KEY");

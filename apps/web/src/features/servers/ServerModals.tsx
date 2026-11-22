@@ -10,3 +10,5 @@ export {
 } from "./NewRemoteServerClaimModal";
 export { JoinServerModal, type JoinServerModalProps } from "./JoinServerModal";
 export { ServerSettingsModal, type ServerSettingsModalProps } from "./ServerSettingsModal";
+export { TeamManagementModal } from "./TeamManagementModal";
+export { InstanceTransferModal } from "./InstanceTransferModal";

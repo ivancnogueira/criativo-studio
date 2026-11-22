@@ -32,6 +32,7 @@ export type StudioNavSection =
   | "tarefas"
   | "agenda"
   | "galeria_ig"
+  | "crm"
   | "uso"
   | "arquivos"
   | "loja"

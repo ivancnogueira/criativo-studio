@@ -138,6 +138,10 @@ export async function createDaemonServer(
     passwordManagerRegistry,
     browserAutofillService,
     telemetryService,
+    teamService,
+    instanceTransferService,
+    crmService,
+    voiceHostService,
     workflowEngine,
     workflowTriggers,
     routineResultDispatcher,
@@ -292,6 +296,10 @@ export async function createDaemonServer(
         passwordManagerRegistry,
         browserAutofillService,
         telemetryService,
+        teamService,
+        instanceTransferService,
+        crmService,
+        voiceHostService,
       };
 
       if (
@@ -535,6 +543,7 @@ export async function createDaemonServer(
       uiBlockRegistry.dispose();
       screenCapture.dispose();
       telegramBot.stopPolling();
+      voiceHostService.dispose();
       await browserService.closeAll();
       await workflowEngine.dispose();
       whatsappArchiveService.stopPeriodicCleanup();

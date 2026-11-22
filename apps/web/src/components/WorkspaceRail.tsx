@@ -1,8 +1,11 @@
+import React, { useEffect, useState } from "react";
 import {
+  Briefcase,
   HelpCircle,
   MoreHorizontal,
   Settings,
 } from "lucide-react";
+import { daemonApi } from "../services/websocket-client";
 import {
   MascoteAvatar,
 } from "./MascoteAvatar";
@@ -23,6 +26,15 @@ export {
 
 export const WorkspaceRail: React.FC<WorkspaceRailProps> = (props) => {
   const { t } = useI18n();
+  const [crmEnabled, setCrmEnabled] = useState(false);
+
+  useEffect(() => {
+    void daemonApi
+      .getCrmStatus()
+      .then(setCrmEnabled)
+      .catch(() => {});
+  }, [props.activeServerId]);
+
   const ctrl = useWorkspaceRailController(props);
   const {
     activeSection,
@@ -100,6 +112,23 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = (props) => {
             </button>
           );
         })}
+
+        {crmEnabled && (
+          <button
+            type="button"
+            onClick={() => onSelectSection("crm")}
+            title="CRM"
+            aria-label="CRM"
+            aria-current={activeSection === "crm" ? "page" : undefined}
+            className={`relative h-9 w-9 rounded-xl flex items-center justify-center transition-colors ${
+              activeSection === "crm"
+                ? "bg-[#242424] text-white shadow-inner"
+                : "text-[#979797] hover:text-white hover:bg-[#1A1A1A]"
+            }`}
+          >
+            <Briefcase className="h-[17px] w-[17px]" />
+          </button>
+        )}
       </div>
 
       {/* Rodapé: anéis concêntricos de cota (1 por conta, limite 5 + ver mais) + WhatsApp móvel + Ajuda + Configurações */}

@@ -131,6 +131,11 @@ export const LiveVoiceBar: React.FC<LiveVoiceBarProps> = ({
             for (let i = 0; i < data.length; i += 1) sum += data[i];
             const avg = Math.min(100, Math.round((sum / Math.max(1, data.length)) * 1.4));
             setAudioLevel(avg);
+            if (avg > 22 && typeof window !== "undefined" && "speechSynthesis" in window && window.speechSynthesis.speaking) {
+              // Barge-in: usuário começou a falar -> interrompe imediatamente a fala do agente
+              window.speechSynthesis.cancel();
+              setVoiceState("ouvindo");
+            }
             if (avg > 14 && silenceTimerRef.current) {
               window.clearTimeout(silenceTimerRef.current);
               silenceTimerRef.current = null;

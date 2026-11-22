@@ -4,6 +4,7 @@ import {
 } from "./schema-core.ts";
 import { SCHEMA_ROUTINES_WORKFLOWS_TABLES } from "./schema-routines-workflows.ts";
 import { SCHEMA_THREADS_INTEGRATIONS_TABLES } from "./schema-threads-integrations.ts";
+import { SCHEMA_PHASE36_TABLES } from "./schema-phase36.ts";
 
 export type { SchemaTableDefinition };
 
@@ -11,6 +12,7 @@ export const SCHEMA_TABLES: readonly SchemaTableDefinition[] = [
   ...SCHEMA_CORE_TABLES,
   ...SCHEMA_ROUTINES_WORKFLOWS_TABLES,
   ...SCHEMA_THREADS_INTEGRATIONS_TABLES,
+  ...SCHEMA_PHASE36_TABLES,
 ];
 
 export const SCHEMA_TABLE_NAMES = [

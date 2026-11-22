@@ -8,6 +8,7 @@ import { readImageTool } from "../../engine/tools/image-reader.ts";
 import { readVideoTool } from "../../engine/tools/video-reader.ts";
 import { executeShowcaseTool, SHOWCASE_AGENT_TOOL_NAMES } from "../showcase-service.ts";
 import { executeSidebarTool, SIDEBAR_AGENT_TOOL_NAMES } from "../sidebar-service.ts";
+import { CRM_TOOL_NAMES, executeCrmTool } from "../../crm/crm-tools.ts";
 import { assertAgentPermissionForPath, readAgentGovernance } from "./phase15-governance.ts";
 import {
   normalizeBrowserTargetInput,
@@ -438,6 +439,13 @@ export async function executePhase15ToolCall(
         stderr_tail: String(e?.stderr || "").slice(-1000),
       };
     }
+  }
+
+  if (CRM_TOOL_NAMES.has(toolName)) {
+    if (!services.crmService) {
+      return { ok: false, erro: "CrmService não inicializado neste daemon." };
+    }
+    return executeCrmTool(toolName, args, { agenteId: ctx.agenteId }, services.crmService);
   }
 
   throw new Error(`Ferramenta da Fase 15 desconhecida: ${toolName}`);

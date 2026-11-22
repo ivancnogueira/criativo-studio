@@ -1,22 +1,30 @@
 import type { FetchLike } from "../engine/providers/provider-interface.ts";
 import { sanitizeProviderError } from "../engine/providers/provider-interface.ts";
 import type { VaultService } from "../vault/vault-service.ts";
+import type { VoiceHostService } from "./voice-host-service.ts";
 
 export interface TranscriptionOptions {
   vault: VaultService;
   fetchImpl?: FetchLike;
+  voiceHost?: VoiceHostService;
 }
 
 /**
- * Serviço de transcrição de comandos de voz (OGG/Opus, MP3, WAV) usando OpenAI Whisper ou Gemini Multimodal.
+ * Serviço de transcrição de comandos de voz (OGG/Opus, MP3, WAV) usando Host Local Isolado ou OpenAI Whisper / Gemini Multimodal.
  */
 export class TranscriptionService {
   private readonly vault: VaultService;
   private readonly fetchFn: FetchLike;
+  private voiceHost?: VoiceHostService;
 
   constructor(options: TranscriptionOptions) {
     this.vault = options.vault;
     this.fetchFn = options.fetchImpl ?? fetch;
+    this.voiceHost = options.voiceHost;
+  }
+
+  public attachVoiceHost(host: VoiceHostService): void {
+    this.voiceHost = host;
   }
 
   private getSecretAnyCase(candidates: string[]): string | null {
@@ -33,6 +41,20 @@ export class TranscriptionService {
     audioBuffer: Buffer,
     mimeType = "audio/ogg"
   ): Promise<string> {
+    if (this.voiceHost) {
+      const cfg = this.voiceHost.getSettings();
+      if (cfg.mode === "local" || cfg.mode === "auto") {
+        try {
+          return await this.voiceHost.transcribeLocal(audioBuffer, mimeType);
+        } catch (err) {
+          if (cfg.mode === "local") {
+            throw err;
+          }
+          // Modo 'auto' faz fallback transparente para nuvem caso modelo local não esteja pronto
+        }
+      }
+    }
+
     const openaiKey = this.getSecretAnyCase(["OPENAI_API_KEY", "openai_api_key"]);
     const geminiKey = this.getSecretAnyCase([
       "GEMINI_API_KEY",
