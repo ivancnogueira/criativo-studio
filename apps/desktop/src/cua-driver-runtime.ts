@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { globalShortcut, screen, systemPreferences } from "electron";
 import type { CuaActionRequest, CuaActionResult } from "@criativo/contracts";
+import { buildCuaDaemonHeaders } from "./cua-auth-headers.ts";
 import { CuaOverlayController } from "./cua-overlay.ts";
 import { registerTrustedIpcHandle } from "./desktop-security.ts";
 
@@ -19,11 +20,15 @@ export interface CuaDesktopRuntimeHandle {
 export async function startCuaDesktopRuntime(options: {
   getDaemonBaseUrl: () => string;
   getDaemonPort?: () => number | null | undefined;
+  getServerToken?: () => string | null | undefined;
   onLog?: (msg: string) => void;
 }): Promise<CuaDesktopRuntimeHandle> {
   const bridgeToken = randomBytes(24).toString("hex");
   const overlay = new CuaOverlayController();
   let aborted = false;
+
+  const getAuthHeaders = (extra?: Record<string, string>): Record<string, string> =>
+    buildCuaDaemonHeaders(options.getServerToken?.() ?? null, extra);
 
   const checkAccessibilityGranted = (): boolean => {
     if (process.platform === "darwin") {
@@ -78,7 +83,7 @@ export async function startCuaDesktopRuntime(options: {
     if (daemonBaseUrl) {
       await fetch(`${daemonBaseUrl}/api/cua/abort`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ reason }),
       }).catch(() => {});
     }
@@ -136,7 +141,10 @@ export async function startCuaDesktopRuntime(options: {
     aborted = false;
     const daemonBaseUrl = options.getDaemonBaseUrl();
     if (daemonBaseUrl) {
-      await fetch(`${daemonBaseUrl}/api/cua/reset-abort`, { method: "POST" }).catch(() => {});
+      await fetch(`${daemonBaseUrl}/api/cua/reset-abort`, {
+        method: "POST",
+        headers: getAuthHeaders(),
+      }).catch(() => {});
     }
     return true;
   });
@@ -150,7 +158,7 @@ export async function startCuaDesktopRuntime(options: {
   if (daemonBaseUrl && port > 0) {
     await fetch(`${daemonBaseUrl}/api/cua/register-bridge`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getAuthHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         bridgeUrl,
         bridgeToken,

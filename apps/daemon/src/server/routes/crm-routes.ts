@@ -1,4 +1,10 @@
-import type { CrmStage } from "@criativo/contracts";
+import type { CrmStage, TeamRole } from "@criativo/contracts";
+import {
+  assertTeamRoleAtLeast,
+  resolveTeamActor,
+  TeamRbacError,
+  type ResolvedTeamActor,
+} from "../../team/rbac-middleware.ts";
 import type { StudioRouteContext } from "./route-helpers.ts";
 
 export async function tryHandleCrmRoutes(ctx: StudioRouteContext): Promise<boolean> {
@@ -8,21 +14,52 @@ export async function tryHandleCrmRoutes(ctx: StudioRouteContext): Promise<boole
   if (!path.startsWith("/api/crm/")) {
     return false;
   }
+
+  let actor: ResolvedTeamActor;
+  try {
+    actor = resolveTeamActor(req, teamService);
+  } catch (err) {
+    const code = err instanceof TeamRbacError ? err.statusCode : 401;
+    sendJson(res, code, { erro: err instanceof Error ? err.message : String(err) });
+    return true;
+  }
+
+  const requireRole = (targetActor: ResolvedTeamActor, minRole: TeamRole): boolean => {
+    try {
+      assertTeamRoleAtLeast(targetActor, minRole);
+      return true;
+    } catch (err) {
+      if (err instanceof TeamRbacError) {
+        sendJson(res, err.statusCode, { erro: err.message });
+        return false;
+      }
+      sendJson(res, 403, { erro: err instanceof Error ? err.message : String(err) });
+      return false;
+    }
+  };
+
   if (!crmService) {
     sendJson(res, 503, { erro: "CrmService não inicializado." });
     return true;
   }
 
   if (method === "GET" && path === "/api/crm/status") {
+    if (!requireRole(actor, "viewer")) {
+      return true;
+    }
     sendJson(res, 200, { enabled: crmService.isEnabled() });
     return true;
   }
 
   if (method === "POST" && path === "/api/crm/toggle") {
+    if (!requireRole(actor, "admin")) {
+      return true;
+    }
     const body = await readJsonBody(req);
     const enabled = crmService.setEnabled(Boolean(body.enabled));
     teamService?.audit.record({
-      actorLabel: "owner",
+      actorMemberId: actor.memberId,
+      actorLabel: actor.label,
       action: "crm.module.toggled",
       resourceType: "crm",
       detail: { enabled },
@@ -32,6 +69,9 @@ export async function tryHandleCrmRoutes(ctx: StudioRouteContext): Promise<boole
   }
 
   if (method === "GET" && path === "/api/crm/contacts") {
+    if (!requireRole(actor, "viewer")) {
+      return true;
+    }
     const q = url.searchParams.get("q") ?? undefined;
     sendJson(res, 200, {
       enabled: crmService.isEnabled(),
@@ -41,6 +81,9 @@ export async function tryHandleCrmRoutes(ctx: StudioRouteContext): Promise<boole
   }
 
   if (method === "POST" && path === "/api/crm/contacts") {
+    if (!requireRole(actor, "editor")) {
+      return true;
+    }
     const body = await readJsonBody(req);
     const name = String(body.name ?? "").trim();
     if (!name) {
@@ -64,6 +107,9 @@ export async function tryHandleCrmRoutes(ctx: StudioRouteContext): Promise<boole
 
   const contactPatchMatch = path.match(/^\/api\/crm\/contacts\/([^/]+)$/);
   if (method === "PATCH" && contactPatchMatch) {
+    if (!requireRole(actor, "editor")) {
+      return true;
+    }
     const contactId = decodeURIComponent(contactPatchMatch[1]!);
     const body = await readJsonBody(req);
     const updated = crmService.updateContact(contactId, {
@@ -80,12 +126,18 @@ export async function tryHandleCrmRoutes(ctx: StudioRouteContext): Promise<boole
   }
 
   if (method === "GET" && path === "/api/crm/activities") {
+    if (!requireRole(actor, "viewer")) {
+      return true;
+    }
     const contactId = url.searchParams.get("contactId") ?? undefined;
     sendJson(res, 200, { activities: crmService.listActivities(contactId) });
     return true;
   }
 
   if (method === "POST" && path === "/api/crm/activities") {
+    if (!requireRole(actor, "editor")) {
+      return true;
+    }
     const body = await readJsonBody(req);
     const contactId = String(body.contactId ?? "").trim();
     const summary = String(body.summary ?? "").trim();
@@ -97,13 +149,17 @@ export async function tryHandleCrmRoutes(ctx: StudioRouteContext): Promise<boole
       contactId,
       channel: typeof body.channel === "string" ? body.channel : "manual",
       summary,
-      author: typeof body.author === "string" ? body.author : "operador",
+      author:
+        typeof body.author === "string" && body.author.trim() ? body.author.trim() : actor.label,
     });
     sendJson(res, 201, { ok: true, activity });
     return true;
   }
 
   if (method === "GET" && path === "/api/crm/proposals") {
+    if (!requireRole(actor, "viewer")) {
+      return true;
+    }
     const status = url.searchParams.get("status") as "pending" | "approved" | "rejected" | null;
     sendJson(res, 200, { proposals: crmService.listProposals(status ?? undefined) });
     return true;
@@ -111,28 +167,38 @@ export async function tryHandleCrmRoutes(ctx: StudioRouteContext): Promise<boole
 
   const propActionMatch = path.match(/^\/api\/crm\/proposals\/([^/]+)\/(approve|reject)$/);
   if (method === "POST" && propActionMatch) {
+    if (!requireRole(actor, "editor")) {
+      return true;
+    }
     try {
       const proposalId = decodeURIComponent(propActionMatch[1]!);
       const approved = propActionMatch[2] === "approve";
       const body = await readJsonBody(req);
+      const decidedBy =
+        typeof body.decidedBy === "string" && body.decidedBy.trim()
+          ? body.decidedBy.trim()
+          : actor.label;
       const out = crmService.decideProposal({
         proposalId,
         approved,
-        decidedBy: typeof body.decidedBy === "string" ? body.decidedBy : "operador",
+        decidedBy,
         editedDiff:
           body.editedDiff && typeof body.editedDiff === "object"
             ? (body.editedDiff as Record<string, unknown>)
             : undefined,
       });
       teamService?.audit.record({
-        actorLabel: typeof body.decidedBy === "string" ? body.decidedBy : "operador",
+        actorMemberId: actor.memberId,
+        actorLabel: actor.label,
         action: approved ? "crm.proposal.approved" : "crm.proposal.rejected",
         resourceType: "crm_proposal",
         resourceId: proposalId,
+        detail: { decidedBy },
       });
       sendJson(res, 200, { ok: true, ...out });
     } catch (err) {
-      sendJson(res, 400, { erro: err instanceof Error ? err.message : String(err) });
+      const code = err instanceof TeamRbacError ? err.statusCode : 400;
+      sendJson(res, code, { erro: err instanceof Error ? err.message : String(err) });
     }
     return true;
   }

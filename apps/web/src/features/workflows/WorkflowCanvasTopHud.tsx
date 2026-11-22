@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { normalizeWorkflowGraph, type WorkflowPresenceMember } from "@criativo/contracts";
 import { daemonApi } from "../../services/websocket-client";
+import { subscribeWsEvent } from "../../services/ws-transport";
 import { WorkflowSwitcher } from "./WorkflowSwitcher";
 import { WorkflowVersionBar } from "./WorkflowVersionBar";
 import { WORKFLOW_STATUS_META } from "./workflow-canvas-helpers";
@@ -23,9 +24,11 @@ import type { WorkflowCanvasController } from "./useWorkflowCanvasController";
 export function WorkflowCanvasTopHud({
   ctrl,
   props,
+  initialPresenceMembers,
 }: {
   ctrl: WorkflowCanvasController;
   props: WorkflowsCanvasPageProps;
+  initialPresenceMembers?: WorkflowPresenceMember[];
 }) {
   const {
     workflows,
@@ -80,14 +83,41 @@ export function WorkflowCanvasTopHud({
     totalExecCount,
   } = ctrl;
 
-  const [presenceMembers, setPresenceMembers] = useState<WorkflowPresenceMember[]>([]);
+  const [presenceMembers, setPresenceMembers] = useState<WorkflowPresenceMember[]>(
+    () => initialPresenceMembers ?? []
+  );
 
   useEffect(() => {
-    if (!currentWf?.workflow_id) return;
+    const wfId = currentWf?.workflow_id;
+    if (!wfId) {
+      setPresenceMembers([]);
+      return;
+    }
+    let active = true;
+    const unsubPresence = subscribeWsEvent("workflow:presence", (evt) => {
+      if (active && evt.workflowId === wfId) {
+        setPresenceMembers(evt.members);
+      }
+    });
     void daemonApi
-      .listWorkflowPresence(currentWf.workflow_id)
-      .then(setPresenceMembers)
-      .catch(() => {});
+      .updateWorkflowPresence(wfId, "join")
+      .then((members) => {
+        if (active) setPresenceMembers(members);
+      })
+      .catch(() => {
+        void daemonApi
+          .listWorkflowPresence(wfId)
+          .then((members) => {
+            if (active) setPresenceMembers(members);
+          })
+          .catch(() => {});
+      });
+
+    return () => {
+      active = false;
+      unsubPresence();
+      void daemonApi.updateWorkflowPresence(wfId, "leave").catch(() => {});
+    };
   }, [currentWf?.workflow_id]);
 
   return (
@@ -235,6 +265,8 @@ export function WorkflowCanvasTopHud({
           {presenceMembers.length > 0 && (
             <div
               data-testid="workflow-presence-badge"
+              title={presenceMembers.map((m) => `${m.displayName} (${m.role})`).join(", ")}
+              aria-label={`${presenceMembers.length} membro(s) ativo(s) no fluxo`}
               className="flex items-center gap-1.5 rounded-xl border border-white/[0.12] bg-[#212121] px-2.5 py-2 text-[12px] text-[#31CF76]"
             >
               <Users className="h-3.5 w-3.5" />

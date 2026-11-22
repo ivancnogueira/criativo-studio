@@ -100,6 +100,26 @@ export const phase36Api = {
     return json.members ?? [];
   },
 
+  async updateWorkflowPresence(
+    workflowId: string,
+    action: "join" | "leave" | "heartbeat" = "join",
+    opts?: { selectedNodeId?: string | null; cursorX?: number | null; cursorY?: number | null },
+  ): Promise<WorkflowPresenceMember[]> {
+    const res = await apiFetch("/api/workflows/presence", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workflowId,
+        action,
+        ...(opts?.selectedNodeId !== undefined ? { selectedNodeId: opts.selectedNodeId } : {}),
+        ...(opts?.cursorX !== undefined ? { cursorX: opts.cursorX } : {}),
+        ...(opts?.cursorY !== undefined ? { cursorY: opts.cursorY } : {}),
+      }),
+    });
+    const json = (await res.json()) as { members?: WorkflowPresenceMember[] };
+    return json.members ?? [];
+  },
+
   async listTransferHistory(): Promise<InstanceTransferJob[]> {
     const res = await apiFetch("/api/transfer/history");
     const json = (await res.json()) as { history?: InstanceTransferJob[] };

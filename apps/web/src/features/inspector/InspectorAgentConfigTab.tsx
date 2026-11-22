@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Cpu,
   Database,
+  Download,
   FileText,
   FolderOpen,
   GitFork,
@@ -74,6 +75,10 @@ export function InspectorAgentConfigTab({
     handleSaveConfig,
     handlePermissionPick,
     handlePickNativeFolder,
+    exportingTemplate,
+    templateExportInfo,
+    templateExportError,
+    handleExportAgentTemplate,
     authorizedFoldersLabel,
     authorizedFoldersSummary,
     backupSummary,
@@ -83,6 +88,7 @@ export function InspectorAgentConfigTab({
   return (
     <>
         {subView === "config" && agente && (
+          <div className="space-y-3">
           <form onSubmit={handleSaveConfig} className="space-y-4">
             {/* Cartão de Identidade do Especialista */}
             <div className="rounded-xl bg-[#212121] border border-white/[0.06] p-3 space-y-3">
@@ -508,6 +514,36 @@ export function InspectorAgentConfigTab({
               {saving ? "Aplicando..." : "Salvar identidade do agente"}
             </button>
           </form>
+
+          <div className="rounded-xl bg-[#212121] border border-white/[0.08] p-3 space-y-2">
+            <button
+              type="button"
+              data-testid="export-agent-template-btn"
+              disabled={exportingTemplate}
+              onClick={() => void handleExportAgentTemplate()}
+              className="w-full flex items-center justify-center gap-2 rounded-lg bg-[#181818] hover:bg-[#2A2A2A] border border-white/[0.08] px-3 py-2 text-[12px] font-medium text-[#F0F0F0] transition-colors disabled:opacity-50"
+            >
+              <Download className="h-3.5 w-3.5 text-[#42A0FF]" />
+              <span>
+                {exportingTemplate ? "Exportando template..." : "Exportar template (.json)"}
+              </span>
+            </button>
+            {templateExportInfo && (
+              <p
+                data-testid="export-agent-template-feedback"
+                className="text-[11px] font-mono text-[#31CF76] break-all"
+              >
+                {templateExportInfo.fileName} · v{templateExportInfo.version} · sha256:
+                {templateExportInfo.sha256Prefix}
+              </p>
+            )}
+            {templateExportError && (
+              <p className="text-[11px] text-[#FD2F3B] leading-snug">
+                {templateExportError}
+              </p>
+            )}
+          </div>
+          </div>
         )}
     </>
   );

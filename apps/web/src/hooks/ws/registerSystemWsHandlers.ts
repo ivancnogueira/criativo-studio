@@ -15,6 +15,7 @@ import type {
   BrowserSecretRequest,
   BrowserStatusReport,
   BrowserTabSummary,
+  BrowserTakeoverReason,
   BrowserTakeoverSession,
   CanalEquipe,
   CaptureScreenConsentRequest,
@@ -49,6 +50,7 @@ import type {
   UsageLimitAskPayload,
   UserBrowsingStep,
   UsoProvedoresSnapshot,
+  WebSocketEventMap,
   WhatsAppContaResumo,
   WhatsNewReleaseInfo,
   WorkflowAresta,
@@ -85,6 +87,23 @@ import {
 import { mergeUniqueMessages, type AgenteEnriquecido } from "../../utils/studio-storage";
 import type { StudioAppState } from "../useStudioState";
 import type { StudioBootstrapActions } from "../useStudioBootstrap";
+
+function mapChallengeKindToTakeoverReason(
+  kind: WebSocketEventMap["browser:challenge_detected"]["kind"]
+): BrowserTakeoverReason {
+  switch (kind) {
+    case "2fa":
+      return "2fa";
+    case "login_wall":
+      return "login";
+    case "anti_bot":
+      return "sign-in-blocked";
+    case "recaptcha":
+    case "hcaptcha":
+    case "turnstile":
+      return "captcha";
+  }
+}
 
 export function registerSystemWsHandlers(
   ws: WebSocketClient,
@@ -317,6 +336,30 @@ export function registerSystemWsHandlers(
       setActiveTakeoverModal((prev) => (prev && prev.tabId === evt.tabId ? null : prev));
     });
 
+    const unsubChallengeDetected = ws.on("browser:challenge_detected", (evt) => {
+      const agKey = evt.agenteId ?? "global";
+      const takeoverSession: BrowserTakeoverSession = {
+        takeoverId: `challenge:${evt.tabId}`,
+        tabId: evt.tabId,
+        agenteId: evt.agenteId,
+        reason: mapChallengeKindToTakeoverReason(evt.kind),
+        url: evt.url,
+        title: evt.title,
+        status: "pending",
+        criadoEm: evt.detectedAt,
+      };
+      setTakeoverByAgent((prev) => ({ ...prev, [agKey]: takeoverSession }));
+      setActiveBrowserTabId(evt.tabId);
+      setBrowserTabs((prev) =>
+        prev.map((t) =>
+          t.tabId === evt.tabId
+            ? { ...t, userControl: true, url: evt.url || t.url, title: evt.title || t.title }
+            : t
+        )
+      );
+      setBrowserPanelMode((cur) => (cur === "closed" ? "sidebar" : cur));
+    });
+
     const unsubTeachStatus = ws.on("browser:teach_status", (evt) => {
       setTeachStatusByTab((prev) => ({
         ...prev,
@@ -421,6 +464,7 @@ export function registerSystemWsHandlers(
     unsubBrowserTabs();
     unsubTakeoverReq();
     unsubTakeoverRes();
+    unsubChallengeDetected();
     unsubTeachStatus();
     unsubScreenCapture();
     unsubAutofillRequested();

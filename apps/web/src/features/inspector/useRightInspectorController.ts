@@ -11,6 +11,7 @@ import type {
 } from "@criativo/contracts";
 import { resolveAgentAvatarConfig } from "../../components/MascoteAvatar";
 import type { CarbonSelectOption } from "../../components/ui/CarbonControls";
+import { daemonApi } from "../../services/websocket-client";
 import { getCriativoDesktopBridge } from "../../types/desktop-bridge";
 import {
   PERMISSION_RANK,
@@ -86,6 +87,13 @@ export function useRightInspectorController(props: RightInspectorPanelProps) {
   const [confirmDeleteFileId, setConfirmDeleteFileId] = useState<string | null>(null);
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
   const [deleteFileError, setDeleteFileError] = useState<string | null>(null);
+  const [exportingTemplate, setExportingTemplate] = useState(false);
+  const [templateExportInfo, setTemplateExportInfo] = useState<{
+    version: string;
+    sha256Prefix: string;
+    fileName: string;
+  } | null>(null);
+  const [templateExportError, setTemplateExportError] = useState<string | null>(null);
 
   // Estados de Configurações da Equipe (Canal)
   const [channelNomeDraft, setChannelNomeDraft] = useState(canal?.nome ?? "");
@@ -164,6 +172,8 @@ export function useRightInspectorController(props: RightInspectorPanelProps) {
   }, [agente, canal]);
 
   useEffect(() => {
+    setTemplateExportInfo(null);
+    setTemplateExportError(null);
     if (!agente) return;
     const cfg = (agente.config ?? {}) as Record<string, unknown>;
     const resolvedVis = resolveAgentAvatarConfig(agente);
@@ -330,6 +340,42 @@ export function useRightInspectorController(props: RightInspectorPanelProps) {
       setAllowedFoldersDraft(next);
     } catch (err) {
       setFolderError(err instanceof Error ? err.message : "Falha ao remover pasta.");
+    }
+  };
+
+  const handleExportAgentTemplate = async () => {
+    if (!agente || exportingTemplate) return;
+    setExportingTemplate(true);
+    setTemplateExportError(null);
+    try {
+      const res = await daemonApi.exportAgentTemplate(agente.agente_id);
+      const pkg = res.package;
+      const slug = agente.agente_id.replace(/[^a-zA-Z0-9._-]+/g, "-").toLowerCase();
+      const fileName = `${slug}.template.json`;
+      if (typeof window !== "undefined" && typeof document !== "undefined") {
+        const blob = new Blob([JSON.stringify(pkg, null, 2)], {
+          type: "application/json;charset=utf-8",
+        });
+        const objectUrl = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = objectUrl;
+        anchor.download = fileName;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(objectUrl);
+      }
+      setTemplateExportInfo({
+        version: pkg.version,
+        sha256Prefix: pkg.sha256.slice(0, 12),
+        fileName,
+      });
+    } catch (err) {
+      setTemplateExportError(
+        err instanceof Error ? err.message : "Falha ao exportar template do agente."
+      );
+    } finally {
+      setExportingTemplate(false);
     }
   };
 
@@ -516,6 +562,10 @@ export function useRightInspectorController(props: RightInspectorPanelProps) {
     handleAddAllowedFolderPath,
     handlePickNativeFolder,
     handleRemoveAllowedFolder,
+    exportingTemplate,
+    templateExportInfo,
+    templateExportError,
+    handleExportAgentTemplate,
     browserProfileOptions,
     authorizedFoldersLabel,
     authorizedFoldersSummary,

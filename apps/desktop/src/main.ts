@@ -446,6 +446,7 @@ async function bootstrapDesktop(): Promise<void> {
   cuaRuntime = await startCuaDesktopRuntime({
     getDaemonBaseUrl: () => daemonHandle?.baseUrl ?? "",
     getDaemonPort: () => daemonHandle?.port ?? null,
+    getServerToken: () => process.env.CRIATIVO_SERVER_ACCESS_TOKEN ?? null,
     onLog: writeDesktopLog,
   }).catch(() => null);
 

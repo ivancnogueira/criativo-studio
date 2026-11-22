@@ -7,6 +7,40 @@ type EventListener<K extends EventName> = (
   envelope: WebSocketEnvelope<K>
 ) => void;
 
+type GlobalWsListener = (payload: unknown, envelope: WebSocketEnvelope<EventName>) => void;
+const globalEventListeners = new Map<EventName, Set<GlobalWsListener>>();
+
+export function subscribeWsEvent<K extends EventName>(
+  event: K,
+  listener: EventListener<K>
+): () => void {
+  let bucket = globalEventListeners.get(event);
+  if (!bucket) {
+    bucket = new Set();
+    globalEventListeners.set(event, bucket);
+  }
+  const wrapped: GlobalWsListener = (payload, envelope) => {
+    listener(payload as WebSocketEventMap[K], envelope as WebSocketEnvelope<K>);
+  };
+  bucket.add(wrapped);
+  return () => {
+    bucket?.delete(wrapped);
+    if (bucket && bucket.size === 0) {
+      globalEventListeners.delete(event);
+    }
+  };
+}
+
+export function dispatchWsEvent<K extends EventName>(envelope: WebSocketEnvelope<K>): void {
+  const bucket = globalEventListeners.get(envelope.event);
+  if (!bucket) return;
+  for (const listener of bucket) {
+    listener(envelope.data, envelope as WebSocketEnvelope<EventName>);
+  }
+}
+
+export const emitWsEventForTest = dispatchWsEvent;
+
 /**
  * Cliente WebSocket reativo com reconexão exponencial (1s -> 2s -> 4s -> máx 15s)
  * para consumir os eventos do DaemonServer em tempo real.
@@ -99,6 +133,7 @@ export class WebSocketClient {
             listener(envelope.data, envelope);
           }
         }
+        dispatchWsEvent(envelope);
       } catch {
         // ignora payload inválido
       }

@@ -1,5 +1,15 @@
-import type { InstanceTransferManifest, InstanceTransferScope } from "@criativo/contracts";
+import type {
+  InstanceTransferManifest,
+  InstanceTransferScope,
+  TeamRole,
+} from "@criativo/contracts";
 import type { TransferChunkPacket } from "../../servers/instance-transfer-chunks.ts";
+import {
+  assertTeamRoleAtLeast,
+  resolveTeamActor,
+  TeamRbacError,
+  type ResolvedTeamActor,
+} from "../../team/rbac-middleware.ts";
 import type { StudioRouteContext } from "./route-helpers.ts";
 
 export async function tryHandleServersTransferRoutes(
@@ -11,17 +21,47 @@ export async function tryHandleServersTransferRoutes(
   if (!path.startsWith("/api/transfer/")) {
     return false;
   }
+
+  let actor: ResolvedTeamActor;
+  try {
+    actor = resolveTeamActor(req, teamService);
+  } catch (err) {
+    const code = err instanceof TeamRbacError ? err.statusCode : 401;
+    sendJson(res, code, { erro: err instanceof Error ? err.message : String(err) });
+    return true;
+  }
+
+  const requireRole = (targetActor: ResolvedTeamActor, minRole: TeamRole): boolean => {
+    try {
+      assertTeamRoleAtLeast(targetActor, minRole);
+      return true;
+    } catch (err) {
+      if (err instanceof TeamRbacError) {
+        sendJson(res, err.statusCode, { erro: err.message });
+        return false;
+      }
+      sendJson(res, 403, { erro: err instanceof Error ? err.message : String(err) });
+      return false;
+    }
+  };
+
   if (!instanceTransferService) {
     sendJson(res, 503, { erro: "InstanceTransferService não inicializado." });
     return true;
   }
 
   if (method === "GET" && path === "/api/transfer/history") {
+    if (!requireRole(actor, "viewer")) {
+      return true;
+    }
     sendJson(res, 200, { history: instanceTransferService.listHistory() });
     return true;
   }
 
   if (method === "POST" && path === "/api/transfer/export") {
+    if (!requireRole(actor, "admin")) {
+      return true;
+    }
     const body = await readJsonBody(req);
     const rawScope = (body.scope ?? {}) as Partial<InstanceTransferScope>;
     const scope: InstanceTransferScope = {
@@ -41,7 +81,8 @@ export async function tryHandleServersTransferRoutes(
       chunkSizeBytes,
     });
     teamService?.audit.record({
-      actorLabel: "owner",
+      actorMemberId: actor.memberId,
+      actorLabel: actor.label,
       action: "instance.transfer.exported",
       resourceType: "instance_transfer",
       resourceId: exported.manifest.jobId,
@@ -52,6 +93,9 @@ export async function tryHandleServersTransferRoutes(
   }
 
   if (method === "POST" && path === "/api/transfer/import/begin") {
+    if (!requireRole(actor, "admin")) {
+      return true;
+    }
     const body = await readJsonBody(req);
     const manifest = body.manifest as InstanceTransferManifest | undefined;
     if (!manifest || !manifest.jobId || !manifest.payloadSha256) {
@@ -65,6 +109,9 @@ export async function tryHandleServersTransferRoutes(
 
   const chunkMatch = path.match(/^\/api\/transfer\/chunks\/([^/]+)$/);
   if (method === "POST" && chunkMatch) {
+    if (!requireRole(actor, "admin")) {
+      return true;
+    }
     try {
       const jobId = decodeURIComponent(chunkMatch[1]!);
       const body = await readJsonBody(req);
@@ -77,6 +124,9 @@ export async function tryHandleServersTransferRoutes(
   }
 
   if (method === "POST" && path === "/api/transfer/commit") {
+    if (!requireRole(actor, "admin")) {
+      return true;
+    }
     try {
       const body = await readJsonBody(req);
       const jobId = String(body.jobId ?? "").trim();
@@ -86,7 +136,8 @@ export async function tryHandleServersTransferRoutes(
       }
       const out = instanceTransferService.commitImport(jobId);
       teamService?.audit.record({
-        actorLabel: "owner",
+        actorMemberId: actor.memberId,
+        actorLabel: actor.label,
         action: "instance.transfer.imported",
         resourceType: "instance_transfer",
         resourceId: jobId,
