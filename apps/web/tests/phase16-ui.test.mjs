@@ -176,7 +176,7 @@ describe("Fase 16 — UI Licenciamento Carbon Dark SSR & Auditoria Estática", (
         onDeleteBrowserProxy: async () => {},
       }),
     );
-    assert.match(modalHtml, /Licença &amp; Plano/);
+    assert.match(modalHtml, /Licença/);
     assert.match(modalHtml, /18 \/ Ilimitado/);
   });
 

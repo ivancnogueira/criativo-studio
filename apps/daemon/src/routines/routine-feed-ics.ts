@@ -60,10 +60,10 @@ export function buildRoutinesIcsFeed(
   const rawLines: string[] = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//Criativo AI Studio//Rotinas//PT-BR",
+    "PRODID:-//CriativoOS//Rotinas//PT-BR",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
-    "X-WR-CALNAME:Criativo AI Studio - Rotinas",
+    "X-WR-CALNAME:CriativoOS - Rotinas",
   ];
 
   for (const routine of routines) {

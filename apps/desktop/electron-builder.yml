@@ -1,7 +1,7 @@
 appId: com.criativoaistudio.desktop
-productName: Criativo AI Studio
+productName: CriativoOS
 executableName: criativo-ai-studio
-copyright: Copyright © Criativo AI Studio Online
+copyright: Copyright © CriativoOS
 asar: true
 npmRebuild: false
 electronVersion: "35.7.5"
@@ -30,7 +30,7 @@ win:
     - target: nsis
       arch:
         - x64
-  artifactName: "CriativoAIStudio-Setup-${version}.${ext}"
+  artifactName: "CriativoOS-Setup-${version}.${ext}"
 
 nsis:
   oneClick: false
@@ -38,7 +38,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: "Criativo AI Studio"
+  shortcutName: "CriativoOS"
 
 mac:
   target:
@@ -49,7 +49,7 @@ mac:
       arch:
         - universal
   category: public.app-category.productivity
-  artifactName: "CriativoAIStudio-${version}-universal.${ext}"
+  artifactName: "CriativoOS-${version}-universal.${ext}"
 
 linux:
   target:
@@ -60,7 +60,7 @@ linux:
       arch:
         - x64
   category: Utility
-  artifactName: "CriativoAIStudio-${version}-x86_64.${ext}"
+  artifactName: "CriativoOS-${version}-x86_64.${ext}"
 
 publish:
   provider: generic

@@ -228,7 +228,7 @@ export function bootstrapUserDataDirectory(paths: StudioResolvedPaths): StudioPa
     const envExamplePath = join(paths.productRoot, ".env.example");
     const baseContent = existsSync(envExamplePath)
       ? readFileSync(envExamplePath, "utf8")
-      : "# Criativo AI Studio Online - Configuracao da Instancia\nPORT=3000\n";
+      : "# CriativoOS - Configuracao da Instancia\nPORT=3000\n";
     const randomVaultKey = randomBytes(32).toString("hex");
     const finalEnv = /^CRIATIVO_VAULT_KEY=.*$/m.test(baseContent)
       ? baseContent.replace(/^CRIATIVO_VAULT_KEY=.*$/m, `CRIATIVO_VAULT_KEY=${randomVaultKey}`)

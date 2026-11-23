@@ -302,7 +302,10 @@ describe("Fase 22 — CDP sem __name, Takeover sem trava, WhatsApp Formatter e F
 
   it("4. (DESK22-01 & SYNC22-01) Verifica Electron desktopCapturer/FloatingDock, timeout OpenCode >= 180s e sync WhatsApp->Chat", () => {
     const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-    const desktopMainSrc = readFileSync(join(repoRoot, "apps/desktop/src/main.ts"), "utf8");
+    const desktopMainSrc =
+      readFileSync(join(repoRoot, "apps/desktop/src/main.ts"), "utf8") +
+      "\n" +
+      readFileSync(join(repoRoot, "apps/desktop/src/main-ipc-handlers.ts"), "utf8");
     const desktopDockSrc = readFileSync(join(repoRoot, "apps/desktop/src/floating-dock.ts"), "utf8");
     const openCodeSrc = readFileSync(
       join(repoRoot, "apps/daemon/src/providers/opencode-live-service.ts"),

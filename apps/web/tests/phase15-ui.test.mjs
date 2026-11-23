@@ -425,11 +425,11 @@ describe("Fase 15 — UI Carbon Dark SSR & Auditoria Estática Clean-Room", () =
       "Geral",
       "Aparência",
       "Comportamento",
-      "Navegador &amp; Proxies",
-      "Notificações &amp; Sons",
-      "Voz &amp; Live Voice",
+      "Navegador",
+      "Notificações",
+      "Voz",
       "Armazenamento",
-      "Atualizações &amp; Novidades",
+      "Atualizações",
     ]) {
       assert.match(settingsHtml, new RegExp(label));
     }

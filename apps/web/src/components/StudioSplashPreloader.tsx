@@ -1,5 +1,6 @@
 import React, { useEffect, useId, useRef, useState } from "react";
 import type { AvatarShape } from "@criativo/contracts";
+import { CriativoSymbolLogo } from "./CriativoSymbolLogo";
 
 export type SplashInitialStage = "scout" | "expand" | "jumping";
 
@@ -55,7 +56,7 @@ const SPLASH_SQUAD: readonly MascotMemberSpec[] = [
   { slot: -3, x: -396, xStart: -104, yEnd: -4, shape: "octo", color: "#a855f7" },
   { slot: -2, x: -264, xStart: -52, yEnd: -12, shape: "pill", color: "#3b82f6" },
   { slot: -1, x: -132, xStart: 0, yEnd: -20, shape: "hex", color: "#22c55e" },
-  { slot: 0, x: 0, xStart: 0, yEnd: -28, shape: "blob", color: "#f97316" },
+  { slot: 0, x: 0, xStart: 0, yEnd: -28, shape: "blob", color: "#B9FC01" },
   { slot: 1, x: 132, xStart: 0, yEnd: -20, shape: "diamond", color: "#f27ba5" },
   { slot: 2, x: 264, xStart: 52, yEnd: -12, shape: "rounded_square", color: "#2dd4bf" },
   { slot: 3, x: 396, xStart: 104, yEnd: -4, shape: "triangle", color: "#eab308" },
@@ -457,7 +458,7 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
   return (
     <div
       role="status"
-      aria-label="Carregando Criativo AI Studio"
+      aria-label="Carregando CriativoOS"
       data-testid="studio-splash-preloader"
       data-splash-stage={stage}
       className="fixed inset-0 z-[9999] flex items-center justify-center overflow-hidden select-none"
@@ -494,17 +495,17 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
             height: 210,
             transform: "translate(-50%, -45%)",
             background:
-              "radial-gradient(ellipse at center, rgba(249, 115, 22, 0.22) 0%, rgba(56, 189, 248, 0.09) 48%, transparent 74%)",
+              "radial-gradient(ellipse at center, rgba(185, 252, 1, 0.20) 0%, rgba(0, 49, 204, 0.10) 48%, transparent 74%)",
             filter: "blur(36px)",
             opacity: stage === "reveal-burst" || stage === "reveal-open" ? 0 : 1,
             transition: "opacity 420ms ease",
           }}
         />
 
-        {/* Anel laranja de impacto no Reveal */}
+        {/* Anel Volt de impacto no Reveal + Easter Egg oO piscando */}
         <div
           aria-hidden="true"
-          className={`pointer-events-none absolute left-1/2 rounded-full border-[4px] border-[#FF6B00] ${
+          className={`pointer-events-none absolute left-1/2 rounded-full border-[4px] border-[#B9FC01] ${
             stage === "reveal-burst" || stage === "reveal-open" ? "studio-splash-ring-pop" : ""
           }`}
           style={{
@@ -512,10 +513,28 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
             width: 220,
             height: 220,
             transform: "translate(-50%, -50%) scale(0.35)",
-            boxShadow: "0 0 36px rgba(255, 107, 0, 0.55)",
+            boxShadow: "0 0 36px rgba(185, 252, 1, 0.45)",
             opacity: stage === "reveal-burst" || stage === "reveal-open" ? undefined : 0,
           }}
         />
+
+        {/* Assinatura discreta CriativoOS abaixo do horizonte com Easter Egg na transição */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute left-1/2 flex flex-col items-center gap-1"
+          style={{
+            top: SPLASH_HORIZON_TOP + 22,
+            transform: "translateX(-50%)",
+            opacity: stage === "reveal-open" ? 0 : 0.85,
+            transition: "opacity 240ms ease",
+          }}
+        >
+          <CriativoSymbolLogo
+            size={34}
+            color="#B9FC01"
+            blinkActive={stage === "reveal-squash" || stage === "reveal-burst"}
+          />
+        </div>
 
         {/* Janela do horizonte que corta pela metade na espiada e destrava para os pulos */}
         <div
@@ -664,8 +683,8 @@ export const StudioSplashPreloader: React.FC<StudioSplashPreloaderProps> = ({
                   ? 0.45
                   : 1,
             background:
-              "linear-gradient(90deg, transparent, rgba(255, 107, 0, 0.52), rgba(255, 255, 255, 0.34), rgba(255, 107, 0, 0.52), transparent)",
-            boxShadow: "0 0 22px rgba(255, 107, 0, 0.36)",
+              "linear-gradient(90deg, transparent, rgba(185, 252, 1, 0.55), rgba(255, 255, 255, 0.34), rgba(185, 252, 1, 0.55), transparent)",
+            boxShadow: "0 0 22px rgba(185, 252, 1, 0.38)",
             transition: "width 900ms cubic-bezier(0.22, 1, 0.36, 1), opacity 360ms ease",
           }}
         />

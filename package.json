@@ -1,6 +1,6 @@
 {
   "name": "criativo-studio-online",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Plataforma autônoma multi-agente para produção de criativos, carrosséis, stories e vídeos cinematográficos Remotion via Web, WhatsApp e Telegram.",
   "type": "module",
@@ -33,7 +33,8 @@
     "build:desktop": "npm run build --workspace=apps/desktop",
     "dist:desktop:win": "node ./node_modules/electron-builder/cli.js --project apps/desktop --config electron-builder.yml --win nsis --x64",
     "dist:desktop:linux": "node ./node_modules/electron-builder/cli.js --project apps/desktop --config electron-builder.yml --linux tar.gz --x64",
-    "dist:desktop:mac": "node ./node_modules/electron-builder/cli.js --project apps/desktop --config electron-builder.yml --mac dmg zip"
+    "dist:desktop:mac": "node ./node_modules/electron-builder/cli.js --project apps/desktop --config electron-builder.yml --mac dmg zip",
+    "release:bump": "node scripts/release-bump.mjs"
   },
   "engines": {
     "node": ">=22.0.0"

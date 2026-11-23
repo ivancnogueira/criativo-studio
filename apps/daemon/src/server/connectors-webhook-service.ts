@@ -516,7 +516,7 @@ export class ConnectorsWebhookService {
       statusCode: 200,
       body: {
         type: 4,
-        data: { content: "Interação recebida pelo Criativo AI Studio." },
+        data: { content: "Interação recebida pelo CriativoOS." },
       },
       event,
     };
@@ -724,7 +724,7 @@ export class ConnectorsWebhookService {
     const payload =
       params.action === "comment_issue"
         ? { body: params.body }
-        : { title: params.title?.trim() || "Ação do Criativo AI Studio", body: params.body };
+        : { title: params.title?.trim() || "Ação do CriativoOS", body: params.body };
 
     const resp = await fetchFn(endpoint, {
       method: "POST",

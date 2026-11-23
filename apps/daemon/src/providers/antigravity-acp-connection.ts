@@ -232,7 +232,7 @@ export class AcpProcessConnection {
         {
           protocolVersion: 1,
           clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-          clientInfo: { name: "criativo-ai-studio", title: "Criativo AI Studio", version: "1.0.0" },
+          clientInfo: { name: "criativo-ai-studio", title: "CriativoOS", version: "1.0.0" },
         },
         25_000
       );

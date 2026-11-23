@@ -191,7 +191,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
               onClick={() => setMode("agents")}
               className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-[12px] font-semibold transition-colors border-b-2 ${
                 effectiveMode === "agents"
-                  ? "bg-[#2A2A2A] text-[#F0F0F0] border-[#007CF7]"
+                  ? "bg-[#2A2A2A] text-[#F0F0F0] border-[var(--studio-accent,#B9FC01)]"
                   : "text-[#979797] hover:text-white border-transparent"
               }`}
             >
@@ -205,7 +205,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
               onClick={() => setMode("routines")}
               className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-[12px] font-semibold transition-colors border-b-2 ${
                 effectiveMode === "routines"
-                  ? "bg-[#2A2A2A] text-[#F0F0F0] border-[#007CF7]"
+                  ? "bg-[#2A2A2A] text-[#F0F0F0] border-[var(--studio-accent,#B9FC01)]"
                   : "text-[#979797] hover:text-white border-transparent"
               }`}
             >
@@ -331,9 +331,9 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
         {creatingSectionParentId !== undefined && onMutateSidebar && (
           <form
             onSubmit={(e) => void handleCreateSectionSubmit(e)}
-            className="rounded-xl border border-[#007CF7]/50 bg-[#141414] p-2 space-y-2"
+            className="rounded-xl border border-[var(--studio-accent,#B9FC01)]/50 bg-[#141414] p-2 space-y-2"
           >
-            <div className="text-[11px] font-semibold text-[#42A0FF]">
+            <div className="text-[11px] font-semibold text-[var(--studio-accent-text,#B9FC01)]">
               {creatingSectionParentId ? "Novo subdiretório" : "Novo diretório"}
             </div>
             <input
@@ -343,7 +343,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
               placeholder="Nome do diretório"
               aria-label="Nome do novo diretório"
               autoFocus
-              className="w-full rounded-lg border border-white/10 bg-[#212121] px-2.5 py-1.5 text-[12px] text-white placeholder-[#6A6A6A] focus:border-[#007CF7] focus:outline-none"
+              className="w-full rounded-lg border border-white/10 bg-[#212121] px-2.5 py-1.5 text-[12px] text-white placeholder-[#6A6A6A] focus:border-[var(--studio-accent,#B9FC01)] focus:outline-none"
             />
             <div className="flex items-center justify-end gap-1.5">
               <button
@@ -359,7 +359,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
               <button
                 type="submit"
                 disabled={!newSectionName.trim()}
-                className="rounded-lg bg-[#007CF7] px-2.5 py-1 text-[11.5px] font-semibold text-white disabled:opacity-40"
+                className="rounded-lg bg-[var(--studio-accent,#B9FC01)] px-2.5 py-1 text-[11.5px] font-semibold text-[var(--studio-text-on-accent,#0D0D0D)] disabled:opacity-40"
               >
                 {creatingSectionParentId ? "Criar subdiretório" : "Criar diretório"}
               </button>

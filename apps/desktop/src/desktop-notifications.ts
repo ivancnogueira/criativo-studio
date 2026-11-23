@@ -23,7 +23,7 @@ export function showDesktopNotification(
     return { shown: false, reason: "unsupported" };
   }
 
-  const title = String(payload.title ?? "Criativo AI Studio").trim().slice(0, 120);
+  const title = String(payload.title ?? "CriativoOS").trim().slice(0, 120);
   const body = String(payload.body ?? "").trim().slice(0, 280);
   if (!title && !body) {
     return { shown: false, reason: "empty" };
@@ -38,7 +38,7 @@ export function showDesktopNotification(
   recentShownAt.set(dedupeKey, now);
 
   const notif = new Notification({
-    title: title || "Criativo AI Studio",
+    title: title || "CriativoOS",
     body,
     silent: false,
   });

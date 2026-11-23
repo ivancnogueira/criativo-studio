@@ -244,7 +244,7 @@ export class LicenseClientService {
         machines_used: 0,
         upgrades: [],
         devices: [],
-        message: "Informe seu e-mail de compra e chave de licença para ativar o Criativo AI Studio.",
+        message: "Informe seu e-mail de compra e chave de licença para ativar o CriativoOS.",
         hub_url: this.#hubBaseUrl,
       };
     }

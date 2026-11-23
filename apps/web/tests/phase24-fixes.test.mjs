@@ -143,7 +143,7 @@ describe("Fase 24 — UI: Logo Servidor Remoto, Cotas Auto, Dock Settings & Sele
     );
 
     for (const expected of [
-      "Dock de agentes",
+      "Dock de Criativos",
       "Mostrar o dock de agentes",
       "Posição",
       "Tela",

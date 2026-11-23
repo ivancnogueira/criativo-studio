@@ -201,7 +201,7 @@ describe("Fase 23 — UI, Multi-Server, Dock, Identidade Própria, Pastas Autori
 
     assert.match(html, /data-testid="sidebar-pinned-strip"/);
     assert.match(html, /data-testid="pinned-agent-tile-estrategista"/);
-    assert.match(html, /role="tooltip"[^>]*>Estrategista Editorial<\/span>/);
+    assert.match(html, /aria-label="Estrategista Editorial"/);
     assert.match(html, /Equipes/);
 
     const sidebarSrc = [
@@ -215,7 +215,7 @@ describe("Fase 23 — UI, Multi-Server, Dock, Identidade Própria, Pastas Autori
       .join("\n");
     assert.doesNotMatch(sidebarSrc, /window\.confirm/);
     assert.match(sidebarSrc, /Excluir agente/);
-    assert.match(sidebarSrc, /Nova equipe/);
+    assert.match(sidebarSrc, /Nova equipe|sidebar\.newTeam/);
     assert.match(sidebarSrc, /Novo diretório/);
     assert.match(sidebarSrc, /Nova Subconversa/);
     assert.match(sidebarSrc, /Abrir em nova janela/);

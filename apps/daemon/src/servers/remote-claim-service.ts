@@ -39,7 +39,7 @@ export class RemoteClaimService {
     const hubUrl = this.#licenseService.hubBaseUrl;
     const safeName = serverName.replace(/[^a-zA-Z0-9 _.-]/g, "").trim() || "Servidor VPS";
     const commandBash = `{ echo CRIATIVO_CLAIM=${claimSecret}; curl -fsSL ${hubUrl}/api/releases/install-server.sh; } | sudo bash -s -- --name "${safeName}" --hub-url "${hubUrl}"`;
-    const commandAgentPrompt = `Execute o comando abaixo via terminal/SSH no meu servidor Linux Ubuntu/Debian para instalar o Criativo AI Studio Online e conectá-lo automaticamente:\n\n\`\`\`bash\n${commandBash}\n\`\`\``;
+    const commandAgentPrompt = `Execute o comando abaixo via terminal/SSH no meu servidor Linux Ubuntu/Debian para instalar o CriativoOS e conectá-lo automaticamente:\n\n\`\`\`bash\n${commandBash}\n\`\`\``;
     return { command_bash: commandBash, command_agent_prompt: commandAgentPrompt };
   }
 

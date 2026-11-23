@@ -74,7 +74,7 @@ function isValidOAuthCallbackRequest(
 }
 
 function renderBridgeResultHtml(ok: boolean, message: string): string {
-  const accent = ok ? "#31CF76" : "#FD2F3B";
+  const accent = ok ? "#B9FC01" : "#FD2F3B";
   const title = ok ? "Autenticação concluída!" : "Falha na autenticação remota";
   const escaped = message
     .replaceAll("&", "&amp;")
@@ -86,7 +86,7 @@ function renderBridgeResultHtml(ok: boolean, message: string): string {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${title} — Criativo AI Studio</title>
+  <title>${title} — CriativoOS</title>
   <style>
     body { margin: 0; font-family: Inter, -apple-system, sans-serif; background: #0D0D0D; color: #FFFFFF; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
     .card { max-width: 440px; padding: 28px 24px; border-radius: 16px; background: #18181A; border: 1px solid rgba(255,255,255,0.1); text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.6); }
@@ -224,7 +224,7 @@ export class RemoteOAuthBridgeService {
         res.end(
           renderBridgeResultHtml(
             true,
-            `Autenticação concluída em '${srv.nome}'! Você já pode fechar esta aba e voltar ao Criativo AI Studio.`,
+            `Autenticação concluída em '${srv.nome}'! Você já pode fechar esta aba e voltar ao CriativoOS.`,
           ),
         );
       } catch (err) {

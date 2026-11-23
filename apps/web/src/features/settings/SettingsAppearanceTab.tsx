@@ -112,7 +112,7 @@ export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
     <div className="space-y-4">
       <div className="rounded-xl border border-white/[0.06] bg-[#212121] p-4 space-y-3">
         <div className="flex items-center gap-2 text-[13px] font-semibold text-white">
-          <Palette className="h-4 w-4 text-[#42A0FF]" />
+          <Palette className="h-4 w-4 text-[var(--studio-accent,#B9FC01)]" />
           <span>{t("settings.appearance.theme")}</span>
         </div>
         <div className="grid grid-cols-3 gap-2.5">
@@ -129,7 +129,7 @@ export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
                 onClick={() => onChange({ ...aparencia, tema: theme.id })}
                 className={`rounded-xl border p-2.5 text-left transition-colors ${
                   selected
-                    ? "border-[#007CF7] bg-[#2A2A2A]"
+                    ? "border-[var(--studio-accent,#B9FC01)] bg-[#2A2A2A]"
                     : "border-white/[0.06] bg-[#141414] hover:bg-[#242424]"
                 }`}
               >
@@ -162,7 +162,13 @@ export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
                   active ? "ring-2 ring-white scale-105" : "opacity-80 hover:opacity-100"
                 }`}
               >
-                {active && <Check className="h-4 w-4 text-white drop-shadow" />}
+                {active && (
+                  <Check
+                    className={`h-4 w-4 ${
+                      c.hex.toUpperCase() === "#B9FC01" ? "text-[#0D0D0D]" : "text-white drop-shadow"
+                    }`}
+                  />
+                )}
               </button>
             );
           })}
@@ -198,7 +204,13 @@ export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
                   active ? "ring-2 ring-white scale-105" : "opacity-85 hover:opacity-100"
                 }`}
               >
-                {active && <Check className="h-4 w-4 text-white drop-shadow" />}
+                {active && (
+                  <Check
+                    className={`h-4 w-4 ${
+                      c.hex.toUpperCase() === "#B9FC01" ? "text-[#0D0D0D]" : "text-white drop-shadow"
+                    }`}
+                  />
+                )}
               </button>
             );
           })}

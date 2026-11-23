@@ -70,12 +70,12 @@ function buildSplashDataUrl(_iconPath?: string): string {
   <html lang="pt-BR">
     <head>
       <meta charset="utf-8" />
-      <title>Criativo AI Studio</title>
+      <title>CriativoOS</title>
       <style>
         html,body{margin:0;height:100%;overflow:hidden;user-select:none;background:radial-gradient(circle at 50% 54%,#181615 0%,#0D0D0D 76%);display:flex;align-items:center;justify-content:center}
         .stage{position:relative;flex-shrink:0;width:960px;height:380px;transform-origin:center center}
-        .glow{position:absolute;left:50%;top:250px;width:900px;height:210px;transform:translate(-50%,-45%);background:radial-gradient(ellipse at center,rgba(249,115,22,.22) 0%,rgba(56,189,248,.09) 48%,transparent 74%);filter:blur(36px);pointer-events:none;animation:pulse 1.8s ease-in-out infinite}
-        .line{position:absolute;left:50%;top:250px;width:320px;height:2px;transform:translateX(-50%);border-radius:999px;background:linear-gradient(90deg,transparent,rgba(255,107,0,.52),rgba(255,255,255,.34),rgba(255,107,0,.52),transparent);box-shadow:0 0 22px rgba(255,107,0,.36);pointer-events:none;animation:pulse 1.8s ease-in-out infinite}
+        .glow{position:absolute;left:50%;top:250px;width:900px;height:210px;transform:translate(-50%,-45%);background:radial-gradient(ellipse at center,rgba(185,252,1,.20) 0%,rgba(0,49,204,.10) 48%,transparent 74%);filter:blur(36px);pointer-events:none;animation:pulse 1.8s ease-in-out infinite}
+        .line{position:absolute;left:50%;top:250px;width:320px;height:2px;transform:translateX(-50%);border-radius:999px;background:linear-gradient(90deg,transparent,rgba(185,252,1,.58),rgba(255,255,255,.34),rgba(185,252,1,.58),transparent);box-shadow:0 0 22px rgba(185,252,1,.38);pointer-events:none;animation:pulse 1.8s ease-in-out infinite}
         @keyframes pulse{0%,100%{opacity:.65}50%{opacity:1}}
         @media (prefers-reduced-motion: reduce){.glow,.line{animation:none;opacity:1}}
       </style>
@@ -140,7 +140,7 @@ function createWindow(daemonPort: number, iconPath?: string): BrowserWindow {
     height: Math.max(680, workArea?.height || 880),
     minWidth: 1024,
     minHeight: 680,
-    title: "Criativo AI Studio Online",
+    title: "CriativoOS",
     backgroundColor: "#0D0D0D",
     ...(iconPath ? { icon: iconPath } : {}),
     autoHideMenuBar: true,
@@ -281,10 +281,11 @@ function isAllowedLoopbackOrigin(originUrl: string): boolean {
 }
 
 async function bootstrapDesktop(): Promise<void> {
+  // Preserva o diretorio legado CriativoAIStudio para zero perda de SQLite/Vault em updates
   const userDataDir =
     process.env.CRIATIVO_USER_DATA_DIR || join(app.getPath("appData"), "CriativoAIStudio");
   try {
-    app.setName("Criativo AI Studio");
+    app.setName("CriativoOS");
     app.setPath("userData", userDataDir);
   } catch {
     // ignora caso já esteja bloqueado
@@ -351,7 +352,7 @@ async function bootstrapDesktop(): Promise<void> {
   });
 
   activeBootLogPath = join(userDataDir, "logs", "desktop-boot.log");
-  writeDesktopLog(`Iniciando Criativo AI Studio v${app.getVersion()} (packaged=${app.isPackaged})`);
+  writeDesktopLog(`Iniciando CriativoOS v${app.getVersion()} (packaged=${app.isPackaged})`);
 
   installDesktopCsp(session.defaultSession, (rawUrl) => {
     if (daemonHandle) {
@@ -499,7 +500,7 @@ bootstrapDesktop().catch((err) => {
   console.error("[Criativo Desktop] Falha ao iniciar aplicativo:", err);
   try {
     dialog.showErrorBox(
-      "Criativo AI Studio — Falha ao iniciar",
+      "CriativoOS — Falha ao iniciar",
       `Não foi possível iniciar o motor local do aplicativo.\n\nDetalhes: ${
         err instanceof Error ? err.message : String(err)
       }${activeBootLogPath ? `\n\nLog salvo em:\n${activeBootLogPath}` : ""}`,

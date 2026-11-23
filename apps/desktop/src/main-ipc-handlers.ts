@@ -286,7 +286,7 @@ export function registerDesktopIpcHandlers(deps: DesktopIpcDeps): void {
       height: 760,
       minWidth: 780,
       minHeight: 560,
-      title: "Criativo AI Studio Online",
+      title: "CriativoOS",
       backgroundColor: "#0D0D0D",
       ...(iconPath ? { icon: iconPath } : {}),
       autoHideMenuBar: true,
@@ -320,7 +320,7 @@ export function registerDesktopIpcHandlers(deps: DesktopIpcDeps): void {
     const payload =
       rawPayload && typeof rawPayload === "object"
         ? (rawPayload as NativeDesktopNotificationPayload)
-        : { title: "Criativo AI Studio", body: "" };
+        : { title: "CriativoOS", body: "" };
     return showDesktopNotification(deps.getMainWindow, payload);
   });
 

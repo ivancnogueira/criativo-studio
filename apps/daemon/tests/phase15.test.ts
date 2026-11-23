@@ -354,9 +354,18 @@ describe("Fase 15 — Navegador CDP, Mídia, Backup Models, Sidebar, Settings, S
       assert.equal(openRes.status, 200, `Falha ao abrir aba CDP: ${openText}`);
       const openData = JSON.parse(openText) as {
         tabId?: string;
-        result?: { tabId?: string };
+        pausedForHuman?: boolean;
+        result?: { tabId?: string; pausedForHuman?: boolean };
       };
       activeTabId = openData.result?.tabId ?? openData.tabId!;
+
+      if (openData.result?.pausedForHuman ?? openData.pausedForHuman) {
+        await fetch(`${baseUrl}/api/navegador/sessoes/acao`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "release_takeover", tabId: activeTabId }),
+        });
+      }
 
       const snapRes = await fetch(`${baseUrl}/api/navegador/sessoes/acao`, {
         method: "POST",

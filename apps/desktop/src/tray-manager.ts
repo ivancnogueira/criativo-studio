@@ -14,11 +14,11 @@ export interface TrayManagerOptions {
 }
 
 function createFallbackTrayIcon() {
-  // Ícone SVG Carbon Dark + Esmeralda gerado em memória para nunca depender de ativo externo ausente
+  // Ícone SVG oficial oO (Carbon Dark #16171A + Volt #B9FC01) em memória
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-    <rect width="32" height="32" rx="8" fill="#141414"/>
-    <circle cx="11" cy="16" r="4" fill="#31CF76"/>
-    <circle cx="21" cy="16" r="4" fill="#FFFFFF"/>
+    <rect width="32" height="32" rx="8" fill="#16171A"/>
+    <circle cx="11.5" cy="17.5" r="4.2" fill="none" stroke="#B9FC01" stroke-width="2.6"/>
+    <circle cx="20.5" cy="15.5" r="5.5" fill="none" stroke="#B9FC01" stroke-width="2.8"/>
   </svg>`;
   const dataUrl = `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
   const img = nativeImage.createFromDataURL(dataUrl);
@@ -34,11 +34,11 @@ export function createStudioTray(options: TrayManagerOptions): Tray {
   const icon = existingIcon ? nativeImage.createFromPath(existingIcon) : createFallbackTrayIcon();
 
   const tray = new Tray(icon.isEmpty() ? createFallbackTrayIcon() : icon);
-  tray.setToolTip("Criativo AI Studio — Agentes e WhatsApp ativos");
+  tray.setToolTip("CriativoOS — Criativos e WhatsApp ativos");
 
   const menu = Menu.buildFromTemplate([
     {
-      label: "Abrir Criativo AI Studio",
+      label: "Abrir CriativoOS",
       click: () => options.onShowWindow(),
     },
     ...(options.onToggleFloatingDock
@@ -79,7 +79,7 @@ export function createStudioTray(options: TrayManagerOptions): Tray {
     },
     { type: "separator" },
     {
-      label: "Encerrar Criativo AI Studio",
+      label: "Encerrar CriativoOS",
       click: () => options.onQuit(),
     },
   ]);

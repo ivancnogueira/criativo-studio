@@ -13,6 +13,8 @@ import {
 import { SettingsTelemetryCard } from "./SettingsTelemetryCard";
 
 export const ACCENT_COLORS = [
+  { hex: "#B9FC01", label: "Volt CriativoOS" },
+  { hex: "#0031CC", label: "Royal Cobalt" },
   { hex: "#007CF7", label: "Azul Carbon" },
   { hex: "#31CF76", label: "Verde Estúdio" },
   { hex: "#8B5CF6", label: "Violeta Studio" },

@@ -459,7 +459,7 @@ describe("Fase 13 — Cockpit Tasks, Threads Paralelas, Esperas, Fila, Branch, P
     assert.match(chatHtml, /Carregar anteriores/);
     assert.match(chatHtml, /Voltar ao fim/);
     assert.match(chatHtml, /Reiniciar contexto/);
-    assert.match(chatHtml, /Novo chat iniciado — contexto do modelo reiniciado/);
+    assert.match(chatHtml, /Contexto reiniciado a partir daqui\.|Novo chat iniciado — contexto do modelo reiniciado/);
     assert.match(chatHtml, /Interromper turno/);
     assert.match(chatHtml, /Ramificar conversa/);
     assert.match(chatHtml, /Fixar mensagem/);

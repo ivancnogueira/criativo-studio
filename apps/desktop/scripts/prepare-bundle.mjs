@@ -183,7 +183,7 @@ function bundleEntrySync(entryFile, outFile, repoRoot, outDir) {
     },
     banner: {
       js: [
-        "// Criativo AI Studio — Bundle autossuficiente (gerado por esbuild)",
+        "// CriativoOS — Bundle autossuficiente (gerado por esbuild)",
         'import { createRequire as __createRequire } from "node:module";',
         "const require = __createRequire(import.meta.url);",
       ].join("\n"),

@@ -219,7 +219,7 @@ export async function createDaemonServer(
         if (!opCheck.ok) {
           sendJson(res, 402, {
             error: "license_required",
-            erro: opCheck.status.message ?? "Licença ativa necessária para operar o Criativo AI Studio.",
+            erro: opCheck.status.message ?? "Licença ativa necessária para operar o CriativoOS.",
             status: opCheck.status,
           });
           return;

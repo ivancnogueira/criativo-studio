@@ -52,7 +52,7 @@ export const DEFAULT_STUDIO_USER_SETTINGS: StudioUserSettings = {
   },
   aparencia: {
     tema: "carbon_dark",
-    cor_acento: "#007CF7",
+    cor_acento: "#B9FC01",
     cor_balao_usuario: "#2A2A2A",
     baloes_solidos: true,
     escala: 100,
@@ -394,8 +394,8 @@ export function getWhatsNewInfo(
       versao: versaoAtual,
       data: "2026-11-19",
       added: [
-        "Criativo AI Studio v1.0.0: equipe multiagente com Copilot no Chat (`/` comandos e `@` menções), Cofre AES-256-GCM e Memórias FTS5.",
-        "Motor de automação Chromium CDP nativo com perfis isolados, Takeover remoto e modo Ensinar ao Agente.",
+        "CriativoOS v1.0.0: equipe multiagente de Criativos com Copilot no Chat (`/` comandos e `@` menções), Cofre AES-256-GCM e Memórias FTS5.",
+        "Motor de automação Chromium CDP nativo com perfis isolados, Takeover remoto e modo Ensinar ao Criativo.",
         "Pareamento WhatsApp Baileys multi-número com suporte explícito ao modo Conversa Interna (meu número).",
         "Workflows visuais com Undo/Redo, Auto-layout e gatilhos por Cron, Webhook HMAC e WhatsApp.",
       ],

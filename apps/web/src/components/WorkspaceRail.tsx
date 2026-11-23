@@ -9,6 +9,7 @@ import { daemonApi } from "../services/websocket-client";
 import {
   MascoteAvatar,
 } from "./MascoteAvatar";
+import { CriativoSymbolLogo } from "./CriativoSymbolLogo";
 import {
   ServerSwitcherPopover,
 } from "../features/servers/ServerSwitcherPopover";
@@ -74,16 +75,16 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = (props) => {
       aria-label="Navegação principal do estúdio"
       className="relative w-[52px] shrink-0 bg-[#0D0D0D] border-r border-white/[0.06] flex flex-col items-center justify-between py-2.5 select-none z-40"
     >
-      {/* Topo: emblema Criativo + módulos principais */}
+      {/* Topo: emblema CriativoOS (oO com Easter Egg no hover) + módulos principais */}
       <div className="flex flex-col items-center gap-1.5 w-full px-1.5">
         <button
           type="button"
           onClick={() => onSelectSection("agentes")}
-          title="Criativo AI Studio"
-          aria-label="Início Criativo AI Studio"
+          title="CriativoOS"
+          aria-label="Início CriativoOS"
           className="h-9 w-9 rounded-xl flex items-center justify-center hover:bg-[#212121] transition-colors mb-1"
         >
-          <MascoteAvatar shape="hex" color="#31cf76" size={24} />
+          <CriativoSymbolLogo size={26} easterEggOnHover />
         </button>
 
         {RAIL_ITEMS.map(({ id, labelKey, Icon }) => {
@@ -105,7 +106,7 @@ export const WorkspaceRail: React.FC<WorkspaceRailProps> = (props) => {
             >
               <Icon className="h-[17px] w-[17px]" />
               {id === "tarefas" && pendingCount > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 h-4 min-w-[16px] px-1 rounded-full bg-[#42A0FF] text-[9.5px] font-semibold text-[#0D0D0D] flex items-center justify-center">
+                <span className="absolute -top-0.5 -right-0.5 h-4 min-w-[16px] px-1 rounded-full bg-[var(--studio-accent,#B9FC01)] text-[9.5px] font-bold text-[var(--studio-text-on-accent,#0D0D0D)] flex items-center justify-center">
                   {pendingCount}
                 </span>
               )}

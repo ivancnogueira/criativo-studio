@@ -160,7 +160,7 @@ describe("Fase 7 — Paridade Criativo Studio Backend (Onboarding, Provedores, C
     });
     assert.equal(createCanalRes.status, 201);
     const canalJson = (await createCanalRes.json()) as { canal: { canal_id: string; nome: string } };
-    assert.equal(canalJson.canal.nome, "#lancamento-q4");
+    assert.equal(canalJson.canal.nome, "lancamento-q4");
 
     const postCanalMsg = await fetch(
       `${baseUrl}/api/canais/${encodeURIComponent(canalJson.canal.canal_id)}/mensagens`,

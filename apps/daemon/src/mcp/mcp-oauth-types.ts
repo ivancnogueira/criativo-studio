@@ -18,7 +18,7 @@ export const TOKEN_REFRESH_MARGIN_MS = 60_000;
 export const OAUTH_STATE_TTL_MS = 10 * 60_000;
 export const OAUTH_REVOCATION_TIMEOUT_MS = 5_000;
 export const OAUTH_HTTP_TIMEOUT_MS = 15_000;
-export const MCP_OAUTH_CLIENT_NAME = "Criativo AI Studio Online";
+export const MCP_OAUTH_CLIENT_NAME = "CriativoOS";
 
 export const VAULT_SEAL_KEY_NAME = "__mcp_oauth_seal_key__";
 

@@ -15,7 +15,7 @@ on:
         description: "Tag da Release (quando disparado manualmente)"
         required: true
         type: string
-        default: "v1.0.0"
+        default: "v1.0.1"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -52,6 +52,15 @@ jobs:
       - name: Instalar dependências
         run: npm install
 
+      - name: Sincronizar versão com a tag da release (quando aplicável)
+        run: |
+          RAW_TAG="${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag_name }}"
+          CLEAN_VER="${RAW_TAG#v}"
+          if [[ "$CLEAN_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            node scripts/release-bump.mjs --set "$CLEAN_VER" --no-painel
+          fi
+        shell: bash
+
       - name: Compilar pacotes TypeScript do monorepo
         run: npm run build
 
@@ -75,7 +84,7 @@ jobs:
       - name: Fazer upload dos artefatos da plataforma
         uses: actions/upload-artifact@v4
         with:
-          name: criativo-desktop-${{ matrix.os_name }}
+          name: criativoos-desktop-${{ matrix.os_name }}
           path: |
             apps/desktop/release-dist/*.exe
             apps/desktop/release-dist/*.blockmap
@@ -95,6 +104,11 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout histórico completo para changelog incremental
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Criar diretório de artefatos
         run: mkdir -p dist-artifacts
 
@@ -104,20 +118,110 @@ jobs:
           path: dist-artifacts
           merge-multiple: true
 
-      - name: Gerar somas de verificação SHA-256
+      - name: Gerar SHA256SUMS.txt, release-manifest.json e notas limpas
+        env:
+          TARGET_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag_name }}
+          REPO_SLUG: ${{ github.repository }}
         run: |
+          set -euo pipefail
+          CLEAN_VER="${TARGET_TAG#v}"
+
           cd dist-artifacts
-          sha256sum * > SHA256SUMS.txt || true
+          rm -f SHA256SUMS.txt release-manifest.json
+          sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
+          cd ..
+
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const crypto = require("node:crypto");
+
+            const dir = "dist-artifacts";
+            const cleanVer = process.env.CLEAN_VER || "${CLEAN_VER}";
+            const repo = process.env.REPO_SLUG;
+            const tag = process.env.TARGET_TAG;
+
+            function inferPlatform(name) {
+              const lower = name.toLowerCase();
+              if (lower.endsWith(".exe") || lower.endsWith(".msi")) {
+                return { platform: "win32", arch: lower.includes("arm64") ? "arm64" : "x64", install_mode: "native_installer" };
+              }
+              if (lower.endsWith(".dmg") || (lower.endsWith(".zip") && (lower.includes("mac") || lower.includes("darwin") || lower.includes("universal")))) {
+                return { platform: "darwin", arch: lower.includes("universal") ? "universal" : "x64", install_mode: "native_installer" };
+              }
+              if (lower.endsWith(".appimage") || lower.endsWith(".deb")) {
+                return { platform: "linux", arch: lower.includes("arm64") ? "arm64" : "x64", install_mode: "native_installer" };
+              }
+              if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) {
+                return { platform: "vps-tarball", arch: "x64", install_mode: "native_installer" };
+              }
+              return null;
+            }
+
+            const artifacts = [];
+            for (const entry of fs.readdirSync(dir).sort()) {
+              const inferred = inferPlatform(entry);
+              if (!inferred) continue;
+              const fullPath = path.join(dir, entry);
+              const stat = fs.statSync(fullPath);
+              const sha256 = crypto.createHash("sha256").update(fs.readFileSync(fullPath)).digest("hex");
+              artifacts.push({
+                platform: inferred.platform,
+                arch: inferred.arch,
+                filename: entry,
+                sha256,
+                size_bytes: stat.size,
+                download_path: `/api/releases/download/${tag.replace(/^v/i, "")}/${entry}`,
+                external_url: `https://github.com/${repo}/releases/download/${tag}/${entry}`,
+                install_mode: inferred.install_mode,
+              });
+            }
+
+            const manifest = {
+              product: "CriativoOS",
+              version: tag.replace(/^v/i, ""),
+              tag_name: tag,
+              channel: "stable",
+              published_at: new Date().toISOString(),
+              artifacts,
+            };
+            fs.writeFileSync(path.join(dir, "release-manifest.json"), JSON.stringify(manifest, null, 2) + "\n", "utf8");
+          '
+
+          PREV_TAG=$(git tag --list 'v*' --sort=-v:refname | grep -Fxv "$TARGET_TAG" | head -n 1 || true)
+          {
+            echo "## CriativoOS ${TARGET_TAG}"
+            echo ""
+            echo "### Instaladores Desktop Multiplataforma"
+            echo "- **Windows (x64 NSIS):** \`CriativoOS-Setup-${CLEAN_VER}.exe\`"
+            echo "- **macOS (Universal DMG / ZIP):** \`CriativoOS-${CLEAN_VER}-universal.dmg\` / \`CriativoOS-${CLEAN_VER}-universal.zip\`"
+            echo "- **Linux (x86_64 AppImage / tar.gz):** \`CriativoOS-${CLEAN_VER}-x86_64.AppImage\` / \`CriativoOS-${CLEAN_VER}-x86_64.tar.gz\`"
+            echo ""
+            echo "### Alterações nesta versão"
+            if [ -n "$PREV_TAG" ] && git rev-parse "$PREV_TAG" >/dev/null 2>&1; then
+              git log "${PREV_TAG}..HEAD" --no-merges --pretty=format:"- %s (%h)" || true
+              echo ""
+              echo ""
+              echo "**Full Changelog**: https://github.com/${REPO_SLUG}/compare/${PREV_TAG}...${TARGET_TAG}"
+            else
+              git log -n 15 --no-merges --pretty=format:"- %s (%h)" || true
+              echo ""
+            fi
+          } > RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
 
       - name: Publicar Release no GitHub
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag_name }}
+          name: "CriativoOS ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag_name }}"
+          body_path: RELEASE_NOTES.md
+          append_body: false
+          generate_release_notes: false
           files: |
             dist-artifacts/*
           draft: false
           prerelease: false
-          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
