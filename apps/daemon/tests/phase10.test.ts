@@ -245,7 +245,7 @@ describe("Fase 10 — Loja Unificada, WhatsApp Real Completo & MCPs Ponta-a-Pont
       assert.ok(sockPrincipal, "Auto-boot deveria abrir socket para conta registrada");
       sockPrincipal.emit("connection.update", { connection: "open" });
 
-      // Cria segunda conta e testa pareamento por código numérico (browser Linux) e QR (browser Criativo Studio)
+      // Cria segunda conta e testa pareamento por código numérico (browser Linux) e QR (browser CriativoOS)
       const createRes = await fetch(`${baseUrl}/api/mensageria/whatsapp/contas`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -294,8 +294,8 @@ describe("Fase 10 — Loja Unificada, WhatsApp Real Completo & MCPs Ponta-a-Pont
       });
       assert.equal(qrRes.status, 200);
       assert.ok(
-        observedBrowsers.some((b) => b[0] === "Criativo Studio"),
-        "Modo QR deve usar browser 'Criativo Studio'"
+        observedBrowsers.some((b) => b[0] === "CriativoOS"),
+        "Modo QR deve usar browser 'CriativoOS'"
       );
 
       // Regras de remetente: ownNumber ignora estranho; dedicated gera código 6 chars e aprova via API

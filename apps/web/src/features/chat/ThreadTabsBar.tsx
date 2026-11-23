@@ -25,7 +25,7 @@ export const ThreadTabsBar: React.FC<ThreadTabsBarProps> = ({
 
   return (
     <nav
-      aria-label="Subconversas do agente"
+      aria-label="Subconversas do Criativo"
       className="flex h-12 shrink-0 items-center gap-2 overflow-x-auto border-b border-white/[0.06] bg-[#0D0D0D] px-4"
     >
       <button

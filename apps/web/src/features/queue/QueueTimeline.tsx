@@ -135,9 +135,9 @@ export function QueueTimeline({
           <textarea
             id="queue-new-prompt"
             name="queue_new_prompt"
-            aria-label="Briefing detalhado para os agentes"
+            aria-label="Briefing detalhado para os Criativos"
             rows={2}
-            placeholder="Briefing detalhado para os agentes (estilo da marca, objetivo, CTA)..."
+            placeholder="Briefing detalhado para os Criativos (estilo da marca, objetivo, CTA)..."
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             className="w-full rounded-xl border border-white/10 bg-[#212121] px-3 py-1.5 text-xs text-white placeholder-[#6A6A6A] focus:border-white/30 focus:outline-none"
@@ -174,7 +174,7 @@ export function QueueTimeline({
 
       {filtered.length === 0 ? (
         <div className="flex min-h-[160px] items-center justify-center rounded-2xl border border-dashed border-white/10 bg-[#141414]/70 p-6 text-center text-sm text-[#979797]">
-          Nenhuma tarefa pendente. Os agentes estão prontos para agir.
+          Nenhuma tarefa pendente. Os Criativos estão prontos para agir.
         </div>
       ) : (
         <div className="space-y-2">

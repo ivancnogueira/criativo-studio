@@ -84,7 +84,7 @@ export function ApiKeyRequestCard({
       bloco.estado?.values &&
       typeof bloco.estado.values === "object" &&
       (bloco.estado.values as { scope?: string }).scope === "agente_especifico"
-        ? "Exclusiva do agente"
+        ? "Exclusiva do Criativo"
         : "Cofre global";
 
     return (
@@ -121,7 +121,7 @@ export function ApiKeyRequestCard({
           <span className="text-[14px] font-semibold font-terminal text-[#FFFFFF]">{keyName}</span>
         </div>
         <span className="rounded-full bg-[#242424] px-2 py-1 text-[12px] font-normal text-[#979797]">
-          {scope === "agente_especifico" ? "Exclusiva do agente" : "Cofre global"}
+          {scope === "agente_especifico" ? "Exclusiva do Criativo" : "Cofre global"}
         </span>
       </div>
 
@@ -153,7 +153,7 @@ export function ApiKeyRequestCard({
               : "bg-[#242424] hover:bg-[#2A2A2A] text-[#DCDCDC] border-[rgba(255,255,255,0.06)]"
           }`}
         >
-          Cofre global (todos os agentes)
+          Cofre global (todos os Criativos)
         </button>
         <button
           type="button"
@@ -171,7 +171,7 @@ export function ApiKeyRequestCard({
               : "bg-[#242424] hover:bg-[#2A2A2A] text-[#DCDCDC] border-[rgba(255,255,255,0.06)]"
           }`}
         >
-          Exclusiva deste agente
+          Exclusiva deste Criativo
         </button>
       </div>
 

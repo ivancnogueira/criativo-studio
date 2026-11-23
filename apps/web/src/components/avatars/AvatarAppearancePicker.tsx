@@ -117,7 +117,7 @@ export const AvatarAppearancePicker: React.FC<MascoteAppearancePickerProps> = ({
   const handleGenerateAi = async () => {
     const promptText =
       aiPrompt.trim() ||
-      `Avatar carismático para o agente ${agentName || "especialista criativo"}`;
+      `Avatar carismático para o Criativo ${agentName || "especialista criativo"}`;
     setGenerating(true);
     setMediaFeedback(null);
     try {

@@ -106,7 +106,7 @@ export function ChatLiveActivityAndCards({
           </div>
         )}
 
-        {/* Feedback ao vivo estilo Criativo Studio enquanto o agente executa */}
+        {/* Feedback ao vivo estilo CriativoOS enquanto o agente executa */}
         {isWorking && (() => {
           const liveSenderAgent =
             mode === "channel" && liveRun?.agenteId

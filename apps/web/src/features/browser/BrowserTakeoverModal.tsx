@@ -74,7 +74,7 @@ export function BrowserTakeoverCard({
       </div>
 
       <p className="text-[14px] text-[#DCDCDC]">
-        O agente pausou para você concluir a autenticação nesta página.
+        O Criativo pausou para você concluir a autenticação nesta página.
       </p>
 
       {previewDataUrl && previewDataUrl.startsWith("data:image/") && (
@@ -454,7 +454,7 @@ export function BrowserSecretCard({
               Credencial segura — {request.host}
             </p>
             <p className="text-[12px] text-[#979797]">
-              Autorize o preenchimento direto em {request.host} sem revelar o segredo ao agente.
+              Autorize o preenchimento direto em {request.host} sem revelar o segredo ao Criativo.
             </p>
           </div>
         </div>

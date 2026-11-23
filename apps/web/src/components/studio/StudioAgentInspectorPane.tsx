@@ -118,7 +118,7 @@ export function StudioAgentInspectorPane({ ctx }: { ctx: StudioUiCtx }) {
                         tabs={browserTabs}
                         activeTabId={activeBrowserTabId}
                         framesByTab={browserFramesByTab}
-                        agentName={activeAgent?.nome ?? "Agente"}
+                        agentName={activeAgent?.nome ?? "Criativo"}
                         agentAvatar={getAgentAvatar(activeAgent)}
                         agentAvatarShape={getAgentAvatar(activeAgent).shape}
                         agentAvatarColor={getAgentAvatar(activeAgent).color}

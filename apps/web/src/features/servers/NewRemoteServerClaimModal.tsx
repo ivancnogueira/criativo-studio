@@ -165,7 +165,7 @@ export const NewRemoteServerClaimModal: React.FC<NewRemoteServerClaimModalProps>
           <X className="w-4 h-4" />
         </button>
 
-        {/* Logo oficial Criativo AI Studio */}
+        {/* Logo oficial CriativoOS */}
         <div className="flex flex-col items-center text-center pt-1">
           <div className="w-14 h-14 rounded-2xl bg-[#141414] border border-white/[0.1] flex items-center justify-center shadow-lg">
             <MascoteAvatar shape="hex" color="#31cf76" size={40} />
@@ -174,7 +174,7 @@ export const NewRemoteServerClaimModal: React.FC<NewRemoteServerClaimModalProps>
             Novo servidor em outro computador
           </h2>
           <p className="mt-2 text-[13.5px] text-[#9A9A9A] max-w-[380px] leading-relaxed">
-            Execute este comando em um computador Linux ou VPS que seja seu. Ele instala o Criativo AI Studio e adiciona o servidor a esta conta.
+            Execute este comando em um computador Linux ou VPS que seja seu. Ele instala o CriativoOS e adiciona o servidor a esta conta.
           </p>
         </div>
 
@@ -235,7 +235,7 @@ export const NewRemoteServerClaimModal: React.FC<NewRemoteServerClaimModalProps>
                 ) : (
                   <Bot className="w-3.5 h-3.5" />
                 )}
-                <span>{copiedMode === "agent" ? "Copiado para IA!" : "Copiar para um agente de IA"}</span>
+                <span>{copiedMode === "agent" ? "Copiado para IA!" : "Copiar para um Criativo de IA"}</span>
               </button>
               <button
                 type="button"
@@ -343,14 +343,14 @@ export const NewRemoteServerClaimModal: React.FC<NewRemoteServerClaimModalProps>
             onClick={() => {
               const prompt =
                 claim?.command_agent_prompt ??
-                `Quero instalar e parear um novo servidor Criativo AI Studio em minha VPS Linux${
+                `Quero instalar e parear um novo servidor CriativoOS em minha VPS Linux${
                   serverName ? ` chamada "${serverName}"` : ""
                 }. Gere ou utilize o comando seguro CRIATIVO_CLAIM e me guie passo a passo.`;
               onConfigureWithAgent(prompt, claim);
             }}
             className="w-full py-2.5 rounded-xl bg-[#F0F0F0] hover:bg-white text-[#0D0D0D] text-[13.5px] font-semibold transition-colors disabled:opacity-40"
           >
-            Configurar com um agente
+            Configurar com um Criativo
           </button>
 
           <button

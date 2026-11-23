@@ -1,4 +1,4 @@
-# Criativo AI Studio Desktop (`@criativo/desktop`)
+# CriativoOS Desktop (`@criativo/desktop`)
 
 Aplicativo desktop instalável para **Windows (`.exe` NSIS)**, **macOS (`.dmg` universal)** e **Linux (`.AppImage`)**.
 

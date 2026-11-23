@@ -392,7 +392,7 @@ export async function tryHandleAgentsCrudRoutes(ctx: StudioRouteContext): Promis
     const rawPromptBase =
       typeof body.prompt_base === "string" && body.prompt_base.trim().length > 0
         ? body.prompt_base.trim()
-        : `Você é ${nome}, agente customizado do Criativo AI Studio para [NOME_DA_MARCA].`;
+        : `Você é ${nome}, agente customizado do CriativoOS para [NOME_DA_MARCA].`;
     const resolvedPromptBase = hasBrand
       ? interpolateBrandPlaceholders(rawPromptBase, currentBrand)
       : rawPromptBase;

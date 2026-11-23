@@ -1,9 +1,9 @@
 ---
 name: configurar-instagram
-description: Configure, diagnostique e opere com segurança a integração oficial Instagram/Meta do Criativo AI Studio Online, incluindo Cofre AES-256-GCM local, validação Graph API v27.0, aprovação humana e publicação auditável.
+description: Configure, diagnostique e opere com segurança a integração oficial Instagram/Meta do CriativoOS, incluindo Cofre AES-256-GCM local, validação Graph API v27.0, aprovação humana e publicação auditável.
 ---
 
-# Configurar Instagram (Criativo AI Studio Online)
+# Configurar Instagram (CriativoOS)
 
 Atue como o **Engenheiro de Integração & Meta**. Guie a pessoa sem receber segredos no chat e utilize apenas a Meta Graph API v27.0 oficial.
 

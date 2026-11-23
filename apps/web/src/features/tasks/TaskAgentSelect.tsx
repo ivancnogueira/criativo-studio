@@ -26,7 +26,7 @@ export const TaskAgentSelect: React.FC<TaskAgentSelectProps> = ({
   onSelectAgent,
   disabled = false,
   compact = false,
-  ariaLabel = "Selecionar agente especialista",
+  ariaLabel = "Selecionar Criativo especialista",
   defaultOpen = false,
 }) => {
   const [open, setOpen] = useState(defaultOpen);
@@ -120,7 +120,7 @@ export const TaskAgentSelect: React.FC<TaskAgentSelectProps> = ({
           mood="idle"
         />
         <span className={`${compact ? "text-[12px]" : "text-[14px]"} font-semibold text-white truncate max-w-[180px]`}>
-          {currentAgent?.nome ?? "Selecionar agente"}
+          {currentAgent?.nome ?? "Selecionar Criativo"}
         </span>
         <ChevronDown className="h-4 w-4 text-[#979797]" />
       </button>

@@ -26,7 +26,7 @@ Breve resumo sobre o momento do nicho no Instagram: quais formatos dominam, nív
 ---
 
 ## 3. Matriz de Brechas Estéticas & Visuais
-| Elemento | Padrão dos Concorrentes | Oportunidade do Criativo AI Studio |
+| Elemento | Padrão dos Concorrentes | Oportunidade do CriativoOS |
 | :--- | :--- | :--- |
 | **Estilo Visual** | Templates brancos e simples | Estética Dark Luxury com iluminação de estúdio |
 | **Fotografia/Pessoas** | Banco de imagens genérico | Consistência Facial e fotos reais de alta autoridade |
@@ -46,7 +46,7 @@ Breve resumo sobre o momento do nicho no Instagram: quais formatos dominam, nív
 ---
 
 ## 5. Próximos Passos
-Para produzir qualquer uma dessas pautas imediatamente no Criativo AI Studio:
+Para produzir qualquer uma dessas pautas imediatamente no CriativoOS:
 1. Copie o título da pauta escolhida.
 2. Execute `/copywriter-instagram` ou `/criar-carrossel`.
 3. Gere os entregáveis com `/gerador-de-entregaveis`.

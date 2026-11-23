@@ -1,5 +1,5 @@
 /**
- * Contratos compartilhados do Criativo AI Studio Online.
+ * Contratos compartilhados do CriativoOS.
  * Barrel principal reexportando os modulos de dominio para total retrocompatibilidade.
  */
 

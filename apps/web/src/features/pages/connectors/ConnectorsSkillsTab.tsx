@@ -58,7 +58,7 @@ export function ConnectorsSkillsTab({
                       </div>
                       <p className="text-[12px] text-[#979797]">{up.descricao}</p>
                       <p className="text-[11px] text-[#787878]">
-                        Agentes: {up.agentes.join(", ")}
+                        Criativos: {up.agentes.join(", ")}
                       </p>
                     </div>
                     <div className="flex items-center justify-between gap-2 pt-2 border-t border-white/[0.05]">
@@ -68,7 +68,7 @@ export function ConnectorsSkillsTab({
                           type="button"
                           onClick={async () => {
                             await onInstallUpgrade(up.id);
-                            showToast(`${up.nome} desbloqueado nos seus agentes!`);
+                            showToast(`${up.nome} desbloqueado nos seus Criativos!`);
                           }}
                           className="rounded-lg bg-[#F0F0F0] hover:bg-white text-[#141414] px-3 py-1 text-[11.5px] font-semibold shrink-0"
                         >
@@ -99,7 +99,7 @@ export function ConnectorsSkillsTab({
               <div className="flex items-center gap-1.5">
                 {[
                   { id: "todas", rotulo: "Todas" },
-                  { id: "criativo", rotulo: "Criativo AI Studio" },
+                  { id: "criativo", rotulo: "CriativoOS" },
                   { id: "sistema", rotulo: "Engenharia & GSD" },
                 ].map((f) => (
                   <button
@@ -145,7 +145,7 @@ export function ConnectorsSkillsTab({
                     <div className="flex items-center justify-between gap-2 pt-2 border-t border-white/[0.05] text-[11px]">
                       <span className="text-[#787878] truncate">
                         {sk.agentes_vinculados.length > 0
-                          ? `Agentes: ${sk.agentes_vinculados.join(", ")}`
+                          ? `Criativos: ${sk.agentes_vinculados.join(", ")}`
                           : sk.id}
                       </span>
                       <button

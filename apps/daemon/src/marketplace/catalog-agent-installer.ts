@@ -325,7 +325,7 @@ export function catalog_exportAgentTemplate(
       name: row.nome,
       role: row.papel,
       tagline: row.papel,
-      description: `Agente exportado do Criativo AI Studio (${row.nome}).`,
+      description: `Agente exportado do CriativoOS (${row.nome}).`,
       category: typeof cfg.categoria_loja === "string" ? cfg.categoria_loja : "Operações",
       source: "public",
       verified: false,

@@ -213,7 +213,7 @@ export function SharedTablesModal({
                   Nenhuma tabela SQL compartilhada encontrada
                 </h3>
                 <p className="max-w-md text-[14px] font-normal leading-[1.43] text-[#979797]">
-                  Peça ao agente para estruturar uma tabela de dados durante a conversa. Os registros aparecerão aqui para consulta e exportação.
+                  Peça ao Criativo para estruturar uma tabela de dados durante a conversa. Os registros aparecerão aqui para consulta e exportação.
                 </p>
               </div>
             ) : readError ? (

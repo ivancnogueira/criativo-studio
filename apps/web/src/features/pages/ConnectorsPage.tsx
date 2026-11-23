@@ -73,7 +73,7 @@ export const ConnectorsPage: React.FC<ConnectorsPageProps> = (props) => {
             <Plug className="h-3 w-3 text-[#141414]" />
           </div>
           <span className="text-[13px] font-semibold text-white truncate">
-            Criativo AI Studio
+            CriativoOS
           </span>
         </div>
 

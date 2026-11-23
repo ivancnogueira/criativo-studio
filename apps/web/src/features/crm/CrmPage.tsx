@@ -72,7 +72,7 @@ export const CrmPage: React.FC<{
           <div>
             <h1 className="text-[20px] font-semibold">CRM Leve & Funil</h1>
             <p className="text-[12px] text-[#979797]">
-              Módulo opcional para acompanhar leads dos canais; agentes apenas propõem alterações via `crm_propose`.
+              Módulo opcional para acompanhar leads dos canais; Criativos apenas propõem alterações via `crm_propose`.
             </p>
           </div>
         </div>
@@ -92,7 +92,7 @@ export const CrmPage: React.FC<{
       {pendingProposals.length > 0 && (
         <div className="space-y-2">
           <h2 className="text-[13px] font-semibold text-[#FF9412]">
-            Propostas de Agentes aguardando aprovação ({pendingProposals.length})
+            Propostas de Criativos aguardando aprovação ({pendingProposals.length})
           </h2>
           {pendingProposals.map((p) => (
             <div

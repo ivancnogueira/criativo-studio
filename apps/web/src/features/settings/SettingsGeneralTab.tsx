@@ -152,7 +152,7 @@ export const SettingsGeneralTab: React.FC<SettingsGeneralTabProps> = ({
 
       <ToggleRow
         label="Exibir passos das ferramentas"
-        description="Mostra os cards colapsáveis de etapas executadas pelos agentes durante o turno."
+        description="Mostra os cards colapsáveis de etapas executadas pelos Criativos durante o turno."
         checked={geral.exibir_passos_agente}
         onChange={(next) => onChange({ ...geral, exibir_passos_agente: next })}
       />
@@ -206,7 +206,7 @@ export const SettingsGeneralTab: React.FC<SettingsGeneralTabProps> = ({
           <div className="flex items-center justify-between gap-2">
             <div>
               <div className="text-[13px] font-semibold text-white">
-                Agentes padrão excluídos ({deletedNativeAgents.length})
+                Criativos padrão excluídos ({deletedNativeAgents.length})
               </div>
               <p className="text-[11.5px] text-[#979797]">
                 Estes especialistas nativos foram removidos por você e não voltarão automaticamente. Restaure quando desejar.

@@ -72,13 +72,13 @@ export function MarketplaceCatalogContent({
             <header className="flex flex-wrap items-center justify-between gap-4">
               <div>
                 <h1 className="text-[28px] font-semibold leading-[1.2] text-[#F0F0F0]">
-                  {tab === "apps" ? "Apps" : tab === "agents" ? "Agentes" : "Habilidades"}
+                  {tab === "apps" ? "Apps" : tab === "agents" ? "Criativos" : "Habilidades"}
                 </h1>
                 <p className="mt-1 text-[14px] text-[#979797]">
                   {tab === "apps"
                     ? "Conecte serviços criativos, ferramentas MCP e integrações nativas do estúdio."
                     : tab === "agents"
-                      ? "Instale especialistas em 1 clique ou importe agentes públicos de repositórios."
+                      ? "Instale especialistas em 1 clique ou importe Criativos públicos de repositórios."
                       : "Gerencie instruções reutilizáveis (SKILL.md) e vincule aos seus agentes."}
                 </p>
               </div>
@@ -145,7 +145,7 @@ export function MarketplaceCatalogContent({
                 <div className="flex items-start gap-2 rounded-[10px] border border-[#FF9412]/40 bg-[#FF9412]/10 p-3 text-[12px] text-[#FF9412]">
                   <AlertTriangle size={16} className="mt-0.5 shrink-0" />
                   <span>
-                    Origem externa do GitHub: este pacote não foi auditado pela equipe do estúdio. Revise as instruções antes de vincular aos seus agentes.
+                    Origem externa do GitHub: este pacote não foi auditado pela equipe do estúdio. Revise as instruções antes de vincular aos seus Criativos.
                   </span>
                 </div>
                 {githubLoading ? (
@@ -174,7 +174,7 @@ export function MarketplaceCatalogContent({
                           }
                           className="shrink-0 rounded-full bg-[#F0F0F0] px-3 py-1.5 text-[12px] font-semibold text-[#141414]"
                         >
-                          {githubPreview.kind === "agents" ? "Instalar agente" : "Instalar habilidade"}
+                          {githubPreview.kind === "agents" ? "Instalar Criativo" : "Instalar habilidade"}
                         </button>
                       </div>
                     ))}
@@ -326,7 +326,7 @@ export function MarketplaceCatalogContent({
                         onClick={() => void handleInstallAgentTemplate(pkg)}
                         className="rounded-full bg-[#F0F0F0] px-4 py-1.5 text-[14px] font-semibold text-[#141414] hover:bg-white"
                       >
-                        Instalar agente
+                        Instalar Criativo
                       </button>
                     </div>
                   ))}
@@ -335,7 +335,7 @@ export function MarketplaceCatalogContent({
                 {agentes.length > 0 && (
                   <section className="space-y-3 border-t border-[#2A2A2A] pt-6">
                     <h2 className="text-[20px] font-semibold text-[#F0F0F0]">
-                      Agentes instalados no estúdio
+                      Criativos instalados no estúdio
                     </h2>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                       {agentes.map((ag) => (
@@ -355,7 +355,7 @@ export function MarketplaceCatalogContent({
                               onClick={() => void daemonApi.duplicateLojaAgent(ag.agente_id).then(() => onRefreshStudio?.())}
                               className="inline-flex items-center gap-1 rounded-full border border-[#2A2A2A] bg-[#242424] px-3 py-1 text-[12px] font-semibold text-[#F0F0F0]"
                             >
-                              <Copy size={12} /> Duplicar agente
+                              <Copy size={12} /> Duplicar Criativo
                             </button>
                             <button
                               type="button"
@@ -366,7 +366,7 @@ export function MarketplaceCatalogContent({
                               }
                               className="inline-flex items-center gap-1 rounded-full border border-[#2A2A2A] bg-[#242424] px-3 py-1 text-[12px] font-semibold text-[#F0F0F0]"
                             >
-                              <Download size={12} /> Exportar agente
+                              <Download size={12} /> Exportar Criativo
                             </button>
                           </div>
                         </div>
@@ -408,7 +408,7 @@ export function MarketplaceCatalogContent({
                             onClick={() => setBatchSkillTarget(sk)}
                             className="rounded-full border border-[#2A2A2A] bg-[#242424] px-3 py-1.5 text-[12px] font-semibold text-[#F0F0F0] hover:bg-[#2A2A2A]"
                           >
-                            Adicionar aos agentes
+                            Adicionar aos Criativos
                           </button>
                           {sk.source !== "nativa" && (
                             <button

@@ -113,14 +113,14 @@ export function InspectorAgentConfigTab({
                   <input
                     id="inspector-agent-name"
                     name="inspector_agent_name"
-                    aria-label="Nome do agente"
+                    aria-label="Nome do Criativo"
                     type="text"
                     value={nomeDraft}
                     onChange={(e) => setNomeDraft(e.target.value)}
                     className="w-full rounded-lg bg-[#141414] border border-white/10 px-2.5 py-1 text-[12.5px] font-semibold text-white focus:outline-none focus:border-white/30"
                   />
                   <input
-                    aria-label="Título ou papel do agente"
+                    aria-label="Título ou papel do Criativo"
                     type="text"
                     value={papelDraft}
                     onChange={(e) => setPapelDraft(e.target.value)}
@@ -235,7 +235,7 @@ export function InspectorAgentConfigTab({
                           setChatColorDraft(null);
                           void onSaveAgentSettings(agente.agente_id, { chat_color: null });
                         }}
-                        ariaLabelPrefix="Cor dos balões do agente"
+                        ariaLabelPrefix="Cor dos balões do Criativo"
                       />
                     </div>
                   )}
@@ -406,7 +406,7 @@ export function InspectorAgentConfigTab({
                     <span>Permissões</span>
                   </div>
                   <CarbonSelect
-                    ariaLabel="Nível de acesso do agente"
+                    ariaLabel="Nível de acesso do Criativo"
                     value={permissionDraft}
                     options={PERMISSION_OPTIONS}
                     onChange={handlePermissionPick}
@@ -501,7 +501,7 @@ export function InspectorAgentConfigTab({
                   ))}
                 </div>
                 <p className="text-[11px] text-[#787878] leading-snug">
-                  Esta escolha vale só para você neste servidor. Se o servidor estiver silenciado, este agente também fica em silêncio.
+                  Esta escolha vale só para você neste servidor. Se o servidor estiver silenciado, este Criativo também fica em silêncio.
                 </p>
               </div>
             </div>
@@ -511,7 +511,7 @@ export function InspectorAgentConfigTab({
               disabled={saving}
               className="studio-btn-primary w-full py-2 text-[12.5px]"
             >
-              {saving ? "Aplicando..." : "Salvar identidade do agente"}
+              {saving ? "Aplicando..." : "Salvar identidade do Criativo"}
             </button>
           </form>
 

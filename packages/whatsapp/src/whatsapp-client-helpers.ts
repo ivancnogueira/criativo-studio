@@ -56,7 +56,7 @@ export const WA_ECHO_TTL_MS = 20 * 60_000;
 export const WA_ECHO_MAX_ENTRIES = 5_000;
 export const WA_ACK_WAIT_MS = 10_000;
 export const WA_MESSAGE_ACK_EVENT = "CB:ack,class:message";
-export const WA_QR_BROWSER: [string, string, string] = ["Criativo Studio", "Chrome", "1.0.0"];
+export const WA_QR_BROWSER: [string, string, string] = ["CriativoOS", "Chrome", "1.0.0"];
 export const WA_PAIRING_CODE_BROWSER: [string, string, string] = ["Chrome (Linux)", "", ""];
 
 export type SocketFactory = (

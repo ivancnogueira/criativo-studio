@@ -87,7 +87,7 @@ export const DEFAULT_FRONTEND_USER_SETTINGS: StudioUserSettings = {
   },
   aparencia: {
     tema: "carbon_dark",
-    cor_acento: "#007CF7",
+    cor_acento: "#B9FC01",
     cor_balao_usuario: "#2A2A2A",
     baloes_solidos: true,
     escala: 100,
@@ -141,10 +141,17 @@ export function applyUserSettingsToDocument(settings: StudioUserSettings): void 
     root.style.setProperty("--studio-bg-surface", "#212121");
   }
 
-  const accentHex = /^#[0-9a-fA-F]{6}$/.test(aparencia.cor_acento ?? "")
-    ? aparencia.cor_acento
-    : "#007CF7";
+  const defaultAccent = theme === "light" ? "#0031CC" : "#B9FC01";
+  const rawAccent = aparencia.cor_acento?.trim() ?? "";
+  const isValidHex = /^#[0-9a-fA-F]{6}$/.test(rawAccent);
+  const accentHex =
+    isValidHex && !(theme === "light" && rawAccent.toUpperCase() === "#B9FC01")
+      ? rawAccent
+      : defaultAccent;
+  const textOnAccent = accentHex.toUpperCase() === "#B9FC01" ? "#0D0D0D" : "#FFFFFF";
   root.style.setProperty("--studio-accent", accentHex);
+  root.style.setProperty("--studio-accent-text", accentHex);
+  root.style.setProperty("--studio-text-on-accent", textOnAccent);
 
   const scale = ALLOWED_SCALES.has(Number(aparencia.escala))
     ? Number(aparencia.escala)
@@ -182,7 +189,7 @@ const NAV_GROUPS: Array<{
       { id: "geral", label: "Geral", labelKey: "settings.tab.geral", Icon: Sliders },
       { id: "aparencia", label: "Aparência", labelKey: "settings.tab.aparencia", Icon: Palette },
       { id: "comportamento", label: "Comportamento", labelKey: "settings.tab.comportamento", Icon: Zap },
-      { id: "dock", label: "Dock de agentes", labelKey: "settings.tab.dock", Icon: PanelRight },
+      { id: "dock", label: "Dock de Criativos", labelKey: "settings.tab.dock", Icon: PanelRight },
       { id: "navegador", label: "Navegador & Proxies", labelKey: "settings.tab.navegador", Icon: Globe },
     ],
   },

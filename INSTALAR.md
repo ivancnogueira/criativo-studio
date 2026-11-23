@@ -1,6 +1,6 @@
-# Instalação do Criativo AI Studio Online
+# Instalação do CriativoOS
 
-O **Criativo AI Studio Online** reúne um **Daemon + Cockpit Web 24/7 (`http://127.0.0.1:3000`)** com 9 agentes base no pacote inicial (e upgrades modulares opcionais em etapas) que também se integram diretamente ao seu agente de código: **Antigravity**, **Claude Code** ou **Codex**. Você instala uma vez e passa a operar tanto pelo Cockpit Web / WhatsApp quanto pelos comandos de barra (`/planejar-conteudo`, `/criar-carrossel`, `/criar-post-individual`, `/configurar-instagram`, etc.).
+O **CriativoOS** reúne um **Daemon + Cockpit Web 24/7 (`http://127.0.0.1:3000`)** com 9 agentes base no pacote inicial (e upgrades modulares opcionais em etapas) que também se integram diretamente ao seu agente de código: **Antigravity**, **Claude Code** ou **Codex**. Você instala uma vez e passa a operar tanto pelo Cockpit Web / WhatsApp quanto pelos comandos de barra (`/planejar-conteudo`, `/criar-carrossel`, `/criar-post-individual`, `/configurar-instagram`, etc.).
 
 ## Pré-requisitos
 

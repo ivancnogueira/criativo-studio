@@ -241,7 +241,7 @@ describe("Fase 20 — Backend, Gemini Schemas, Baileys, CDP Nativo, ACP, Marca &
     const dir = makeTempDir("p20-upd-");
     writeFileSync(
       join(dir, "produto.json"),
-      JSON.stringify({ nome: "Criativo AI Studio", versao: "1.0.0" }),
+      JSON.stringify({ nome: "CriativoOS", versao: "1.0.0" }),
       "utf8"
     );
     const paths = makeTestPaths(dir);

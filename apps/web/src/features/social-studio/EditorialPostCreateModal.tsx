@@ -139,9 +139,9 @@ export const EditorialPostCreateModal: React.FC<EditorialPostCreateModalProps> =
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-[#DCDCDC]">Agente responsável</label>
+              <label className="mb-1 block text-xs font-medium text-[#DCDCDC]">Criativo responsável</label>
               <CarbonSelect
-                ariaLabel="Agente responsável pela pauta"
+                ariaLabel="Criativo responsável pela pauta"
                 value={agenteId}
                 onChange={onChangeAgenteId}
                 options={agentes.map((ag) => ({

@@ -24,7 +24,7 @@ describe("Fase 24 — UI: Logo Servidor Remoto, Cotas Auto, Dock Settings & Sele
     await vite.close();
   });
 
-  it("1. (SRV24-01) NewRemoteServerClaimModal exibe logo oficial Criativo Studio em vez de pontos pretos", async () => {
+  it("1. (SRV24-01) NewRemoteServerClaimModal exibe logo oficial CriativoOS em vez de pontos pretos", async () => {
     const { NewRemoteServerClaimModal } = await vite.ssrLoadModule(
       "/src/features/servers/ServerModals.tsx",
     );
@@ -45,7 +45,7 @@ describe("Fase 24 — UI: Logo Servidor Remoto, Cotas Auto, Dock Settings & Sele
           claim_id: "clm_logo_test",
           server_name: "VPS Cliente",
           command_bash: "echo CRIATIVO_CLAIM=CRV_demo",
-          command_agent_prompt: "Instale o Criativo Studio",
+          command_agent_prompt: "Instale o CriativoOS",
           expires_at: new Date(Date.now() + 900_000).toISOString(),
           ttl_seconds: 900,
           status: "pending",
@@ -144,7 +144,7 @@ describe("Fase 24 — UI: Logo Servidor Remoto, Cotas Auto, Dock Settings & Sele
 
     for (const expected of [
       "Dock de Criativos",
-      "Mostrar o dock de agentes",
+      "Mostrar o dock de Criativos",
       "Posição",
       "Tela",
       "Borda da tela",
@@ -152,8 +152,8 @@ describe("Fase 24 — UI: Logo Servidor Remoto, Cotas Auto, Dock Settings & Sele
       "Ocultar quando não estiver em uso",
       "Mostrar uma faixa na borda",
       "Mostrar trabalho concluído",
-      "Mostrar agentes com novidades",
-      "Agentes no dock",
+      "Mostrar Criativos com novidades",
+      "Criativos no dock",
       "Estrategista Editorial",
       "Copywriter Sênior",
       "Cada servidor tem seu próprio dock",
@@ -167,8 +167,8 @@ describe("Fase 24 — UI: Logo Servidor Remoto, Cotas Auto, Dock Settings & Sele
         initialAgentes: sampleAgents,
       }),
     );
-    assert.match(floatingHtml, /Adicionar agentes ao dock/);
-    assert.doesNotMatch(floatingHtml, /Criar novo agente/);
+    assert.match(floatingHtml, /Adicionar Criativos ao dock/);
+    assert.doesNotMatch(floatingHtml, /Criar novo Criativo/);
 
     const drawerHtml = renderToStaticMarkup(
       React.createElement(QuickAgentDrawer, {
@@ -180,8 +180,8 @@ describe("Fase 24 — UI: Logo Servidor Remoto, Cotas Auto, Dock Settings & Sele
         onToggleAgentInDock: async () => {},
       }),
     );
-    assert.match(drawerHtml, /Adicionar agentes ao dock/);
-    assert.doesNotMatch(drawerHtml, /Criar novo agente/);
+    assert.match(drawerHtml, /Adicionar Criativos ao dock/);
+    assert.doesNotMatch(drawerHtml, /Criar novo Criativo/);
   });
 
   it("4. (AVAT24-01) RightInspectorPanel inicia com seletor de avatar aberto por padrão e miniaturas individuais ampliadas", async () => {
@@ -315,7 +315,7 @@ describe("Fase 24 — UI: Logo Servidor Remoto, Cotas Auto, Dock Settings & Sele
     );
     assert.match(sidebarHtml, /data-vps-assistant-card="true"/);
     assert.match(sidebarHtml, /Especialista em Servidor VPS/);
-    assert.match(sidebarHtml, /Roster \(1 Agentes\)/);
+    assert.match(sidebarHtml, /Roster \(1 Criativos\)/);
   });
 
   it("6. (DOCK28-01 & QUOTA28-03) Protege WebSocket contra close antigo, sincroniza servidor ativo no Dock, atualiza cotas em provider:updated e evita colisão na porta 1455", () => {

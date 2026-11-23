@@ -114,14 +114,14 @@ const EFFORT_LABELS: Record<NivelEsforco, string> = {
 };
 
 /**
- * Construtor 'Novo agente' nativo do Criativo Studio.
+ * Construtor 'Novo agente' nativo do CriativoOS.
  */
 export const NewAgentScreen: React.FC<NewAgentScreenProps> = ({
   provedores,
   onCreateAgent,
   onOpenConnectors,
 }) => {
-  const [nome, setNome] = useState("Novo agente");
+  const [nome, setNome] = useState("Novo Criativo");
   const [prompt, setPrompt] = useState("");
   const [color, setColor] = useState("#38bdf8");
   const [shape, setShape] = useState<AvatarShape>("rounded_square");
@@ -144,7 +144,7 @@ export const NewAgentScreen: React.FC<NewAgentScreenProps> = ({
         nome: nome.trim(),
         prompt_base:
           prompt.trim() ||
-          `Atue como ${nome.trim()} do Criativo AI Studio auxiliando [NOME_DA_MARCA] em conteúdo estratégico.`,
+          `Atue como ${nome.trim()} do CriativoOS auxiliando [NOME_DA_MARCA] em conteúdo estratégico.`,
         papel: prompt.trim().slice(0, 96) || "Especialista customizado do estúdio",
         modelo_padrao: modelo,
         avatar_shape: shape,
@@ -205,12 +205,12 @@ export const NewAgentScreen: React.FC<NewAgentScreenProps> = ({
             <input
               id="new-agent-name"
               name="agent_name"
-              aria-label="Nome do agente"
+              aria-label="Nome do Criativo"
               required
               type="text"
               value={nome}
               onChange={(e) => setNome(e.target.value)}
-              placeholder="Novo agente"
+              placeholder="Novo Criativo"
               className="w-full rounded-xl bg-[#212121] border border-white/10 px-3.5 py-2.5 text-[13px] text-white placeholder-[#6A6A6A] focus:outline-none focus:border-white/30"
             />
           </div>
@@ -220,12 +220,12 @@ export const NewAgentScreen: React.FC<NewAgentScreenProps> = ({
               htmlFor="new-agent-prompt"
               className="block text-[11.5px] font-medium text-[#979797] mb-1.5"
             >
-              Em que este agente deve ajudar?
+              Em que este Criativo deve ajudar?
             </label>
             <textarea
               id="new-agent-prompt"
               name="agent_prompt"
-              aria-label="Objetivo e instruções do agente"
+              aria-label="Objetivo e instruções do Criativo"
               rows={3}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
@@ -256,7 +256,7 @@ export const NewAgentScreen: React.FC<NewAgentScreenProps> = ({
               disabled={submitting || !nome.trim()}
               className="studio-btn-primary px-6 py-2 text-[13px] shadow-md disabled:opacity-50"
             >
-              {submitting ? "Criando..." : "Criar agente"}
+              {submitting ? "Criando..." : "Criar Criativo"}
             </button>
           </div>
         </form>

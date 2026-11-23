@@ -317,7 +317,7 @@ export function WhatsAppIntegrationPanel(props: WhatsAppIntegrationPanelProps) {
                   )}
                 </div>
                 <p className="text-[11.5px] leading-relaxed text-[#D7F5E3]">
-                  Modo Conversa Interna ativo: o agente monitora e responde apenas às mensagens que
+                  Modo Conversa Interna ativo: o Criativo monitora e responde apenas às mensagens que
                   você enviar na conversa consigo mesmo (&lsquo;Você / Mensagens salvas&rsquo;).
                   Conversas com outras pessoas ou clientes não recebem resposta automática, salvo
                   contatos/grupos que você autorizar abaixo.
@@ -515,10 +515,10 @@ export function WhatsAppIntegrationPanel(props: WhatsAppIntegrationPanelProps) {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div className="space-y-1">
             <span className="block text-[14px] font-semibold text-[#F0F0F0]">
-              Agente Orquestrador
+              Criativo Orquestrador
             </span>
             <CarbonSelect
-              ariaLabel="Agente orquestrador do WhatsApp"
+              ariaLabel="Criativo orquestrador do WhatsApp"
               value={activeAccount.agente_orquestrador_id ?? "estrategista"}
               options={orchestratorOptions}
               onChange={(agenteId) =>

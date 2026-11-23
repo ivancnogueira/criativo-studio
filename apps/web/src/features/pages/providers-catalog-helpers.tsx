@@ -116,5 +116,5 @@ export function browserConnectLabel(prov: ProviderName): string {
 }
 
 /**
- * Visual Master/Detail de Provedores de IA do Criativo AI Studio.
+ * Visual Master/Detail de Provedores de IA do CriativoOS.
  */

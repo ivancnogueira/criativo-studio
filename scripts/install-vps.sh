@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Instalador automatizado do Criativo AI Studio Online para Ubuntu 24.04 LTS / Debian
+# Instalador automatizado do CriativoOS para Ubuntu 24.04 LTS / Debian
 # Uso recomendado: sudo bash scripts/install-vps.sh
 
 APP_USER="criativo"
@@ -53,7 +53,7 @@ fi
 mkdir -p "$APP_DIR" "$DATA_DIR" "$ENV_DIR" /run/criativo
 chown -R "$APP_USER:$APP_USER" "$DATA_DIR" /run/criativo
 
-echo "==> [4/6] Copiando e compilando Criativo AI Studio Online..."
+echo "==> [4/6] Copiando e compilando CriativoOS..."
 cp -a "$REPO_SOURCE_DIR"/. "$APP_DIR"/
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 

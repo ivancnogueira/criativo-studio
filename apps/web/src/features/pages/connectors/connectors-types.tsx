@@ -154,7 +154,7 @@ export const AgentCustomPicker: React.FC<{
       >
         <span className="flex items-center gap-2 truncate">
           <Bot className="h-3.5 w-3.5 text-[#31CF76]" />
-          <span className="truncate">{current ? current.nome : selectedId || "Selecionar agente"}</span>
+          <span className="truncate">{current ? current.nome : selectedId || "Selecionar Criativo"}</span>
         </span>
         <ChevronDown className="h-3.5 w-3.5 text-[#888]" />
       </button>

@@ -495,7 +495,7 @@ export function StudioAgentCenterPane({ ctx }: { ctx: StudioUiCtx }) {
 
                       <LiveVoiceBar
                         active={liveVoiceActive}
-                        agentName={activeAgent?.nome ?? activeChannel?.nome ?? "Agente"}
+                        agentName={activeAgent?.nome ?? activeChannel?.nome ?? "Criativo"}
                         processing={sendingChat || Boolean(activeLiveRun)}
                         lastAssistantReply={
                           activeMessages

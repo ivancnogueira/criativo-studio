@@ -438,7 +438,7 @@ export class AntigravityLiveService {
 
   /**
    * Abre o fluxo oficial Google OAuth no navegador via `antigravity acp --gemini-dir=<pasta_isolada>`
-   * e salva a conta exclusivamente no armazenamento local do Criativo AI Studio.
+   * e salva a conta exclusivamente no armazenamento local do CriativoOS.
    */
   public async connectGoogleViaBrowser(
     label?: string,

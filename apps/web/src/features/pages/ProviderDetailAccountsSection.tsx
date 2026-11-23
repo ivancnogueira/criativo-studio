@@ -90,12 +90,12 @@ export function ProviderDetailAccountsSection({ ctrl }: { ctrl: ProvidersCatalog
                 </span>
               </div>
               <p className="text-[12px] text-[#8E8E93] mt-0.5">
-                {isDefault ? "Padrão para novos agentes · " : ""}
+                {isDefault ? "Padrão para novos Criativos · " : ""}
                 {agentCount === 0
-                  ? "Nenhum agente usa"
+                  ? "Nenhum Criativo usa"
                   : agentCount === 1
-                    ? "1 agente usa"
-                    : `${agentCount} agentes usam`}
+                    ? "1 Criativo usa"
+                    : `${agentCount} Criativos usam`}
               </p>
             </div>
           </div>
@@ -110,7 +110,7 @@ export function ProviderDetailAccountsSection({ ctrl }: { ctrl: ProvidersCatalog
               </h4>
               {isBrowserProvider && contas.length > 0 && (
                 <p className="text-[11.5px] text-[#8E8E93] mt-0.5">
-                  {contas.length} de 10. Os agentes compartilham estas contas.
+                  {contas.length} de 10. Os Criativos compartilham estas contas.
                 </p>
               )}
             </div>
@@ -243,7 +243,7 @@ export function ProviderDetailAccountsSection({ ctrl }: { ctrl: ProvidersCatalog
                           Agrupar contas
                         </div>
                         <p className="text-[11.5px] text-[#8E8E93] mt-0.5 leading-relaxed">
-                          Os agentes usam uma conta até ela chegar perto de um limite de uso e
+                          Os Criativos usam uma conta até ela chegar perto de um limite de uso e
                           depois a conta cujo limite reinicia primeiro.
                         </p>
                       </div>

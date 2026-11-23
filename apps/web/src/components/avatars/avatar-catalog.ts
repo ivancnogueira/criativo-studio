@@ -6,7 +6,7 @@ import type {
 } from "./avatar-types";
 
 /**
- * 17 cores fiéis às duas fileiras do construtor de mascotes do Criativo Studio.
+ * 17 cores fiéis às duas fileiras do construtor de mascotes do CriativoOS.
  */
 export const MASCOT_COLOR_PALETTE: readonly string[] = [
   "#38bdf8",
@@ -183,7 +183,7 @@ export const AVATAR_VARIANTS_BY_STYLE: Record<AvatarStyle, readonly AvatarVarian
     { id: "per_bun", label: "Coque Clássico" },
     { id: "per_ninja", label: "Folha & Faixa" },
     { id: "per_long_dark", label: "Cabelo Longo" },
-    { id: "per_agent", label: "Agente Escuros" },
+    { id: "per_agent", label: "Criativo Escuros" },
     { id: "per_gamer", label: "Headset Gamer" },
     { id: "per_paperbag", label: "Misterioso" },
     { id: "per_senior", label: "Barba & Óculos" },

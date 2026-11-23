@@ -454,7 +454,7 @@ export const SchedulePage: React.FC<SchedulePageProps> = ({
                   Nenhuma rotina agendada ainda
                 </h2>
                 <p className="text-[14px] font-normal text-[#DCDCDC]">
-                  Crie rotinas recorrentes ou webhooks autenticados para seus agentes produzirem relatórios, alertas e entregas automaticamente no calendário.
+                  Crie rotinas recorrentes ou webhooks autenticados para seus Criativos produzirem relatórios, alertas e entregas automaticamente no calendário.
                 </p>
                 <button
                   type="button"
@@ -646,7 +646,7 @@ export const SchedulePage: React.FC<SchedulePageProps> = ({
                                   onClick={() => onOpenAgentChat(routine.owner_id)}
                                   className="rounded-xl border border-white/10 hover:bg-[#242424] px-4 py-2 text-[14px] font-normal text-[#42A0FF] transition-colors"
                                 >
-                                  Abrir agente
+                                  Abrir Criativo
                                 </button>
                               )}
                             </div>

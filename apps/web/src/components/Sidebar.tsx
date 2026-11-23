@@ -82,7 +82,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
 
   return (
     <aside
-      aria-label={`Roster (${permanentAgentsCount} Agentes)`}
+      aria-label={`Roster (${permanentAgentsCount} Criativos)`}
       style={widthPx ? { width: `${widthPx}px` } : { width: "276px" }}
       className="shrink-0 bg-[#1A1A1A] border-r border-white/[0.06] flex flex-col h-full overflow-hidden select-none"
     >
@@ -93,7 +93,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
           <input
             id="sidebar-search-agents"
             name="sidebar_search"
-            aria-label="Buscar agentes e canais"
+            aria-label="Buscar Criativos e canais"
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -109,8 +109,8 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
               ? setMenuOpen((o) => !o)
               : undefined
           }
-          title="Novo agente, equipe ou diretório"
-          aria-label="Criar novo agente, equipe ou diretório"
+          title="Novo Criativo, equipe ou diretório"
+          aria-label="Criar novo Criativo, equipe ou diretório"
           className="h-[32px] w-[32px] rounded-xl flex items-center justify-center text-[#979797] hover:text-white hover:bg-[#242424] transition-colors shrink-0"
         >
           <Plus className="h-4 w-4" />
@@ -169,7 +169,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
                 className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-[12px] text-[#74B9FF] hover:bg-white/[0.06] text-left border-t border-white/[0.06] mt-0.5 pt-2"
               >
                 <RotateCcw className="h-3.5 w-3.5 shrink-0" />
-                <span>Restaurar agentes excluídos ({deletedNativeAgents.length})</span>
+                <span>Restaurar Criativos excluídos ({deletedNativeAgents.length})</span>
               </button>
             )}
           </div>
@@ -181,7 +181,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
         <div className="px-2.5 pb-2">
           <div
             role="tablist"
-            aria-label="Alternar entre agentes e rotinas"
+            aria-label="Alternar entre Criativos e rotinas"
             className="p-1 rounded-xl bg-[#141414] border border-white/[0.06] grid grid-cols-2 gap-1"
           >
             <button

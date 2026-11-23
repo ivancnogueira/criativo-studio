@@ -82,7 +82,7 @@ export function ChatHeaderBar({
               <div className="text-[11px] text-[#6A6A6A] truncate">
                 {mode === "channel"
                   ? canal?.descricao?.trim() ||
-                    `${canal?.membros_agentes.length ?? 0} agentes coordenados`
+                    `${canal?.membros_agentes.length ?? 0} Criativos coordenados`
                   : agente?.papel}
               </div>
             </div>

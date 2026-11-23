@@ -2,7 +2,7 @@
 
 ## Segurança em Primeiro Lugar
 - Nunca cole tokens ou senhas no chat de texto.
-- No Criativo AI Studio Online, salve suas credenciais no **Cockpit Web → Conexões → Apps & Canais → Instagram (Meta Graph API)** (cifradas em AES-256-GCM no SQLite) ou no `.env` local.
+- No CriativoOS, salve suas credenciais no **Cockpit Web → Conexões → Apps & Canais → Instagram (Meta Graph API)** (cifradas em AES-256-GCM no SQLite) ou no `.env` local.
 
 ## Pré-requisitos na Meta
 1. Conta do Instagram configurada como **Profissional** (Business ou Creator).

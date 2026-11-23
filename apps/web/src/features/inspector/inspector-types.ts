@@ -188,12 +188,12 @@ export const FOLDER_MODE_OPTIONS: readonly CarbonSelectOption<"read_write" | "re
   {
     value: "read_write",
     label: "Leitura e escrita",
-    description: "Agente pode ler e criar/editar arquivos dentro desta pasta",
+    description: "Criativo pode ler e criar/editar arquivos dentro desta pasta",
   },
   {
     value: "read",
     label: "Somente leitura",
-    description: "Agente apenas consulta arquivos desta pasta",
+    description: "Criativo apenas consulta arquivos desta pasta",
   },
 ];
 

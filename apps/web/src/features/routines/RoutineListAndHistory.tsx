@@ -53,7 +53,7 @@ export function RoutineListView({
               </button>
             )}
             <h2 className="text-[20px] font-semibold text-[#F0F0F0] truncate">
-              Rotinas do agente
+              Rotinas do Criativo
             </h2>
             <p className="text-[12px] font-normal text-[#979797] truncate">{ownerName}</p>
           </div>

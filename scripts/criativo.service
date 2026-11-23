@@ -1,5 +1,5 @@
 [Unit]
-Description=Criativo AI Studio Online Daemon (15 Agentes + WhatsApp + Remotion)
+Description=CriativoOS Daemon (15 Agentes + WhatsApp + Remotion)
 After=network-online.target
 Wants=network-online.target
 

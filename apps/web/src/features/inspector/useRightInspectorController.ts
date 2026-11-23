@@ -372,7 +372,7 @@ export function useRightInspectorController(props: RightInspectorPanelProps) {
       });
     } catch (err) {
       setTemplateExportError(
-        err instanceof Error ? err.message : "Falha ao exportar template do agente."
+        err instanceof Error ? err.message : "Falha ao exportar template do Criativo."
       );
     } finally {
       setExportingTemplate(false);
@@ -383,12 +383,12 @@ export function useRightInspectorController(props: RightInspectorPanelProps) {
     {
       value: "shared",
       label: "Compartilhado (padrão)",
-      description: "Usa a sessão compartilhada entre agentes",
+      description: "Usa a sessão compartilhada entre Criativos",
     },
     {
       value: "agent",
-      label: "Exclusivo deste agente",
-      description: "Isola cookies e login exclusivamente neste agente",
+      label: "Exclusivo deste Criativo",
+      description: "Isola cookies e login exclusivamente neste Criativo",
     },
     ...browserProfiles
       .filter((p) => !p.compartilhado && p.perfil_id !== "shared")
@@ -414,7 +414,7 @@ export function useRightInspectorController(props: RightInspectorPanelProps) {
     subView === "files"
       ? `Biblioteca (${arquivos.length})`
       : subView === "config"
-        ? "Configurações do agente"
+        ? "Configurações do Criativo"
         : subView === "channel_config"
           ? "Configurações da equipe"
           : subView === "channel_memories"
@@ -422,7 +422,7 @@ export function useRightInspectorController(props: RightInspectorPanelProps) {
             : subView === "channel_routines"
               ? "Rotinas da equipe"
               : subView === "routines"
-                ? "Rotinas do agente"
+                ? "Rotinas do Criativo"
                 : subView === "subconversations"
                   ? `Subconversas (${threads.length})`
                   : subView === "folders"

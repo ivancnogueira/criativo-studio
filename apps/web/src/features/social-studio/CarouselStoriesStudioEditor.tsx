@@ -316,7 +316,7 @@ export const CarouselStoriesStudioEditor: React.FC<CarouselStoriesStudioEditorPr
                       <ImageIcon className="h-10 w-10 text-[#42A0FF]" />
                       <p className="text-xs font-medium text-white">Nenhuma mídia adicionada</p>
                       <p className="text-[11px]">
-                        Adicione imagens/vídeos abaixo ou gere criativos pelo agente no Calendário Editorial.
+                        Adicione imagens/vídeos abaixo ou gere criativos pelo Criativo no Calendário Editorial.
                       </p>
                     </div>
                   )}

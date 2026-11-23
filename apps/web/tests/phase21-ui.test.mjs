@@ -331,7 +331,7 @@ describe("Fase 21 — UI, Prévia Borrada, Avatares Sincronizados, Fotos Reais, 
     assert.match(dockHtml, /fixed right-0 top-1\/2 -translate-y-1\/2/);
     assert.match(dockHtml, /rounded-l-\[24px\]/);
     assert.match(dockHtml, /Recolher ilha lateral/);
-    assert.match(dockHtml, /Adicionar agentes ao dock/);
+    assert.match(dockHtml, /Adicionar Criativos ao dock/);
     assert.match(dockHtml, /mascote-working/);
 
     const appSrc = [

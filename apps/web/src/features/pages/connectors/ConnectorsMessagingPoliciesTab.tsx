@@ -110,7 +110,7 @@ export const ConnectorsMessagingPoliciesTab: React.FC<{
                 Políticas Conversacionais Multicanal
               </h3>
               <p className="text-[12px] text-[#9E9EA6]">
-                Configure allowlist, papéis, thread nativa e agente orquestrador padrão para Telegram, Slack e Discord.
+                Configure allowlist, papéis, thread nativa e Criativo orquestrador padrão para Telegram, Slack e Discord.
               </p>
             </div>
           </div>
@@ -165,7 +165,7 @@ export const ConnectorsMessagingPoliciesTab: React.FC<{
               <div className="space-y-1">
                 <span className="block text-[11px] text-[#9E9EA6]">Orquestrador fallback</span>
                 <CarbonSelect
-                  ariaLabel="Selecionar agente orquestrador padrão"
+                  ariaLabel="Selecionar Criativo orquestrador padrão"
                   value={currentPolicy.orchestratorAgentId}
                   options={agentOptions}
                   onChange={(val) =>

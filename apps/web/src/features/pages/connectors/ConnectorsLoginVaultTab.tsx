@@ -161,7 +161,7 @@ export const ConnectorsLoginVaultTab: React.FC<{
             </h3>
           </div>
           <span className="text-[11px] text-[#8E8E93]">
-            Senhas nunca são retornadas em claro para UI ou agentes
+            Senhas nunca são retornadas em claro para UI ou Criativos
           </span>
         </div>
 

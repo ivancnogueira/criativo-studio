@@ -145,7 +145,7 @@ export function normalizeModelFamilyAndEffort(
 
 /**
  * Gerencia exclusivamente as conexões Google/Antigravity reais criadas pelo usuário
- * dentro do Criativo AI Studio (em `dados/contas/gemini/<id>`), com login oficial
+ * dentro do CriativoOS (em `dados/contas/gemini/<id>`), com login oficial
  * no navegador via protocolo ACP, renovação silenciosa de token e consulta de cotas/modelos.
  */
 

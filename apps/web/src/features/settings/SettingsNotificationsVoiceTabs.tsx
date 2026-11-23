@@ -35,7 +35,7 @@ const TTS_OPTIONS: CarbonSelectOption[] = [
 
 const NATIVE_LEVEL_OPTIONS: CarbonSelectOption<NativeNotificationLevel>[] = [
   { value: "all", label: "Todas as notificações", description: "Aprovações, erros e entregas concluídas" },
-  { value: "approvals_only", label: "Apenas aprovações", description: "Somente quando um agente aguarda revisão" },
+  { value: "approvals_only", label: "Apenas aprovações", description: "Somente quando um Criativo aguarda revisão" },
   { value: "errors_only", label: "Apenas erros", description: "Falhas críticas e quedas de integração" },
   { value: "muted", label: "Silenciado", description: "Desativar notificações nativas do sistema" },
 ];
@@ -138,7 +138,7 @@ export const NotificationMatrix: React.FC<NotificationMatrixProps> = ({
   onChangeLevel,
 }) => {
   const rows: Array<{ id: string; nome: string; kind: string }> = [
-    ...agentes.map((a) => ({ id: a.agente_id, nome: a.nome, kind: "Agente" })),
+    ...agentes.map((a) => ({ id: a.agente_id, nome: a.nome, kind: "Criativo" })),
     ...canais.map((c) => ({ id: `canal:${c.canal_id}`, nome: c.nome, kind: "Canal" })),
   ];
 
@@ -151,7 +151,7 @@ export const NotificationMatrix: React.FC<NotificationMatrixProps> = ({
   return (
     <div className="rounded-xl border border-white/[0.06] bg-[#212121] p-4 space-y-2.5">
       <div className="text-[13px] font-semibold text-white">
-        Matriz por agente e canal
+        Matriz por Criativo e canal
       </div>
       <div className="max-h-56 overflow-y-auto divide-y divide-white/[0.06]">
         {rows.map((row) => {
@@ -220,7 +220,7 @@ export const SettingsNotificationsTab: React.FC<SettingsNotificationsTabProps> =
   const handleTestNotification = () => {
     playStudioPreviewSound(notificacoes.som_tarefa);
     if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-      new Notification("Criativo AI Studio", {
+      new Notification("CriativoOS", {
         body: notificacoes.mostrar_preview
           ? "Exemplo de notificação concluída com prévia visível."
           : "Nova notificação de tarefa concluída.",
@@ -237,7 +237,7 @@ export const SettingsNotificationsTab: React.FC<SettingsNotificationsTabProps> =
     <div className="space-y-4">
       <SwitchItem
         label="Ativar notificações Web"
-        description="Alerta quando agentes finalizam entregas ou solicitam intervenção no navegador."
+        description="Alerta quando Criativos finalizam entregas ou solicitam intervenção no navegador."
         checked={notificacoes.web_habilitadas}
         onChange={(next) => void handleToggleWeb(next)}
       />
@@ -479,7 +479,7 @@ export const SettingsVoiceTab: React.FC<SettingsVoiceTabProps> = ({ voz, onChang
 
       <SwitchItem
         label="Leitura automática de respostas"
-        description="Sintetiza e lê respostas do agente ativo automaticamente via SpeechSynthesis."
+        description="Sintetiza e lê respostas do Criativo ativo automaticamente via SpeechSynthesis."
         checked={voz.leitura_automatica}
         onChange={(next) => onChange({ ...voz, leitura_automatica: next })}
       />

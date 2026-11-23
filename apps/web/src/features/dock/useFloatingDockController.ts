@@ -128,7 +128,7 @@ export function useFloatingDockController(props: FloatingDesktopDockProps) {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "";
       setRosterError(
-        msg || "Não foi possível carregar os agentes deste servidor.",
+        msg || "Não foi possível carregar os Criativos deste servidor.",
       );
     }
   }, []);

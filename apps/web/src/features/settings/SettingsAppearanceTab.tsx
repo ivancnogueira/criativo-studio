@@ -180,7 +180,7 @@ export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
           <div>
             <div className="text-[13px] font-semibold text-white">Cor do balão do operador</div>
             <div className="text-[11.5px] text-[#979797]">
-              Define a cor das suas mensagens no chat. A cor dos balões de cada especialista é configurada no painel do agente.
+              Define a cor das suas mensagens no chat. A cor dos balões de cada especialista é configurada no painel do Criativo.
             </div>
           </div>
           <span className="font-mono text-[11.5px] text-[#A8A8A8]">
@@ -410,8 +410,8 @@ export const SettingsAppearanceTab: React.FC<SettingsAppearanceTabProps> = ({
             }}
           />
           <ToggleRow
-            label="Ilha flutuante de agentes na área de trabalho"
-            description="Mantém o acesso rápido aos agentes flutuando sobre outros aplicativos no Desktop."
+            label="Ilha flutuante de Criativos na área de trabalho"
+            description="Mantém o acesso rápido aos Criativos flutuando sobre outros aplicativos no Desktop."
             checked={desktopDockState.visible}
             onChange={(next) => {
               setDesktopDockState((prev) => ({ ...prev, visible: next }));

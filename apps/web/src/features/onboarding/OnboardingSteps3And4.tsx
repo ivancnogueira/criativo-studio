@@ -46,7 +46,7 @@ export function OnboardingStep3({ ctrl }: { ctrl: OnboardingController }) {
             Identidade visual e arquivos
           </h2>
           <p className="text-[13px] text-[#979797] mb-6 text-center">
-            Suba logo, fotos, referências ou Ficha PDF para que os agentes criativos já operem no seu estilo (opcional agora).
+            Suba logo, fotos, referências ou Ficha PDF para que os Criativos já operem no seu estilo (opcional agora).
           </p>
 
           {errorNote && (

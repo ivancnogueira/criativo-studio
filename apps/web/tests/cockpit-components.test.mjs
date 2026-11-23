@@ -79,7 +79,7 @@ describe("Fase 5 — Componentes React do Cockpit Web & Mobile", () => {
         onChangeModel: () => {},
       })
     );
-    assert.match(sidebarHtml, /Roster \(15 Agentes\)/);
+    assert.match(sidebarHtml, /Roster \(15 Criativos\)/);
     assert.match(sidebarHtml, /Estrategista Editorial/);
     assert.match(sidebarHtml, /Agente Base 2/);
     assert.match(sidebarHtml, /Agente Bônus 3/);
@@ -132,7 +132,7 @@ describe("Fase 5 — Componentes React do Cockpit Web & Mobile", () => {
     );
     assert.match(
       emptyQueueHtml,
-      /Nenhuma tarefa pendente\. Os agentes estão prontos para agir\./
+      /Nenhuma tarefa pendente\. Os Criativos estão prontos para agir\./
     );
     assert.match(emptyQueueHtml, /Disparar Nova Tarefa/);
 
@@ -262,7 +262,8 @@ describe("Fase 5 — Componentes React do Cockpit Web & Mobile", () => {
       })
     );
     assert.match(onboardingHtml, /Monte sua/);
-    assert.match(onboardingHtml, /equipe de IA\./);
+    assert.match(onboardingHtml, /equipe de Criativos\./);
+    assert.match(onboardingHtml, /Sua licença do CriativoOS está ativa/);
     assert.match(onboardingHtml, /Usar modelos gratuitos/);
 
     const newAgentHtml = renderToStaticMarkup(
@@ -271,8 +272,8 @@ describe("Fase 5 — Componentes React do Cockpit Web & Mobile", () => {
         onCreateAgent: async () => {},
       })
     );
-    assert.match(newAgentHtml, /Em que este agente deve ajudar\?/);
-    assert.match(newAgentHtml, /Criar agente/);
+    assert.match(newAgentHtml, /Em que este Criativo deve ajudar\?/);
+    assert.match(newAgentHtml, /Criar Criativo/);
     assert.match(newAgentHtml, /Curador de Ganchos Virais/);
 
     const chatHtml = renderToStaticMarkup(

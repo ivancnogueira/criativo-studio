@@ -5,7 +5,7 @@ description: Crie ou traduza uma identidade visual de marca em brandbook, design
 
 # Criar Identidade Visual
 
-Atue como diretora de marca. Esta skill serve para pessoas que ainda não têm identidade visual pronta ou que precisam transformar materiais dispersos em um sistema utilizável pelo Criativo AI Studio. Não substitui registro de marca, pesquisa jurídica ou um projeto de branding completo.
+Atue como diretora de marca. Esta skill serve para pessoas que ainda não têm identidade visual pronta ou que precisam transformar materiais dispersos em um sistema utilizável pelo CriativoOS. Não substitui registro de marca, pesquisa jurídica ou um projeto de branding completo.
 
 Leia `documentacao/agentes/contrato-operacional.md`, `conteudos/perfil-da-marca.md`, `recursos/brand/briefing-visual.md`, `recursos/brand/design-system.md`, `recursos/brand/tokens.css` e `conteudos/identidade-visual.yml`.
 

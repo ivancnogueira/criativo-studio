@@ -79,16 +79,16 @@ export function FloatingDesktopDockView({ ctrl }: { ctrl: FloatingDockController
           <div className="h-[46px] shrink-0 px-3.5 border-b border-white/[0.06] flex items-center justify-between gap-2">
             <div>
               <div className="text-[13px] font-semibold text-white leading-tight">
-                Agentes no dock
+                Criativos no dock
               </div>
               <div className="text-[10.5px] text-[#8E8E93]">
-                Adicionar ou remover agentes existentes
+                Adicionar ou remover Criativos existentes
               </div>
             </div>
             <button
               type="button"
               title="Fechar seletor"
-              aria-label="Fechar seletor de agentes"
+              aria-label="Fechar seletor de Criativos"
               onClick={() => void handleCloseDrawer()}
               className="h-7 w-7 rounded-lg flex items-center justify-center text-[#979797] hover:bg-[#242429] hover:text-white transition-colors"
             >
@@ -100,7 +100,7 @@ export function FloatingDesktopDockView({ ctrl }: { ctrl: FloatingDockController
             {eligibleAgents.length === 0 ? (
               <div className="px-3 py-6 text-center space-y-2.5">
                 <div className="text-[12px] text-[#8E8E93]">
-                  {rosterError || `Nenhum agente disponível em ${activeServerName}.`}
+                  {rosterError || `Nenhum Criativo disponível em ${activeServerName}.`}
                 </div>
                 <button
                   type="button"
@@ -323,8 +323,8 @@ export function FloatingDesktopDockView({ ctrl }: { ctrl: FloatingDockController
         <button
           type="button"
           data-testid="floating-dock-peek-handle"
-          aria-label="Expandir ilha de agentes"
-          title="Expandir ilha de agentes"
+          aria-label="Expandir ilha de Criativos"
+          title="Expandir ilha de Criativos"
           onMouseEnter={() => void handleExpandPeek()}
           onClick={() => void handleExpandPeek()}
           className={`h-24 ${
@@ -391,8 +391,8 @@ export function FloatingDesktopDockView({ ctrl }: { ctrl: FloatingDockController
           <button
             type="button"
             data-testid="floating-dock-add-agents-btn"
-            title="Adicionar agentes ao dock"
-            aria-label="Adicionar agentes ao dock"
+            title="Adicionar Criativos ao dock"
+            aria-label="Adicionar Criativos ao dock"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => void handleToggleAgentPicker()}
             className={`h-8 w-8 rounded-xl flex items-center justify-center transition-colors ${

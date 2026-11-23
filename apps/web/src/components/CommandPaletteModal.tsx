@@ -64,7 +64,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
 
   const quickActions = useMemo<QuickAction[]>(() => {
     const base: QuickAction[] = [
-      { id: "act-agentes", label: "Ir para Estúdio (Agentes)", subtitle: "Navegação rápida", Icon: Bot, run: () => onSelectSection("agentes") },
+      { id: "act-agentes", label: "Ir para Estúdio (Criativos)", subtitle: "Navegação rápida", Icon: Bot, run: () => onSelectSection("agentes") },
       { id: "act-fluxos", label: "Ir para Automações (Workflows)", subtitle: "Editor em grafo", Icon: GitBranch, run: () => onSelectSection("fluxos") },
       { id: "act-tarefas", label: "Ir para Fila de Tarefas", subtitle: "Status e aprovações", Icon: WalletCards, run: () => onSelectSection("tarefas") },
       { id: "act-agenda", label: "Ir para Calendário Editorial & Rotinas", subtitle: "Pautas e agendamentos", Icon: CalendarClock, run: () => onSelectSection("agenda") },
@@ -78,7 +78,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
     if (onCreateNewAgent) {
       base.splice(1, 0, {
         id: "act-new-agent",
-        label: "Criar Novo Agente Especialista",
+        label: "Criar Novo Criativo Especialista",
         subtitle: "Ação rápida do estúdio",
         Icon: Plus,
         run: onCreateNewAgent,
@@ -123,7 +123,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
           if (cancelled) return;
           const flat: GlobalSearchResultItem[] = [];
           for (const a of res.grupos.agentes) {
-            flat.push({ ...a, categoria: "Agentes", agente_id: a.id });
+            flat.push({ ...a, categoria: "Criativos", agente_id: a.id });
           }
           for (const e of res.grupos.equipes) {
             flat.push({ ...e, categoria: "Equipes" });
@@ -239,7 +239,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Buscar agentes, conversas, workflows, rotinas, arquivos ou ações..."
+            placeholder="Buscar Criativos, conversas, workflows, rotinas, arquivos ou ações..."
             className="flex-1 bg-transparent text-sm text-white placeholder:text-[#6A6A6A] focus:outline-none"
           />
           {loading && <Loader2 className="h-4 w-4 animate-spin text-[#42A0FF]" />}

@@ -49,7 +49,7 @@ export function AgentStepsWaterfall({
       {thoughtStream && (
         <div className="mb-3 rounded-xl border border-white/10 bg-[#212121] p-2.5">
           <span className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-[#42A0FF]">
-            Raciocínio do Agente (Streaming)
+            Raciocínio do Criativo (Streaming)
           </span>
           <p className="font-terminal max-h-24 overflow-y-auto whitespace-pre-wrap text-[#DCDCDC]">
             {thoughtStream}

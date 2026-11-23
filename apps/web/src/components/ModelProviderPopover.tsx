@@ -32,7 +32,7 @@ function quotaTextColor(pct: number): string {
 }
 
 /**
- * Popover unificado Provedor + Modelo + Esforço idêntico ao Criativo Studio Desktop,
+ * Popover unificado Provedor + Modelo + Esforço idêntico ao CriativoOS Desktop,
  * mostrando contas conectadas, modelos reais descobertos e % restante ao vivo.
  */
 export const ModelProviderPopover: React.FC<ModelProviderPopoverProps> = ({

@@ -128,7 +128,7 @@ export async function validarIntegracoes({ diretorioRaiz = raiz, fetchFn = fetch
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   validarIntegracoes()
     .then((res) => {
-      console.log("\n=== Validação de Integrações (Criativo AI Studio Online) ===");
+      console.log("\n=== Validação de Integrações (CriativoOS) ===");
       console.log(`Token Meta no Cofre/.env:  ${res.tokenConfigurado ? "✅ Configurado" : "❌ Ausente"}`);
       console.log(`IG Business Account ID:    ${res.accountIdConfigurado ? "✅ Configurado" : "❌ Ausente"}`);
       console.log(`Meta Graph API (${res.ok ? "✅ HTTP " + res.httpStatus + " OK" : "❌ " + res.mensagem})`);

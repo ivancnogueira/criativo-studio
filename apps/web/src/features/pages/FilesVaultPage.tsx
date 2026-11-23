@@ -118,7 +118,7 @@ export const FilesVaultPage: React.FC<FilesVaultPageProps> = ({
 
   const breadcrumbs = useMemo(() => {
     if (selection.kind === "all") return ["Todos os arquivos"];
-    if (selection.kind === "removed_agents") return ["Todos os arquivos", "Agentes removidos"];
+    if (selection.kind === "removed_agents") return ["Todos os arquivos", "Criativos removidos"];
     if (selection.kind === "agent") {
       const agName =
         agentes.find((a) => a.agente_id === selection.agenteId)?.nome ?? selection.agenteId;

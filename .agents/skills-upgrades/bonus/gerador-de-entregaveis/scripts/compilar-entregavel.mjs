@@ -54,9 +54,9 @@ async function run() {
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
   const titulo = briefing.titulo || publicacao.titulo || path.basename(absOrigem).replace(/-/g, ' ').toUpperCase();
-  const legenda = briefing.legenda || publicacao.legenda || 'Confira este conteúdo completo produzido com o Criativo AI Studio.';
+  const legenda = briefing.legenda || publicacao.legenda || 'Confira este conteúdo completo produzido com o CriativoOS.';
   const hashtags = briefing.hashtags || publicacao.hashtags || '#criativoaistudio #marketingdigital #inteligenciaartificial';
-  const nomeMarca = briefing.marca || publicacao.marca || 'Criativo AI Studio';
+  const nomeMarca = briefing.marca || publicacao.marca || 'CriativoOS';
   const dataCriacao = new Date().toLocaleDateString('pt-BR');
 
   // Criar pasta de saída entregavel/

@@ -53,7 +53,7 @@ export const BrowserAutofillConsentModal: React.FC<{
               Autorizar autopreenchimento de login
             </h3>
             <p className="text-[12.5px] text-[#979797] mt-0.5">
-              Um agente solicitou o preenchimento direto da credencial em{" "}
+              Um Criativo solicitou o preenchimento direto da credencial em{" "}
               <span className="font-mono text-white">{request.domain}</span>. A senha permanece
               oculta do modelo de IA.
             </p>

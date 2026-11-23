@@ -42,7 +42,7 @@ export function InstagramMobilePreview({ tarefa }: InstagramMobilePreviewProps) 
       ? tarefa.resultado.copy
       : typeof tarefa.resultado?.texto === "string"
       ? tarefa.resultado.texto
-      : "Legenda gerada pelos agentes especialistas para publicação.";
+      : "Legenda gerada pelos Criativos especialistas para publicação.";
 
   const totalSlides = Math.max(1, rawPreviews.length);
   const activeSlide = Math.min(slideIndex, totalSlides - 1);

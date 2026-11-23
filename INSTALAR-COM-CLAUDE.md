@@ -1,6 +1,6 @@
 # Instalação assistida pelo Claude Code
 
-Escolha a opção conforme a forma como você recebeu o **Criativo AI Studio Online**.
+Escolha a opção conforme a forma como você recebeu o **CriativoOS**.
 
 ## A) Recebi um arquivo ZIP (mais simples)
 
@@ -10,7 +10,7 @@ Escolha a opção conforme a forma como você recebeu o **Criativo AI Studio Onl
 4. Cole este prompt no chat:
 
 ```text
-Inicie a instalação guiada do Criativo AI Studio Online nesta pasta, que veio de um arquivo ZIP. Leia integralmente AGENTS.md, README.md, INSTALAR.md e documentacao/onboarding-guiado.md. Você está autorizado a executar npm install, npm run instalar -- --plataforma claude, npm run build e preparar o ambiente. Conduza os 4 Marcos da instalação como um único processo contínuo, encerrando após validar as credenciais e entregar o Cockpit Web funcionando em http://127.0.0.1:3000.
+Inicie a instalação guiada do CriativoOS nesta pasta, que veio de um arquivo ZIP. Leia integralmente AGENTS.md, README.md, INSTALAR.md e documentacao/onboarding-guiado.md. Você está autorizado a executar npm install, npm run instalar -- --plataforma claude, npm run build e preparar o ambiente. Conduza os 4 Marcos da instalação como um único processo contínuo, encerrando após validar as credenciais e entregar o Cockpit Web funcionando em http://127.0.0.1:3000.
 
 Antes da primeira pergunta, mostre estes quatro marcos:
 1) Instalação (Node.js 22+, dependências, .env com Cofre AES-256-GCM, build Daemon/Web e 9 skills base no Claude Code)
@@ -37,7 +37,7 @@ Regras fundamentais:
 Precisa de **Git** instalado (<https://git-scm.com>) e acesso ao repositório `criativo-studio`. Em uma pasta vazia, abra o terminal com o Claude Code e cole:
 
 ```text
-Instale o Criativo AI Studio Online a partir de https://github.com/ivancnogueira/criativo-studio.git em uma nova pasta criativo-studio-online no diretório atual. Depois do clone, entre na pasta e leia integralmente AGENTS.md, README.md, INSTALAR.md e documentacao/onboarding-guiado.md. Você está autorizado a executar npm install, npm run instalar -- --plataforma claude e preparar o ambiente. Conduza os 4 Marcos da instalação como um único processo contínuo, encerrando após validar as credenciais e entregar o Cockpit Web funcionando em http://127.0.0.1:3000.
+Instale o CriativoOS a partir de https://github.com/ivancnogueira/criativo-studio.git em uma nova pasta criativo-studio-online no diretório atual. Depois do clone, entre na pasta e leia integralmente AGENTS.md, README.md, INSTALAR.md e documentacao/onboarding-guiado.md. Você está autorizado a executar npm install, npm run instalar -- --plataforma claude e preparar o ambiente. Conduza os 4 Marcos da instalação como um único processo contínuo, encerrando após validar as credenciais e entregar o Cockpit Web funcionando em http://127.0.0.1:3000.
 
 Antes da primeira pergunta, mostre estes quatro marcos:
 1) Instalação (clone GitHub, Node.js 22+, dependências, .env com Cofre AES-256-GCM, build Daemon/Web e 9 skills base no Claude Code)
@@ -64,7 +64,7 @@ Regras fundamentais:
 Quando tiver os módulos adicionais, abra o Claude Code na pasta da instalação e cole:
 
 ```text
-Instale o pacote de upgrade <bonus ou video> no Criativo AI Studio Online usando:
+Instale o pacote de upgrade <bonus ou video> no CriativoOS usando:
 npm run instalar-upgrade -- --pacote <bonus ou video> --fonte <CAMINHO-OU-URL-GIT> --plataforma claude
 Depois rode npm run diagnosticar e me informe as novas skills instaladas.
 ```
@@ -76,7 +76,7 @@ Depois rode npm run diagnosticar e me informe as novas skills instaladas.
 As atualizações trocam só o produto (código, skills base e documentação). **Seus dados nunca são tocados**: `.env`, `apps/daemon/dados/`, `conteudos/`, `recursos/`, `saidas/`, `previas/` e upgrades instalados. Abra o Claude Code na pasta e cole:
 
 ```text
-Atualize o Criativo AI Studio Online nesta pasta. Se ela for um clone do git, rode npm run atualizar -- --plataforma claude. Se eu tiver baixado um ZIP novo, rode npm run atualizar -- --simular --zip CAMINHO-DO-ARQUIVO --plataforma claude, me mostre o relatório e, com a minha confirmação, rode sem --simular. Nunca apague nem sobrescreva .env, apps/daemon/dados, conteudos, recursos, saidas, previas ou meus upgrades, e nunca abra o .env. Ao final, rode npm run diagnosticar e explique em português simples o que mudou.
+Atualize o CriativoOS nesta pasta. Se ela for um clone do git, rode npm run atualizar -- --plataforma claude. Se eu tiver baixado um ZIP novo, rode npm run atualizar -- --simular --zip CAMINHO-DO-ARQUIVO --plataforma claude, me mostre o relatório e, com a minha confirmação, rode sem --simular. Nunca apague nem sobrescreva .env, apps/daemon/dados, conteudos, recursos, saidas, previas ou meus upgrades, e nunca abra o .env. Ao final, rode npm run diagnosticar e explique em português simples o que mudou.
 ```
 
 ---

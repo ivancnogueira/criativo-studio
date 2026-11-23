@@ -315,7 +315,7 @@ export async function generateAgentChatReply(
     const readyAnexos = finalizeTurnAnexos();
     const cleanErr = execState.hadConnectedRoute
       ? `Não consegui concluir a chamada em *${agente.modelo_padrao}* (${providerName}): ${(execState.lastExecutionError ?? "sem resposta do servidor").slice(0, 140)}. Tente novamente em instantes ou revise a conta em Conexões.`
-      : `O modelo *${agente.modelo_padrao}* (${providerName}) ainda não está conectado no Criativo Studio. Conecte uma conta em Conexões e tente novamente.`;
+      : `O modelo *${agente.modelo_padrao}* (${providerName}) ainda não está conectado no CriativoOS. Conecte uma conta em Conexões e tente novamente.`;
     return {
       markdown: `*${agente.nome}*: ${cleanErr}`,
       steps,

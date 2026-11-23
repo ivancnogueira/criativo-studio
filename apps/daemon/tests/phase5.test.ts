@@ -19,7 +19,7 @@ describe("Fase 5 — Integração HTTP Cockpit Web <-> Daemon API", () => {
       const htmlRes = await fetch(`http://127.0.0.1:${runtime.port}/`);
       assert.equal(htmlRes.status, 200);
       const htmlText = await htmlRes.text();
-      assert.match(htmlText, /Criativo AI Studio Online/);
+      assert.match(htmlText, /CriativoOS/);
 
       const agentsRes = await fetch(`http://127.0.0.1:${runtime.port}/api/agentes`);
       assert.equal(agentsRes.status, 200);

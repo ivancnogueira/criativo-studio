@@ -474,7 +474,7 @@ export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
   {
     name: "create_server_install_command",
     description:
-      "Gera comando único de instalação e pareamento (CRIATIVO_CLAIM) com validade de 15 minutos para conectar uma VPS Linux ao Criativo AI Studio (fluxo 'Configurar com um agente'). Nunca registre o token em memórias permanentes.",
+      "Gera comando único de instalação e pareamento (CRIATIVO_CLAIM) com validade de 15 minutos para conectar uma VPS Linux ao CriativoOS (fluxo 'Configurar com um agente'). Nunca registre o token em memórias permanentes.",
     parameters: {
       type: "object",
       properties: {
@@ -490,7 +490,7 @@ export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
   {
     name: "gerar_comando_claim_vps",
     description:
-      "Gera um novo comando shell único (CRIATIVO_CLAIM válido por 15 minutos) para instalar e conectar uma VPS Linux ao Criativo AI Studio Online.",
+      "Gera um novo comando shell único (CRIATIVO_CLAIM válido por 15 minutos) para instalar e conectar uma VPS Linux ao CriativoOS.",
     parameters: {
       type: "object",
       properties: {
@@ -501,7 +501,7 @@ export const PHASE15_TOOLS_SCHEMA: ToolDefinition[] = [
   {
     name: "instalar_parear_servidor_vps",
     description:
-      "Instala via SSH (quando host e chave SSH são fornecidos) ou verifica saúde HTTP (/health) de um servidor VPS Linux para conectá-lo ao Criativo AI Studio Online.",
+      "Instala via SSH (quando host e chave SSH são fornecidos) ou verifica saúde HTTP (/health) de um servidor VPS Linux para conectá-lo ao CriativoOS.",
     parameters: {
       type: "object",
       properties: {

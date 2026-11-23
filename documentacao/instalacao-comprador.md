@@ -1,4 +1,4 @@
-# Instalação do Comprador — Criativo AI Studio Online (Local & VPS)
+# Instalação do Comprador — CriativoOS (Local & VPS)
 
 > **Instalação guiada pelo seu agente de código:** consulte [INSTALAR.md](../INSTALAR.md) para prompts prontos para **Antigravity**, **Claude Code** e **Codex (GPT)**.
 

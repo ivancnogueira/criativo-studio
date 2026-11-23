@@ -432,14 +432,14 @@ export function LibraryFolderTree({
                 : "hover:bg-[#242424] border-l-transparent text-[#979797]"
             }`}
           >
-            <span className="text-[14px] font-semibold">Agentes removidos</span>
+            <span className="text-[14px] font-semibold">Criativos removidos</span>
             <span className="text-[12px] font-normal">{orphanCount}</span>
           </button>
         )}
       </div>
 
       {/* Referencia de acessibilidade de menu contextual */}
-      <span className="sr-only">Renomear pasta · Excluir pasta · Agentes removidos</span>
+      <span className="sr-only">Renomear pasta · Excluir pasta · Criativos removidos</span>
     </aside>
   );
 }

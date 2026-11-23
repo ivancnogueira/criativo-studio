@@ -200,7 +200,7 @@ export function BackupModelsEditor({
           Backup Models &amp; Failover
         </h3>
         <p className="text-[12px] text-[#979797]">
-          Quando o modelo principal atingir o limite, o agente seguirá esta ordem automaticamente.
+          Quando o modelo principal atingir o limite, o Criativo seguirá esta ordem automaticamente.
         </p>
       </div>
 

@@ -147,7 +147,7 @@ export function InspectorChannelConfigTab({
                     Manter as memórias neste canal
                   </div>
                   <p className="text-[11px] text-[#8E8E93] mt-0.5 leading-snug">
-                    Os agentes guardam o que aprendem aqui como memórias do canal. As outras conversas deles não as veem.
+                    Os Criativos guardam o que aprendem aqui como memórias do canal. As outras conversas deles não as veem.
                   </p>
                 </div>
                 <button

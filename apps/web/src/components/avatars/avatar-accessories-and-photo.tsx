@@ -172,7 +172,7 @@ export const PhotoAvatarRenderer: React.FC<PhotoAvatarRendererProps> = ({
   size,
   taskContext,
   isWorking,
-  label = "Avatar do agente",
+  label = "Avatar do Criativo",
   className = "",
   fallbackNode,
 }) => {

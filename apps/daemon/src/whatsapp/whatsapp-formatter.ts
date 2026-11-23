@@ -205,7 +205,7 @@ export function formatMarkdownForWhatsApp(
   }
 
   if (truncated && chunks.length > 0) {
-    const suffix = "\n\n_(Resumo completo disponível no chat do Criativo Studio)_";
+    const suffix = "\n\n_(Resumo completo disponível no chat do CriativoOS)_";
     const lastIdx = chunks.length - 1;
     const base = chunks[lastIdx]!.slice(0, Math.max(50, maxChunkLength - suffix.length));
     chunks[lastIdx] = `${base.trimEnd()}${suffix}`;

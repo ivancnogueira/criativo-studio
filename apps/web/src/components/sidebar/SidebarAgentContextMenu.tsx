@@ -120,7 +120,7 @@ export function SidebarAgentContextMenu({
             ) : (
               <BellOff className="h-3.5 w-3.5 text-[#979797]" />
             )}
-            <span>{isMuted ? "Ativar alertas" : "Silenciar agente"}</span>
+            <span>{isMuted ? "Ativar alertas" : "Silenciar Criativo"}</span>
           </button>
         )}
 
@@ -222,7 +222,7 @@ export function SidebarAgentContextMenu({
             className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center gap-2"
           >
             <Pencil className="h-3.5 w-3.5 text-[#979797]" />
-            <span>Editar agente</span>
+            <span>Editar Criativo</span>
           </button>
         )}
 
@@ -237,7 +237,7 @@ export function SidebarAgentContextMenu({
             className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#DCDCDC] hover:bg-[#303033] hover:text-white flex items-center gap-2"
           >
             <Copy className="h-3.5 w-3.5 text-[#31CF76]" />
-            <span>Duplicar agente</span>
+            <span>Duplicar Criativo</span>
           </button>
         )}
 
@@ -260,7 +260,7 @@ export function SidebarAgentContextMenu({
             ) : (
               <EyeOff className="h-3.5 w-3.5 text-[#979797]" />
             )}
-            <span>{isHidden ? "Reexibir agente" : "Ocultar agente"}</span>
+            <span>{isHidden ? "Reexibir Criativo" : "Ocultar Criativo"}</span>
           </button>
         )}
 
@@ -278,7 +278,7 @@ export function SidebarAgentContextMenu({
               className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#FF7675] hover:bg-[#FD2F3B]/15 flex items-center gap-2"
             >
               <Trash2 className="h-3.5 w-3.5" />
-              <span>Excluir agente</span>
+              <span>Excluir Criativo</span>
             </button>
           </div>
         )}

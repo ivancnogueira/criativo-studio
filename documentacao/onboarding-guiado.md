@@ -1,4 +1,4 @@
-# Onboarding Guiado de Instalação em 4 Marcos — Criativo AI Studio Online
+# Onboarding Guiado de Instalação em 4 Marcos — CriativoOS
 
 Roteiro enxuto seguido pelos agentes instaladores (**Antigravity**, **Claude Code** e **Codex**) até deixar o ambiente 100% pronto e conectado, entregando a operação de criação e publicação diretamente no **Cockpit Web (`http://127.0.0.1:3000`)**. Mostre todos os 4 marcos no início da conversa e, a cada etapa, informe o marco atual, o progresso e a ação seguinte. Nunca encerre apenas perguntando se o usuário deseja continuar.
 

@@ -431,15 +431,15 @@ export const QuickAgentDrawer: React.FC<QuickAgentDrawerProps> = ({
         >
           <div className="px-3 py-2.5 border-b border-white/[0.06] flex items-center justify-between gap-2">
             <div>
-              <div className="text-[12.5px] font-semibold text-white">Agentes no dock</div>
+              <div className="text-[12.5px] font-semibold text-white">Criativos no dock</div>
               <div className="text-[10.5px] text-[#8E8E93]">
-                Adicione ou remova agentes existentes
+                Adicione ou remova Criativos existentes
               </div>
             </div>
             <button
               type="button"
               onClick={() => setPickerOpen(false)}
-              aria-label="Fechar seletor de agentes do dock"
+              aria-label="Fechar seletor de Criativos do dock"
               className="h-6 w-6 rounded-lg flex items-center justify-center text-[#8E8E93] hover:text-white hover:bg-white/[0.06]"
             >
               <X className="h-3.5 w-3.5" />
@@ -498,8 +498,8 @@ export const QuickAgentDrawer: React.FC<QuickAgentDrawerProps> = ({
         <button
           type="button"
           onClick={() => setHoveredOrOpen(true)}
-          aria-label="Expandir ilha lateral de agentes"
-          title="Expandir ilha lateral de agentes"
+          aria-label="Expandir ilha lateral de Criativos"
+          title="Expandir ilha lateral de Criativos"
           className={`h-24 transition-all flex items-center justify-center ${
             isLeft
               ? "rounded-r-[24px] border border-l-0"
@@ -623,8 +623,8 @@ export const QuickAgentDrawer: React.FC<QuickAgentDrawerProps> = ({
                   onCreateAgent?.();
                 }
               }}
-              title="Adicionar agentes ao dock"
-              aria-label="Adicionar agentes ao dock"
+              title="Adicionar Criativos ao dock"
+              aria-label="Adicionar Criativos ao dock"
               className={`mt-0.5 h-8 w-8 rounded-full border flex items-center justify-center transition-colors ${
                 pickerOpen
                   ? "border-[#007CF7] bg-[#007CF7]/20 text-white"

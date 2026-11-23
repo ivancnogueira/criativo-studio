@@ -129,7 +129,7 @@ export class McpOAuthProvider {
         .then(() => {
           res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
           res.end(
-            `<!doctype html><html lang="pt-BR"><body style="background:#1A1A1A;color:#F0F0F0;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center"><h2>Autenticação concluída</h2><p>Você já pode fechar esta janela e retornar ao Criativo Studio.</p><script>setTimeout(function(){try{window.close()}catch(e){}},400)</script></div></body></html>`
+            `<!doctype html><html lang="pt-BR"><body style="background:#1A1A1A;color:#F0F0F0;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center"><h2>Autenticação concluída</h2><p>Você já pode fechar esta janela e retornar ao CriativoOS.</p><script>setTimeout(function(){try{window.close()}catch(e){}},400)</script></div></body></html>`
           );
         })
         .catch((err) => {

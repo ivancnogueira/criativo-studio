@@ -22,7 +22,7 @@ export function renderClassicExpressiveStyles({
   gazeX,
   gazeY,
   isWorking = false,
-  label = "Avatar do agente",
+  label = "Avatar do Criativo",
   className = "",
   svgRef,
   uid,

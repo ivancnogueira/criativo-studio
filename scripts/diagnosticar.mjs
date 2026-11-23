@@ -67,7 +67,7 @@ function diagnosticar() {
     checks.push({ item: "Banco SQLite", ok: false, detalhe: "Será criado na 1ª execução do daemon" });
   }
 
-  console.log("\n=== Diagnóstico do Criativo AI Studio Online ===");
+  console.log("\n=== Diagnóstico do CriativoOS ===");
   for (const c of checks) {
     console.log(`  ${c.ok ? "✅" : "⚠️"} ${c.item.padEnd(28, " ")} ${c.detalhe}`);
   }

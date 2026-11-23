@@ -38,17 +38,17 @@ export function SidebarModals({
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Confirmar exclusão de agente"
+          aria-label="Confirmar exclusão de Criativo"
           data-testid="confirm-delete-agent-modal"
           className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4"
         >
           <div className="w-full max-w-sm rounded-2xl bg-[#212121] border border-white/10 p-5 space-y-4 shadow-2xl">
             <div className="space-y-1.5">
               <h3 className="text-[15px] font-semibold text-white">
-                Excluir agente {confirmDeleteAgent.nome}?
+                Excluir Criativo {confirmDeleteAgent.nome}?
               </h3>
               <p className="text-[12.5px] text-[#A0A0A8] leading-relaxed">
-                Este agente será removido da barra lateral e suas conversas locais ficarão arquivadas. Agentes padrão do sistema podem ser restaurados a qualquer momento em Configurações.
+                Este Criativo será removido da barra lateral e suas conversas locais ficarão arquivadas. Criativos padrão do sistema podem ser restaurados a qualquer momento em Configurações.
               </p>
             </div>
             <div className="flex items-center justify-end gap-2">
@@ -77,7 +77,7 @@ export function SidebarModals({
                 }}
                 className="rounded-lg bg-[#FD2F3B] hover:bg-[#E12530] px-4 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
               >
-                {deletingAgentId === confirmDeleteAgent.agente_id ? "Excluindo..." : "Excluir agente"}
+                {deletingAgentId === confirmDeleteAgent.agente_id ? "Excluindo..." : "Excluir Criativo"}
               </button>
             </div>
           </div>
@@ -88,14 +88,14 @@ export function SidebarModals({
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Restaurar agentes padrão excluídos"
+          aria-label="Restaurar Criativos padrão excluídos"
           data-testid="restore-deleted-agents-modal"
           className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4"
         >
           <div className="w-full max-w-md rounded-2xl bg-[#212121] border border-white/10 p-5 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between gap-2">
               <h3 className="text-[15px] font-semibold text-white">
-                Restaurar agentes excluídos ({deletedNativeAgents.length})
+                Restaurar Criativos excluídos ({deletedNativeAgents.length})
               </h3>
               <button
                 type="button"
@@ -177,7 +177,7 @@ export function SidebarModals({
                 Excluir equipe {confirmDeleteChannel.nome}?
               </h3>
               <p className="text-[12.5px] text-[#A0A0A8] leading-relaxed">
-                O canal, o histórico de mensagens, memórias e rotinas exclusivas desta equipe serão removidos. Os agentes continuam disponíveis individualmente.
+                O canal, o histórico de mensagens, memórias e rotinas exclusivas desta equipe serão removidos. Os Criativos continuam disponíveis individualmente.
               </p>
             </div>
             <div className="flex items-center justify-end gap-2">

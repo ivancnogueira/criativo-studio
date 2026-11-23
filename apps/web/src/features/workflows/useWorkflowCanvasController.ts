@@ -266,7 +266,7 @@ export function useWorkflowCanvasController(props: WorkflowsCanvasPageProps) {
         setVersions(err.conflict.versions ?? []);
         setTriggers(err.conflict.triggers ?? []);
         setStatusFeedback(
-          "Fluxo atualizado por outra sessão ou agente; grafo sincronizado."
+          "Fluxo atualizado por outra sessão ou Criativo; grafo sincronizado."
         );
       } else {
         setStatusFeedback(

@@ -217,7 +217,7 @@ export function useRoutineFlowsController(props: RoutineFlowsCanvasProps) {
       setConnectingFromAgentId(null);
       await loadCanvas(ownerId);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : "Erro ao conectar agentes.");
+      setErrorMsg(err instanceof Error ? err.message : "Erro ao conectar Criativos.");
       setConnectingFromAgentId(null);
     }
   };

@@ -49,14 +49,14 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = (props) =
 
   return (
     <aside
-      aria-label={canal && !agente ? "Inspetor contextual da equipe" : "Inspetor contextual do agente"}
+      aria-label={canal && !agente ? "Inspetor contextual da equipe" : "Inspetor contextual do Criativo"}
       style={widthPx ? { width: `${widthPx}px` } : { width: "330px" }}
       className="relative shrink-0 bg-[#1A1A1A] border-l border-white/[0.06] flex flex-col h-full overflow-hidden"
     >
       <div className="h-[48px] shrink-0 px-3.5 flex items-center justify-between gap-2 border-b border-white/[0.06]">
         {subView === "hub" ? (
           <span className="text-[12px] font-medium text-[#787878]">
-            {canal && !agente ? "Painel da equipe" : "Painel do agente"}
+            {canal && !agente ? "Painel da equipe" : "Painel do Criativo"}
           </span>
         ) : (
           <button
@@ -99,7 +99,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = (props) =
         {subView === "channel_memories" && canal && (
           <div className="space-y-4">
             <p className="rounded-xl bg-[#212121] border border-white/[0.06] p-3 text-[11.5px] text-[#979797] leading-relaxed">
-              Memórias salvas aqui pertencem exclusivamente à equipe <strong className="text-white">{canal.nome}</strong>. Outras conversas individuais dos agentes não as enxergam.
+              Memórias salvas aqui pertencem exclusivamente à equipe <strong className="text-white">{canal.nome}</strong>. Outras conversas individuais dos Criativos não as enxergam.
             </p>
             <div className="flex gap-1.5">
               <input
@@ -174,7 +174,7 @@ export const RightInspectorPanel: React.FC<RightInspectorPanelProps> = (props) =
                   Ampliar permissões de {agente?.nome ?? "agente"}?
                 </h4>
                 <p className="text-[12px] text-[#979797]">
-                  Acesso ampliado permite editar pastas fora das restrições padrão do agente.
+                  Acesso ampliado permite editar pastas fora das restrições padrão do Criativo.
                 </p>
               </div>
             </div>

@@ -54,7 +54,7 @@ export function OnboardingStep2({ ctrl }: { ctrl: OnboardingController }) {
             Conecte seu plano
           </h2>
           <p className="text-[13px] text-[#979797] mb-7 text-center">
-            Entre uma vez. Todos os seus agentes liberados usam seu provedor preferido.
+            Entre uma vez. Todos os seus Criativos liberados usam seu provedor preferido.
           </p>
 
           <div className="w-full text-left mb-2 flex items-center justify-between gap-2">
@@ -124,7 +124,7 @@ export function OnboardingStep2({ ctrl }: { ctrl: OnboardingController }) {
                             ? "Abrindo tela de login no navegador..."
                             : prov.conectado
                               ? prov.cli_versao
-                                ? `${prov.cli_versao} · Conta pronta para seus agentes`
+                                ? `${prov.cli_versao} · Conta pronta para seus Criativos`
                                 : "Credencial ativa no Cofre AES-256-GCM"
                               : prov.cli_detectado
                                 ? `${prov.subtitulo} · Clique em Conectar para autenticar no navegador.`
@@ -226,7 +226,7 @@ export function OnboardingStep2({ ctrl }: { ctrl: OnboardingController }) {
 
           <div className="w-full flex items-center justify-between mt-3 px-1">
             <span className="text-[11.5px] text-[#6A6A6A]">
-              Você pode alterar isso para cada agente depois.
+              Você pode alterar isso para cada Criativo depois.
             </span>
             <button
               type="button"
@@ -353,7 +353,7 @@ export function OnboardingStep2({ ctrl }: { ctrl: OnboardingController }) {
 
           <p className="mt-3 text-[11px] text-[#6A6A6A]">
             {activeProviderConnected
-              ? "Provedor pronto para os agentes."
+              ? "Provedor pronto para os Criativos."
               : "Conecte um provedor acima ou use modelos gratuitos locais."}
           </p>
 

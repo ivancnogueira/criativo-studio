@@ -38,7 +38,7 @@ export function parseCriativoDeepLink(rawUrl: string): DeepLinkRoute {
   if (host === "agent") {
     const agenteId = pathSegments[0] ?? parsed.searchParams.get("id")?.trim() ?? "";
     if (!agenteId || !SAFE_ID_REGEX.test(agenteId)) {
-      throw new DeepLinkSecurityError("Identificador de agente inválido no deep link.");
+      throw new DeepLinkSecurityError("Identificador de Criativo inválido no deep link.");
     }
     return { kind: "agent", agenteId, rawUrl: parsed.toString() };
   }

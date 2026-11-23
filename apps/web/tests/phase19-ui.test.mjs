@@ -71,8 +71,8 @@ describe("Fase 19 — Onboarding 4 Etapas, Layout Redimensionável, Apps Nativos
         onComplete: async () => {},
       })
     );
-    assert.doesNotMatch(step1Html, /15(?:<!-- -->|\s)+agentes/i);
-    assert.match(step1Html, /9(?:<!-- -->|\s)+agentes/i);
+    assert.doesNotMatch(step1Html, /15(?:<!-- -->|\s)+Criativos/i);
+    assert.match(step1Html, /9(?:<!-- -->|\s)+Criativos/i);
     assert.match(step1Html, /Monte sua/);
     assert.match(step1Html, /Nome da sua marca/);
     assert.match(step1Html, /Usar minha assinatura de IA/);
@@ -127,7 +127,7 @@ describe("Fase 19 — Onboarding 4 Etapas, Layout Redimensionável, Apps Nativos
         onRetryCheck: async () => {},
       })
     );
-    assert.doesNotMatch(gateHtml, /15\s+agentes/i);
+    assert.doesNotMatch(gateHtml, /15\s+Criativos/i);
 
     const setupAgent = {
       agente_id: "assistente_setup",
@@ -153,7 +153,7 @@ describe("Fase 19 — Onboarding 4 Etapas, Layout Redimensionável, Apps Nativos
         onDismissSetupAssistant: async () => {},
       })
     );
-    assert.match(sidebar9Html, /Roster \(9 Agentes\)/);
+    assert.match(sidebar9Html, /Roster \(9 Criativos\)/);
     assert.match(sidebar9Html, /Assistente de Configuração/);
     assert.match(sidebar9Html, /Concluir e ocultar/);
     assert.match(sidebar9Html, /width:320px/);
@@ -266,7 +266,7 @@ describe("Fase 19 — Onboarding 4 Etapas, Layout Redimensionável, Apps Nativos
               tagline: "Publicação oficial Graph API v27.0 e análise de métricas",
               description: "Conector nativo Meta Graph API v27.0.",
               category: "Redes Sociais & Marketing",
-              creatorName: "Meta / Criativo Studio",
+              creatorName: "Meta / CriativoOS",
               verified: true,
               isNative: true,
               authFlows: [

@@ -93,7 +93,7 @@ export function TaskCard({
       {tarefa.status === "falha" && (
         <div className="mt-2 rounded-lg border border-[#FD2F3B]/30 bg-[#FD2F3B]/10 p-2 text-xs text-[#FF6069]">
           <p>
-            Falha na execução do agente [{tarefa.agente_id ?? "Especialista"}].{" "}
+            Falha na execução do Criativo [{tarefa.agente_id ?? "Especialista"}].{" "}
             {tarefa.erro_detalhes ?? "Erro inesperado no processamento."}
           </p>
           <button

@@ -518,7 +518,7 @@ export function ChatMessageItem({
                   {isUser && msg.reacao_emoji && (
                     <span
                       data-testid={`reaction-pill-${msg.mensagem_id}`}
-                      aria-label={`Reação do agente: ${msg.reacao_emoji}`}
+                      aria-label={`Reação do Criativo: ${msg.reacao_emoji}`}
                       className="mt-1 bg-[#242424] border border-white/12 px-2 py-1 rounded-full text-[12px] leading-none select-none"
                     >
                       {msg.reacao_emoji}

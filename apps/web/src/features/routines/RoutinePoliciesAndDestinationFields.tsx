@@ -39,7 +39,7 @@ export function RoutinePoliciesAndDestinationFields({
           rows={4}
           value={draft.instrucao}
           onChange={(e) => setDraft((d) => ({ ...d, instrucao: e.target.value }))}
-          placeholder="Descreva exatamente o que o agente deve analisar ou produzir..."
+          placeholder="Descreva exatamente o que o Criativo deve analisar ou produzir..."
           className="w-full rounded-xl bg-[#212121] border border-white/10 focus:border-[#007CF7] px-3 py-2 text-[14px] font-normal text-[#F0F0F0] focus:outline-none"
         />
         <p className="text-[12px] font-normal text-[#979797]">

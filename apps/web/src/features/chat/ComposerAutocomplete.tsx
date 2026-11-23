@@ -406,7 +406,7 @@ export const ComposerAutocomplete: React.FC<ComposerAutocompleteProps> = ({
   return (
     <div
       role="listbox"
-      aria-label={trigger.kind === "slash" ? "Comandos rápidos" : "Menções de agentes e arquivos"}
+      aria-label={trigger.kind === "slash" ? "Comandos rápidos" : "Menções de Criativos e arquivos"}
       className="mb-2 max-h-[280px] overflow-y-auto rounded-2xl border border-white/[0.1] bg-[#161619] p-1.5 shadow-2xl"
     >
       {trigger.kind === "slash" ? (
@@ -416,7 +416,7 @@ export const ComposerAutocomplete: React.FC<ComposerAutocompleteProps> = ({
         </>
       ) : (
         <>
-          {renderGroup("Agentes da equipe", mentionAgents, "↑↓ navegar · Enter mencionar")}
+          {renderGroup("Criativos da equipe", mentionAgents, "↑↓ navegar · Enter mencionar")}
           {renderGroup("Arquivos do estúdio", mentionFiles, "auto-anexa ao chat")}
         </>
       )}

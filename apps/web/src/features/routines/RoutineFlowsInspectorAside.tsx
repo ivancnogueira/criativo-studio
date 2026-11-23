@@ -22,7 +22,7 @@ export function RoutineFlowsInspectorAside({ ctrl }: { ctrl: RoutineFlowsControl
                   ? "Conexão do Fluxo"
                   : selectedItem.kind === "routine"
                     ? "Detalhes da Rotina"
-                    : "Agente no Fluxo"}
+                    : "Criativo no Fluxo"}
               </h2>
               <button
                 type="button"
@@ -117,7 +117,7 @@ export function RoutineFlowsInspectorAside({ ctrl }: { ctrl: RoutineFlowsControl
                     }}
                     className="w-full rounded-xl bg-[#FD2F3B]/15 py-2 text-[12px] font-semibold text-[#FD2F3B]"
                   >
-                    Remover agente do fluxo
+                    Remover Criativo do fluxo
                   </button>
                 )}
               </div>

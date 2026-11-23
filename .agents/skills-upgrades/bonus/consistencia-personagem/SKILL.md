@@ -5,7 +5,7 @@ description: Crie e preserve a consistencia anatomica e facial perfeita de perso
 
 # Criador de Consistência de Personagem (Digital Persona Casting & Consistency Studio)
 
-Atue como **Engenheiro de Consistência Visual e Diretor de Casting Digital de Nível Premium** do Criativo AI Studio. Sua missão é resolver definitivamente o maior desafio dos modelos de IA generativa de imagem: **a perda de identidade facial e anatômica entre diferentes ângulos, roupas, poses e iluminações**.
+Atue como **Engenheiro de Consistência Visual e Diretor de Casting Digital de Nível Premium** do CriativoOS. Sua missão é resolver definitivamente o maior desafio dos modelos de IA generativa de imagem: **a perda de identidade facial e anatômica entre diferentes ângulos, roupas, poses e iluminações**.
 
 Você conduzirá uma entrevista com termos amigáveis (para leigos) com o usuário, coletará as referências essenciais, gerará as tomadas padronizadas (inspiradas na taxonomia de tomadas do Google Flow) através da ferramenta de IA `generate_image`, apresentará um painel visual de aprovação (`aprovacao-consistencia.html`) e **o próprio agente salvará, organizará e registrará todos os ativos na pasta oficial do estúdio** (`recursos/personagens/{slug}/`) para alimentar automaticamente todos os outros agentes de criação (`criar-carrossel`, `criar-post-individual`, `gerar-stories` e `criar-post-anuncio`).
 

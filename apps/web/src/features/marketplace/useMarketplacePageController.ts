@@ -523,8 +523,8 @@ export function useMarketplacePageController(props: MarketplacePageProps) {
         }
         setAccessFeedback(
           accessMode === "everyone"
-            ? "Acesso liberado para todos os agentes do estúdio."
-            : `Acesso atualizado para ${acessoPayload.agentIds.length} agente(s) selecionado(s).`
+            ? "Acesso liberado para todos os Criativos do estúdio."
+            : `Acesso atualizado para ${acessoPayload.agentIds.length} Criativo(s) selecionado(s).`
         );
         await loadCatalogAndApps();
         await onRefreshStudio?.();
@@ -540,13 +540,13 @@ export function useMarketplacePageController(props: MarketplacePageProps) {
     await daemonApi.setMcpServerStatus(accessServerId, {
       acesso: acessoPayload,
     });
-    setAccessFeedback("Permissões de agentes atualizadas com sucesso.");
+    setAccessFeedback("Permissões de Criativos atualizadas com sucesso.");
     await loadCatalogAndApps();
   };
 
   const handleInstallAgentTemplate = async (pkg: MarketplaceAgentPackage) => {
     const installed = await daemonApi.installLojaAgent(pkg.slug);
-    setFeedbackBanner(`Agente "${installed.agente.nome}" instalado no estúdio.`);
+    setFeedbackBanner(`Criativo "${installed.agente.nome}" instalado no estúdio.`);
     await onRefreshStudio?.();
   };
 

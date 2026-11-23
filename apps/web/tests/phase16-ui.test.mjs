@@ -62,7 +62,7 @@ describe("Fase 16 — UI Licenciamento Carbon Dark SSR & Auditoria Estática", (
         onDeactivateDevice: async () => ({ ok: true, devices: [] }),
       }),
     );
-    assert.match(missingHtml, /Ative sua licença do Criativo AI Studio/);
+    assert.match(missingHtml, /Ative sua licença do CriativoOS/);
     assert.match(missingHtml, /Agência 10/);
     assert.match(missingHtml, /Agência Ilimitada/);
 

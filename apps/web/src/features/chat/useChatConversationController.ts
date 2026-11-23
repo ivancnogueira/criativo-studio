@@ -174,7 +174,7 @@ export function useChatConversationController(props: AgentConversationViewProps)
   ) as NivelEsforco;
   const currentProvider = inferProviderFromModelId(currentModel);
 
-  const titleName = mode === "channel" ? canal?.nome ?? "#equipe" : agente?.nome ?? "Agente";
+  const titleName = mode === "channel" ? canal?.nome ?? "#equipe" : agente?.nome ?? "Criativo";
 
   const channelMembers = useMemo(() => {
     if (mode !== "channel" || !canal) return [];

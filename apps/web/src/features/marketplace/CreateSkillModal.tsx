@@ -165,7 +165,7 @@ export function CreateSkillModal({
             value={mode}
             onChange={setMode}
             tabs={[
-              { id: "assisted", label: "Assistida por agente" },
+              { id: "assisted", label: "Assistida por Criativo" },
               { id: "manual", label: "Definição manual" },
             ]}
           />
@@ -177,10 +177,10 @@ export function CreateSkillModal({
               </p>
               <div className="space-y-1">
                 <span className="block text-[14px] font-semibold text-[#F0F0F0]">
-                  Agente responsável
+                  Criativo responsável
                 </span>
                 <CarbonSelect
-                  ariaLabel="Selecionar agente criador da habilidade"
+                  ariaLabel="Selecionar Criativo criador da habilidade"
                   value={assistantAgentId}
                   options={agentSelectOptions}
                   onChange={setAssistantAgentId}
@@ -294,7 +294,7 @@ export function CreateSkillModal({
 
               <div className="space-y-2">
                 <span className="block text-[14px] font-semibold text-[#F0F0F0]">
-                  Vincular aos agentes ({selectedAgents.length})
+                  Vincular aos Criativos ({selectedAgents.length})
                 </span>
                 <div className="grid max-h-32 grid-cols-1 gap-1.5 overflow-y-auto rounded-[10px] border border-[#2A2A2A] bg-[#1A1A1A] p-3 md:grid-cols-2">
                   {agentes.map((ag) => {

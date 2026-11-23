@@ -425,7 +425,7 @@ export const EditorialCalendarPage: React.FC<EditorialCalendarPageProps> = ({
                               type="button"
                               disabled={busyId === post.id}
                               onClick={() => void handleProduceWithAgent(post)}
-                              title="Produzir com Agente"
+                              title="Produzir com Criativo"
                               className="rounded bg-[#31CF76]/20 px-1.5 py-0.5 text-[10px] text-[#31CF76] hover:bg-[#31CF76]/30"
                             >
                               <Sparkles className="h-3 w-3" />
@@ -515,7 +515,7 @@ export const EditorialCalendarPage: React.FC<EditorialCalendarPageProps> = ({
                             className="inline-flex w-full items-center justify-center gap-1 rounded-lg bg-[#31CF76]/15 py-1 text-[11px] font-medium text-[#31CF76] hover:bg-[#31CF76]/25"
                           >
                             <Wand2 className="h-3 w-3" />
-                            <span>Produzir com Agente</span>
+                            <span>Produzir com Criativo</span>
                           </button>
                         </div>
                       </div>
@@ -601,7 +601,7 @@ export const EditorialCalendarPage: React.FC<EditorialCalendarPageProps> = ({
                         className="inline-flex items-center gap-1 rounded-lg bg-[#31CF76]/20 px-2.5 py-1 text-xs font-semibold text-[#31CF76] hover:bg-[#31CF76]/30"
                       >
                         <Sparkles className="h-3.5 w-3.5" />
-                        <span>Produzir com Agente</span>
+                        <span>Produzir com Criativo</span>
                       </button>
                       <button
                         type="button"

@@ -540,15 +540,15 @@ export function CustomMcpModal({
 
           <div className="space-y-2">
             <span className="block text-[14px] font-semibold text-[#F0F0F0]">
-              Acesso inicial de agentes
+              Acesso inicial de Criativos
             </span>
             <SlidingTabs<"everyone" | "agents">
-              ariaLabel="Escopo inicial de agentes"
+              ariaLabel="Escopo inicial de Criativos"
               value={accessMode}
               onChange={setAccessMode}
               tabs={[
-                { id: "everyone", label: "Todos os agentes" },
-                { id: "agents", label: "Agentes selecionados" },
+                { id: "everyone", label: "Todos os Criativos" },
+                { id: "agents", label: "Criativos selecionados" },
               ]}
             />
             {accessMode === "agents" && (
@@ -599,7 +599,7 @@ export function CustomMcpModal({
                 Remover servidor {editingServer.nome}?
               </p>
               <p className="text-[12px] text-[#979797]">
-                Os agentes vinculados perderão acesso imediato às ferramentas deste servidor e os tokens OAuth locais serão revogados.
+                Os Criativos vinculados perderão acesso imediato às ferramentas deste servidor e os tokens OAuth locais serão revogados.
               </p>
               <div className="flex justify-end gap-2">
                 <button

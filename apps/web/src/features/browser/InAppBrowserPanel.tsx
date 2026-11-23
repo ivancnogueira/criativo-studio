@@ -677,7 +677,7 @@ export const InAppBrowserPanel: React.FC<InAppBrowserPanelProps> = ({
                 Navegador integrado aguardando quadro da página...
               </p>
               <p className="max-w-md text-[12px] text-[#979797]">
-                Digite um endereço acima ou clique para interagir diretamente sem sair do Criativo Studio.
+                Digite um endereço acima ou clique para interagir diretamente sem sair do CriativoOS.
               </p>
             </div>
           )}

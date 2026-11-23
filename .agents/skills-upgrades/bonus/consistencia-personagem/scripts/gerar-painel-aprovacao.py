@@ -374,7 +374,7 @@ def create_approval_html(persona_data, images_info, output_html_path):
         <div class="hero-banner">
             <div class="hero-info">
                 <h1>Galeria de Calibração Visual & Turnaround</h1>
-                <p>Todas as tomadas foram geradas exclusivamente por IA com base no DNA visual do personagem. Os agentes do Criativo AI Studio utilizam este conjunto como âncora para gerar posts, carrosséis e stories sem descaracterização facial ou corporal.</p>
+                <p>Todas as tomadas foram geradas exclusivamente por IA com base no DNA visual do personagem. Os agentes do CriativoOS utilizam este conjunto como âncora para gerar posts, carrosséis e stories sem descaracterização facial ou corporal.</p>
             </div>
             <div>
                 <a href="folha-consistencia-mestre.png" download class="stat-chip" style="text-decoration:none; cursor:pointer; border-color:var(--primary); color:#fff;">

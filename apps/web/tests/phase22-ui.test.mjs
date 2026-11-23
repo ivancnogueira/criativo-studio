@@ -170,7 +170,7 @@ describe("Fase 22 — Navegador Integrado, Dock Flutuante Desktop, WhatsApp Sync
     assert.match(html, /data-testid="floating-dock-pill"/);
     assert.match(html, /data-testid="floating-dock-chat-card"/);
     assert.match(html, /data-testid="floating-dock-pin-toggle"/);
-    assert.match(html, /Adicionar agentes ao dock/);
+    assert.match(html, /Adicionar Criativos ao dock/);
     assert.match(html, /WhatsApp/);
     assert.match(html, /Mensagem para Estrategista Editorial/);
 

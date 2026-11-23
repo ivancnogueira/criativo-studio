@@ -34,7 +34,7 @@ function buildVisualBaseCss(theme: "dark" | "light"): string {
         --studio-border: rgba(0, 0, 0, 0.12);
         --studio-fg: #141414;
         --studio-muted-fg: #5c5c5c;
-        --studio-accent: #007CF7;
+        --studio-accent: #0031CC;
         --studio-success: #16a34a;
         --studio-warning: #d97706;
         --studio-danger: #FD2F3B;
@@ -69,7 +69,7 @@ function buildVisualBaseCss(theme: "dark" | "light"): string {
       --studio-border: rgba(255, 255, 255, 0.12);
       --studio-fg: #F0F0F0;
       --studio-muted-fg: #979797;
-      --studio-accent: #42A0FF;
+      --studio-accent: #B9FC01;
       --studio-success: #31CF76;
       --studio-warning: #FF9412;
       --studio-danger: #FD2F3B;

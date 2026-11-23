@@ -181,7 +181,7 @@ export const SettingsLicenseTab: React.FC<SettingsLicenseTabProps> = ({
           {[
             {
               id: "bonus",
-              title: "Pacote Agentes Bônus (3 Especialistas)",
+              title: "Pacote Criativos Bônus (3 Especialistas)",
               unlocked: hasBonus,
             },
             {

@@ -142,7 +142,7 @@ describe("Fase 17 — UI Multi-Servidores Carbon Dark SSR & Auditoria Zero <sele
     );
 
     assert.match(blockedHtml, /Novo servidor neste computador/);
-    assert.match(blockedHtml, /O servidor tem seus próprios agentes, chats e arquivos/);
+    assert.match(blockedHtml, /O servidor tem seus próprios Criativos, chats e arquivos/);
     assert.match(blockedHtml, /Nome do servidor/);
     assert.match(blockedHtml, /Licença Individual/);
     assert.match(blockedHtml, /Ver planos e licença/);
@@ -170,7 +170,7 @@ describe("Fase 17 — UI Multi-Servidores Carbon Dark SSR & Auditoria Zero <sele
       server_name: "VPS Cliente Demo",
       command_bash:
         '{ echo CRIATIVO_CLAIM=CRV_demo_token_xyz; curl -fsSL http://127.0.0.1:3007/api/releases/install-server.sh; } | sudo bash -s -- --name "VPS Cliente Demo"',
-      command_agent_prompt: "Instale o Criativo AI Studio na VPS via SSH.",
+      command_agent_prompt: "Instale o CriativoOS na VPS via SSH.",
       expires_at: new Date(Date.now() + 14 * 60 * 1000).toISOString(),
       ttl_seconds: 900,
       status: "pending",
@@ -198,10 +198,10 @@ describe("Fase 17 — UI Multi-Servidores Carbon Dark SSR & Auditoria Zero <sele
 
     assert.match(pendingHtml, /Novo servidor em outro computador/);
     assert.match(pendingHtml, /CRIATIVO_CLAIM=CRV_demo_token_xyz/);
-    assert.match(pendingHtml, /Copiar para um agente de IA/);
+    assert.match(pendingHtml, /Copiar para um Criativo de IA/);
     assert.match(pendingHtml, /Funciona uma vez\. Expira em/);
     assert.match(pendingHtml, /Aguardando o comando ser executado no seu servidor/);
-    assert.match(pendingHtml, /Configurar com um agente/);
+    assert.match(pendingHtml, /Configurar com um Criativo/);
     assert.match(pendingHtml, /<button[^>]*disabled=""[^>]*>Abrir servidor<\/button>/);
 
     const redeemedHtml = renderToStaticMarkup(

@@ -73,7 +73,7 @@ export function McpSignInChatCard({
             </p>
           ) : status === "connected" ? (
             <p className="text-[14px] text-[#31CF76] font-semibold">
-              Conectado — Ferramentas liberadas para o agente continuar.
+              Conectado — Ferramentas liberadas para o Criativo continuar.
             </p>
           ) : (
             <p className="text-[14px] text-[#DCDCDC]">

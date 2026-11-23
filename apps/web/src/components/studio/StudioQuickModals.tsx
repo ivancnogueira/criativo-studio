@@ -277,7 +277,7 @@ export function StudioQuickModals({ ctx }: { ctx: StudioUiCtx }) {
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-[11.5px] text-[#979797]">
-                  Membros ({newChannelMembers.length}) · cada agente usa seu próprio provedor
+                  Membros ({newChannelMembers.length}) · cada Criativo usa seu próprio provedor
                 </span>
               </div>
               <div className="max-h-44 overflow-y-auto grid grid-cols-1 gap-1 pr-1">
@@ -368,13 +368,13 @@ export function StudioQuickModals({ ctx }: { ctx: StudioUiCtx }) {
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Ajuda e arquitetura Criativo AI Studio"
+          aria-label="Ajuda e arquitetura CriativoOS"
           className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4"
         >
           <div className="w-full max-w-lg rounded-2xl bg-[#212121] border border-white/10 p-5 space-y-3 shadow-2xl">
             <div className="flex items-center justify-between">
               <h3 className="text-[15px] font-semibold text-white">
-                Criativo AI Studio Online — Guia Rápido
+                CriativoOS — Guia Rápido
               </h3>
               <button
                 type="button"
@@ -431,7 +431,7 @@ export function StudioQuickModals({ ctx }: { ctx: StudioUiCtx }) {
                   }}
                   className="rounded-lg bg-[#007CF7] px-2.5 py-1 text-[12px] font-semibold text-white"
                 >
-                  Abrir agente
+                  Abrir Criativo
                 </button>
                 <button
                   type="button"
@@ -491,7 +491,7 @@ export function StudioQuickModals({ ctx }: { ctx: StudioUiCtx }) {
           tabs={browserTabs}
           activeTabId={activeBrowserTabId}
           framesByTab={browserFramesByTab}
-          agentName={activeAgent?.nome ?? "Agente"}
+          agentName={activeAgent?.nome ?? "Criativo"}
           agentAvatar={getAgentAvatar(activeAgent)}
           agentAvatarShape={getAgentAvatar(activeAgent).shape}
           agentAvatarColor={getAgentAvatar(activeAgent).color}

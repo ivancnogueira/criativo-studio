@@ -257,7 +257,7 @@ export const PublishedGalleryMetricsPage: React.FC<PublishedGalleryMetricsPagePr
               Conecte sua conta Instagram / Meta para ver métricas reais
             </h2>
             <p className="max-w-lg text-xs leading-relaxed text-[#979797]">
-              Configure seu Access Token e Business Account ID com segurança no Cofre AES-256-GCM para sincronizar alcance, salvamentos, retenção de Reels e gerar variações vencedoras com seus agentes.
+              Configure seu Access Token e Business Account ID com segurança no Cofre AES-256-GCM para sincronizar alcance, salvamentos, retenção de Reels e gerar variações vencedoras com seus Criativos.
             </p>
             <button
               type="button"
@@ -400,7 +400,7 @@ export const PublishedGalleryMetricsPage: React.FC<PublishedGalleryMetricsPagePr
                           className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-[#212121] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#2B2B2B]"
                         >
                           <Sparkles className="h-3.5 w-3.5 text-[#31CF76]" />
-                          <span>Analisar com Agente</span>
+                          <span>Analisar com Criativo</span>
                         </button>
                         {post.permalink && (
                           <a

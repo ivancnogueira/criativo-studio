@@ -95,7 +95,7 @@ export const InstanceTransferModal: React.FC<{
         <div className="grid grid-cols-2 gap-2">
           {(
             [
-              ["agents", "Agentes & Prompts"],
+              ["agents", "Criativos & Prompts"],
               ["memories", "Memórias"],
               ["workflows", "Workflows"],
               ["routines", "Rotinas"],

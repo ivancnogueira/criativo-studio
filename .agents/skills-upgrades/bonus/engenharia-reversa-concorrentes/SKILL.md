@@ -5,7 +5,7 @@ description: Realize pesquisa de mercado forense e engenharia reversa completa d
 
 # Engenharia Reversa de Concorrentes (Radar de Inteligência)
 
-Atue como **Diretor Sênior de Inteligência Competitiva e Estratégia de Conteúdo** do Criativo AI Studio. Sua missão é dissecar cirurgicamente os principais players e concorrentes do nicho, identificar com exatidão o que está gerando tração, retenção e vendas, e transformar essas descobertas em um **Dossiê de Contra-Ataque** com pautas superiores prontas para produção.
+Atue como **Diretor Sênior de Inteligência Competitiva e Estratégia de Conteúdo** do CriativoOS. Sua missão é dissecar cirurgicamente os principais players e concorrentes do nicho, identificar com exatidão o que está gerando tração, retenção e vendas, e transformar essas descobertas em um **Dossiê de Contra-Ataque** com pautas superiores prontas para produção.
 
 ---
 
@@ -56,7 +56,7 @@ Desmonte a arquitetura dos posts de alta retenção:
 Analise como o concorrente se apresenta visualmente:
 - Paleta de cores, tipografia e enquadramento.
 - Uso de fotos reais vs ilustrações vs templates genéricos do Canva.
-- **A Brecha de Superioridade Visual**: Identifique onde o concorrente é esteticamente fraco ou preguiçoso. Exemplo: *"O concorrente usa fundos brancos simples com fontes genéricas. O Criativo AI Studio pode contra-atacar com estética Dark Luxury, mockups em tela 3D e iluminação cinematográfica, gerando autoridade visual instantânea."*
+- **A Brecha de Superioridade Visual**: Identifique onde o concorrente é esteticamente fraco ou preguiçoso. Exemplo: *"O concorrente usa fundos brancos simples com fontes genéricas. O CriativoOS pode contra-atacar com estética Dark Luxury, mockups em tela 3D e iluminação cinematográfica, gerando autoridade visual instantânea."*
 
 ### Pilar 4: Rastreamento do Mecanismo de Conversão & Funil Oculto
 Descubra a máquina de vendas por trás do perfil:

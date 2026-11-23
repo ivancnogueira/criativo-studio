@@ -85,7 +85,7 @@ export function MarketplacePage(props: MarketplacePageProps) {
           </p>
           {[
             { id: "apps" as const, label: "Apps", count: apps.length, Icon: Blocks },
-            { id: "agents" as const, label: "Agentes", count: agentTemplates.length, Icon: Bot },
+            { id: "agents" as const, label: "Criativos", count: agentTemplates.length, Icon: Bot },
             { id: "skills" as const, label: "Habilidades", count: skills.length, Icon: Sparkles },
           ].map(({ id, label, count, Icon }) => {
             const active = tab === id && !selectedAppSlug;

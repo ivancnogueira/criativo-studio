@@ -84,13 +84,13 @@ export function AddToAgentsDialog({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={`Adicionar habilidade ${skill.name} aos agentes`}
+      aria-label={`Adicionar habilidade ${skill.name} aos Criativos`}
       className="fixed inset-0 z-50 flex items-center justify-center bg-[#0D0D0D]/80 p-4 backdrop-blur-sm"
     >
       <div className="w-full max-w-lg rounded-[16px] border border-[#2A2A2A] bg-[#212121] p-6 space-y-4 shadow-2xl">
         <div className="flex items-center justify-between">
           <h3 className="text-[20px] font-semibold text-[#F0F0F0]">
-            Adicionar aos agentes
+            Adicionar aos Criativos
           </h3>
           <button
             type="button"
@@ -106,7 +106,7 @@ export function AddToAgentsDialog({
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar agentes..."
+          placeholder="Filtrar Criativos..."
           className="w-full rounded-[10px] border border-[#2A2A2A] bg-[#242424] px-3 py-2 text-[14px] text-[#F0F0F0] placeholder-[#979797]"
         />
 

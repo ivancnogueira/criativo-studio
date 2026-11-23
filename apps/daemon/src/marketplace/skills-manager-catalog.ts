@@ -67,7 +67,7 @@ export function syncDiskAndCatalogOp(deps: SkillsManagerDeps): { syncedCount: nu
         const descricao =
           catalogItem?.description ||
           parsed.frontmatter.description ||
-          "Habilidade nativa do Criativo Studio.";
+          "Habilidade nativa do CriativoOS.";
         const categoria = catalogItem?.category || "Design & Criação";
 
         upsertDiskStmt.run(
@@ -77,7 +77,7 @@ export function syncDiskAndCatalogOp(deps: SkillsManagerDeps): { syncedCount: nu
           descricao,
           categoria,
           "nativa",
-          "Criativo Studio",
+          "CriativoOS",
           folderPath,
           1,
           agora,

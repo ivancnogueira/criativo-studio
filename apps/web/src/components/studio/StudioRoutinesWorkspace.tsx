@@ -97,7 +97,7 @@ export function StudioRoutinesWorkspace({ ctx }: { ctx: StudioUiCtx }) {
                         type="text"
                         value={routinesAgentSearch}
                         onChange={(e) => setRoutinesAgentSearch(e.target.value)}
-                        placeholder="Filtrar agentes..."
+                        placeholder="Filtrar Criativos..."
                         className="w-full rounded-lg border border-white/[0.08] bg-[#1B1B1F] pl-8 pr-3 py-1.5 text-[12px] text-[#E4E4E7] placeholder:text-[#6B6B76] focus:border-[#42A0FF]/50 focus:outline-none"
                       />
                     </div>
@@ -106,7 +106,7 @@ export function StudioRoutinesWorkspace({ ctx }: { ctx: StudioUiCtx }) {
                   <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
                     {visibleAgents.length === 0 ? (
                       <div className="px-3 py-6 text-center text-[12px] text-[#7A7A85]">
-                        Nenhum agente encontrado para "{routinesAgentSearch}".
+                        Nenhum Criativo encontrado para "{routinesAgentSearch}".
                       </div>
                     ) : (
                       visibleAgents.map((ag) => {
@@ -265,7 +265,7 @@ export function StudioRoutinesWorkspace({ ctx }: { ctx: StudioUiCtx }) {
                     </>
                   ) : (
                     <div className="flex-1 flex items-center justify-center text-[13px] text-[#7A7A85]">
-                      Nenhum agente disponível para configurar rotinas.
+                      Nenhum Criativo disponível para configurar rotinas.
                     </div>
                   )}
                 </div>

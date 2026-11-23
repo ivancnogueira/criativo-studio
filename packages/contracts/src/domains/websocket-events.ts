@@ -1,5 +1,5 @@
 /**
- * Mapa de eventos WebSocket do Criativo AI Studio Online.
+ * Mapa de eventos WebSocket do CriativoOS.
  */
 
 import type { McpOAuthStatus } from "../mcp-contracts.ts";

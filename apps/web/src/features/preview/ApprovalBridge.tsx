@@ -47,7 +47,7 @@ export function ApprovalBridge({
         className="flex w-full items-center justify-center gap-1.5 rounded-full border border-white/10 bg-[#1A1A1A] px-3 py-2 text-[12px] font-medium text-[#DCDCDC] transition hover:bg-[#2A2A2A]"
       >
         <RefreshCw className="h-3.5 w-3.5" />
-        Solicitar Ajuste aos Agentes
+        Solicitar Ajuste aos Criativos
       </button>
     </div>
   );

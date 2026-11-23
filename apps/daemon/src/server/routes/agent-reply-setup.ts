@@ -169,7 +169,7 @@ export async function prepareAgentReplySetup(
   const promptBaseParts = [
     typeof config.prompt_base === "string" && config.prompt_base.length > 0
       ? config.prompt_base
-      : `Você é ${agente.nome} (${agente.papel}) do Criativo AI Studio para ${onboarding.marca_nome} (${onboarding.perfil_handle}).`,
+      : `Você é ${agente.nome} (${agente.papel}) do CriativoOS para ${onboarding.marca_nome} (${onboarding.perfil_handle}).`,
     liveStudioContext,
   ];
   if (loadedSkill) {

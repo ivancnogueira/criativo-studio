@@ -213,7 +213,7 @@ export const SettingsUpdatesTab: React.FC<SettingsUpdatesTabProps> = ({
         <div className="rounded-xl bg-[#131313] border border-white/[0.06] p-3 text-[11.5px] text-[#8E8E8E] flex items-center gap-2">
           <ShieldCheck className="h-4 w-4 text-[#31CF76] shrink-0" />
           <span>
-            Blindagem de dados: atualizações substituem apenas os binários do Criativo AI Studio, preservando 100% dos arquivos da marca, `.env`, banco SQLite e servidores conectados.
+            Blindagem de dados: atualizações substituem apenas os binários do CriativoOS, preservando 100% dos arquivos da marca, `.env`, banco SQLite e servidores conectados.
           </span>
         </div>
       </div>

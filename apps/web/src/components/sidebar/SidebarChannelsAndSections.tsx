@@ -328,7 +328,7 @@ export function SidebarChannelsAndSections({
                               {canal.nome}
                             </span>
                             <span className="text-[11px] text-[#737378] tabular-nums shrink-0">
-                              {canal.membros_agentes.length} agentes
+                              {canal.membros_agentes.length} Criativos
                             </span>
                           </div>
                           <p className="text-[12px] text-[#8E8E93] truncate mt-0.5">

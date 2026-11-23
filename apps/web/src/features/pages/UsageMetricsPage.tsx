@@ -190,7 +190,7 @@ export const UsageMetricsPage: React.FC<UsageMetricsPageProps> = ({
     PERIOD_OPTIONS.find((o) => o.dias === periodoDias)?.rotulo ?? `Últimos ${periodoDias} dias`;
   const selectedAgentLabel = agenteFiltroId
     ? agentes.find((a) => a.agente_id === agenteFiltroId)?.nome ?? agenteFiltroId
-    : "Todos os agentes";
+    : "Todos os Criativos";
 
   const handleManualRefresh = async () => {
     setRefreshing(true);
@@ -206,7 +206,7 @@ export const UsageMetricsPage: React.FC<UsageMetricsPageProps> = ({
       return (
         <tr>
           <td colSpan={4} className="py-6 text-[12.5px] text-[#787878] text-center">
-            Nenhum registro encontrado neste período. Envie uma mensagem em um agente ou importe a telemetria local.
+            Nenhum registro encontrado neste período. Envie uma mensagem em um Criativo ou importe a telemetria local.
           </td>
         </tr>
       );
@@ -306,7 +306,7 @@ export const UsageMetricsPage: React.FC<UsageMetricsPageProps> = ({
                           : "text-[#DCDCDC] hover:bg-white/[0.06]"
                       }`}
                     >
-                      Todos os agentes
+                      Todos os Criativos
                     </button>
                     {agentes.map((ag) => (
                       <button
@@ -516,7 +516,7 @@ export const UsageMetricsPage: React.FC<UsageMetricsPageProps> = ({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-[13px] font-semibold text-[#E5E5E5]">Detalhamento</h2>
 
-            {/* SlidingTabs do Criativo Studio */}
+            {/* SlidingTabs do CriativoOS */}
             <div className="relative inline-grid grid-cols-4 rounded-xl bg-[#212121] border border-white/[0.06] p-1">
               <div
                 aria-hidden="true"
@@ -525,7 +525,7 @@ export const UsageMetricsPage: React.FC<UsageMetricsPageProps> = ({
               />
               {[
                 { key: "modelo", label: "Modelo" },
-                { key: "agente", label: "Agente" },
+                { key: "agente", label: "Criativo" },
                 { key: "dia", label: "Dia" },
                 { key: "habilidade", label: "Habilidade" },
               ].map((t) => (
@@ -551,7 +551,7 @@ export const UsageMetricsPage: React.FC<UsageMetricsPageProps> = ({
                     {activeTab === "modelo"
                       ? "Modelo"
                       : activeTab === "agente"
-                        ? "Agente"
+                        ? "Criativo"
                         : activeTab === "dia"
                           ? "Dia"
                           : "Habilidade"}

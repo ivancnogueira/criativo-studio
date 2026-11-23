@@ -84,7 +84,7 @@ export function BrowserTeachBar({
           <div className="flex min-w-0 items-center gap-[8px]">
             <span className="inline-flex h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-[#FD2F3B]" />
             <span className="truncate text-[14px] font-semibold text-[#F0F0F0]">
-              Gravando fluxo para o agente
+              Gravando fluxo para o Criativo
             </span>
             <span className="rounded-md bg-[#141414] px-2 py-0.5 font-mono text-[12px] text-[#42A0FF]">
               {stepsCount} {stepsCount === 1 ? "passo" : "passos"}
@@ -209,7 +209,7 @@ export function UserBrowsingLogInspector({
               </p>
               <p className="mt-1 text-[12px] text-[#979797]">
                 Inicie o BrowserTakeover e clique em Iniciar gravação para ensinar rotas repetíveis
-                ao agente.
+                ao Criativo.
               </p>
             </div>
           ) : (

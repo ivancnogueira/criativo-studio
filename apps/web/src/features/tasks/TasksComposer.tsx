@@ -273,7 +273,7 @@ export const TaskTookLine: React.FC<TaskTookLineProps> = ({
           selectedAgentId={pending.agenteId}
           onSelectAgent={onChangePendingAgent}
           compact
-          ariaLabel="Trocar agente antes de iniciar"
+          ariaLabel="Trocar Criativo antes de iniciar"
         />
         <span className="truncate text-[14px] font-normal text-[#DCDCDC] max-w-[280px]">
           {pending.titulo}

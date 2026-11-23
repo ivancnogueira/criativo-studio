@@ -1,6 +1,6 @@
-# Criativo AI Studio Online — instruções para o agente
+# CriativoOS — instruções para o agente
 
-Este repositório implementa o **Criativo AI Studio Online**, uma plataforma autônoma multi-agente para planejamento editorial, copywriting, design de posts/carrosséis/anúncios/stories, análise de métricas e publicação oficial no Instagram (com upgrades modulares em etapas para Entregáveis/Consistência e Vídeos Remotion). Converse sempre com o usuário em português do Brasil.
+Este repositório implementa o **CriativoOS**, uma plataforma autônoma multi-agente para planejamento editorial, copywriting, design de posts/carrosséis/anúncios/stories, análise de métricas e publicação oficial no Instagram (com upgrades modulares em etapas para Entregáveis/Consistência e Vídeos Remotion). Converse sempre com o usuário em português do Brasil.
 
 ## Estrutura
 

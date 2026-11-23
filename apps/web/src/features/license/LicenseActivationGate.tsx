@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import type { LicenseActivationStatus, LicenseDeviceRecord } from "@criativo/contracts";
 import { AlertTriangle, CheckCircle2, KeyRound, Laptop, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
 import { DaemonHttpError } from "../../services/websocket-client";
+import { CriativoSymbolLogo } from "../../components/CriativoSymbolLogo";
 
 export interface LicenseActivationGateProps {
   status: LicenseActivationStatus;
@@ -19,10 +20,10 @@ const STATUS_BANNER: Record<
   { title: string; tone: "neutral" | "danger" | "warn"; description: string }
 > = {
   missing: {
-    title: "Ative sua licença do Criativo AI Studio",
+    title: "Ative sua licença do CriativoOS",
     tone: "neutral",
     description:
-      "Informe o e-mail usado na compra e a chave de licença enviada para liberar sua equipe de agentes de IA e a operação 24/7.",
+      "Informe o e-mail usado na compra e a chave de licença enviada para liberar sua equipe de Criativos de IA e a operação 24/7.",
   },
   revoked: {
     title: "Licença revogada ou suspensa",
@@ -130,17 +131,13 @@ export const LicenseActivationGate: React.FC<LicenseActivationGateProps> = ({
     <div className="min-h-screen w-full bg-[#0D0D0D] text-[#F0F0F0] flex flex-col items-center justify-center p-6">
       <div className="w-full max-w-[520px] rounded-2xl border border-white/[0.08] bg-[#1A1A1A] p-7 shadow-2xl space-y-6">
         <div className="flex items-start gap-4">
-          <div className="h-12 w-12 rounded-2xl bg-[#242424] border border-white/10 flex items-center justify-center shrink-0 p-1.5">
-            <img
-              src="/logo-criativo.png"
-              alt="Criativo AI Studio"
-              className="h-full w-full object-contain"
-            />
+          <div className="h-12 w-12 rounded-2xl bg-[#141414] border border-white/10 flex items-center justify-center shrink-0 p-1.5">
+            <CriativoSymbolLogo size={32} color="#B9FC01" easterEggOnHover />
           </div>
           <div className="min-w-0 flex-1 space-y-1">
-            <div className="inline-flex items-center gap-1.5 rounded-full bg-[#242424] border border-white/[0.06] px-2.5 py-0.5 text-[11px] font-semibold text-[#979797]">
-              <KeyRound className="h-3 w-3 text-[#31CF76]" />
-              <span>Criativo AI Studio Online</span>
+            <div className="inline-flex items-center gap-1.5 rounded-full bg-[#242424] border border-white/[0.06] px-2.5 py-0.5 text-[11px] font-semibold text-[#DCDCDC]">
+              <KeyRound className="h-3 w-3 text-[#B9FC01]" />
+              <span>CriativoOS</span>
             </div>
             <h1 className="text-[20px] font-semibold text-white tracking-tight leading-snug">
               {banner.title}
@@ -178,7 +175,7 @@ export const LicenseActivationGate: React.FC<LicenseActivationGateProps> = ({
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="seu-email@dominio.com"
-              className="w-full rounded-xl border border-white/10 bg-[#141414] px-3.5 py-2.5 text-[13px] text-white placeholder:text-[#6A6A6A] focus:border-[#42A0FF] focus:outline-none"
+              className="w-full rounded-xl border border-white/10 bg-[#141414] px-3.5 py-2.5 text-[13px] text-white placeholder:text-[#6A6A6A] focus:border-[#B9FC01] focus:outline-none"
             />
           </div>
 
@@ -192,7 +189,7 @@ export const LicenseActivationGate: React.FC<LicenseActivationGateProps> = ({
               value={licenseKey}
               onChange={(e) => setLicenseKey(e.target.value)}
               placeholder="CRIA-IND-XXXX-XXXX-XXXX"
-              className="w-full rounded-xl border border-white/10 bg-[#141414] px-3.5 py-2.5 font-mono text-[13px] tracking-wider text-white placeholder:text-[#6A6A6A] focus:border-[#42A0FF] focus:outline-none"
+              className="w-full rounded-xl border border-white/10 bg-[#141414] px-3.5 py-2.5 font-mono text-[13px] tracking-wider text-white placeholder:text-[#6A6A6A] focus:border-[#B9FC01] focus:outline-none"
             />
           </div>
 
@@ -200,7 +197,7 @@ export const LicenseActivationGate: React.FC<LicenseActivationGateProps> = ({
             <button
               type="submit"
               disabled={loading}
-              className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-[#F0F0F0] px-4 py-2.5 text-[13px] font-semibold text-[#141414] hover:bg-white transition-colors disabled:opacity-50"
+              className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-[#B9FC01] px-4 py-2.5 text-[13px] font-semibold text-[#0D0D0D] hover:bg-[#C9FF2E] transition-colors disabled:opacity-50"
             >
               {loading ? (
                 <>
@@ -277,7 +274,7 @@ export const LicenseActivationGate: React.FC<LicenseActivationGateProps> = ({
             <div className="text-[10.5px] text-[#787878]">10 servidores · 3 PCs</div>
           </div>
           <div className="rounded-xl bg-[#141414] border border-white/[0.05] px-2 py-2">
-            <div className="text-[11px] font-semibold text-[#31CF76]">Agência Ilimitada</div>
+            <div className="text-[11px] font-semibold text-[#B9FC01]">Agência Ilimitada</div>
             <div className="text-[10.5px] text-[#787878]">∞ servidores · 5 PCs</div>
           </div>
         </div>

@@ -384,7 +384,7 @@ export class SkillLearningService {
       .join("\n");
 
     const systemPrompt = [
-      "Você é o redator de habilidades reutilizáveis (SKILL.md) do Criativo AI Studio Online.",
+      "Você é o redator de habilidades reutilizáveis (SKILL.md) do CriativoOS.",
       "Escreva sempre em português (pt-br), de forma imperativa, clara e sem nenhum segredo, token ou nome real.",
       `Retorne APENAS JSON válido no formato: {"description":"até ${LEARNED_DESCRIPTION_CHARACTERS} caracteres","instructions":"markdown conciso até ${LEARNED_INSTRUCTIONS_CHARACTERS} caracteres"}`,
       previousBody

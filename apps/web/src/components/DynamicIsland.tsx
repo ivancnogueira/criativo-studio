@@ -73,7 +73,7 @@ interface DynamicIslandProps {
 }
 
 /**
- * Barra superior com navegação em abas e Dynamic Island central preta (#000000) do Criativo Studio.
+ * Barra superior com navegação em abas e Dynamic Island central preta (#000000) do CriativoOS.
  */
 export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   wsConnected,
@@ -231,7 +231,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         </div>
       </div>
 
-      {/* Centro: Barra de Pulso #000000 do Criativo Studio */}
+      {/* Centro: Barra de Pulso #000000 do CriativoOS */}
       <div
         aria-label="Barra de Pulso"
         className="hidden md:flex items-center gap-2.5 h-[30px] px-3.5 rounded-full bg-[#000000] border border-white/10 shadow-[0_6px_20px_rgba(0,0,0,0.65)] shrink-0"

@@ -36,7 +36,7 @@ export function ProvidersMasterView({ ctrl }: { ctrl: ProvidersCatalogController
         <div>
           <div className="text-[13px] font-medium text-white">Provedor padrão</div>
           <p className="text-[11.5px] text-[#8E8E93] mt-0.5">
-            Novos agentes começam com este provedor.
+            Novos Criativos começam com este provedor.
           </p>
         </div>
         <div className="relative shrink-0">

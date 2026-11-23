@@ -214,7 +214,7 @@ describe("Fase 23 — UI, Multi-Server, Dock, Identidade Própria, Pastas Autori
       .map((f) => readFileSync(f, "utf8"))
       .join("\n");
     assert.doesNotMatch(sidebarSrc, /window\.confirm/);
-    assert.match(sidebarSrc, /Excluir agente/);
+    assert.match(sidebarSrc, /Excluir Criativo/);
     assert.match(sidebarSrc, /Nova equipe|sidebar\.newTeam/);
     assert.match(sidebarSrc, /Novo diretório/);
     assert.match(sidebarSrc, /Nova Subconversa/);

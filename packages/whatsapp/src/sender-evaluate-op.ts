@@ -243,7 +243,7 @@ export async function evaluateIncomingOp(deps: SenderRulesDeps, input: EvaluateI
   };
 
   const challengeMessage = [
-    "Olá! Este número do Criativo AI Studio exige aprovação para iniciar atendimento.",
+    "Olá! Este número do CriativoOS exige aprovação para iniciar atendimento.",
     `Seu código de solicitação é: *${codigo}* (válido por 1 hora).`,
     "Peça ao administrador do estúdio para aprovar este código no painel do WhatsApp.",
   ].join("\n");

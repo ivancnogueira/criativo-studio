@@ -394,7 +394,7 @@ export function ServerBrowserProfilesPanel({
           </h3>
         </div>
         <p className="text-[12px] text-[#979797]">
-          Perfis isolam sessões, cookies e proxies entre agentes de pesquisa e publicação.
+          Perfis isolam sessões, cookies e proxies entre Criativos de pesquisa e publicação.
         </p>
       </div>
 

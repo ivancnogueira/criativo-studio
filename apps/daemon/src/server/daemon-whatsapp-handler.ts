@@ -226,7 +226,7 @@ export function createWhatsAppAuthorizedTurnHandler(
       const errMsg = err instanceof Error ? err.message : String(err);
       try {
         await event.client.sendMessage(event.msg.remoteJid, {
-          text: `Não consegui processar sua solicitação agora (${errMsg.slice(0, 180)}). Verifique a conexão do provedor de IA no Criativo Studio.`,
+          text: `Não consegui processar sua solicitação agora (${errMsg.slice(0, 180)}). Verifique a conexão do provedor de IA no CriativoOS.`,
         });
       } catch {
         // Ignora falha secundária de envio caso o socket esteja desconectado

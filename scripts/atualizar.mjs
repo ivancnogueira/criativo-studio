@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Atualiza o Criativo AI Studio Online sem tocar nos dados da instância do cliente.
+// Atualiza o CriativoOS sem tocar nos dados da instância do cliente.
 // Uso:
 //   npm run atualizar                                    (clone Git: git pull --ff-only)
 //   npm run atualizar -- --zip <arquivo.zip>             (pacote ZIP baixado)
@@ -115,12 +115,12 @@ function lerMeta(dir) {
   const arq = join(dir, "produto.json");
   if (existsSync(arq)) {
     const json = JSON.parse(readFileSync(arq, "utf8"));
-    return { nome: json.nome || "Criativo AI Studio Online", versao: json.versao || "1.0.0" };
+    return { nome: json.nome || "CriativoOS", versao: json.versao || "1.0.0" };
   }
   const pkg = join(dir, "package.json");
   if (existsSync(pkg)) {
     const json = JSON.parse(readFileSync(pkg, "utf8"));
-    return { nome: json.name || "Criativo AI Studio Online", versao: json.version || "1.0.0" };
+    return { nome: json.name || "CriativoOS", versao: json.version || "1.0.0" };
   }
   throw new Error(`Diretório inválido: produto.json e package.json ausentes em ${dir}`);
 }
@@ -131,7 +131,7 @@ export function localizarRaiz(dir) {
     (d) => d.isDirectory() && existsSync(join(dir, d.name, "produto.json"))
   );
   if (sub.length === 1) return join(dir, sub[0].name);
-  throw new Error("Este arquivo não parece um pacote do Criativo AI Studio Online (produto.json ausente).");
+  throw new Error("Este arquivo não parece um pacote do CriativoOS (produto.json ausente).");
 }
 
 function mesmoConteudo(a, b) {

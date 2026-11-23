@@ -88,7 +88,7 @@ export const WORKFLOW_ORIGIN_LABELS: Record<WorkflowRunOrigin, string> = {
   whatsapp: "WhatsApp",
   telegram: "Telegram",
   conector: "Conector externo",
-  agente: "Agente",
+  agente: "Criativo",
 };
 
 export const WORKFLOW_NODE_DIMENSIONS: Record<
@@ -151,7 +151,7 @@ export const WORKFLOW_NODE_LIBRARY: readonly WorkflowLibraryItem[] = [
   {
     tipo: "agente",
     categoria: "processamento",
-    titulo: "Executar Agente",
+    titulo: "Executar Criativo",
     descricao: "Delega tarefa completa a um dos 15 especialistas",
   },
   {

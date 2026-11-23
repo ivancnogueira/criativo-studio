@@ -79,7 +79,7 @@ export function InspectorAgentExtraTabs({
               <textarea
                 id="inspector-agent-prompt"
                 name="inspector_agent_prompt"
-                aria-label="Instruções do agente"
+                aria-label="Instruções do Criativo"
                 rows={10}
                 value={promptDraft}
                 onChange={(e) => setPromptDraft(e.target.value)}
@@ -101,7 +101,7 @@ export function InspectorAgentExtraTabs({
             <div className="flex items-center justify-between gap-3 rounded-xl bg-[#212121] border border-white/[0.06] px-3.5 py-3">
               <div className="min-w-0">
                 <div className="text-[12.5px] font-semibold text-white">
-                  Memória automática deste agente
+                  Memória automática deste Criativo
                 </div>
                 <div className="text-[11px] text-[#8E8E93]">
                   Extrai aprendizados relevantes em segundo plano após as conversas.
@@ -111,7 +111,7 @@ export function InspectorAgentExtraTabs({
                 type="button"
                 role="switch"
                 aria-checked={autoMemoryDraft}
-                aria-label="Memória automática deste agente"
+                aria-label="Memória automática deste Criativo"
                 onClick={() => {
                   const next = !autoMemoryDraft;
                   setAutoMemoryDraft(next);
@@ -134,7 +134,7 @@ export function InspectorAgentExtraTabs({
                 <input
                   id="inspector-new-memory"
                   name="new_memory"
-                  aria-label="Adicionar memória permanente do agente"
+                  aria-label="Adicionar memória permanente do Criativo"
                   type="text"
                   value={memoryDraft}
                   onChange={(e) => setMemoryDraft(e.target.value)}
@@ -227,7 +227,7 @@ export function InspectorAgentExtraTabs({
 
             {allowedFoldersDraft.length === 0 ? (
               <p className="rounded-xl border border-white/[0.06] bg-[#212121] p-3.5 text-[11.5px] text-[#8E8E93]">
-                Nenhuma pasta adicional liberada. O agente opera apenas no workspace do estúdio.
+                Nenhuma pasta adicional liberada. O Criativo opera apenas no workspace do estúdio.
               </p>
             ) : (
               <div className="space-y-1.5">
@@ -286,7 +286,7 @@ export function InspectorAgentExtraTabs({
                   </button>
                 </div>
                 <CarbonSelect
-                  ariaLabel="Perfil de navegador do agente"
+                  ariaLabel="Perfil de navegador do Criativo"
                   value={browserProfileDraft}
                   options={browserProfileOptions}
                   onChange={(nextVal) => {

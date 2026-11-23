@@ -11,7 +11,7 @@ export const RoutineFlowsCanvas: React.FC<RoutineFlowsCanvasProps> = (props) => 
   if (!ctrl.agente) {
     return (
       <div className="flex-1 h-full flex items-center justify-center bg-[#1A1A1A] text-[#979797] text-[14px]">
-        Selecione um agente na barra lateral para visualizar os fluxos de rotinas.
+        Selecione um Criativo na barra lateral para visualizar os fluxos de rotinas.
       </div>
     );
   }

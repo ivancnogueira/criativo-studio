@@ -298,7 +298,7 @@ export function ConnectorsAppsTab({
                 {agentes.length > 0 && (
                   <div className="space-y-1.5">
                     <span className="block text-[12px] font-medium text-[#DCDCDC]">
-                      Agente Orquestrador Vinculado
+                      Criativo Orquestrador Vinculado
                     </span>
                     <AgentCustomPicker
                       agentes={agentes}

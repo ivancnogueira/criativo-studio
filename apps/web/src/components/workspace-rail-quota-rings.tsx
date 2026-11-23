@@ -229,7 +229,7 @@ export const ConcentricQuotaRings: React.FC<{
 };
 
 /**
- * Trilho de navegação vertical estreito à esquerda (52px) espelhando o Criativo Studio Desktop,
+ * Trilho de navegação vertical estreito à esquerda (52px) espelhando o CriativoOS Desktop,
  * com anéis concêntricos reais por conta conectada e popover de cotas ao vivo.
  */
 export const MAX_VISIBLE_ACCOUNT_RINGS = 5;

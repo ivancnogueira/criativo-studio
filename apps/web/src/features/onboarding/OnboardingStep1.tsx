@@ -49,13 +49,13 @@ export function OnboardingStep1({ ctrl }: { ctrl: OnboardingController }) {
           <h1 className="text-[42px] leading-[1.08] font-bold tracking-tight text-white mb-3">
             Monte sua
             <br />
-            equipe de IA.
+            equipe de Criativos.
           </h1>
 
           <p className="text-[13px] text-[#979797] mb-7 max-w-[360px]">
             {unlockedAgentsCount && unlockedAgentsCount > 0
-              ? `O Criativo Studio é gratuito para uso local. Escolha a IA dos seus ${unlockedAgentsCount} agentes liberados.`
-              : "O Criativo Studio é gratuito para uso local. Escolha a IA para sua equipe criativa."}
+              ? `Sua licença do CriativoOS está ativa. Escolha a IA que vai alimentar seus ${unlockedAgentsCount} Criativos liberados.`
+              : "Sua licença do CriativoOS está ativa. Escolha a IA que vai alimentar sua equipe de Criativos."}
           </p>
 
           {/* Caixa agrupada Carbon Dark */}
@@ -72,7 +72,7 @@ export function OnboardingStep1({ ctrl }: { ctrl: OnboardingController }) {
                   value={marcaNome}
                   onChange={(e) => setMarcaNome(e.target.value)}
                   placeholder="Ex.: Minha Marca"
-                  className="w-full rounded-lg bg-[#141414] border border-white/10 px-2.5 py-1.5 text-[12px] text-white placeholder-[#5A5A5F] focus:outline-none focus:border-[#42A0FF]"
+                  className="w-full rounded-lg bg-[#141414] border border-white/10 px-2.5 py-1.5 text-[12px] text-white placeholder-[#5A5A5F] focus:outline-none focus:border-[#B9FC01]"
                 />
               </div>
               <div>
@@ -86,7 +86,7 @@ export function OnboardingStep1({ ctrl }: { ctrl: OnboardingController }) {
                   value={perfilHandle}
                   onChange={(e) => setPerfilHandle(e.target.value)}
                   placeholder="Ex.: @seu_perfil"
-                  className="w-full rounded-lg bg-[#141414] border border-white/10 px-2.5 py-1.5 text-[12px] text-white placeholder-[#5A5A5F] focus:outline-none focus:border-[#42A0FF]"
+                  className="w-full rounded-lg bg-[#141414] border border-white/10 px-2.5 py-1.5 text-[12px] text-white placeholder-[#5A5A5F] focus:outline-none focus:border-[#B9FC01]"
                 />
               </div>
             </div>
@@ -135,15 +135,15 @@ export function OnboardingStep1({ ctrl }: { ctrl: OnboardingController }) {
               <input
                 id="onboarding-telemetry"
                 name="telemetria_anonima"
-                aria-label="Ajude a melhorar o Criativo Studio"
+                aria-label="Ajude a melhorar o CriativoOS"
                 type="checkbox"
                 checked={telemetria}
                 onChange={(e) => setTelemetria(e.target.checked)}
-                className="mt-1 h-4 w-4 rounded border-white/25 bg-[#141414] accent-[#42A0FF]"
+                className="mt-1 h-4 w-4 rounded border-white/25 bg-[#141414] accent-[#B9FC01]"
               />
               <div>
                 <div className="text-[13px] font-medium text-[#DCDCDC]">
-                  Ajude a melhorar o Criativo Studio
+                  Ajude a melhorar o CriativoOS
                 </div>
                 <div className="text-[11.5px] text-[#6A6A6A]">
                   Métricas locais de fila. Nunca vaza chats, chaves do cofre ou arquivos.

@@ -154,7 +154,7 @@ export function useConnectorsController(props: ConnectorsPageProps) {
         id: "mcp",
         nome: "Servidores MCP",
         categoria: "sistema",
-        descricao: "Conecte servidores Model Context Protocol aos 15 agentes do estúdio.",
+        descricao: "Conecte servidores Model Context Protocol aos 15 Criativos do estúdio.",
         subtitulo: "Ferramentas externas",
         status: "desconectado",
         resumo_estado: "Nenhum servidor externo",

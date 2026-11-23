@@ -59,7 +59,7 @@ export function StudioModalsHost({ ctx }: { ctx: StudioUiCtx }) {
           tabId={activeTakeoverModal.tabId}
           agentName={
             agentes.find((a) => a.agente_id === activeTakeoverModal.agenteId)?.nome ??
-            "Agente de Pesquisa"
+            "Criativo de Pesquisa"
           }
           url={
             activeTakeoverFrame?.tabId === activeTakeoverModal.tabId

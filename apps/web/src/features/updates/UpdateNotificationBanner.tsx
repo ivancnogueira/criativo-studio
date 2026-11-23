@@ -75,7 +75,7 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
                 : status.state === "applying"
                   ? "Aplicando atualização sem tocar nos seus dados..."
                   : `Baixando atualização (${Math.round(status.progress_percent)}%)...`
-              : "Clique para atualizar mantendo agentes, conversas e banco seguros."}
+              : "Clique para atualizar mantendo Criativos, conversas e banco seguros."}
       </p>
 
       {isInProgress && (

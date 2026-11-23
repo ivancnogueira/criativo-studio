@@ -210,7 +210,7 @@ export function useSidebarController(props: SidebarProps) {
       },
       {
         key: "bonus",
-        label: "Agentes Bônus",
+        label: "Criativos Bônus",
         items: sorted.filter(
           (a) => a.frente === "bonus" || (a.config as Record<string, unknown>)?.frente === "bonus"
         ),

@@ -31,7 +31,7 @@ export const ExpressiveSvgAvatar: React.FC<ExpressiveBodyRenderProps> = (props) 
     gazeX,
     gazeY,
     isWorking = false,
-    label = "Avatar do agente",
+    label = "Avatar do Criativo",
     className = "",
     svgRef,
   } = props;

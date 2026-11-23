@@ -147,7 +147,7 @@ describe("Fase 11 — UI Agenda, Switch Rotinas, Webhook 3 Passos, Editor & Canv
         routineCountsByAgent: { estrategista: 3 },
       })
     );
-    assert.match(sidebarAgentsHtml, /Agentes/);
+    assert.match(sidebarAgentsHtml, /Criativos/);
     assert.match(sidebarAgentsHtml, /Rotinas/);
     assert.match(sidebarAgentsHtml, /Equipes/);
 
@@ -359,7 +359,7 @@ describe("Fase 11 — UI Agenda, Switch Rotinas, Webhook 3 Passos, Editor & Canv
     assert.match(canvasHtml, /routine:rot-wh-1/);
     assert.match(canvasHtml, /agent:estrategista/);
     assert.match(canvasHtml, /Executar rotina agora/);
-    assert.match(canvasHtml, /Adicionar agente ao fluxo/);
+    assert.match(canvasHtml, /Adicionar Criativo ao fluxo/);
     assert.doesNotMatch(canvasHtml, /<select/i);
 
     // Valida computeConnectProblem puro no cliente

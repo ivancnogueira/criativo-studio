@@ -391,7 +391,7 @@ export const TasksQueuePage: React.FC<TasksQueuePageProps> = ({
           <header>
             <h1 className="text-[20px] font-semibold text-white">Sub-tarefas Paralelas &amp; Fila</h1>
             <p className="text-[12px] font-normal text-[#979797]">
-              Dispare entregas paralelas por agente, acompanhe progresso isolado e aprove saídas para [NOME_DA_MARCA].
+              Dispare entregas paralelas por Criativo, acompanhe progresso isolado e aprove saídas para [NOME_DA_MARCA].
             </p>
           </header>
 

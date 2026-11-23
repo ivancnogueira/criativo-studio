@@ -415,7 +415,7 @@ export function uninstallSkillOp(deps: SkillsManagerDeps, skillIdOrSlug: string)
 
   if (existing.origem === "nativa") {
     throw new SkillsManagerError(
-      "Habilidades nativas do Criativo Studio não podem ser desinstaladas.",
+      "Habilidades nativas do CriativoOS não podem ser desinstaladas.",
       "NATIVE_SKILL_PROTECTED"
     );
   }

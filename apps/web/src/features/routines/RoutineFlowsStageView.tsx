@@ -96,13 +96,13 @@ export function RoutineFlowsStageView({
               className="inline-flex items-center gap-1.5 rounded-lg bg-[#212121] hover:bg-[#2A2A2A] border border-white/[0.08] px-3 py-1.5 text-[12px] font-semibold text-[#F0F0F0]"
             >
               <UserPlus className="h-3.5 w-3.5 text-[#42A0FF]" />
-              <span>Adicionar agente ao fluxo</span>
+              <span>Adicionar Criativo ao fluxo</span>
             </button>
             {addAgentOpen && (
               <div className="absolute right-0 mt-1 z-40 w-64 rounded-xl bg-[#212121] border border-white/10 p-1 shadow-2xl max-h-64 overflow-y-auto">
                 {availableExtraAgents.length === 0 ? (
                   <p className="px-3 py-2 text-[12px] text-[#979797]">
-                    Todos os agentes já estão no canvas.
+                    Todos os Criativos já estão no canvas.
                   </p>
                 ) : (
                   availableExtraAgents.map((candidate) => (
@@ -422,7 +422,7 @@ export function RoutineFlowsStageView({
                     </div>
 
                     <p className="text-[12px] font-normal text-[#979797] truncate">
-                      {agObj?.modelo_padrao ?? "Agente especialista"}
+                      {agObj?.modelo_padrao ?? "Criativo especialista"}
                     </p>
 
                     {step?.output && (

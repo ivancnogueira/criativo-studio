@@ -1,4 +1,4 @@
-# Criativo AI Studio Online
+# CriativoOS
 
 Plataforma autônoma **multi-agente** (24/7) para criação, revisão e publicação de conteúdo criativo para Instagram — carrosséis, posts individuais, anúncios, stories 9:16 e vídeos cinematográficos Remotion — operada via **Cockpit Web**, **WhatsApp (QR Code)**, **Telegram** e **CLI Linux**.
 

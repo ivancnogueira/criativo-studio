@@ -88,7 +88,7 @@ export const NewLocalServerModal: React.FC<NewLocalServerModalProps> = ({
               Novo servidor neste computador
             </h2>
             <p className="mt-1.5 text-[13.5px] text-[#9A9A9A] leading-relaxed">
-              O servidor tem seus próprios agentes, chats e arquivos. Ele é executado neste computador.
+              O servidor tem seus próprios Criativos, chats e arquivos. Ele é executado neste computador.
             </p>
           </div>
           <button

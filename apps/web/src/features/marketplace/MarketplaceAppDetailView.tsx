@@ -323,8 +323,8 @@ export function MarketplaceAppDetailView({
                         : ""}
                       Acesso:{" "}
                       {acc.acesso?.mode === "agents"
-                        ? `${acc.acesso.agentIds.length} agente(s) liberado(s)`
-                        : "Todos os agentes"}
+                        ? `${acc.acesso.agentIds.length} Criativo(s) liberado(s)`
+                        : "Todos os Criativos"}
                     </p>
                     {acc.ultimo_erro && (
                       <p className="text-[11px] text-[#FD2F3B]">{acc.ultimo_erro}</p>
@@ -407,18 +407,18 @@ export function MarketplaceAppDetailView({
         <section className="rounded-[14px] border border-[#2A2A2A] bg-[#212121] p-6 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-[20px] font-semibold text-[#F0F0F0]">Acesso de agentes</h2>
+              <h2 className="text-[20px] font-semibold text-[#F0F0F0]">Acesso de Criativos</h2>
               <p className="text-[12px] text-[#979797]">
-                Defina quais agentes da sua licença podem usar as ferramentas deste conector no chat e em fluxos.
+                Defina quais Criativos da sua licença podem usar as ferramentas deste conector no chat e em fluxos.
               </p>
             </div>
             <SlidingTabs<"everyone" | "agents">
-              ariaLabel="Controle de acesso por agente"
+              ariaLabel="Controle de acesso por Criativo"
               value={accessMode}
               onChange={setAccessMode}
               tabs={[
-                { id: "everyone", label: "Todos os agentes" },
-                { id: "agents", label: "Agentes selecionados" },
+                { id: "everyone", label: "Todos os Criativos" },
+                { id: "agents", label: "Criativos selecionados" },
               ]}
             />
           </div>
@@ -473,7 +473,7 @@ export function MarketplaceAppDetailView({
               <h2 className="text-[20px] font-semibold text-[#F0F0F0]">Experimentar no chat</h2>
               <div className="w-64">
                 <CarbonSelect
-                  ariaLabel="Selecionar agente destino para testar prompt"
+                  ariaLabel="Selecionar Criativo destino para testar prompt"
                   value={tryTargetAgentId}
                   options={agentSelectOptions}
                   onChange={setTryTargetAgentId}

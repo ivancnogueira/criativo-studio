@@ -239,7 +239,7 @@ describe("Fase 10 — UI Carbon Dark da Loja Unificada, WhatsApp Multi-Número &
     );
     assert.match(appDetailHtml, /Conectar aplicativo/);
     assert.match(appDetailHtml, /Autenticar no navegador/);
-    assert.match(appDetailHtml, /Acesso de agentes/);
+    assert.match(appDetailHtml, /Acesso de Criativos/);
     assert.match(appDetailHtml, /Experimentar prompt/);
     assert.doesNotMatch(appDetailHtml, /<select/i);
 
@@ -252,8 +252,8 @@ describe("Fase 10 — UI Carbon Dark da Loja Unificada, WhatsApp Multi-Número &
     );
     assert.match(agentsHtml, /Importar repositório/);
     assert.match(agentsHtml, /Diretor Criativo/);
-    assert.match(agentsHtml, /Instalar agente/);
-    assert.match(agentsHtml, /Duplicar agente/);
+    assert.match(agentsHtml, /Instalar Criativo/);
+    assert.match(agentsHtml, /Duplicar Criativo/);
     assert.doesNotMatch(agentsHtml, /<select/i);
 
     const skillsHtml = renderToStaticMarkup(
@@ -266,7 +266,7 @@ describe("Fase 10 — UI Carbon Dark da Loja Unificada, WhatsApp Multi-Número &
     assert.match(skillsHtml, /Criar habilidade/);
     assert.match(skillsHtml, /Suas habilidades/);
     assert.match(skillsHtml, /Ativada em 1 de 1/);
-    assert.match(skillsHtml, /Adicionar aos agentes/);
+    assert.match(skillsHtml, /Adicionar aos Criativos/);
     assert.match(skillsHtml, /Instalar habilidade/);
     assert.doesNotMatch(skillsHtml, /<select/i);
 
@@ -291,7 +291,7 @@ describe("Fase 10 — UI Carbon Dark da Loja Unificada, WhatsApp Multi-Número &
         onClose: () => {},
       })
     );
-    assert.match(skillModalHtml, /Assistida por agente/);
+    assert.match(skillModalHtml, /Assistida por Criativo/);
     assert.match(skillModalHtml, /Definição manual/);
     assert.match(skillModalHtml, /Criar habilidade/);
     assert.doesNotMatch(skillModalHtml, /<select/i);
@@ -355,7 +355,7 @@ describe("Fase 10 — UI Carbon Dark da Loja Unificada, WhatsApp Multi-Número &
     assert.match(wppHtml, /Aprovar pareamento/);
     assert.match(wppHtml, /Recusar pedido/);
     assert.match(wppHtml, /9º dígito brasileiro/);
-    assert.match(wppHtml, /Agente Orquestrador/);
+    assert.match(wppHtml, /Criativo Orquestrador/);
     assert.doesNotMatch(wppHtml, /<select/i);
 
     const legacyModalHtml = renderToStaticMarkup(

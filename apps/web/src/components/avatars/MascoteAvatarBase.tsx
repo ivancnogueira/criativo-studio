@@ -110,7 +110,7 @@ export interface MascoteAvatarProps {
 }
 
 /**
- * Motor unificado de avatares do Criativo AI Studio Online:
+ * Motor unificado de avatares do CriativoOS:
  * - "classic": pelúcia 3D original com animação ocular.
  * - 6 estilos expressivos (plush, cartoon, robots, personas, pets, monsters) com 20 variantes cada e 16+1 expressões ligadas ao contexto da tarefa.
  * - "image": foto real enviada ou gerada com IA.
@@ -130,7 +130,7 @@ export const MascoteAvatar: React.FC<MascoteAvatarProps> = ({
   expressionOverride = null,
   hoverAnimate,
   agentKey = "",
-  label = "Mascote do agente",
+  label = "Mascote do Criativo",
   className = "",
 }) => {
   const uid = useId().replace(/:/g, "");

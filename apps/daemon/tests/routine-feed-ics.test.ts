@@ -54,7 +54,7 @@ test("routine-feed-ics: gera VCALENDAR RFC 5545 válido com escaping e folding e
   });
 
   assert.match(ics, /^BEGIN:VCALENDAR\r\n/);
-  assert.match(ics, /X-WR-CALNAME:Criativo AI Studio - Rotinas/);
+  assert.match(ics, /X-WR-CALNAME:CriativoOS - Rotinas/);
   assert.match(ics, /BEGIN:VEVENT\r\n/);
   assert.match(ics, /SUMMARY:Revisão Semanal\\, Métricas\\; IG/);
   assert.equal(ics.includes("Rotina Pausada"), false);

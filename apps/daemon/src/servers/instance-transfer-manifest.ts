@@ -70,7 +70,7 @@ export function buildInstanceTransferBundle(options: {
   const manifest: InstanceTransferManifest = {
     version: "1.0",
     jobId,
-    sourceServerName: options.sourceServerName?.trim() || "Criativo Studio",
+    sourceServerName: options.sourceServerName?.trim() || "CriativoOS",
     createdAt: new Date().toISOString(),
     scope,
     counts: {

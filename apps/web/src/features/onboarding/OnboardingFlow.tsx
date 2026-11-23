@@ -64,7 +64,7 @@ export const ARCH_MASCOTS = [
 ];
 
 /**
- * Fluxo guiado em 2 etapas nativo do Criativo Studio.
+ * Fluxo guiado em 4 etapas nativo do CriativoOS.
  */
 
 export const OnboardingFlow: React.FC<OnboardingFlowProps> = (props) => {
@@ -109,7 +109,7 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = (props) => {
           <MonitorSmartphone className="h-4 w-4 text-[#DCDCDC] mt-0.5 shrink-0" />
           <div className="min-w-0 flex-1 text-left">
             <p className="text-[12px] font-semibold text-white leading-snug">
-              Criativo Runtime atualizado
+              CriativoOS Runtime atualizado
             </p>
             <p className="text-[11px] text-[#979797] mt-0.5">
               {initialState.runtime_versao || "v1.0.0"} · Node + SQLite
@@ -136,7 +136,7 @@ export const OnboardingFlow: React.FC<OnboardingFlowProps> = (props) => {
             </h3>
             <p className="text-[12.5px] text-[#DCDCDC] leading-relaxed mb-4">
               Todas as chaves API ficam cifradas localmente em AES-256-GCM no banco SQLite
-              (<code className="text-[#42A0FF]">dados/criativo.db</code>). Nenhuma publicação
+              (<code className="text-[#B9FC01]">dados/criativo.db</code>). Nenhuma publicação
               no Instagram ocorre sem aprovação humana explícita pelo Cockpit ou WhatsApp.
             </p>
             <button

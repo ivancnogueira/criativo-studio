@@ -154,7 +154,7 @@ export function InspectorHubAndToolsTabs({
                     className="w-full flex items-center gap-3 rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.07] px-4 py-3 text-[13px] font-medium text-white transition-colors disabled:opacity-40"
                   >
                     <Settings className="h-4 w-4 text-[#979797]" />
-                    <span>Abrir Configurações do agente</span>
+                    <span>Abrir Configurações do Criativo</span>
                   </button>
 
                   <button

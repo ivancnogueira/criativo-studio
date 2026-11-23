@@ -69,7 +69,7 @@ export function MarketplaceModalsAndToasts({
               Excluir habilidade {skillPendingDelete.name}?
             </h3>
             <p className="text-[14px] text-[#979797]">
-              Os agentes vinculados perderão acesso imediato às instruções desta habilidade.
+              Os Criativos vinculados perderão acesso imediato às instruções desta habilidade.
             </p>
             <div className="flex justify-end gap-2">
               <button
@@ -106,7 +106,7 @@ export function MarketplaceModalsAndToasts({
           <div className="w-full max-w-md rounded-[16px] border border-[#2A2A2A] bg-[#212121] p-6 space-y-4">
             <h3 className="text-[20px] font-semibold text-[#F0F0F0]">Importar repositório</h3>
             <p className="text-[12px] text-[#FF9412]">
-              Origem externa do GitHub: este pacote não foi auditado pela equipe do estúdio. Revise as instruções antes de vincular aos seus agentes.
+              Origem externa do GitHub: este pacote não foi auditado pela equipe do estúdio. Revise as instruções antes de vincular aos seus Criativos.
             </p>
             <input
               type="url"

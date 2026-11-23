@@ -138,7 +138,7 @@ export interface McpBridgeCallContext {
 }
 
 /**
- * Ponte MCP Interna do Criativo AI Studio (`criativo_studio`).
+ * Ponte MCP Interna do CriativoOS (`criativo_studio`).
  * Expõe ferramentas nativas do Estúdio (Cofre/Meta v27.0, Analytics, Memórias, Tarefas, Workflows, Browser CDP)
  * sobre Streamable HTTP JSON-RPC 2.0 autenticada por token aleatório por processo,
  * garantindo isolamento por agente (`agentId`) e redação de segredos.

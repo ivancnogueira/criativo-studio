@@ -36,14 +36,14 @@ export const SettingsBehaviorTab: React.FC<SettingsBehaviorTabProps> = ({
     <div className="space-y-4">
       <ToggleRow
         label="Restaurar última aba ao abrir"
-        description="Reabre automaticamente o último agente ou equipe selecionado no navegador."
+        description="Reabre automaticamente o último Criativo ou equipe selecionado no navegador."
         checked={comportamento.restaurar_ultima_aba}
         onChange={(next) => onChange({ ...comportamento, restaurar_ultima_aba: next })}
       />
 
       <ToggleRow
         label="Exibir Barra de Pulso"
-        description="Mantém a cápsula superior com abas rápidas e status ao vivo dos agentes."
+        description="Mantém a cápsula superior com abas rápidas e status ao vivo dos Criativos."
         checked={comportamento.exibir_dynamic_island}
         onChange={(next) => onChange({ ...comportamento, exibir_dynamic_island: next })}
       />
@@ -75,8 +75,8 @@ export const SettingsBehaviorTab: React.FC<SettingsBehaviorTabProps> = ({
       </div>
 
       <ToggleRow
-        label="Habilitar drawer rápido de agentes"
-        description="Exibe barra flutuante recolhível com até 6 agentes fixados para troca em 1 clique."
+        label="Habilitar drawer rápido de Criativos"
+        description="Exibe barra flutuante recolhível com até 6 Criativos fixados para troca em 1 clique."
         checked={comportamento.habilitar_drawer_rapido}
         onChange={(next) => onChange({ ...comportamento, habilitar_drawer_rapido: next })}
       />
@@ -125,7 +125,7 @@ const DOCK_POSITION_OPTIONS: CarbonSelectOption<StudioDockSettings["posicao"]>[]
   {
     value: "sobre_outros_apps",
     label: "Sobre outros apps",
-    description: "Mantém o dock visível mesmo quando o Criativo AI Studio está em segundo plano",
+    description: "Mantém o dock visível mesmo quando o CriativoOS está em segundo plano",
   },
   {
     value: "apenas_janela",
@@ -218,16 +218,16 @@ export const SettingsDockTab: React.FC<SettingsDockTabProps> = ({
         <div className="rounded-xl border border-white/[0.06] bg-[#212121] divide-y divide-white/[0.06]">
           <div className="flex items-center justify-between gap-4 px-4 py-3.5">
             <div className="min-w-0">
-              <div className="text-[13px] font-semibold text-white">Mostrar o dock de agentes</div>
+              <div className="text-[13px] font-semibold text-white">Mostrar o dock de Criativos</div>
               <div className="text-[11.5px] text-[#979797]">
-                Mostra seus agentes na borda da tela, prontos para uma conversa rápida.
+                Mostra seus Criativos na borda da tela, prontos para uma conversa rápida.
               </div>
             </div>
             <button
               type="button"
               role="switch"
               aria-checked={safeDock.mostrar_dock}
-              aria-label="Mostrar o dock de agentes"
+              aria-label="Mostrar o dock de Criativos"
               onClick={() => applyPatch({ mostrar_dock: !safeDock.mostrar_dock })}
               className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border transition-colors ${
                 safeDock.mostrar_dock
@@ -247,12 +247,12 @@ export const SettingsDockTab: React.FC<SettingsDockTabProps> = ({
             <div className="min-w-0">
               <div className="text-[13px] font-semibold text-white">Posição</div>
               <div className="text-[11.5px] text-[#979797]">
-                &ldquo;Sobre outros apps&rdquo; mantém o dock na tela quando o Criativo AI Studio está em segundo plano.
+                &ldquo;Sobre outros apps&rdquo; mantém o dock na tela quando o CriativoOS está em segundo plano.
               </div>
             </div>
             <div className="w-[215px] shrink-0">
               <CarbonSelect
-                ariaLabel="Posição do dock de agentes"
+                ariaLabel="Posição do dock de Criativos"
                 value={safeDock.posicao}
                 options={DOCK_POSITION_OPTIONS}
                 onChange={(val) => applyPatch({ posicao: val })}
@@ -264,12 +264,12 @@ export const SettingsDockTab: React.FC<SettingsDockTabProps> = ({
             <div className="min-w-0">
               <div className="text-[13px] font-semibold text-white">Tela</div>
               <div className="text-[11.5px] text-[#979797]">
-                Se essa tela não estiver conectada, o dock vai para a tela da janela do Criativo AI Studio.
+                Se essa tela não estiver conectada, o dock vai para a tela da janela do CriativoOS.
               </div>
             </div>
             <div className="w-[215px] shrink-0">
               <CarbonSelect
-                ariaLabel="Tela do dock de agentes"
+                ariaLabel="Tela do dock de Criativos"
                 value={safeDock.tela}
                 options={displayOptions}
                 onChange={(val) => applyPatch({ tela: val })}
@@ -286,7 +286,7 @@ export const SettingsDockTab: React.FC<SettingsDockTabProps> = ({
             </div>
             <div className="w-[155px] shrink-0">
               <CarbonSelect
-                ariaLabel="Borda da tela do dock de agentes"
+                ariaLabel="Borda da tela do dock de Criativos"
                 value={safeDock.borda}
                 options={DOCK_EDGE_OPTIONS}
                 onChange={(val) => applyPatch({ borda: val })}
@@ -353,7 +353,7 @@ export const SettingsDockTab: React.FC<SettingsDockTabProps> = ({
             <div className="min-w-0">
               <div className="text-[13px] font-semibold text-white">Mostrar uma faixa na borda</div>
               <div className="text-[11.5px] text-[#979797]">
-                Uma faixa fina fica onde o dock se esconde. Aproxime o ponteiro para mostrar o dock. Uma onda de cor sobe pela faixa quando um agente pergunta algo.
+                Uma faixa fina fica onde o dock se esconde. Aproxime o ponteiro para mostrar o dock. Uma onda de cor sobe pela faixa quando um Criativo pergunta algo.
               </div>
             </div>
             <button
@@ -382,7 +382,7 @@ export const SettingsDockTab: React.FC<SettingsDockTabProps> = ({
             <div className="min-w-0">
               <div className="text-[13px] font-semibold text-white">Mostrar trabalho concluído</div>
               <div className="text-[11.5px] text-[#979797]">
-                Os resultados dos agentes aparecem por pouco tempo ao lado do dock.
+                Os resultados dos Criativos aparecem por pouco tempo ao lado do dock.
               </div>
             </div>
             <button
@@ -411,16 +411,16 @@ export const SettingsDockTab: React.FC<SettingsDockTabProps> = ({
 
           <div className="flex items-center justify-between gap-4 px-4 py-3.5">
             <div className="min-w-0">
-              <div className="text-[13px] font-semibold text-white">Mostrar agentes com novidades</div>
+              <div className="text-[13px] font-semibold text-white">Mostrar Criativos com novidades</div>
               <div className="text-[11.5px] text-[#979797]">
-                Um agente ou equipe que não está no dock aparece nele enquanto tem uma nova mensagem ou espera por você.
+                Um Criativo ou equipe que não está no dock aparece nele enquanto tem uma nova mensagem ou espera por você.
               </div>
             </div>
             <button
               type="button"
               role="switch"
               aria-checked={safeDock.mostrar_agentes_com_novidades}
-              aria-label="Mostrar agentes com novidades"
+              aria-label="Mostrar Criativos com novidades"
               onClick={() =>
                 applyPatch({
                   mostrar_agentes_com_novidades: !safeDock.mostrar_agentes_com_novidades,
@@ -444,16 +444,16 @@ export const SettingsDockTab: React.FC<SettingsDockTabProps> = ({
 
       <div className="space-y-2.5">
         <div className="px-0.5">
-          <div className="text-[12.5px] font-semibold text-white">Agentes no dock</div>
+          <div className="text-[12.5px] font-semibold text-white">Criativos no dock</div>
           <div className="text-[11.5px] text-[#979797]">
-            Os agentes de {activeServerName}. Cada servidor tem seu próprio dock.
+            Os Criativos de {activeServerName}. Cada servidor tem seu próprio dock.
           </div>
         </div>
 
         <div className="rounded-xl border border-white/[0.06] bg-[#212121] divide-y divide-white/[0.06]">
           {eligibleAgents.length === 0 ? (
             <div className="px-4 py-4 text-[12px] text-[#979797]">
-              Nenhum agente disponível neste servidor ainda.
+              Nenhum Criativo disponível neste servidor ainda.
             </div>
           ) : (
             eligibleAgents.map((ag) => {

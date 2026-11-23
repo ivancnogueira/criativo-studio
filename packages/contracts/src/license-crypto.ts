@@ -6,7 +6,7 @@ import type {
   LicenseStatusCode,
 } from "./index.ts";
 
-/** Matriz comercial oficial dos 3 planos do Criativo AI Studio Online. */
+/** Matriz comercial oficial dos 3 planos do CriativoOS. */
 export const LICENSE_PLAN_MATRIX: Record<LicensePlanTier, LicenseLimitsConfig> = {
   individual: {
     plan_tier: "individual",

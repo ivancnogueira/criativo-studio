@@ -42,7 +42,7 @@ export function buildStudioLiveContext(deps: {
     );
     const metaCreds = resolveMetaCredentials(deps.vault);
     const compactLines: string[] = [
-      "## Contexto Enxuto do Criativo AI Studio Online",
+      "## Contexto Enxuto do CriativoOS",
       `- Marca: ${String(marcaConfig.marca_nome ?? onboarding.marca_nome)} (${String(
         marcaConfig.perfil_handle ?? onboarding.perfil_handle
       )})`,
@@ -99,7 +99,7 @@ export function buildStudioLiveContext(deps: {
     : "";
 
   const lines: string[] = [
-    "## Contexto Vivo do Criativo AI Studio Online",
+    "## Contexto Vivo do CriativoOS",
     `- Marca configurada: ${String(marcaConfig.marca_nome ?? onboarding.marca_nome)} (${String(
       marcaConfig.perfil_handle ?? onboarding.perfil_handle
     )})`,

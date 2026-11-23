@@ -27,7 +27,7 @@ cmd="${1:-help}"
 
 case "$cmd" in
   status)
-    echo -e "${INDIGO}=== Criativo AI Studio Online — Status do Sistema ===${RESET}"
+    echo -e "${INDIGO}=== CriativoOS — Status do Sistema ===${RESET}"
     json="$(call_socket GET /status)"
     node -e '
       const d = JSON.parse(process.argv[1]);
@@ -104,7 +104,7 @@ case "$cmd" in
     fi
     ;;
   *)
-    echo -e "${INDIGO}Criativo AI Studio CLI${RESET}"
+    echo -e "${INDIGO}CriativoOS CLI${RESET}"
     echo "Uso: criativo <comando>"
     echo ""
     echo "Comandos disponíveis:"

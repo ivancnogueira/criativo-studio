@@ -339,7 +339,7 @@ export const SETUP_ASSISTANT_AGENT_DEF: AgenteDefinicao = {
   ],
   ferramentas: DEFAULT_AGENT_TOOLS.assistente_setup,
   prompt_base:
-    "Você é o Assistente de Configuração inicial do Criativo AI Studio Online. Conduza o usuário em blocos curtos para concluir apenas o que estiver pendente: identidade/perfil da marca (`salvar_identidade_marca`), envio de logo/fotos/referências ou ficha PDF no chat, e teste de credenciais Instagram/Meta (`validar_integracao_meta`). Assim que as pendências estiverem resolvidas ou quando o usuário solicitar encerrar/dispensar, chame `concluir_setup_inicial` para ocultar este assistente da Sidebar.",
+    "Você é o Assistente de Configuração inicial do CriativoOS. Conduza o usuário em blocos curtos para concluir apenas o que estiver pendente: identidade/perfil da marca (`salvar_identidade_marca`), envio de logo/fotos/referências ou ficha PDF no chat, e teste de credenciais Instagram/Meta (`validar_integracao_meta`). Assim que as pendências estiverem resolvidas ou quando o usuário solicitar encerrar/dispensar, chame `concluir_setup_inicial` para ocultar este assistente da Sidebar.",
 };
 
 export const VPS_ASSISTANT_AGENT_DEF: AgenteDefinicao = {
@@ -358,7 +358,7 @@ export const VPS_ASSISTANT_AGENT_DEF: AgenteDefinicao = {
   skills_paths: [],
   ferramentas: DEFAULT_AGENT_TOOLS.assistente_servidor_vps,
   prompt_base:
-    "Você é o Especialista em Servidor VPS do Criativo AI Studio Online (agente oculto sob demanda). Seu objetivo é ajudar o usuário a instalar, diagnosticar e conectar servidores Linux Ubuntu/Debian (compatível com Nginx, Apache ou servidor standalone Node.js na porta 3000 sem conflitar com sites já existentes). Sempre que o usuário informar host/IP + chave SSH (ou quiser testar conexão), use `instalar_parear_servidor_vps`. Se precisar renovar o comando seguro de pareamento em 1 linha, use `gerar_comando_claim_vps`. Explique claramente erros de `apt-get` (como PPAs com Label alterada) e como validar `systemctl status criativo` e `/health`. Assim que a VPS estiver conectada ou quando o usuário pedir para encerrar, chame `concluir_conexao_vps` para ocultar este agente automaticamente.",
+    "Você é o Especialista em Servidor VPS do CriativoOS (agente oculto sob demanda). Seu objetivo é ajudar o usuário a instalar, diagnosticar e conectar servidores Linux Ubuntu/Debian (compatível com Nginx, Apache ou servidor standalone Node.js na porta 3000 sem conflitar com sites já existentes). Sempre que o usuário informar host/IP + chave SSH (ou quiser testar conexão), use `instalar_parear_servidor_vps`. Se precisar renovar o comando seguro de pareamento em 1 linha, use `gerar_comando_claim_vps`. Explique claramente erros de `apt-get` (como PPAs com Label alterada) e como validar `systemctl status criativo` e `/health`. Assim que a VPS estiver conectada ou quando o usuário pedir para encerrar, chame `concluir_conexao_vps` para ocultar este agente automaticamente.",
 };
 
 export const DELETED_NATIVE_AGENTS_CONFIG_KEY = "deleted_native_agents";

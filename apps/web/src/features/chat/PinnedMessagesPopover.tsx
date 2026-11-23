@@ -112,7 +112,7 @@ export const PinnedMessagesPopover: React.FC<PinnedMessagesPopoverProps> = ({
                         <span>
                           {pin.fixado_por_tipo === "usuario"
                             ? "Fixada por você"
-                            : "Fixada pelo agente"}
+                            : "Fixada pelo Criativo"}
                         </span>
                         {isOtherThread && pin.thread_titulo && (
                           <span className="truncate rounded bg-[#141414] px-1 text-[#42A0FF] max-w-[90px]">
