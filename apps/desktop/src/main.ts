@@ -281,9 +281,8 @@ function isAllowedLoopbackOrigin(originUrl: string): boolean {
 }
 
 async function bootstrapDesktop(): Promise<void> {
-  // Preserva o diretorio legado CriativoAIStudio para zero perda de SQLite/Vault em updates
   const userDataDir =
-    process.env.CRIATIVO_USER_DATA_DIR || join(app.getPath("appData"), "CriativoAIStudio");
+    process.env.CRIATIVO_USER_DATA_DIR || join(app.getPath("appData"), "CriativoOS");
   try {
     app.setName("CriativoOS");
     app.setPath("userData", userDataDir);

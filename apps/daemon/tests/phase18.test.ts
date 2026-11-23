@@ -94,14 +94,14 @@ describe("Fase 18 — App Desktop Instalável, Isolamento UserData & Auto-Update
 
   it("Bloco 1 — app-paths.ts separa productRoot vs userDataRoot e preserva dados no re-bootstrap", () => {
     const winDir = resolveDefaultUserDataDir("win32", { APPDATA: "C:\\Users\\Demo\\AppData\\Roaming" }, "C:\\Users\\Demo");
-    assert.match(winDir, /CriativoAIStudio$/);
+    assert.match(winDir, /CriativoOS$/);
     assert.match(winDir, /AppData[\\/]Roaming/);
 
     const macDir = resolveDefaultUserDataDir("darwin", {}, "/Users/demo");
-    assert.equal(macDir, resolve("/Users/demo/Library/Application Support/CriativoAIStudio"));
+    assert.equal(macDir, resolve("/Users/demo/Library/Application Support/CriativoOS"));
 
     const linDir = resolveDefaultUserDataDir("linux", { XDG_CONFIG_HOME: "/home/demo/.cfg" }, "/home/demo");
-    assert.equal(linDir, resolve("/home/demo/.cfg/CriativoAIStudio"));
+    assert.equal(linDir, resolve("/home/demo/.cfg/CriativoOS"));
 
     const productDir = makeTempDir("criativo-p18-prod-");
     const userDir = makeTempDir("criativo-p18-user-");

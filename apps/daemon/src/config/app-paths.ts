@@ -60,13 +60,13 @@ export function resolveDefaultUserDataDir(
 ): string {
   if (platform === "win32") {
     const base = env.APPDATA || join(home, "AppData", "Roaming");
-    return resolve(base, "CriativoAIStudio");
+    return resolve(base, "CriativoOS");
   }
   if (platform === "darwin") {
-    return resolve(home, "Library", "Application Support", "CriativoAIStudio");
+    return resolve(home, "Library", "Application Support", "CriativoOS");
   }
   const xdgConfig = env.XDG_CONFIG_HOME || join(home, ".config");
-  return resolve(xdgConfig, "CriativoAIStudio");
+  return resolve(xdgConfig, "CriativoOS");
 }
 
 /**

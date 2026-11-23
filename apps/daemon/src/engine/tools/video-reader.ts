@@ -195,7 +195,7 @@ async function fetchOpenGraphAndOEmbedFallback(
   try {
     const res = await fetchFn(targetUrl.toString(), {
       headers: {
-        "User-Agent": "CriativoAIStudio-MediaReader/2.0",
+        "User-Agent": "CriativoOS-MediaReader/2.0",
         Accept: "text/html,application/xhtml+xml",
       },
     });

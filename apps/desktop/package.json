@@ -1,6 +1,6 @@
 {
   "name": "@criativo/desktop",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "Aplicativo Desktop instalável (Windows/macOS/Linux) do CriativoOS com Daemon embutido 24/7.",
   "author": "CriativoOS",

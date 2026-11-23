@@ -241,7 +241,7 @@ export class BrowserAutomationService {
 
     const response = await fetch(parsedUrl.toString(), {
       headers: {
-        "User-Agent": "CriativoAIStudio-ResearchBot/2.0",
+        "User-Agent": "CriativoOS-ResearchBot/2.0",
         Accept: "text/html,application/xhtml+xml,application/json",
       },
     });

@@ -575,8 +575,8 @@ describe("Fase 19 — Onboarding Híbrido, Ponte MCP Nativa/Meta v27.0, Layout D
     // Teste unitário de segurança Path Traversal do launcher Desktop
     const updatesFolder = join(userDataDir, "updates");
     mkdirSync(updatesFolder, { recursive: true });
-    const safeExe = resolveSafeUpdateArtifactPath(userDataDir, join(updatesFolder, "CriativoAIStudio-Setup-1.1.0.exe"));
-    assert.ok(safeExe && safeExe.endsWith("CriativoAIStudio-Setup-1.1.0.exe"));
+    const safeExe = resolveSafeUpdateArtifactPath(userDataDir, join(updatesFolder, "CriativoOS-Setup-1.1.0.exe"));
+    assert.ok(safeExe && safeExe.endsWith("CriativoOS-Setup-1.1.0.exe"));
     assert.equal(resolveSafeUpdateArtifactPath(userDataDir, join(dir, "Windows", "System32", "cmd.exe")), null);
     assert.equal(resolveSafeUpdateArtifactPath(userDataDir, join(updatesFolder, "..", "evil.exe")), null);
 

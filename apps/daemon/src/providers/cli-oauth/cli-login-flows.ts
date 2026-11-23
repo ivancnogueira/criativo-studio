@@ -404,7 +404,7 @@ input: {
       });
 
       void requestRpc("initialize", {
-        clientInfo: { name: "criativo-ai-studio", title: "Criativo AI Studio", version: "1.0.0" },
+        clientInfo: { name: "criativo-ai-studio", title: "CriativoOS", version: "1.0.0" },
         capabilities: { experimentalApi: true },
       })
         .then(async () => {

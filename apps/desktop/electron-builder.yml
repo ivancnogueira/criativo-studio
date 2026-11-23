@@ -1,6 +1,6 @@
-appId: com.criativoaistudio.desktop
+appId: com.criativoos.desktop
 productName: CriativoOS
-executableName: criativo-ai-studio
+executableName: CriativoOS
 copyright: Copyright © CriativoOS
 asar: true
 npmRebuild: false
