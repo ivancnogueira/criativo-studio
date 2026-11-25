@@ -3,6 +3,7 @@ import {
 } from "node:path";
 import { watchGoogleSignInUrlOnWindows, type AcpDiscoveredModel, type AcpAuthTokenSnapshot, type McpServersResolver, type AcpPromptExecutionInput, type AcpPromptExecutionOutput, DEFAULT_SIGN_IN_TIMEOUT_MS, DEFAULT_PROMPT_TIMEOUT_MS, WORKER_IDLE_TTL_MS, resolveAntigravityCliExecutable, readAccountTokenFile } from "./antigravity-acp-helpers.ts";
 import { AcpProcessConnection } from "./antigravity-acp-connection.ts";
+import { ensureProviderRuntimeInstalled } from "./provider-runtime-resolver.ts";
 
 export * from "./antigravity-acp-helpers.ts";
 
@@ -52,6 +53,28 @@ export class AntigravityAcpService {
     return this.executableOverride ?? resolveAntigravityCliExecutable(this.appDataDir);
   }
 
+  public async ensureCliExecutable(): Promise<{
+    executable: string | null;
+    installedNow: boolean;
+    error?: string;
+  }> {
+    const existing = this.getCliExecutable();
+    if (existing) {
+      return { executable: existing, installedNow: false };
+    }
+    if (this.executableOverride) {
+      return { executable: null, installedNow: false };
+    }
+    const installed = await ensureProviderRuntimeInstalled("antigravity", {
+      appDataDir: this.appDataDir,
+    });
+    return {
+      executable: installed.executable,
+      installedNow: installed.installedNow,
+      ...(installed.error ? { error: installed.error } : {}),
+    };
+  }
+
   public cancelPendingSignIn(): boolean {
     if (!this.pendingSignInDispose) return false;
     const fn = this.pendingSignInDispose;
@@ -73,11 +96,16 @@ export class AntigravityAcpService {
     timeoutMs?: number;
     onAuthUrl?: (url: string) => void;
   }): Promise<AcpAuthTokenSnapshot> {
-    const exe = this.getCliExecutable();
+    let exe = this.getCliExecutable();
     if (!exe) {
-      throw new Error(
-        "Motor Antigravity CLI não encontrado na máquina para abrir o login Google no navegador."
-      );
+      const ensured = await this.ensureCliExecutable();
+      exe = ensured.executable;
+      if (!exe) {
+        const extraReason = ensured.error ? ` (${ensured.error})` : "";
+        throw new Error(
+          `Motor Antigravity CLI não encontrado na máquina e não pôde ser instalado automaticamente para abrir o login Google no navegador${extraReason}.`
+        );
+      }
     }
 
     let urlEmitted = false;
@@ -128,9 +156,16 @@ export class AntigravityAcpService {
     geminiDir: string,
     fn: (conn: AcpProcessConnection) => Promise<T>
   ): Promise<T> {
-    const exe = this.getCliExecutable();
+    let exe = this.getCliExecutable();
     if (!exe) {
-      throw new Error("Motor Antigravity CLI não instalado para executar via ACP.");
+      const ensured = await this.ensureCliExecutable();
+      exe = ensured.executable;
+      if (!exe) {
+        const extraReason = ensured.error ? ` (${ensured.error})` : "";
+        throw new Error(
+          `Motor Antigravity CLI não instalado para executar via ACP${extraReason}.`
+        );
+      }
     }
 
     let slot = this.workers.get(accountKey);

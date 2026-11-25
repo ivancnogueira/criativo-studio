@@ -189,6 +189,22 @@ export async function ensureOpenCodeRuntimeInBackgroundOp(deps: ProviderConnecti
   return { installed: inst.installedNow, connected: inst.ok };
 }
 
+export async function ensureAntigravityRuntimeInBackgroundOp(deps: ProviderConnectionDeps): Promise<{
+    installed: boolean;
+    available: boolean;
+  }> {
+  const existing = deps.antigravityLive.getCliExecutable();
+  if (existing) {
+    return { installed: false, available: true };
+  }
+  const inst = await ensureProviderRuntimeInstalled("antigravity");
+  if (inst.executable) {
+    deps.invalidateCliProbeCache();
+    return { installed: inst.installedNow, available: true };
+  }
+  return { installed: false, available: false };
+}
+
 export async function connectProviderOp(deps: ProviderConnectionDeps, provedor: ProviderName,
     options?:
       | string

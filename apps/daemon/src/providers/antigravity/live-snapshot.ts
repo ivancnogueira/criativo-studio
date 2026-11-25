@@ -25,6 +25,15 @@ export async function computeAntigravityLiveSnapshot(
 
     const { entries, poolOverride } = ctx.discoverStudioTokenEntries();
     if (entries.length === 0) {
+      if (
+        ctx.allowAutoAcpDiscovery &&
+        process.env.CRIATIVO_SKIP_LOCAL_PROBE !== "1" &&
+        !ctx.acpService.getCliExecutable()
+      ) {
+        void ensureProviderRuntimeInstalled("antigravity", {
+          appDataDir: ctx.appDataDir,
+        }).catch(() => {});
+      }
       const emptySnap: AntigravityLiveSnapshot = {
         contas: [],
         pool: null,

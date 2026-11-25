@@ -17,6 +17,8 @@ import type {
   PoolContasConfig,
 } from "@criativo/contracts";
 import {
+  getExtraSystemCandidatePaths,
+  isLikelyAntigravityGuiBinary,
   resolveManagedProviderRuntime,
   type ManagedRuntimeFolder,
 } from "./provider-runtime-resolver.ts";
@@ -126,13 +128,37 @@ export async function detectLocalBinary(
   for (const bin of bins) {
     const pathFound = await runShortCommand(locator, [bin], 600);
     if (pathFound) {
-      const firstPath = pathFound.split(/\r?\n/)[0].trim();
-      const ver = await runShortCommand(firstPath, ["--version"], 800);
-      return {
-        found: true,
-        version: ver ? ver.split(/\r?\n/)[0].slice(0, 48) : "CLI ativo",
-        executable: firstPath,
-      };
+      const candidates = pathFound
+        .split(/\r?\n/)
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0);
+      for (const candidate of candidates) {
+        if (managedFolder === "antigravity" && isLikelyAntigravityGuiBinary(candidate)) {
+          continue;
+        }
+        const ver = await runShortCommand(candidate, ["--version"], 800);
+        return {
+          found: true,
+          version: ver ? ver.split(/\r?\n/)[0].slice(0, 48) : "CLI ativo",
+          executable: candidate,
+        };
+      }
+    }
+  }
+
+  if (managedFolder && knownFolders.has(managedFolder)) {
+    for (const candidate of getExtraSystemCandidatePaths(managedFolder as ManagedRuntimeFolder)) {
+      if (managedFolder === "antigravity" && isLikelyAntigravityGuiBinary(candidate)) {
+        continue;
+      }
+      if (existsSync(candidate)) {
+        const ver = await runShortCommand(candidate, ["--version"], 800);
+        return {
+          found: true,
+          version: ver ? ver.split(/\r?\n/)[0].slice(0, 48) : "CLI ativo",
+          executable: candidate,
+        };
+      }
     }
   }
 

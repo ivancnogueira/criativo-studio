@@ -372,7 +372,7 @@ export function ProviderDetailAccountsSection({ ctrl }: { ctrl: ProvidersCatalog
                       {detailProvider.provedor === "gemini"
                         ? isRemoteServer
                           ? "Autentique sua conta Google pelo navegador do Desktop (salva isoladamente neste servidor) ou cole uma Gemini API Key abaixo."
-                          : "Autentique sua conta Google no navegador (requer Antigravity CLI) ou cole uma Gemini API Key abaixo sem instalar nada."
+                          : "Autentique sua conta Google no navegador (o motor Antigravity CLI é preparado automaticamente) ou cole uma Gemini API Key abaixo sem instalar nada."
                         : "Autentique sua conta diretamente no navegador em pasta isolada do Studio."}
                     </p>
                   </div>

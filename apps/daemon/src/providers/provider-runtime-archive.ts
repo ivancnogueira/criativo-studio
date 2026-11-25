@@ -1,4 +1,5 @@
 import {
+  createHash,
   randomUUID,
 } from "node:crypto";
 import {
@@ -210,6 +211,37 @@ export const ANTIGRAVITY_LATEST_RELEASE_API =
   "https://api.github.com/repos/google-antigravity/antigravity-cli/releases/latest";
 export const ANTIGRAVITY_LATEST_DOWNLOAD_BASE =
   "https://github.com/google-antigravity/antigravity-cli/releases/latest/download";
+export const ANTIGRAVITY_OFFICIAL_MANIFEST_BASE =
+  "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests";
+
+export function isLinuxMuslHost(platform: NodeJS.Platform = process.platform): boolean {
+  if (platform !== "linux" || process.platform !== "linux") return false;
+  return (
+    existsSync("/lib/libc.musl-x86_64.so.1") ||
+    existsSync("/lib/libc.musl-aarch64.so.1")
+  );
+}
+
+/**
+ * Mapeia SO e arquitetura para o identificador de manifesto usado pelo instalador oficial da Google.
+ */
+export function resolveAntigravityManifestPlatform(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch
+): string | null {
+  if (platform === "win32") {
+    return arch === "arm64" ? "windows_arm64" : "windows_amd64";
+  }
+  if (platform === "darwin") {
+    return arch === "arm64" ? "darwin_arm64" : "darwin_amd64";
+  }
+  if (platform === "linux") {
+    const muslSuffix = isLinuxMuslHost(platform) ? "_musl" : "";
+    if (arch === "arm64") return `linux_arm64${muslSuffix}`;
+    if (arch === "x64") return `linux_amd64${muslSuffix}`;
+  }
+  return null;
+}
 
 export interface AntigravityReleaseAssetSpec {
   assetName: string;
@@ -261,9 +293,10 @@ export function resolveAntigravityReleaseAssetName(
         };
   }
   if (platform === "linux") {
+    const muslSuffix = isLinuxMuslHost(platform) ? "_musl" : "";
     if (arch === "arm64") {
       return {
-        assetName: "agy_cli_linux_arm64.tar.gz",
+        assetName: `agy_cli_linux_arm64${muslSuffix}.tar.gz`,
         archFolder: "linux-arm64",
         binName: "antigravity",
         candidateBinNames: ["antigravity", "agy"],
@@ -272,7 +305,7 @@ export function resolveAntigravityReleaseAssetName(
     }
     if (arch === "x64") {
       return {
-        assetName: "agy_cli_linux_x64.tar.gz",
+        assetName: `agy_cli_linux_x64${muslSuffix}.tar.gz`,
         archFolder: "linux-x64",
         binName: "antigravity",
         candidateBinNames: ["antigravity", "agy"],
@@ -291,11 +324,12 @@ export async function downloadAndStageStandaloneArchive(params: {
   timeoutMs?: number;
   downloadUrl: string;
   explicitVersion?: string | null;
+  expectedSha512?: string | null;
   assetName: string;
   archFolder: string;
   binName: string;
   candidateBinNames: string[];
-  archiveKind: "zip" | "tar.gz";
+  archiveKind: "zip" | "tar.gz" | "raw";
   fetchImpl?: typeof fetch;
   extractImpl?: (
     archivePath: string,
@@ -335,18 +369,35 @@ export async function downloadAndStageStandaloneArchive(params: {
         error: `Arquivo baixado do ${params.label} está vazio.`,
       };
     }
-    writeFileSync(archivePath, buf);
 
-    if (params.extractImpl) {
-      await params.extractImpl(archivePath, extractDir, params.archiveKind);
-    } else {
-      await extractArchiveNative(archivePath, extractDir, params.archiveKind, timeoutMs);
+    if (params.expectedSha512 && params.expectedSha512.trim().length > 0) {
+      const actualSha512 = createHash("sha512").update(buf).digest("hex").toLowerCase();
+      if (actualSha512 !== params.expectedSha512.trim().toLowerCase()) {
+        return {
+          executable: null,
+          version: null,
+          installedNow: false,
+          error: `Verificação de integridade SHA-512 falhou para ${params.label}.`,
+        };
+      }
     }
 
+    writeFileSync(archivePath, buf);
+
     let extractedBin: string | null = null;
-    for (const candidateName of params.candidateBinNames) {
-      extractedBin = findFileRecursive(extractDir, candidateName);
-      if (extractedBin) break;
+    if (params.archiveKind === "raw") {
+      extractedBin = archivePath;
+    } else {
+      if (params.extractImpl) {
+        await params.extractImpl(archivePath, extractDir, params.archiveKind);
+      } else {
+        await extractArchiveNative(archivePath, extractDir, params.archiveKind, timeoutMs);
+      }
+
+      for (const candidateName of params.candidateBinNames) {
+        extractedBin = findFileRecursive(extractDir, candidateName);
+        if (extractedBin) break;
+      }
     }
     if (!extractedBin || !existsSync(extractedBin) || statSync(extractedBin).size <= 0) {
       return {
@@ -363,8 +414,12 @@ export async function downloadAndStageStandaloneArchive(params: {
     const finalBinPath = join(baseDir, params.archFolder, version, "bin", params.binName);
     mkdirSync(dirname(finalBinPath), { recursive: true });
     copyFileSync(extractedBin, finalBinPath);
-    if ((params.platform ?? process.platform) !== "win32") {
+    const targetPlatform = params.platform ?? process.platform;
+    if (targetPlatform !== "win32") {
       chmodSync(finalBinPath, 0o755);
+      if (targetPlatform === "darwin" && process.platform === "darwin") {
+        await runProcessQuiet("xattr", ["-d", "com.apple.quarantine", finalBinPath], 5_000).catch(() => {});
+      }
     }
 
     return {

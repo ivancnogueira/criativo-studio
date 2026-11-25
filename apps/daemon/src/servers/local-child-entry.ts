@@ -87,6 +87,7 @@ async function bootLocalChild(): Promise<void> {
     process.env.CRIATIVO_DISABLE_AUTO_INSTALL !== "1"
   ) {
     void runtime.providerConnection.ensureOpenCodeRuntimeInBackground().catch(() => {});
+    void runtime.providerConnection.ensureAntigravityRuntimeInBackground().catch(() => {});
   }
 
   const readyPayload = {

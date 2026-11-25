@@ -484,6 +484,22 @@ export async function createDaemonServer(
         .catch((err) => {
           console.warn("[Daemon] Auto-instalação em background do OpenCode ignorada:", err);
         });
+      void providerConnection
+        .ensureAntigravityRuntimeInBackground()
+        .then(async (res) => {
+          if (res.installed && res.available) {
+            const list = await providerConnection.getProvidersStatus(false).catch(() => []);
+            const geminiStatus = list.find((p) => p.provedor === "gemini");
+            wsHub.broadcast("provider:updated", {
+              provedor: "gemini",
+              conectado: geminiStatus?.conectado ?? false,
+              modo: geminiStatus?.modo_conexao ?? "nenhum",
+            });
+          }
+        })
+        .catch((err) => {
+          console.warn("[Daemon] Auto-instalação em background do Antigravity CLI ignorada:", err);
+        });
     }
   }
 

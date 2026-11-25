@@ -48,7 +48,7 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogMeta[] = [
     provedor: "gemini",
     rotulo: "Gemini",
     subtitulo: "Conta Google OAuth (Antigravity & Nano Banana) ou Gemini API Key",
-    cliBins: ["antigravity", "agy", "gemini"],
+    cliBins: ["agy", "antigravity"],
     managedRuntimeFolder: "antigravity",
     vaultKeys: ["gemini_api_key", "google_api_key"],
     fallbackModelos: [

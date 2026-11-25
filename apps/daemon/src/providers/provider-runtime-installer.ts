@@ -2,10 +2,11 @@ import {
   mkdirSync,
 } from "node:fs";
 import {
+  basename,
   join,
 } from "node:path";
 import { type ResolvedProviderRuntime, RUNTIME_NPM_PACKAGES, getDefaultAppDataDir, findInSystemPath, resolveManagedProviderRuntime, spawnProviderProcess } from "./provider-runtime-locate.ts";
-import { OPENCODE_LATEST_RELEASE_BASE_URL, resolveOpenCodeReleaseAssetName, inFlightOpenCodeInstalls, inFlightAntigravityInstalls, ANTIGRAVITY_LATEST_RELEASE_API, ANTIGRAVITY_LATEST_DOWNLOAD_BASE, resolveAntigravityReleaseAssetName, downloadAndStageStandaloneArchive } from "./provider-runtime-archive.ts";
+import { OPENCODE_LATEST_RELEASE_BASE_URL, resolveOpenCodeReleaseAssetName, inFlightOpenCodeInstalls, inFlightAntigravityInstalls, ANTIGRAVITY_LATEST_RELEASE_API, ANTIGRAVITY_LATEST_DOWNLOAD_BASE, ANTIGRAVITY_OFFICIAL_MANIFEST_BASE, resolveAntigravityManifestPlatform, resolveAntigravityReleaseAssetName, downloadAndStageStandaloneArchive } from "./provider-runtime-archive.ts";
 
 export async function installOpenCodeStandaloneBinary(options?: {
   appDataDir?: string;
@@ -91,6 +92,7 @@ export async function installAntigravityStandaloneBinary(options?: {
   arch?: string;
   releaseBaseUrl?: string;
   releasesApiUrl?: string;
+  manifestBaseUrl?: string;
   fetchImpl?: typeof fetch;
   extractImpl?: (
     archivePath: string,
@@ -165,7 +167,7 @@ export async function installAntigravityStandaloneBinary(options?: {
       }
     }
 
-    return downloadAndStageStandaloneArchive({
+    const githubResult = await downloadAndStageStandaloneArchive({
       label: "Antigravity CLI",
       folder: "antigravity",
       appDataDir: resolvedAppData,
@@ -181,6 +183,74 @@ export async function installAntigravityStandaloneBinary(options?: {
       fetchImpl: options?.fetchImpl,
       extractImpl: options?.extractImpl,
     });
+    if (githubResult.executable) {
+      return githubResult;
+    }
+
+    // Fallback automático para o CDN oficial da Google (usado por antigravity.google/cli/install.*)
+    const manifestPlatform = resolveAntigravityManifestPlatform(options?.platform, options?.arch);
+    if (manifestPlatform && (!options?.releaseBaseUrl || options?.manifestBaseUrl)) {
+      const manifestBase = (options?.manifestBaseUrl ?? ANTIGRAVITY_OFFICIAL_MANIFEST_BASE).replace(/\/+$/, "");
+      try {
+        const manifestRes = await fetcher(`${manifestBase}/${manifestPlatform}.json`, {
+          headers: { Accept: "application/json" },
+          signal: AbortSignal.timeout(Math.min(options?.timeoutMs ?? 25_000, 25_000)),
+        });
+        if (manifestRes.ok) {
+          const manifestJson = (await manifestRes.json().catch(() => null)) as {
+            version?: string;
+            url?: string;
+            sha512?: string;
+          } | null;
+          const cdnUrl = typeof manifestJson?.url === "string" ? manifestJson.url.trim() : "";
+          const cdnSha = typeof manifestJson?.sha512 === "string" ? manifestJson.sha512.trim() : "";
+          const cdnVersion =
+            typeof manifestJson?.version === "string" ? manifestJson.version.trim().replace(/^v/i, "") : null;
+
+          if (/^https?:\/\//i.test(cdnUrl)) {
+            const urlPath = cdnUrl.split("?")[0] ?? cdnUrl;
+            const archiveKind: "zip" | "tar.gz" | "raw" = urlPath.endsWith(".tar.gz")
+              ? "tar.gz"
+              : urlPath.endsWith(".zip")
+                ? "zip"
+                : "raw";
+            const cdnAssetName = basename(urlPath) || asset.binName;
+            const cdnResult = await downloadAndStageStandaloneArchive({
+              label: "Antigravity CLI (Google CDN)",
+              folder: "antigravity",
+              appDataDir: resolvedAppData,
+              platform: options?.platform,
+              timeoutMs: options?.timeoutMs,
+              downloadUrl: cdnUrl,
+              explicitVersion: cdnVersion,
+              expectedSha512: cdnSha || null,
+              assetName: cdnAssetName,
+              archFolder: asset.archFolder,
+              binName: asset.binName,
+              candidateBinNames: asset.candidateBinNames,
+              archiveKind,
+              fetchImpl: options?.fetchImpl,
+              extractImpl: options?.extractImpl,
+            });
+            if (cdnResult.executable) {
+              return cdnResult;
+            }
+            return {
+              ...cdnResult,
+              error: [githubResult.error, cdnResult.error].filter(Boolean).join(" | "),
+            };
+          }
+        }
+      } catch (cdnErr) {
+        const cdnMsg = cdnErr instanceof Error ? cdnErr.message : String(cdnErr);
+        return {
+          ...githubResult,
+          error: [githubResult.error, `Fallback Google CDN falhou: ${cdnMsg}`].filter(Boolean).join(" | "),
+        };
+      }
+    }
+
+    return githubResult;
   };
 
   const promise = runInstall().finally(() => {

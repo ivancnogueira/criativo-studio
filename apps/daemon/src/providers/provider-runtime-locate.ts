@@ -13,6 +13,7 @@ import {
   homedir,
 } from "node:os";
 import {
+  dirname,
   join,
 } from "node:path";
 
@@ -117,6 +118,38 @@ export function scanProviderRuntimesBase(
   return null;
 }
 
+/**
+ * Evita confundir o aplicativo desktop/IDE Electron do Antigravity (ex.: Antigravity.exe)
+ * com o binário de linha de comando (`agy` / `antigravity`).
+ */
+export function isLikelyAntigravityGuiBinary(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, "/").toLowerCase();
+  const baseName = normalized.split("/").pop() ?? "";
+  if (!baseName.startsWith("antigravity")) {
+    return false;
+  }
+  if (
+    normalized.includes("/programs/antigravity/") ||
+    normalized.includes("/programs/antigravity ide/") ||
+    normalized.includes(".app/contents/")
+  ) {
+    return true;
+  }
+  try {
+    const dir = dirname(filePath);
+    if (
+      existsSync(join(dir, "chrome_100_percent.pak")) ||
+      existsSync(join(dir, "resources", "app.asar")) ||
+      existsSync(join(dir, "Uninstall Antigravity.exe"))
+    ) {
+      return true;
+    }
+  } catch {
+    // ignora erro de leitura de diretório
+  }
+  return false;
+}
+
 export function getExtraSystemCandidatePaths(folder: ManagedRuntimeFolder): string[] {
   const home = homedir();
   const isWin = process.platform === "win32";
@@ -148,6 +181,11 @@ export function getExtraSystemCandidatePaths(folder: ManagedRuntimeFolder): stri
     return [
       join(localAppData, "agy", "bin", "agy.exe"),
       join(home, ".local", "bin", "agy.exe"),
+      join(home, ".agy", "bin", "agy.exe"),
+      join(home, ".antigravity", "bin", "agy.exe"),
+      join(localAppData, "Microsoft", "WinGet", "Links", "agy.exe"),
+      join(appData, "npm", "agy.cmd"),
+      join(localAppData, "agy", "bin", "antigravity.exe"),
     ];
   }
 
@@ -171,20 +209,39 @@ export function getExtraSystemCandidatePaths(folder: ManagedRuntimeFolder): stri
       "/usr/local/bin/opencode",
     ];
   }
+  if (process.platform === "darwin") {
+    return [
+      join(home, ".local", "bin", "agy"),
+      "/opt/homebrew/bin/agy",
+      "/usr/local/bin/agy",
+      join(home, ".agy", "bin", "agy"),
+      join(home, ".antigravity", "bin", "agy"),
+      join(home, ".local", "bin", "antigravity"),
+      "/usr/local/bin/antigravity",
+    ];
+  }
   return [
     join(home, ".local", "bin", "agy"),
     "/usr/local/bin/agy",
+    "/usr/bin/agy",
+    join(home, ".agy", "bin", "agy"),
+    join(home, ".antigravity", "bin", "agy"),
+    join(home, ".local", "bin", "antigravity"),
+    "/usr/local/bin/antigravity",
   ];
 }
 
-export function findInSystemPath(binNames: string[]): string | null {
+export function findInSystemPath(
+  binNames: string[],
+  filter?: (fullPath: string) => boolean
+): string | null {
   const sep = process.platform === "win32" ? ";" : ":";
   const pathEntries = (process.env.PATH ?? "").split(sep);
   for (const dir of pathEntries) {
     if (!dir) continue;
     for (const candidate of binNames) {
       const full = join(dir, candidate);
-      if (existsSync(full)) {
+      if (existsSync(full) && (!filter || filter(full))) {
         return full;
       }
     }
@@ -240,13 +297,22 @@ export function resolveManagedProviderRuntime(
   }
 
   // Camada 3: PATH antes dos caminhos extras oficiais do SO
-  const pathBin = findInSystemPath(binNames);
+  const systemBinNames =
+    folder === "antigravity"
+      ? process.platform === "win32"
+        ? ["agy.exe", "agy.cmd", "antigravity.exe"]
+        : ["agy", "antigravity"]
+      : binNames;
+  const systemFilter =
+    folder === "antigravity" ? (p: string) => !isLikelyAntigravityGuiBinary(p) : undefined;
+
+  const pathBin = findInSystemPath(systemBinNames, systemFilter);
   if (pathBin) {
     return { executable: pathBin, version: "PATH" };
   }
 
   for (const extraPath of getExtraSystemCandidatePaths(folder)) {
-    if (existsSync(extraPath)) {
+    if (existsSync(extraPath) && (!systemFilter || systemFilter(extraPath))) {
       return { executable: extraPath, version: "PATH" };
     }
   }

@@ -305,6 +305,10 @@ export class ProviderConnectionService {
     return actionsOps.ensureOpenCodeRuntimeInBackgroundOp(this.deps(), ...args);
   }
 
+  public ensureAntigravityRuntimeInBackground(...args: TailArgs<typeof actionsOps.ensureAntigravityRuntimeInBackgroundOp>): ReturnType<typeof actionsOps.ensureAntigravityRuntimeInBackgroundOp> {
+    return actionsOps.ensureAntigravityRuntimeInBackgroundOp(this.deps(), ...args);
+  }
+
   public connectProvider(...args: TailArgs<typeof actionsOps.connectProviderOp>): ReturnType<typeof actionsOps.connectProviderOp> {
     return actionsOps.connectProviderOp(this.deps(), ...args);
   }
