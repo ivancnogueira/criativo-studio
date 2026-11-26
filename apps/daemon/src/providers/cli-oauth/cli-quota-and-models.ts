@@ -24,9 +24,16 @@ import {
 } from "../provider-quota-utils.ts";
 import {
   ensureProviderRuntimeInstalled,
+  forceUpgradeProviderRuntime,
   resolveManagedProviderRuntime,
   spawnProviderProcess,
 } from "../provider-runtime-resolver.ts";
+import {
+  fetchCodexAccountModelsHttp,
+  isCodexSchemaMismatchError,
+  isImageGenerationCodexModel,
+  isInternalHiddenCodexModel,
+} from "./codex-models-http.ts";
 import { EXEC_TIMEOUT_MS, MODEL_CATALOG_TTL_MS, QUOTA_CACHE_TTL_MS, mapEffortList, resolveCliBinaryForProvider, type CliServiceRuntimeContext } from "./cli-types-and-helpers.ts";
 
 export async function listCliAccountsWithQuotas(
@@ -218,6 +225,16 @@ export async function runCliCodexAppServerRpc<TResult>(
       timer.unref?.();
 
       const rl = createInterface({ input: child.stdout });
+      let stderrTail = "";
+      child.stderr.on("data", (chunk) => {
+        stderrTail = `${stderrTail}${chunk.toString("utf8")}`.slice(-2048);
+        if (isCodexSchemaMismatchError(stderrTail) && process.env.CRIATIVO_SKIP_LOCAL_PROBE !== "1") {
+          void forceUpgradeProviderRuntime("codex", {
+            appDataDir: ctx.appDataDir,
+            codexHomeToResetCache: codexHome,
+          }).catch(() => {});
+        }
+      });
       child.on("error", () => done(null));
       child.on("exit", () => done(null));
 
@@ -310,38 +327,61 @@ export async function probeCliCodexModels(
     executable: string,
     codexHome: string
   ): Promise<ModeloProvedorInfo[]> {
+    // Camada 1: consulta direta na conta ChatGPT (resiliente a novos campos/efforts da API)
+    if (process.env.CRIATIVO_SKIP_LOCAL_PROBE !== "1") {
+      const httpModels = await fetchCodexAccountModelsHttp({
+        codexHome,
+        fetchImpl: ctx.fetchImpl,
+        appDataDir: ctx.appDataDir,
+        onUnauthorizedRefresh: async () => {
+          await runCliCodexAppServerRpc(ctx, executable, codexHome, "account/rateLimits/read", {});
+        },
+      });
+      if (httpModels.length > 0) {
+        return httpModels;
+      }
+    }
+
+    // Camada 2: fallback via `codex app-server` `model/list` com filtro rigoroso de ocultos
     const result = await runCliCodexAppServerRpc<{
       data?: Array<{
         model?: string;
         displayName?: string;
         isDefault?: boolean;
+        hidden?: boolean;
+        visibility?: string;
         inputModalities?: string[];
         supportedReasoningEfforts?: Array<{ reasoningEffort?: string }>;
       }>;
-    }>(ctx, executable, codexHome, "model/list", { limit: 100, includeHidden: true });
+    }>(ctx, executable, codexHome, "model/list", { limit: 100, includeHidden: false });
 
     const rawList = Array.isArray(result?.data) ? result.data : [];
     const mapped: ModeloProvedorInfo[] = [];
     const seen = new Set<string>();
     for (const item of rawList) {
       const id = typeof item.model === "string" ? item.model.trim() : "";
-      if (!id || seen.has(id)) continue;
+      if (!id || seen.has(id) || isInternalHiddenCodexModel(id)) continue;
+      if (item.hidden === true) continue;
+      if (typeof item.visibility === "string" && item.visibility.trim().toLowerCase() !== "list") {
+        continue;
+      }
       seen.add(id);
       const efforts = mapEffortList(
         (item.supportedReasoningEfforts ?? []).map((e: { reasoningEffort?: string }) =>
           String(e.reasoningEffort ?? "")
         )
       );
-      const hasImage =
-        Array.isArray(item.inputModalities) && item.inputModalities.includes("image");
       mapped.push({
         id,
         rotulo: item.displayName?.trim() || id,
-        padrao: Boolean(item.isDefault) || mapped.length === 0,
-        suporta_imagem: hasImage || /image|gpt-6|gpt-5/i.test(id),
+        padrao: Boolean(item.isDefault),
+        suporta_imagem: isImageGenerationCodexModel(id),
         esforcos_suportados: efforts,
         descoberto_em_conta: true,
       });
+    }
+    if (mapped.length > 0 && !mapped.some((m) => m.padrao)) {
+      mapped[0].padrao = true;
     }
     return mapped;
   }

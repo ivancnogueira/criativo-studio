@@ -309,6 +309,10 @@ export class ProviderConnectionService {
     return actionsOps.ensureAntigravityRuntimeInBackgroundOp(this.deps(), ...args);
   }
 
+  public checkAndUpdateManagedRuntimesInBackground(...args: TailArgs<typeof actionsOps.checkAndUpdateManagedRuntimesInBackgroundOp>): ReturnType<typeof actionsOps.checkAndUpdateManagedRuntimesInBackgroundOp> {
+    return actionsOps.checkAndUpdateManagedRuntimesInBackgroundOp(this.deps(), ...args);
+  }
+
   public connectProvider(...args: TailArgs<typeof actionsOps.connectProviderOp>): ReturnType<typeof actionsOps.connectProviderOp> {
     return actionsOps.connectProviderOp(this.deps(), ...args);
   }

@@ -8,6 +8,8 @@ import {
 import {
   existsSync,
   readdirSync,
+  readFileSync,
+  statSync,
 } from "node:fs";
 import {
   homedir,
@@ -109,7 +111,23 @@ export function scanProviderRuntimesBase(
     for (const binName of npmCandidates) {
       const npmBin = join(baseRuntimeDir, "npm", "node_modules", ".bin", binName);
       if (existsSync(npmBin)) {
-        return { executable: npmBin, version: "managed-npm" };
+        let npmVer = "managed-npm";
+        for (const pkgName of Object.values(RUNTIME_NPM_PACKAGES)) {
+          if (!pkgName) continue;
+          const pkgJsonPath = join(baseRuntimeDir, "npm", "node_modules", pkgName, "package.json");
+          if (existsSync(pkgJsonPath)) {
+            try {
+              const parsed = JSON.parse(readFileSync(pkgJsonPath, "utf8")) as { version?: unknown };
+              if (typeof parsed.version === "string" && parsed.version.trim()) {
+                npmVer = parsed.version.trim();
+                break;
+              }
+            } catch {
+              // ignora package.json inválido
+            }
+          }
+        }
+        return { executable: npmBin, version: npmVer };
       }
     }
   } catch {
@@ -321,6 +339,50 @@ export function resolveManagedProviderRuntime(
 }
 
 /**
+ * Extrai o script JS alvo de um wrapper `.cmd`/`.bat` gerado pelo npm no Windows
+ * para executar direto via Node (`shell: false`), evitando que `cmd.exe /c` interprete `&` ou `|`.
+ */
+export function resolveNpmCmdWrapperTarget(cmdFilePath: string): string | null {
+  if (process.platform !== "win32" || !/\.(cmd|bat)$/i.test(cmdFilePath)) {
+    return null;
+  }
+  try {
+    if (!existsSync(cmdFilePath)) return null;
+    const st = statSync(cmdFilePath);
+    if (!st.isFile() || st.size > 8192) return null;
+    const raw = readFileSync(cmdFilePath, "utf8");
+    const matches = raw.matchAll(
+      /(?:%~dp0|%dp0%)[\\/]([^"'\r\n]+?\.(?:mjs|cjs|js)|[^"'\s\r\n]+)/gi
+    );
+    const baseDir = dirname(cmdFilePath);
+    for (const match of matches) {
+      const rel = match[1]?.trim();
+      if (!rel || /\.(exe|cmd|bat)$/i.test(rel)) continue;
+      const resolved = join(baseDir, rel);
+      if (!existsSync(resolved) || !statSync(resolved).isFile()) continue;
+      if (/\.(mjs|cjs|js)$/i.test(resolved)) {
+        return resolved;
+      }
+      try {
+        const head = readFileSync(resolved, "utf8").slice(0, 128);
+        if (/^#!.*\bnode\b/i.test(head)) {
+          return resolved;
+        }
+      } catch {
+        // ignora leitura de shebang
+      }
+    }
+  } catch {
+    // fallback para execução padrão caso wrapper não seja legível
+  }
+  return null;
+}
+
+function escapeCmdArgForShellFallback(arg: string): string {
+  return arg.replace(/([\^&|<>])/g, "^$1");
+}
+
+/**
  * Executa binário ou wrapper `.cmd`/`.bat` com segurança sem depender de shell global.
  */
 export function spawnProviderProcess(
@@ -338,14 +400,37 @@ export function spawnProviderProcess(
   args: string[],
   options: SpawnOptions = {}
 ): ChildProcess {
-  const isCmdWrapper = process.platform === "win32" && /\.(cmd|bat)$/i.test(executable);
-  return spawn(
-    isCmdWrapper ? process.env.ComSpec || "cmd.exe" : executable,
-    isCmdWrapper ? ["/c", executable, ...args] : args,
-    {
+  if (/\.(m|c)?js$/i.test(executable)) {
+    return spawn(process.execPath, [executable, ...args], {
       ...options,
+      env: { ...(options.env ?? process.env), ELECTRON_RUN_AS_NODE: "1" },
       shell: false,
+    });
+  }
+
+  const isCmdWrapper = process.platform === "win32" && /\.(cmd|bat)$/i.test(executable);
+  if (isCmdWrapper) {
+    const jsTarget = resolveNpmCmdWrapperTarget(executable);
+    if (jsTarget) {
+      return spawn(process.execPath, [jsTarget, ...args], {
+        ...options,
+        env: { ...(options.env ?? process.env), ELECTRON_RUN_AS_NODE: "1" },
+        shell: false,
+      });
     }
-  );
+    return spawn(
+      process.env.ComSpec || "cmd.exe",
+      ["/c", executable, ...args.map(escapeCmdArgForShellFallback)],
+      {
+        ...options,
+        shell: false,
+      }
+    );
+  }
+
+  return spawn(executable, args, {
+    ...options,
+    shell: false,
+  });
 }
 

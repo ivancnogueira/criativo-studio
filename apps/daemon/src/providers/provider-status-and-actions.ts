@@ -13,8 +13,10 @@ import {
   buildUsageWindowsFromGroups,
 } from "./provider-quota-utils.ts";
 import {
+  checkAndUpdateManagedRuntimes,
   ensureProviderRuntimeInstalled,
   resolveManagedProviderRuntime,
+  type ManagedRuntimeFolder,
 } from "./provider-runtime-resolver.ts";
 import { type ProviderConnectionDeps, PROVIDER_CATALOG, API_MODELS_CACHE_TTL_MS, apiKeyModelsCache, fetchApiModelsForProvider } from "./provider-catalog-helpers.ts";
 import { detectOllamaModels, selectPoolAccount } from "./provider-local-detection.ts";
@@ -203,6 +205,38 @@ export async function ensureAntigravityRuntimeInBackgroundOp(deps: ProviderConne
     return { installed: inst.installedNow, available: true };
   }
   return { installed: false, available: false };
+}
+
+export async function checkAndUpdateManagedRuntimesInBackgroundOp(
+  deps: ProviderConnectionDeps
+): Promise<{ updated: ManagedRuntimeFolder[]; checked: ManagedRuntimeFolder[] }> {
+  const folders: ManagedRuntimeFolder[] = ["antigravity", "opencode"];
+  if (
+    deps.cliOAuth.listAccounts("openai").length > 0 ||
+    Boolean(resolveManagedProviderRuntime("codex").executable)
+  ) {
+    folders.push("codex");
+  }
+  if (
+    deps.cliOAuth.listAccounts("claude").length > 0 ||
+    Boolean(resolveManagedProviderRuntime("claude").executable)
+  ) {
+    folders.push("claude");
+  }
+
+  const res = await checkAndUpdateManagedRuntimes({ folders });
+  if (res.updated.length > 0) {
+    deps.invalidateCliProbeCache();
+    if (res.updated.includes("codex")) {
+      deps.cliOAuth.invalidateModelCache("openai");
+      deps.cliOAuth.invalidateQuotaCache("openai");
+    }
+    if (res.updated.includes("claude")) {
+      deps.cliOAuth.invalidateModelCache("claude");
+      deps.cliOAuth.invalidateQuotaCache("claude");
+    }
+  }
+  return res;
 }
 
 export async function connectProviderOp(deps: ProviderConnectionDeps, provedor: ProviderName,

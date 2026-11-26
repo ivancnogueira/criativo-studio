@@ -21,13 +21,16 @@ export async function installOpenCodeStandaloneBinary(options?: {
     archiveKind: "zip" | "tar.gz"
   ) => Promise<void>;
   includeSystemPaths?: boolean;
+  forceInstall?: boolean;
 }): Promise<ResolvedProviderRuntime & { installedNow: boolean; error?: string }> {
-  const existing = resolveManagedProviderRuntime("opencode", {
-    appDataDir: options?.appDataDir,
-    includeSystemPaths: options?.includeSystemPaths,
-  });
-  if (existing.executable) {
-    return { ...existing, installedNow: false };
+  if (!options?.forceInstall) {
+    const existing = resolveManagedProviderRuntime("opencode", {
+      appDataDir: options?.appDataDir,
+      includeSystemPaths: options?.includeSystemPaths,
+    });
+    if (existing.executable) {
+      return { ...existing, installedNow: false };
+    }
   }
 
   if (
@@ -100,13 +103,16 @@ export async function installAntigravityStandaloneBinary(options?: {
     archiveKind: "zip" | "tar.gz"
   ) => Promise<void>;
   includeSystemPaths?: boolean;
+  forceInstall?: boolean;
 }): Promise<ResolvedProviderRuntime & { installedNow: boolean; error?: string }> {
-  const existing = resolveManagedProviderRuntime("antigravity", {
-    appDataDir: options?.appDataDir,
-    includeSystemPaths: options?.includeSystemPaths,
-  });
-  if (existing.executable) {
-    return { ...existing, installedNow: false };
+  if (!options?.forceInstall) {
+    const existing = resolveManagedProviderRuntime("antigravity", {
+      appDataDir: options?.appDataDir,
+      includeSystemPaths: options?.includeSystemPaths,
+    });
+    if (existing.executable) {
+      return { ...existing, installedNow: false };
+    }
   }
 
   if (
@@ -269,11 +275,14 @@ export async function ensureProviderRuntimeInstalled(
   options?: {
     appDataDir?: string;
     timeoutMs?: number;
+    forceInstall?: boolean;
   }
 ): Promise<ResolvedProviderRuntime & { installedNow: boolean; error?: string }> {
-  const existing = resolveManagedProviderRuntime(folder, { appDataDir: options?.appDataDir });
-  if (existing.executable) {
-    return { ...existing, installedNow: false };
+  if (!options?.forceInstall) {
+    const existing = resolveManagedProviderRuntime(folder, { appDataDir: options?.appDataDir });
+    if (existing.executable) {
+      return { ...existing, installedNow: false };
+    }
   }
 
   if (process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1") {
@@ -284,6 +293,7 @@ export async function ensureProviderRuntimeInstalled(
     return await installAntigravityStandaloneBinary({
       appDataDir: options?.appDataDir,
       timeoutMs: options?.timeoutMs,
+      forceInstall: options?.forceInstall,
     });
   }
 
@@ -292,6 +302,7 @@ export async function ensureProviderRuntimeInstalled(
     const standalone = await installOpenCodeStandaloneBinary({
       appDataDir: options?.appDataDir,
       timeoutMs: options?.timeoutMs,
+      forceInstall: options?.forceInstall,
     });
     if (standalone.executable) {
       return standalone;
@@ -326,10 +337,11 @@ export async function ensureProviderRuntimeInstalled(
   mkdirSync(prefixDir, { recursive: true });
 
   const timeoutMs = options?.timeoutMs ?? 120_000;
+  const npmSpec = options?.forceInstall ? `${pkg}@latest` : pkg;
   const installRes = await new Promise<{ ok: boolean; errMsg?: string }>((resolveInstall) => {
     const child = spawnProviderProcess(
       npmExe,
-      ["install", "--no-audit", "--no-fund", "--prefix", prefixDir, pkg],
+      ["install", "--no-audit", "--no-fund", "--prefix", prefixDir, npmSpec],
       {
         cwd: prefixDir,
         env: process.env,

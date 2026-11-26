@@ -82,6 +82,17 @@ import { tryApiKeyOrOllamaAttempt } from "./agent-reply-api-provider.ts";
 import { tryAntigravityAttempt } from "./agent-reply-antigravity.ts";
 import type { AgentReplyOptions, AgentReplyTarget } from "./agent-reply-types.ts";
 
+function sanitizeMarkdownTableCell(raw: string, maxLen: number): string {
+  const flat = String(raw ?? "")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\|/g, "/")
+    .replace(/`/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!flat) return "erro";
+  return flat.length > maxLen ? `${flat.slice(0, Math.max(0, maxLen - 3))}...` : flat;
+}
+
 export async function generateAgentChatReply(
   deps: StudioRoutesDeps,
   agente: AgentReplyTarget,
@@ -313,8 +324,12 @@ export async function generateAgentChatReply(
   // 5. Resposta honesta: diferencia erro técnico em provedor conectado vs ausência real de conexão
   if (options?.channelOrigin === "whatsapp") {
     const readyAnexos = finalizeTurnAnexos();
+    const safeErrShort = sanitizeMarkdownTableCell(
+      execState.lastExecutionError ?? "sem resposta do servidor",
+      140
+    );
     const cleanErr = execState.hadConnectedRoute
-      ? `Não consegui concluir a chamada em *${agente.modelo_padrao}* (${providerName}): ${(execState.lastExecutionError ?? "sem resposta do servidor").slice(0, 140)}. Tente novamente em instantes ou revise a conta em Conexões.`
+      ? `Não consegui concluir a chamada em *${agente.modelo_padrao}* (${providerName}): ${safeErrShort}. Tente novamente em instantes ou revise a conta em Conexões.`
       : `O modelo *${agente.modelo_padrao}* (${providerName}) ainda não está conectado no CriativoOS. Conecte uma conta em Conexões e tente novamente.`;
     return {
       markdown: `*${agente.nome}*: ${cleanErr}`,
@@ -326,8 +341,13 @@ export async function generateAgentChatReply(
 
   const readyAnexos = finalizeTurnAnexos();
   const statusLabel = execState.hadConnectedRoute ? "Falha na chamada" : "Não conectado";
+  const safeErrDetail = sanitizeMarkdownTableCell(
+    execState.lastExecutionError ?? "sem resposta do servidor",
+    280
+  );
+  const safeErrCell = sanitizeMarkdownTableCell(execState.lastExecutionError ?? "erro", 80);
   const detailLine = execState.hadConnectedRoute
-    ? `Erro técnico ao executar **${agente.modelo_padrao}** (${providerName}): \`${execState.lastExecutionError ?? "sem resposta do servidor"}\`. Tente novamente ou reautentique sua conta em **Conexões**.`
+    ? `Erro técnico ao executar **${agente.modelo_padrao}** (${providerName}): \`${safeErrDetail}\`. Tente novamente ou reautentique sua conta em **Conexões**.`
     : readyAnexos.length > 0
       ? `Mídia gerada e salva em \`${readyAnexos[0].caminho_relativo}\`.`
       : `Nenhum provedor conectado para o modelo **${agente.modelo_padrao}** (\`${providerName}\`). Abra **Conexões** e clique para conectar via navegador (Google, Claude ou ChatGPT), utilize modelos gratuitos do **OpenCode** ou salve uma API Key.`;
@@ -340,7 +360,7 @@ export async function generateAgentChatReply(
     "| Etapa do Plano | Ação | Status |",
     "|---|---|---|",
     `| 1. Diagnóstico | Contexto de \`${skillSlug}\` (${agente.modelo_padrao}) | Pronto |`,
-    `| 2. Execução IA | ${readyAnexos.length > 0 ? `Mídia gerada em \`${readyAnexos[0].caminho_relativo}\`` : execState.hadConnectedRoute ? `Falha técnica: ${(execState.lastExecutionError ?? "erro").slice(0, 70)}` : "Aguardando conta conectada ou API Key"} | ${readyAnexos.length > 0 ? "Concluído" : statusLabel} |`,
+    `| 2. Execução IA | ${readyAnexos.length > 0 ? `Mídia gerada em \`${readyAnexos[0].caminho_relativo}\`` : execState.hadConnectedRoute ? `Falha técnica: ${safeErrCell}` : "Aguardando conta conectada ou API Key"} | ${readyAnexos.length > 0 ? "Concluído" : statusLabel} |`,
     `| 3. Segurança Meta | Aprovação humana obrigatória antes da publicação | Ativo |`,
     "",
     detailLine,

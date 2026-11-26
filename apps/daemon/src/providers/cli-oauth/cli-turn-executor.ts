@@ -11,6 +11,8 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { EXEC_TIMEOUT_MS, resolveCliBinaryForProvider, spawnCommandWithStdin, type CliExecutionInput, type CliExecutionOutput, type CliServiceRuntimeContext } from "./cli-types-and-helpers.ts";
+import { forceUpgradeProviderRuntime } from "../provider-runtime-resolver.ts";
+import { extractCleanCodexError, isCodexSchemaMismatchError } from "./codex-models-http.ts";
 
 export async function executeCliAgentTurn(
   ctx: CliServiceRuntimeContext,
@@ -197,27 +199,48 @@ input: CliExecutionInput): Promise<CliExecutionOutput> {
       }
     }
 
-    const res = await spawnCommandWithStdin({
-      executable,
-      args: [
-        "exec",
-        "--json",
-        "--skip-git-repo-check",
-        "--sandbox",
-        "read-only",
-        ...codexMcpArgs,
-        "--model",
-        targetModel,
-        "-",
-      ],
-      env,
-      cwd: ctx.workspaceCwd,
-      stdinText: fullPrompt,
-      timeoutMs: input.timeoutMs ?? EXEC_TIMEOUT_MS,
-    });
+    const runCodexExec = (execPath: string) =>
+      spawnCommandWithStdin({
+        executable: execPath,
+        args: [
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--sandbox",
+          "read-only",
+          ...codexMcpArgs,
+          "--model",
+          targetModel,
+          "-",
+        ],
+        env,
+        cwd: ctx.workspaceCwd,
+        stdinText: fullPrompt,
+        timeoutMs: input.timeoutMs ?? EXEC_TIMEOUT_MS,
+      });
+
+    let res = await runCodexExec(executable);
+    if (res.code !== 0 && isCodexSchemaMismatchError(res.stderr)) {
+      const cacheFile = join(absDir, "models_cache.json");
+      if (existsSync(cacheFile)) {
+        try {
+          rmSync(cacheFile, { force: true });
+        } catch {
+          // ignora
+        }
+      }
+      const upgraded = await forceUpgradeProviderRuntime("codex", {
+        appDataDir: ctx.appDataDir,
+        codexHomeToResetCache: absDir,
+      }).catch(() => null);
+      if (upgraded?.executable) {
+        ctx.invalidateModelCache("openai");
+        res = await runCodexExec(upgraded.executable);
+      }
+    }
 
     if (res.code !== 0) {
-      throw new Error(res.stderr.trim() || res.stdout.trim() || "Codex CLI retornou erro.");
+      throw new Error(extractCleanCodexError(res.stderr, res.stdout));
     }
 
     const answerChunks: string[] = [];

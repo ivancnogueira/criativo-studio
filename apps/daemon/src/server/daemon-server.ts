@@ -500,6 +500,33 @@ export async function createDaemonServer(
         .catch((err) => {
           console.warn("[Daemon] Auto-instalação em background do Antigravity CLI ignorada:", err);
         });
+      void providerConnection
+        .checkAndUpdateManagedRuntimesInBackground()
+        .then(async (res) => {
+          if (res.updated.length > 0) {
+            const list = await providerConnection.getProvidersStatus(true).catch(() => []);
+            const folderToProvider: Record<string, string> = {
+              antigravity: "gemini",
+              opencode: "opencode",
+              codex: "openai",
+              claude: "claude",
+            };
+            for (const folder of res.updated) {
+              const provId = folderToProvider[folder];
+              const st = list.find((p) => p.provedor === provId);
+              if (st) {
+                wsHub.broadcast("provider:updated", {
+                  provedor: st.provedor,
+                  conectado: st.conectado,
+                  modo: st.modo_conexao,
+                });
+              }
+            }
+          }
+        })
+        .catch((err) => {
+          console.warn("[Daemon] Verificação periódica de atualização de CLIs ignorada:", err);
+        });
     }
   }
 
