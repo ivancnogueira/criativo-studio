@@ -96,6 +96,9 @@ const MEDIA_TOOLS = new Set([
   "read_image",
   "crop_margem_segura",
   "exec_remotion_render",
+  "video_inspect_and_silences",
+  "video_transcribe_words",
+  "exec_ffmpeg_edit",
   "attach_files_to_response",
 ]);
 
@@ -253,7 +256,7 @@ const EXTERNAL_MCP_INTENT_RE =
   /\b(mcp|crm|notion|github|slack|discord|google\s+drive|calendar|agenda\s+google|docs|sheets|wordpress|woocommerce|elementor|shopify|rd\s*station|hubspot|pipedrive|airtable|stripe|email|e-mail|imap|smtp)\b/i;
 
 const PRODUCTION_SKILL_RE =
-  /\b(crie|criar|gere|gerar|produza|produzir|monte|montar|escreva|escrever|redija|redigir|planeje|planejar|elabore|elaborar|desenvolva|desenvolver|roteiro|copy|carrossel|post|posts|storie|stories|reel|reels|v[ií]deo|an[uú]ncio|brandbook|identidade\s+visual|concorrente|concorrentes|entreg[aá]vel|dossi[eê]|auditar|audit|m[eé]trica|m[eé]tricas|calend[aá]rio\s+editorial|estrat[eé]gia|pilar|pilares|legenda|gancho)\b/i;
+  /\b(crie|criar|gere|gerar|produza|produzir|monte|montar|escreva|escrever|redija|redigir|planeje|planejar|elabore|elaborar|desenvolva|desenvolver|analis(?:e|ar)|perfil|diagn[oó]stic(?:o|os)|auditoria|roteiro|copy|carrossel|post|posts|storie|stories|reel|reels|v[ií]deo|an[uú]ncio|brandbook|identidade\s+visual|concorrente|concorrentes|entreg[aá]vel|dossi[eê]|auditar|audit|m[eé]trica|m[eé]tricas|calend[aá]rio\s+editorial|estrat[eé]gia|pilar|pilares|legenda|gancho)\b/i;
 
 const MENTION_OR_HANDOFF_RE = /(?:^|\s)@[a-z0-9_-]+|\[HANDOFF:[a-z0-9_-]+\]/i;
 
@@ -327,7 +330,13 @@ export function planTurnContext(input: TurnContextPlannerInput): TurnContextPlan
   ) {
     scopes.add("meta");
   }
-  if (input.anexosCount > 0 || MEDIA_INTENT_RE.test(combinedText)) {
+  if (
+    input.anexosCount > 0 ||
+    input.agenteId === "editor_video" ||
+    input.agenteId === "roteirista_faceless" ||
+    input.agenteId === "roteirista_talking_head" ||
+    MEDIA_INTENT_RE.test(combinedText)
+  ) {
     scopes.add("media");
   }
   if (DATA_UI_INTENT_RE.test(combinedText)) {

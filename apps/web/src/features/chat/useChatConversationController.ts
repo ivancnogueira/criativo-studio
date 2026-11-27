@@ -201,11 +201,14 @@ export function useChatConversationController(props: AgentConversationViewProps)
   const handlePickFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     setUploading(true);
+    setEditError(null);
     try {
       for (const file of Array.from(files)) {
         const uploaded = await onUploadFile(file);
         setPendingAttachments((prev) => [...prev, uploaded]);
       }
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : "Falha ao enviar arquivo.");
     } finally {
       setUploading(false);
     }

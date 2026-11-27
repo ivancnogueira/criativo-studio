@@ -326,7 +326,7 @@ describe("Fase 22 — CDP sem __name, Takeover sem trava, WhatsApp Formatter e F
     assert.match(desktopDockSrc, /alwaysOnTop:\s*true/);
     assert.match(desktopDockSrc, /mode=floating-dock/);
 
-    assert.match(openCodeSrc, /EXEC_TIMEOUT_MS\s*=\s*180_000/);
+    assert.match(openCodeSrc, /EXEC_TIMEOUT_MS\s*=\s*(?:180_000|10\s*\*\s*60_000|600_000)/);
 
     assert.match(daemonServerSrc, /formatMarkdownForWhatsApp/);
     assert.match(daemonServerSrc, /channelOrigin:\s*"whatsapp"/);

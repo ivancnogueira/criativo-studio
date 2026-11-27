@@ -151,10 +151,16 @@ export class AntigravityAcpService {
     }
   }
 
+  private buildWorkerKey(accountKey: string, agentId?: string | null): string {
+    const cleanAgent = agentId?.trim();
+    return cleanAgent ? `${accountKey}::${cleanAgent}` : `${accountKey}::default`;
+  }
+
   private async withAccountWorker<T>(
     accountKey: string,
     geminiDir: string,
-    fn: (conn: AcpProcessConnection) => Promise<T>
+    fn: (conn: AcpProcessConnection) => Promise<T>,
+    agentId?: string | null
   ): Promise<T> {
     let exe = this.getCliExecutable();
     if (!exe) {
@@ -168,7 +174,20 @@ export class AntigravityAcpService {
       }
     }
 
-    let slot = this.workers.get(accountKey);
+    let workerKey = this.buildWorkerKey(accountKey, agentId);
+    let slot = this.workers.get(workerKey);
+    if (!slot) {
+      const accountSlots = [...this.workers.entries()].filter(([k]) =>
+        k.startsWith(`${accountKey}::`)
+      );
+      if (accountSlots.length >= 4) {
+        const idleEntry = accountSlots.find(([, s]) => s.activeCount === 0 && s.conn.isAlive());
+        if (idleEntry) {
+          workerKey = idleEntry[0];
+          slot = idleEntry[1];
+        }
+      }
+    }
     if (!slot || !slot.conn.isAlive()) {
       if (slot?.idleTimer) clearTimeout(slot.idleTimer);
       slot = {
@@ -181,7 +200,7 @@ export class AntigravityAcpService {
         queue: Promise.resolve(),
         activeCount: 0,
       };
-      this.workers.set(accountKey, slot);
+      this.workers.set(workerKey, slot);
     }
 
     if (slot.idleTimer) {
@@ -200,9 +219,10 @@ export class AntigravityAcpService {
       currentSlot.activeCount = Math.max(0, currentSlot.activeCount - 1);
       if (currentSlot.activeCount === 0) {
         currentSlot.idleTimer = setTimeout(() => {
+          if (currentSlot.activeCount > 0) return;
           currentSlot.conn.dispose();
-          if (this.workers.get(accountKey) === currentSlot) {
-            this.workers.delete(accountKey);
+          if (this.workers.get(workerKey) === currentSlot) {
+            this.workers.delete(workerKey);
           }
         }, WORKER_IDLE_TTL_MS);
         currentSlot.idleTimer.unref?.();
@@ -223,8 +243,11 @@ export class AntigravityAcpService {
     agentId?: string | null
   ): Promise<{ models: AcpDiscoveredModel[]; defaultModelId: string | null }> {
     const resolvedMcpServers = await this.resolveMcpServers(agentId);
-    return this.withAccountWorker(accountKey, geminiDir, (conn) =>
-      conn.discoverSessionModels(30_000, resolvedMcpServers)
+    return this.withAccountWorker(
+      accountKey,
+      geminiDir,
+      (conn) => conn.discoverSessionModels(30_000, resolvedMcpServers),
+      agentId
     );
   }
 
@@ -233,28 +256,44 @@ export class AntigravityAcpService {
     input: AcpPromptExecutionInput
   ): Promise<AcpPromptExecutionOutput> {
     const resolvedMcpServers = await this.resolveMcpServers(input.agentId, input.mcpServers);
-    return this.withAccountWorker(accountKey, input.geminiDir, (conn) =>
-      conn.runPrompt({
-        cwd: input.cwd,
-        promptText: input.promptText,
-        modelId: input.modelId,
-        effort: input.effort,
-        imagePaths: input.imagePaths,
-        labeledImages: input.labeledImages,
-        timeoutMs: input.timeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS,
-        agentId: input.agentId,
-        mcpServers: resolvedMcpServers,
-        onDelta: input.onDelta,
-      })
+    return this.withAccountWorker(
+      accountKey,
+      input.geminiDir,
+      (conn) =>
+        conn.runPrompt({
+          cwd: input.cwd,
+          promptText: input.promptText,
+          modelId: input.modelId,
+          effort: input.effort,
+          imagePaths: input.imagePaths,
+          labeledImages: input.labeledImages,
+          timeoutMs: input.timeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS,
+          signal: input.signal,
+          agentId: input.agentId,
+          mcpServers: resolvedMcpServers,
+          onDelta: input.onDelta,
+        }),
+      input.agentId
     );
   }
 
-  public disposeAccount(accountKey: string): void {
-    const slot = this.workers.get(accountKey);
+  public disposeWorker(accountKey: string, agentId?: string | null): void {
+    const workerKey = this.buildWorkerKey(accountKey, agentId);
+    const slot = this.workers.get(workerKey);
     if (!slot) return;
+    if (slot.activeCount > 0 && slot.conn.isAlive()) return;
     if (slot.idleTimer) clearTimeout(slot.idleTimer);
     slot.conn.dispose();
-    this.workers.delete(accountKey);
+    this.workers.delete(workerKey);
+  }
+
+  public disposeAccount(accountKey: string): void {
+    for (const [key, slot] of this.workers.entries()) {
+      if (key !== accountKey && !key.startsWith(`${accountKey}::`)) continue;
+      if (slot.idleTimer) clearTimeout(slot.idleTimer);
+      slot.conn.dispose();
+      this.workers.delete(key);
+    }
   }
 
   public closeAll(): void {

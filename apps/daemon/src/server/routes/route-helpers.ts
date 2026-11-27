@@ -152,8 +152,8 @@ export interface StudioRoutesDeps {
   providerConnection: ProviderConnectionService;
   wsHub: WebSocketHub;
   sendJson: (res: ServerResponse, statusCode: number, body: unknown) => void;
-  readJsonBody: (req: IncomingMessage) => Promise<Record<string, unknown>>;
-  readRawBody?: (req: IncomingMessage) => Promise<Buffer>;
+  readJsonBody: (req: IncomingMessage, maxBytes?: number) => Promise<Record<string, unknown>>;
+  readRawBody?: (req: IncomingMessage, maxBytes?: number) => Promise<Buffer>;
   workspaceRoot?: string;
   productRoot?: string;
   mcpGateway?: McpGateway;

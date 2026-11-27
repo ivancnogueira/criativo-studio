@@ -384,10 +384,10 @@ describe("Fase 22 — Schemas MCP, Wakeups Reais, Resolução @Apelido, Lazy Loa
 
   it("5. (OC22-01 & WPP22-01) OpenCode sem --pure + stderr, Antigravity lean e fallback WhatsApp sem tabelas Markdown", async () => {
     const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-    const openCodeSrc = readFileSync(
-      join(repoRoot, "apps/daemon/src/providers/opencode-live-service.ts"),
-      "utf8",
-    );
+    const openCodeSrc =
+      readFileSync(join(repoRoot, "apps/daemon/src/providers/opencode-live-service.ts"), "utf8") +
+      "\n" +
+      readFileSync(join(repoRoot, "apps/daemon/src/providers/opencode-acp-connection.ts"), "utf8");
     const cliOAuthSrc =
       readFileSync(join(repoRoot, "apps/daemon/src/providers/cli-oauth-accounts-service.ts"), "utf8") +
       "\n" +

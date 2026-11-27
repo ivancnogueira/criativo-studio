@@ -7,13 +7,19 @@ import type { NativeAppConnectionsStore } from "../../marketplace/native-app-con
 import type { SkillsManager } from "../../marketplace/skills-manager.ts";
 import type { McpGateway } from "../../mcp/mcp-gateway.ts";
 import type { ProviderConnectionService } from "../../providers/provider-connection-service.ts";
+import type { LicenseClientService } from "../../license/license-service.ts";
+import type { TranscriptionService } from "../../voice/transcription-service.ts";
 import type { VaultService } from "../../vault/vault-service.ts";
 import type { WebSocketHub } from "../websocket-hub.ts";
+import { VIDEO_STUDIO_TOOLS_SCHEMA } from "./video-tools-schema.ts";
 export interface StudioExtensionToolDeps {
   db: CriativoDatabase;
   vault?: VaultService;
   wsHub?: WebSocketHub;
   workspaceRoot?: string;
+  productRoot?: string;
+  licenseService?: LicenseClientService;
+  transcription?: TranscriptionService;
   agenteId?: string;
   canalId?: string | null;
   mcpGateway?: McpGateway;
@@ -519,6 +525,7 @@ export const PHASE10_TOOL_DEFINITIONS: ToolDefinition[] = [
       required: ["prompt"],
     },
   },
+  ...VIDEO_STUDIO_TOOLS_SCHEMA,
 ];
 
 export const PHASE10_TOOL_NAMES: ReadonlySet<string> = new Set(

@@ -306,6 +306,9 @@ export async function prepareAgentReplySetup(
           db: deps.db,
           vault: deps.vault,
           catalogService: deps.catalogService,
+          licenseService: deps.licenseService,
+          workspaceRoot,
+          productRoot: deps.productRoot,
         })
       ) {
         continue;

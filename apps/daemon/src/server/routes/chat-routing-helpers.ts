@@ -191,6 +191,9 @@ export async function runTextModelWorkflowToolLoop(params: {
             db: params.deps.db,
             vault: params.deps.vault,
             catalogService: params.deps.catalogService,
+            licenseService: params.deps.licenseService,
+            workspaceRoot,
+            productRoot: params.deps.productRoot,
           })
         ) {
           throw new Error(
@@ -221,6 +224,9 @@ export async function runTextModelWorkflowToolLoop(params: {
             vault: params.deps.vault,
             wsHub: params.deps.wsHub,
             workspaceRoot,
+            productRoot: params.deps.productRoot,
+            licenseService: params.deps.licenseService,
+            transcription: params.deps.transcription,
             agenteId: params.agenteId,
             canalId: effectiveCanalId,
             mcpGateway: params.deps.mcpGateway,
@@ -245,7 +251,10 @@ export async function runTextModelWorkflowToolLoop(params: {
             },
           });
           if (
-            (toolName === "generate_image" || toolName === "generate_video") &&
+            (toolName === "generate_image" ||
+              toolName === "generate_video" ||
+              toolName === "exec_remotion_render" ||
+              toolName === "exec_ffmpeg_edit") &&
             out &&
             typeof out === "object" &&
             "anexo" in out &&

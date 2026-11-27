@@ -83,12 +83,37 @@ import {
   type LabeledVisualAsset,
   type Phase14ToolServices,
 } from "../studio-tools-bridge.ts";
+import { readRawBody as defaultReadRawBody } from "../daemon-http-utils.ts";
 import type { StudioRouteContext } from "./route-helpers.ts";
 import { inferTipoUso, RAW_MIME_MAP, sanitizeFileName } from "./route-helpers.ts";
+
+export const MAX_UPLOAD_FILE_BYTES = 100 * 1024 * 1024;
+const MAX_UPLOAD_JSON_RAW_BYTES = 140 * 1024 * 1024;
+
+function sendUploadTooLarge(
+  sendJson: StudioRouteContext["deps"]["sendJson"],
+  res: StudioRouteContext["res"],
+  sizeBytes?: number
+): void {
+  const sizeLabel =
+    typeof sizeBytes === "number" && sizeBytes > 0
+      ? ` (${(sizeBytes / (1024 * 1024)).toFixed(1)} MB)`
+      : "";
+  const sugestao =
+    "Para vídeos ou arquivos maiores que 100 MB, envie o caminho completo do arquivo no chat ou autorize a pasta do vídeo em Inspetor do Agente → Pastas Autorizadas.";
+  sendJson(res, 413, {
+    ok: false,
+    codigo: "CRV-UPLOAD-413",
+    limite_mb: 100,
+    erro: `Arquivo${sizeLabel} excede o limite de 100 MB para upload direto. ${sugestao}`,
+    sugestao,
+  });
+}
 
 export async function tryHandleFilesRoutes(ctx: StudioRouteContext): Promise<boolean> {
   const { req, res, path, method, url, deps, db, wsHub, workspaceRoot } = ctx;
   const { sendJson, readJsonBody, providerConnection } = deps;
+  const readRawBody = deps.readRawBody ?? defaultReadRawBody;
 
   // 6. Arquivos, Uploads (ImagePaths) & Leitura Segura
   if (method === "GET" && path === "/api/arquivos") {
@@ -132,43 +157,103 @@ export async function tryHandleFilesRoutes(ctx: StudioRouteContext): Promise<boo
   }
 
   if (method === "POST" && path === "/api/arquivos/upload") {
-    const body = await readJsonBody(req);
-    if (typeof body.nome !== "string" || typeof body.conteudo_base64 !== "string") {
-      sendJson(res, 400, { erro: "Campos obrigatórios: 'nome' e 'conteudo_base64'." });
-      return true;
+    const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+    const isJsonPayload = contentType.includes("application/json");
+    let rawFileName = "";
+    let rawMimeType = "";
+    let rawCategoria = "";
+    let rawTipoUso: string | undefined;
+    let agenteId: string | null = null;
+    let tarefaId: string | null = null;
+    let buffer: Buffer;
+
+    if (!isJsonPayload) {
+      const contentLen = Number(req.headers["content-length"] ?? 0);
+      if (Number.isFinite(contentLen) && contentLen > MAX_UPLOAD_FILE_BYTES) {
+        req.resume();
+        sendUploadTooLarge(sendJson, res, contentLen);
+        return true;
+      }
+      try {
+        buffer = await readRawBody(req, MAX_UPLOAD_FILE_BYTES);
+      } catch (err) {
+        if ((err as { statusCode?: number })?.statusCode === 413) {
+          sendUploadTooLarge(sendJson, res);
+          return true;
+        }
+        throw err;
+      }
+      if (buffer.length === 0) {
+        sendJson(res, 400, { erro: "Corpo do arquivo binário vazio." });
+        return true;
+      }
+      const headerName = req.headers["x-file-name"];
+      rawFileName =
+        url.searchParams.get("nome")?.trim() ||
+        (typeof headerName === "string" ? decodeURIComponent(headerName).trim() : "") ||
+        "arquivo.bin";
+      rawMimeType =
+        url.searchParams.get("mime_type")?.trim() ||
+        (contentType && !contentType.includes("application/octet-stream") ? contentType.split(";")[0].trim() : "");
+      rawCategoria =
+        url.searchParams.get("categoria") ??
+        url.searchParams.get("tipo_uso") ??
+        "";
+      rawTipoUso = url.searchParams.get("tipo_uso") ?? undefined;
+      agenteId = url.searchParams.get("agente_id")?.trim() || null;
+      tarefaId = url.searchParams.get("tarefa_id")?.trim() || null;
+    } else {
+      let body: Record<string, unknown>;
+      try {
+        body = await readJsonBody(req, MAX_UPLOAD_JSON_RAW_BYTES);
+      } catch (err) {
+        if ((err as { statusCode?: number })?.statusCode === 413) {
+          sendUploadTooLarge(sendJson, res);
+          return true;
+        }
+        throw err;
+      }
+      if (typeof body.nome !== "string" || typeof body.conteudo_base64 !== "string") {
+        sendJson(res, 400, { erro: "Campos obrigatórios: 'nome' e 'conteudo_base64'." });
+        return true;
+      }
+
+      const base64Clean = body.conteudo_base64.replace(/^data:[^;]+;base64,/, "").trim();
+      buffer = Buffer.from(base64Clean, "base64");
+      if (buffer.length === 0) {
+        sendJson(res, 400, { erro: "Conteúdo base64 vazio ou inválido." });
+        return true;
+      }
+      if (buffer.length > MAX_UPLOAD_FILE_BYTES) {
+        sendUploadTooLarge(sendJson, res, buffer.length);
+        return true;
+      }
+
+      rawFileName = body.nome;
+      rawMimeType = typeof body.mime_type === "string" ? body.mime_type : "";
+      rawCategoria =
+        (typeof body.categoria === "string" ? body.categoria : null) ??
+        url.searchParams.get("categoria") ??
+        (typeof body.tipo_uso === "string" ? body.tipo_uso : "");
+      rawTipoUso = typeof body.tipo_uso === "string" ? body.tipo_uso : undefined;
+      agenteId = typeof body.agente_id === "string" ? body.agente_id : null;
+      tarefaId = typeof body.tarefa_id === "string" ? body.tarefa_id : null;
     }
 
-    const base64Clean = body.conteudo_base64.replace(/^data:[^;]+;base64,/, "").trim();
-    const buffer = Buffer.from(base64Clean, "base64");
-    if (buffer.length === 0) {
-      sendJson(res, 400, { erro: "Conteúdo base64 vazio ou inválido." });
-      return true;
-    }
-    if (buffer.length > 15 * 1024 * 1024) {
-      sendJson(res, 413, { erro: "Arquivo excede o limite de 15 MB por upload." });
-      return true;
-    }
-
-    const cleanName = sanitizeFileName(body.nome);
+    const cleanName = sanitizeFileName(rawFileName);
     const arquivoId = `arq-${randomUUID().slice(0, 8)}`;
     const storedName = `${arquivoId}-${cleanName}`;
     const mimeType =
-      typeof body.mime_type === "string" && body.mime_type.length > 0
-        ? body.mime_type
+      rawMimeType.length > 0
+        ? rawMimeType
         : RAW_MIME_MAP[extname(cleanName).toLowerCase()] ?? "application/octet-stream";
-    const rawCategoria =
-      (typeof body.categoria === "string" ? body.categoria : null) ??
-      url.searchParams.get("categoria") ??
-      (typeof body.tipo_uso === "string" ? body.tipo_uso : "");
     const categoria = rawCategoria.trim().toLowerCase();
     const mappedRequestedTipoUso =
       categoria === "foto"
         ? "personagem"
         : categoria === "ficha_pdf"
           ? "documento"
-          : typeof body.tipo_uso === "string"
-            ? body.tipo_uso
-            : undefined;
+          : rawTipoUso;
     const tipoUso = inferTipoUso(mimeType, mappedRequestedTipoUso);
 
     const relFolder =
@@ -196,8 +281,6 @@ export async function tryHandleFilesRoutes(ctx: StudioRouteContext): Promise<boo
     writeFileSync(targetPath, buffer);
 
     const relPath = `${relFolder}/${storedName}`;
-    const agenteId = typeof body.agente_id === "string" ? body.agente_id : null;
-    const tarefaId = typeof body.tarefa_id === "string" ? body.tarefa_id : null;
     const agora = new Date().toISOString();
 
     db.connection
@@ -207,7 +290,7 @@ export async function tryHandleFilesRoutes(ctx: StudioRouteContext): Promise<boo
       )
       .run(
         arquivoId,
-        body.nome.slice(0, 140),
+        rawFileName.slice(0, 140),
         relPath,
         mimeType,
         buffer.length,
@@ -231,7 +314,7 @@ export async function tryHandleFilesRoutes(ctx: StudioRouteContext): Promise<boo
 
     const arquivo: ArquivoStudio = {
       arquivo_id: arquivoId,
-      nome_original: body.nome.slice(0, 140),
+      nome_original: rawFileName.slice(0, 140),
       caminho_relativo: relPath,
       url: `/api/arquivos/raw?path=${encodeURIComponent(relPath)}`,
       mime_type: mimeType,

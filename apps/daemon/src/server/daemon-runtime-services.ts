@@ -550,6 +550,8 @@ export async function createDaemonRuntimeServices(
     vault,
     wsHub,
     workspaceRoot: resolvedWorkspaceRoot,
+    productRoot: studioPaths.productRoot,
+    licenseService,
     mcpGateway,
     catalogService,
     nativeStore: catalogService.nativeStore,

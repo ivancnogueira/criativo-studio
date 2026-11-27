@@ -172,11 +172,14 @@ export const FilesVaultPage: React.FC<FilesVaultPageProps> = ({
   const handleUpload = async (list: FileList | null) => {
     if (!list || list.length === 0) return;
     setUploading(true);
+    setDeleteError(null);
     try {
       for (const file of Array.from(list)) {
         await onUploadFile(file, uploadCategory);
       }
       await onRefreshFolders?.();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Falha ao enviar arquivo.");
     } finally {
       setUploading(false);
     }

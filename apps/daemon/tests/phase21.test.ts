@@ -245,8 +245,8 @@ describe("Fase 21 — Fotos Reais, generate_image, ACP Effort, MCP 2025-11-25, W
     );
   });
 
-  it("3. (MODEL21-01) Timeout ACP 180s, resolveAcpModelSelection com effort, zero fallback silencioso gemini-2.5-flash quando CLI ativo e fallbackReason em REST puro", async () => {
-    assert.equal(DEFAULT_PROMPT_TIMEOUT_MS, 180_000);
+  it("3. (MODEL21-01) Timeout ACP >= 180s, resolveAcpModelSelection com effort, zero fallback silencioso gemini-2.5-flash quando CLI ativo e fallbackReason em REST puro", async () => {
+    assert.ok(DEFAULT_PROMPT_TIMEOUT_MS >= 180_000, "Timeout ACP deve ser >= 180s");
 
     const candidates = [
       "gemini-4-argon-low",

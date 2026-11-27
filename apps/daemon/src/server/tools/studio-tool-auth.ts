@@ -19,6 +19,13 @@ export const WHATSAPP_TOOL_NAMES = new Set([
   "messaging_forget_memory",
 ]);
 
+export const VIDEO_UPGRADE_TOOL_NAMES = new Set([
+  "exec_remotion_render",
+  "video_inspect_and_silences",
+  "video_transcribe_words",
+  "exec_ffmpeg_edit",
+]);
+
 export function resolveNativeAppConnectionsStore(deps: {
   db: CriativoDatabase;
   vault?: VaultService;
@@ -41,8 +48,24 @@ export function isAgentAuthorizedForStudioTool(
     vault?: VaultService;
     nativeStore?: NativeAppConnectionsStore;
     catalogService?: CatalogService;
+    licenseService?: LicenseClientService;
+    workspaceRoot?: string;
+    productRoot?: string;
   }
 ): boolean {
+  if (VIDEO_UPGRADE_TOOL_NAMES.has(toolName)) {
+    if (
+      !isUpgradeUnlocked(
+        deps.db,
+        deps.workspaceRoot ?? process.cwd(),
+        "video",
+        deps.licenseService,
+        deps.productRoot
+      )
+    ) {
+      return false;
+    }
+  }
   const store = resolveNativeAppConnectionsStore(deps);
   if (!store) return true;
   if (INSTAGRAM_TOOL_NAMES.has(toolName)) {

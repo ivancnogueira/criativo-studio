@@ -113,6 +113,7 @@ export interface AcpPromptExecutionInput {
   imagePaths?: string[];
   labeledImages?: LabeledImageInput[];
   timeoutMs?: number;
+  signal?: AbortSignal;
   agentId?: string | null;
   mcpServers?: unknown[];
   onDelta?: (chunk: string) => void;
@@ -192,7 +193,7 @@ export function resolveAcpModelSelection(
 }
 
 export const DEFAULT_SIGN_IN_TIMEOUT_MS = 180_000;
-export const DEFAULT_PROMPT_TIMEOUT_MS = 180_000;
+export const DEFAULT_PROMPT_TIMEOUT_MS = 10 * 60_000;
 export const WORKER_IDLE_TTL_MS = 5 * 60_000;
 
 export function inferMimeFromImagePath(filePath: string): string {

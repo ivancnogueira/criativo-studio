@@ -1,32 +1,18 @@
-import { execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { createInterface } from "node:readline";
+import { execFile } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { resolve } from "node:path";
 import { promisify } from "node:util";
 import type { ModeloProvedorInfo } from "@criativo/contracts";
 import type { VaultService } from "../vault/vault-service.ts";
+import { OpenCodeAcpConnection } from "./opencode-acp-connection.ts";
 import {
   ensureProviderRuntimeInstalled,
   resolveManagedProviderRuntime,
-  spawnProviderProcess,
 } from "./provider-runtime-resolver.ts";
 
 const execFileAsync = promisify(execFile);
 const MODELS_CACHE_TTL_MS = 120_000;
-const EXEC_TIMEOUT_MS = 180_000;
-
-interface PendingRpc {
-  resolve: (result: unknown) => void;
-  reject: (err: Error) => void;
-  timer: NodeJS.Timeout;
-}
-
-interface OpenCodeConfigOption {
-  id?: string;
-  category?: string;
-  currentValue?: string;
-  options?: Array<{ value?: string; name?: string }>;
-}
+const EXEC_TIMEOUT_MS = 10 * 60_000;
 
 function formatOpenCodeModelLabel(rawId: string): string {
   const withoutPrefix = rawId.startsWith("opencode/") ? rawId.slice("opencode/".length) : rawId;
@@ -49,261 +35,16 @@ export function resolveOpenCodeCliExecutable(appDataDir?: string): {
   return resolveManagedProviderRuntime("opencode", { appDataDir });
 }
 
-class OpenCodeAcpConnection {
-  private readonly child: ChildProcessWithoutNullStreams;
-  private readonly pending = new Map<number, PendingRpc>();
-  private nextId = 1;
-  private closed = false;
-  private initialized = false;
-  private stderrTail: string[] = [];
-  private onChunk: ((txt: string) => void) | null = null;
-  private onUsage: ((used: number) => void) | null = null;
-
-  constructor(
-    executable: string,
-    cwd: string,
-    extraEnv: Record<string, string | undefined>
-  ) {
-    this.child = spawnProviderProcess(executable, ["acp"], {
-      cwd,
-      env: {
-        ...process.env,
-        OPENCODE_DISABLE_AUTOUPDATE: "1",
-        ...extraEnv,
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-    });
-
-    this.child.stdin.on("error", () => {
-      this.closed = true;
-    });
-
-    // Drena stderr continuamente para evitar bloqueio de buffer no Windows e enriquecer erros
-    this.child.stderr.on("data", (chunk) => {
-      const txt = chunk.toString("utf8").trim();
-      if (!txt) return;
-      this.stderrTail.push(txt.slice(-260));
-      if (this.stderrTail.length > 6) this.stderrTail.shift();
-    });
-
-    const rl = createInterface({ input: this.child.stdout });
-    rl.on("line", (line) => {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("{")) return;
-      let msg: Record<string, unknown>;
-      try {
-        msg = JSON.parse(trimmed) as Record<string, unknown>;
-      } catch {
-        return;
-      }
-
-      if (typeof msg.method === "string" && msg.id !== undefined) {
-        try {
-          if (msg.method === "session/request_permission") {
-            const rawOptions = (
-              msg.params as { options?: Array<{ optionId?: string; kind?: string }> } | undefined
-            )?.options;
-            const options = Array.isArray(rawOptions) ? rawOptions : [];
-            const chosen =
-              options.find((o) => o.kind === "allow_always" || o.optionId === "allow_always") ??
-              options.find((o) => o.kind === "allow_once" || o.optionId === "allow_once") ??
-              options.find((o) => !String(o.kind ?? "").toLowerCase().includes("reject"));
-            const optionId = chosen?.optionId || "allow";
-            this.send({
-              id: msg.id,
-              result: { outcome: { outcome: "selected", optionId } },
-            });
-          } else {
-            this.send({ id: msg.id, error: { code: -32601, message: "Method not found" } });
-          }
-        } catch {
-          // ignora
-        }
-        return;
-      }
-
-      if (msg.method === "session/update" && msg.params && typeof msg.params === "object") {
-        const upd = (msg.params as {
-          update?: { sessionUpdate?: string; content?: { type?: string; text?: string }; used?: number };
-        }).update;
-        if (!upd) return;
-        if (upd.sessionUpdate === "agent_message_chunk" && upd.content?.type === "text" && upd.content.text) {
-          this.onChunk?.(upd.content.text);
-        } else if (upd.sessionUpdate === "usage_update" && typeof upd.used === "number") {
-          this.onUsage?.(upd.used);
-        }
-        return;
-      }
-
-      if (typeof msg.id === "number") {
-        const wait = this.pending.get(msg.id);
-        if (!wait) return;
-        this.pending.delete(msg.id);
-        clearTimeout(wait.timer);
-        if (msg.error !== undefined) {
-          const rec = msg.error as { message?: string; data?: { details?: string } };
-          wait.reject(new Error(rec.data?.details || rec.message || "Falha no servidor OpenCode ACP."));
-        } else {
-          wait.resolve(msg.result);
-        }
-      }
-    });
-
-    this.child.on("exit", (code) => {
-      this.closed = true;
-      const errDetail = this.stderrTail.length > 0 ? this.stderrTail[this.stderrTail.length - 1] : "";
-      const errMessage = errDetail
-        ? `Servidor OpenCode ACP encerrou (código ${code ?? "null"}): ${errDetail}`
-        : `Servidor OpenCode ACP encerrou (código ${code ?? "null"}).`;
-      for (const [id, wait] of this.pending.entries()) {
-        clearTimeout(wait.timer);
-        wait.reject(new Error(errMessage));
-        this.pending.delete(id);
-      }
-      rl.close();
-    });
-  }
-
-  public isAlive(): boolean {
-    return !this.closed && !this.child.killed;
-  }
-
-  private send(payload: Record<string, unknown>): void {
-    this.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...payload })}\n`);
-  }
-
-  private request<T = unknown>(method: string, params: Record<string, unknown>, timeoutMs: number): Promise<T> {
-    if (this.closed) return Promise.reject(new Error("Conexão OpenCode ACP fechada."));
-    const id = this.nextId++;
-    return new Promise<T>((resolvePromise, rejectPromise) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        rejectPromise(new Error(`Timeout (${Math.round(timeoutMs / 1000)}s) em OpenCode '${method}'.`));
-      }, timeoutMs);
-      timer.unref?.();
-
-      this.pending.set(id, {
-        resolve: (res) => resolvePromise(res as T),
-        reject: rejectPromise,
-        timer,
-      });
-
-      try {
-        this.send({ id, method, params });
-      } catch (err) {
-        clearTimeout(timer);
-        this.pending.delete(id);
-        rejectPromise(err instanceof Error ? err : new Error(String(err)));
-      }
-    });
-  }
-
-  public async runPrompt(input: {
-    cwd: string;
-    promptText: string;
-    modelId: string;
-    timeoutMs: number;
-    agentId?: string | null;
-    mcpServers?: unknown[];
-    onDelta?: (chunk: string) => void;
-  }): Promise<{
-    text: string;
-    modelUsed: string;
-    usage: { uncachedInput: number; cachedInput: number; output: number };
-  }> {
-    if (!this.initialized) {
-      await this.request(
-        "initialize",
-        {
-          protocolVersion: 1,
-          clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-          clientInfo: { name: "criativo-ai-studio", title: "CriativoOS", version: "1.0.0" },
-        },
-        20_000
-      );
-      this.initialized = true;
-    }
-
-    const resolvedMcpServers = Array.isArray(input.mcpServers) ? input.mcpServers : [];
-    const sess = await this.request<{ sessionId: string; configOptions?: OpenCodeConfigOption[] }>(
-      "session/new",
-      { cwd: input.cwd, mcpServers: resolvedMcpServers },
-      25_000
-    );
-
-    let modelUsed = input.modelId;
-    if (Array.isArray(sess.configOptions)) {
-      const modelOpt = sess.configOptions.find((o) => o.id === "model" || o.category === "model");
-      if (modelOpt?.id) {
-        try {
-          await this.request(
-            "session/set_config_option",
-            { sessionId: sess.sessionId, configId: modelOpt.id, value: input.modelId },
-            10_000
-          );
-        } catch {
-          // alguns modelos livres são selecionados direto ou usa o padrão livre
-          if (modelOpt.currentValue) modelUsed = modelOpt.currentValue;
-        }
-      }
-    }
-
-    const chunks: string[] = [];
-    let reportedUsed = 0;
-    this.onChunk = (txt) => {
-      chunks.push(txt);
-      input.onDelta?.(txt);
-    };
-    this.onUsage = (u) => {
-      reportedUsed = Math.max(reportedUsed, u);
-    };
-
-    try {
-      await this.request(
-        "session/prompt",
-        { sessionId: sess.sessionId, prompt: [{ type: "text", text: input.promptText }] },
-        input.timeoutMs
-      );
-    } finally {
-      this.onChunk = null;
-      this.onUsage = null;
-      void this.request("session/close", { sessionId: sess.sessionId }, 3_000).catch(() => {});
-    }
-
-    const finalText = chunks.join("").trim();
-    const estOut = Math.max(1, Math.round(finalText.length / 4));
-    const estIn = Math.max(1, Math.round(input.promptText.length / 4));
-    return {
-      text: finalText,
-      modelUsed,
-      usage: {
-        uncachedInput: reportedUsed > estOut ? reportedUsed - estOut : estIn,
-        cachedInput: 0,
-        output: estOut,
-      },
-    };
-  }
-
-  public dispose(): void {
-    this.closed = true;
-    for (const [id, wait] of this.pending.entries()) {
-      clearTimeout(wait.timer);
-      wait.reject(new Error("OpenCode ACP encerrado."));
-      this.pending.delete(id);
-    }
-    try {
-      this.child.stdin.end();
-      this.child.kill();
-    } catch {
-      // ignora
-    }
-  }
-}
-
 export type OpenCodeMcpServersResolver = (
   agentId?: string | null
 ) => Promise<unknown[]> | unknown[];
+
+interface OpenCodeWorkerSlot {
+  conn: OpenCodeAcpConnection;
+  idleTimer: NodeJS.Timeout | null;
+  queue: Promise<unknown>;
+  activeCount: number;
+}
 
 /**
  * Descobre e executa os modelos gratuitos e ativos do OpenCode CLI instalado na máquina.
@@ -314,7 +55,7 @@ export class OpenCodeLiveService {
   private readonly appDataDir?: string;
   private mcpServersResolver?: OpenCodeMcpServersResolver;
   private modelsCache: { expiresAt: number; data: ModeloProvedorInfo[]; version: string | null; executable: string | null } | null = null;
-  private worker: { conn: OpenCodeAcpConnection; idleTimer: NodeJS.Timeout | null; queue: Promise<unknown> } | null = null;
+  private readonly workers = new Map<string, OpenCodeWorkerSlot>();
 
   constructor(options?: {
     vault?: VaultService;
@@ -423,23 +164,40 @@ export class OpenCodeLiveService {
     return { detected: true, version, executable, modelos: models };
   }
 
-  private getOrCreateWorker(executable: string, sandboxCwd: string, apiKey?: string | null) {
-    if (!this.worker || !this.worker.conn.isAlive()) {
-      if (this.worker?.idleTimer) clearTimeout(this.worker.idleTimer);
-      this.worker = {
+  private getOrCreateWorker(
+    workerKey: string,
+    executable: string,
+    sandboxCwd: string,
+    apiKey?: string | null
+  ): OpenCodeWorkerSlot {
+    let slot = this.workers.get(workerKey);
+    if (!slot || !slot.conn.isAlive()) {
+      if (slot?.idleTimer) clearTimeout(slot.idleTimer);
+      slot = {
         conn: new OpenCodeAcpConnection(executable, sandboxCwd, {
           ...(apiKey ? { OPENCODE_API_KEY: apiKey } : {}),
         }),
         idleTimer: null,
         queue: Promise.resolve(),
+        activeCount: 0,
       };
+      this.workers.set(workerKey, slot);
     }
 
-    if (this.worker.idleTimer) {
-      clearTimeout(this.worker.idleTimer);
-      this.worker.idleTimer = null;
+    if (slot.idleTimer) {
+      clearTimeout(slot.idleTimer);
+      slot.idleTimer = null;
     }
-    return this.worker;
+    return slot;
+  }
+
+  private disposeWorker(workerKey: string): void {
+    const slot = this.workers.get(workerKey);
+    if (!slot) return;
+    if (slot.activeCount > 0 && slot.conn.isAlive()) return;
+    if (slot.idleTimer) clearTimeout(slot.idleTimer);
+    slot.conn.dispose();
+    this.workers.delete(workerKey);
   }
 
   public async ensureInstalled(timeoutMs = 180_000): Promise<{
@@ -471,6 +229,7 @@ export class OpenCodeLiveService {
     systemPrompt?: string;
     messages: Array<{ role: "user" | "assistant"; text: string }>;
     timeoutMs?: number;
+    signal?: AbortSignal;
     agentId?: string | null;
     channelOrigin?: "web" | "whatsapp";
     mcpServers?: unknown[];
@@ -480,6 +239,11 @@ export class OpenCodeLiveService {
     modelUsed: string;
     usage: { uncachedInput: number; cachedInput: number; output: number };
   }> {
+    if (input.signal?.aborted) {
+      const abortErr = new Error("Turno interrompido.");
+      abortErr.name = "AbortError";
+      throw abortErr;
+    }
     let { executable } = resolveOpenCodeCliExecutable(this.appDataDir);
     if (!executable) {
       const ens = await this.ensureInstalled();
@@ -514,15 +278,18 @@ export class OpenCodeLiveService {
     }
     promptParts.push(input.messages[input.messages.length - 1]?.text ?? "");
     const fullPrompt = promptParts.join("\n\n");
+    const workerKey = input.agentId?.trim() || "default";
 
     const runWithModel = async (targetModel: string) => {
-      const activeWorker = this.getOrCreateWorker(executable, sandboxCwd, apiKey);
+      const activeWorker = this.getOrCreateWorker(workerKey, executable, sandboxCwd, apiKey);
+      activeWorker.activeCount += 1;
       const run = activeWorker.queue.then(() =>
         activeWorker.conn.runPrompt({
           cwd: sandboxCwd,
           promptText: fullPrompt,
           modelId: targetModel,
           timeoutMs: input.timeoutMs ?? EXEC_TIMEOUT_MS,
+          signal: input.signal,
           agentId: input.agentId,
           mcpServers: resolvedMcpServers,
           onDelta: input.onDelta,
@@ -537,11 +304,17 @@ export class OpenCodeLiveService {
         }
         return res;
       } finally {
-        activeWorker.idleTimer = setTimeout(() => {
-          activeWorker.conn.dispose();
-          if (this.worker === activeWorker) this.worker = null;
-        }, 5 * 60_000);
-        activeWorker.idleTimer.unref?.();
+        activeWorker.activeCount = Math.max(0, activeWorker.activeCount - 1);
+        if (activeWorker.activeCount === 0) {
+          activeWorker.idleTimer = setTimeout(() => {
+            if (activeWorker.activeCount > 0) return;
+            activeWorker.conn.dispose();
+            if (this.workers.get(workerKey) === activeWorker) {
+              this.workers.delete(workerKey);
+            }
+          }, 5 * 60_000);
+          activeWorker.idleTimer.unref?.();
+        }
       }
     };
 
@@ -572,9 +345,17 @@ export class OpenCodeLiveService {
     for (let idx = 0; idx < candidates.length; idx += 1) {
       const candidateModel = candidates[idx];
       for (let attempt = 0; attempt < 2; attempt += 1) {
+        if (input.signal?.aborted) {
+          const abortErr = new Error("Turno interrompido.");
+          abortErr.name = "AbortError";
+          throw abortErr;
+        }
         try {
           return await runWithModel(candidateModel);
         } catch (err) {
+          if ((err instanceof Error && err.name === "AbortError") || input.signal?.aborted) {
+            throw err;
+          }
           lastErr = err;
           const msg = err instanceof Error ? err.message : String(err);
           const isTransient =
@@ -584,11 +365,10 @@ export class OpenCodeLiveService {
           if (!isTransient) {
             throw err;
           }
-          // Descarta worker potencialmente frio/instável e aguarda curto backoff antes de tentar outro ou repetir
-          this.close();
+          // Descarta apenas o worker isolado deste agente (nunca workers de outros agentes)
+          this.disposeWorker(workerKey);
           if (attempt === 0) {
             await new Promise((r) => setTimeout(r, 700));
-            // Só repete o mesmo modelo na 1a falha se for o primeiro candidato; nos fallbacks vai direto
             if (idx === 0) continue;
           }
           break;
@@ -600,9 +380,10 @@ export class OpenCodeLiveService {
   }
 
   public close(): void {
-    if (!this.worker) return;
-    if (this.worker.idleTimer) clearTimeout(this.worker.idleTimer);
-    this.worker.conn.dispose();
-    this.worker = null;
+    for (const [key, slot] of this.workers.entries()) {
+      if (slot.idleTimer) clearTimeout(slot.idleTimer);
+      slot.conn.dispose();
+      this.workers.delete(key);
+    }
   }
 }

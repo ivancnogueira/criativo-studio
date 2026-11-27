@@ -12,7 +12,9 @@ import type { SkillsManager } from "../marketplace/skills-manager.ts";
 import type { RoutineToolExecutionContext, RoutineToolsDeps } from "../routines/routine-agent-tools.ts";
 import type { RemoteClaimService } from "../servers/remote-claim-service.ts";
 import type { ProviderConnectionService } from "../providers/provider-connection-service.ts";
+import { trackMcpToolExecution } from "../providers/turn-stall-watchdog.ts";
 import { toolBelongsToScopes, type StudioToolScope } from "../server/turn-context-planner.ts";
+import type { LicenseClientService } from "../license/license-service.ts";
 import type { VaultService } from "../vault/vault-service.ts";
 import type { WorkflowEngine } from "../workflows/workflow-engine.ts";
 import type { WorkflowStore } from "../workflows/workflow-store.ts";
@@ -57,6 +59,8 @@ export interface CriativoStudioMcpBridgeOptions {
   vault?: VaultService;
   wsHub: WebSocketHub;
   workspaceRoot: string;
+  productRoot?: string;
+  licenseService?: LicenseClientService;
   mcpGateway?: McpGateway;
   catalogService?: CatalogService;
   nativeStore?: NativeAppConnectionsStore;
@@ -361,6 +365,9 @@ export class CriativoStudioMcpBridge {
           vault: this.deps.vault,
           nativeStore,
           catalogService: this.deps.catalogService,
+          licenseService: this.deps.licenseService,
+          workspaceRoot: this.deps.workspaceRoot,
+          productRoot: this.deps.productRoot,
         })
       ) {
         continue;
@@ -399,6 +406,9 @@ export class CriativoStudioMcpBridge {
         vault: this.deps.vault,
         nativeStore,
         catalogService: this.deps.catalogService,
+        licenseService: this.deps.licenseService,
+        workspaceRoot: this.deps.workspaceRoot,
+        productRoot: this.deps.productRoot,
       })
     ) {
       throw new Error(
@@ -434,6 +444,9 @@ export class CriativoStudioMcpBridge {
         vault: this.deps.vault,
         wsHub: this.deps.wsHub,
         workspaceRoot: this.deps.workspaceRoot,
+        productRoot: this.deps.productRoot,
+        licenseService: this.deps.licenseService,
+        transcription: this.deps.transcription,
         agenteId: resolvedAgentId,
         canalId,
         mcpGateway: this.deps.mcpGateway,
@@ -698,7 +711,7 @@ export class CriativoStudioMcpBridge {
           : {};
 
       try {
-        const result = await this.callToolForAgent(toolName, rawArgs, resolvedAgentId, callCtx);
+        const result = await trackMcpToolExecution(resolvedAgentId, () => this.callToolForAgent(toolName, rawArgs, resolvedAgentId, callCtx));
         const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
         sendJsonRpc(res, 200, {
           jsonrpc: "2.0",

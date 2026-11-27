@@ -60,6 +60,11 @@ export async function executeAntigravityCodeAssistGenerate(
       const combinedPrompt = promptParts.join("\n\n");
 
       for (let attempt = 0; attempt < 2; attempt += 1) {
+        if (input.signal?.aborted) {
+          const abortErr = new Error("Turno interrompido.");
+          abortErr.name = "AbortError";
+          throw abortErr;
+        }
         try {
           const acpOut = await ctx.acpService.executePrompt(chosenEntry.id, {
             geminiDir: chosenEntry.geminiDir,
@@ -69,6 +74,7 @@ export async function executeAntigravityCodeAssistGenerate(
             effort: input.effort,
             imagePaths: input.imagePaths,
             labeledImages: input.labeledImages,
+            signal: input.signal,
             agentId: input.agentId,
             mcpServers: input.mcpServers,
             onDelta: attempt === 0 ? input.onDelta : undefined,
@@ -87,14 +93,21 @@ export async function executeAntigravityCodeAssistGenerate(
           }
           acpLastError = new Error("Sessão ACP retornou resposta vazia.");
         } catch (err) {
+          if ((err instanceof Error && err.name === "AbortError") || input.signal?.aborted) {
+            throw err;
+          }
           acpLastError = err;
           const errMsg = err instanceof Error ? err.message : String(err);
-          // Não repete em caso de timeout/aborto para evitar espera duplicada
-          if (/timeout|timed out|abort|cancel/i.test(errMsg)) {
+          // Não repete em caso de timeout/aborto/encerramento para evitar espera duplicada
+          if (/timeout|timed out|tempo limite|abort|cancel|encerrad/i.test(errMsg)) {
             break;
           }
         }
-        ctx.acpService.disposeAccount(chosenEntry.id);
+        if (typeof ctx.acpService.disposeWorker === "function") {
+          ctx.acpService.disposeWorker(chosenEntry.id, input.agentId);
+        } else {
+          ctx.acpService.disposeAccount(chosenEntry.id);
+        }
       }
     }
 

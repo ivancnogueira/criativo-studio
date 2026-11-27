@@ -124,6 +124,19 @@ export function ChatComposerBar({
               />
             )}
 
+          {!editingQueueItem && editError && (
+            <div className="mb-2 flex items-start justify-between gap-2 rounded-xl border border-[#FD2F3B]/40 bg-[#FD2F3B]/10 px-3 py-2 text-[12px] text-[#FF8A91]">
+              <span>{editError}</span>
+              <button
+                type="button"
+                aria-label="Dispensar erro de upload"
+                onClick={() => setEditError(null)}
+                className="shrink-0 font-bold text-[#FF8A91] hover:text-white"
+              >
+                ×
+              </button>
+            </div>
+          )}
           {editingQueueItem && (
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#007CF7]/40 bg-[#242424] px-4 py-2">
               <div className="min-w-0">

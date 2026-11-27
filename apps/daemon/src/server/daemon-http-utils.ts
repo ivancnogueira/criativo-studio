@@ -186,7 +186,10 @@ export function sendJson(res: ServerResponse, statusCode: number, body: unknown)
 
 const MAX_RAW_BODY_BYTES = 2 * 1024 * 1024;
 
-export async function readRawBody(req: IncomingMessage): Promise<Buffer> {
+export async function readRawBody(
+  req: IncomingMessage,
+  maxBytes = MAX_RAW_BODY_BYTES
+): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let totalBytes = 0;
   let exceeded = false;
@@ -194,7 +197,7 @@ export async function readRawBody(req: IncomingMessage): Promise<Buffer> {
   for await (const chunk of req) {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     totalBytes += buf.length;
-    if (totalBytes > MAX_RAW_BODY_BYTES) {
+    if (totalBytes > maxBytes) {
       exceeded = true;
       continue;
     }
@@ -202,7 +205,8 @@ export async function readRawBody(req: IncomingMessage): Promise<Buffer> {
   }
 
   if (exceeded) {
-    const err = new Error("Payload excede o limite máximo de 2 MB.") as Error & {
+    const limitMb = Math.max(1, Math.round(maxBytes / (1024 * 1024)));
+    const err = new Error(`Payload excede o limite máximo de ${limitMb} MB.`) as Error & {
       statusCode?: number;
     };
     err.statusCode = 413;
@@ -212,8 +216,11 @@ export async function readRawBody(req: IncomingMessage): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-export async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const buf = await readRawBody(req);
+export async function readJsonBody(
+  req: IncomingMessage,
+  maxBytes = MAX_RAW_BODY_BYTES
+): Promise<Record<string, unknown>> {
+  const buf = await readRawBody(req, maxBytes);
   const raw = buf.toString("utf8").trim();
   if (!raw) return {};
   try {

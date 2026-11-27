@@ -26,6 +26,7 @@ import {
 import type { StudioExtensionToolDeps } from "./phase10-tools-schema.ts";
 import { selectBalancedVisualAssets } from "./studio-media-scanner.ts";
 import { readStringArg, readStringArrayArg } from "./studio-tool-helpers.ts";
+import { executeVideoStudioTool, isVideoStudioToolName } from "./video-tools-exec.ts";
 export async function executePhase10CreativeMetaTool(
   toolName: string,
   args: Record<string, unknown>,
@@ -33,6 +34,9 @@ export async function executePhase10CreativeMetaTool(
   ctx: { workspaceRoot: string; nativeStore: NativeAppConnectionsStore | null }
 ): Promise<unknown> {
   const { workspaceRoot, nativeStore } = ctx;
+  if (isVideoStudioToolName(toolName)) {
+    return await executeVideoStudioTool(toolName, args, deps, workspaceRoot);
+  }
   switch (toolName) {
     case "validar_integracao_meta": {
       const contaId = readStringArg(args, "contaId", "conta_id");

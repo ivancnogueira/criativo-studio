@@ -14,11 +14,21 @@ import {
 import {
   createInterface,
 } from "node:readline";
-import { type AcpDiscoveredModel, type LabeledImageInput, formatLabeledImageInstruction, type AcpPromptExecutionOutput, type PendingRpc, type AcpSessionNewResult, resolveAcpModelSelection, inferMimeFromImagePath, normalizeJsonRpcError } from "./antigravity-acp-helpers.ts";
+import { type AcpDiscoveredModel, type LabeledImageInput, formatLabeledImageInstruction, type AcpPromptExecutionOutput, type AcpSessionNewResult, resolveAcpModelSelection, inferMimeFromImagePath, normalizeJsonRpcError } from "./antigravity-acp-helpers.ts";
+import { createTurnStallWatchdog, getLastMcpActivityAt, hasActiveMcpToolForAgent } from "./turn-stall-watchdog.ts";
+
+interface ManagedPendingRpc {
+  resolve: (result: unknown) => void;
+  reject: (err: Error) => void;
+  timer?: NodeJS.Timeout;
+  touchActivity?: () => void;
+  cleanup?: () => void;
+}
 
 export class AcpProcessConnection {
   private readonly child: ChildProcessWithoutNullStreams;
-  private readonly pending = new Map<number, PendingRpc>();
+  private readonly pending = new Map<number, ManagedPendingRpc>();
+  private readonly openToolCalls = new Set<string>();
   private nextId = 1;
   private closed = false;
   private initialized = false;
@@ -82,6 +92,9 @@ export class AcpProcessConnection {
 
     let authUrlEmitted = false;
     this.child.stderr.on("data", (chunk) => {
+      for (const wait of this.pending.values()) {
+        wait.touchActivity?.();
+      }
       const txt = chunk.toString("utf8").trim();
       if (txt) {
         this.stderrTail.push(txt.slice(-300));
@@ -98,12 +111,14 @@ export class AcpProcessConnection {
 
     this.child.on("exit", (code) => {
       this.closed = true;
+      this.openToolCalls.clear();
       const errMsg =
         this.stderrTail.length > 0
           ? `Processo Antigravity ACP encerrou (${code ?? "sinal"}): ${this.stderrTail[this.stderrTail.length - 1]}`
           : `Processo Antigravity ACP encerrou inesperadamente (código ${code ?? "null"}).`;
       for (const [id, wait] of this.pending.entries()) {
-        clearTimeout(wait.timer);
+        if (wait.timer) clearTimeout(wait.timer);
+        wait.cleanup?.();
         wait.reject(new Error(errMsg));
         this.pending.delete(id);
       }
@@ -135,6 +150,9 @@ export class AcpProcessConnection {
 
     // Requisição iniciada pelo servidor: auto-aprova chamadas de ferramentas MCP autorizadas
     if (typeof msg.method === "string" && msg.id !== undefined) {
+      for (const wait of this.pending.values()) {
+        wait.touchActivity?.();
+      }
       try {
         if (msg.method === "session/request_permission") {
           const rawOptions = (
@@ -167,12 +185,27 @@ export class AcpProcessConnection {
       const params = msg.params as {
         update?: {
           sessionUpdate?: string;
+          toolCallId?: string;
+          status?: string;
           content?: { type?: string; text?: string };
           used?: number;
         };
       };
       const upd = params.update;
       if (!upd) return;
+      if (upd.sessionUpdate === "tool_call" && typeof upd.toolCallId === "string" && upd.toolCallId) {
+        this.openToolCalls.add(upd.toolCallId);
+      } else if (upd.sessionUpdate === "tool_call_update" && typeof upd.toolCallId === "string" && upd.toolCallId) {
+        const st = String(upd.status ?? "").toLowerCase();
+        if (st === "completed" || st === "failed" || st === "cancelled" || st === "error") {
+          this.openToolCalls.delete(upd.toolCallId);
+        } else {
+          this.openToolCalls.add(upd.toolCallId);
+        }
+      }
+      for (const wait of this.pending.values()) {
+        wait.touchActivity?.();
+      }
       if (upd.sessionUpdate === "agent_message_chunk" && upd.content?.type === "text" && upd.content.text) {
         this.onChunkListener?.(upd.content.text);
       } else if (upd.sessionUpdate === "usage_update" && typeof upd.used === "number") {
@@ -186,7 +219,8 @@ export class AcpProcessConnection {
       const wait = this.pending.get(msg.id);
       if (!wait) return;
       this.pending.delete(msg.id);
-      clearTimeout(wait.timer);
+      if (wait.timer) clearTimeout(wait.timer);
+      wait.cleanup?.();
       if (msg.error !== undefined) {
         wait.reject(new Error(normalizeJsonRpcError(msg.error)));
       } else {
@@ -195,28 +229,137 @@ export class AcpProcessConnection {
     }
   }
 
-  public request<T = unknown>(method: string, params: Record<string, unknown>, timeoutMs: number): Promise<T> {
+  public request<T = unknown>(
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs: number,
+    options?: {
+      signal?: AbortSignal;
+      resetOnActivity?: boolean;
+      agentId?: string | null;
+      enableAliveProbe?: boolean;
+      onAbortSendCancelSessionId?: string;
+    }
+  ): Promise<T> {
     if (this.closed) {
       return Promise.reject(new Error("Processo ACP encerrado."));
     }
+    if (options?.signal?.aborted) {
+      const abortErr = new Error("Turno interrompido.");
+      abortErr.name = "AbortError";
+      return Promise.reject(abortErr);
+    }
     const id = this.nextId++;
     return new Promise<T>((resolvePromise, rejectPromise) => {
-      const timer = setTimeout(() => {
+      let settled = false;
+      let timer: NodeJS.Timeout | undefined;
+      let watchdog: ReturnType<typeof createTurnStallWatchdog> | null = null;
+
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        watchdog?.stop();
+        if (options?.signal && onSignalAbort) {
+          options.signal.removeEventListener("abort", onSignalAbort);
+        }
+      };
+
+      const failTimeout = (silentSeconds: number) => {
+        if (settled) return;
+        settled = true;
         this.pending.delete(id);
-        rejectPromise(new Error(`Tempo limite (${Math.round(timeoutMs / 1000)}s) aguardando resposta de '${method}'.`));
-      }, timeoutMs);
-      timer.unref?.();
+        cleanup();
+        if (options?.onAbortSendCancelSessionId && !this.closed) {
+          try {
+            this.sendRaw({
+              method: "session/cancel",
+              params: { sessionId: options.onAbortSendCancelSessionId },
+            });
+          } catch {
+            // ignora erro ao cancelar sessão silenciosa
+          }
+        }
+        const suffix = options?.resetOnActivity ? " de silêncio" : "";
+        rejectPromise(new Error(`Tempo limite (${silentSeconds}s${suffix}) aguardando resposta de '${method}'.`));
+      };
+
+      if (options?.resetOnActivity) {
+        watchdog = createTurnStallWatchdog({
+          stallMs: timeoutMs,
+          toolStallMs: null,
+          isToolRunning: () => this.openToolCalls.size > 0 || hasActiveMcpToolForAgent(options.agentId),
+          getExternalActivityAt: () => getLastMcpActivityAt(options.agentId),
+          ...(options.enableAliveProbe && timeoutMs >= 5_000
+            ? {
+                probeAlive: async () => {
+                  if (this.closed || !this.isAlive()) return false;
+                  try {
+                    await this.request("session/list", { cwd: resolve(this.geminiDir) }, 15_000);
+                    return true;
+                  } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    return /-32601|method not found/i.test(msg);
+                  }
+                },
+              }
+            : {}),
+          onStall: () => failTimeout(Math.round(timeoutMs / 1000)),
+        });
+      } else {
+        timer = setTimeout(() => failTimeout(Math.round(timeoutMs / 1000)), timeoutMs);
+        timer.unref?.();
+      }
+
+      const onSignalAbort = () => {
+        if (settled) return;
+        settled = true;
+        this.pending.delete(id);
+        cleanup();
+        if (options?.onAbortSendCancelSessionId && !this.closed) {
+          try {
+            this.sendRaw({
+              method: "session/cancel",
+              params: { sessionId: options.onAbortSendCancelSessionId },
+            });
+          } catch {
+            // ignora erro de cancelamento
+          }
+        }
+        const abortErr = new Error("Turno interrompido.");
+        abortErr.name = "AbortError";
+        rejectPromise(abortErr);
+      };
+
+      if (options?.signal) {
+        options.signal.addEventListener("abort", onSignalAbort, { once: true });
+      }
 
       this.pending.set(id, {
-        resolve: (res) => resolvePromise(res as T),
-        reject: rejectPromise,
+        resolve: (res) => {
+          if (settled) return;
+          settled = true;
+          resolvePromise(res as T);
+        },
+        reject: (err) => {
+          if (settled) return;
+          settled = true;
+          rejectPromise(err);
+        },
         timer,
+        cleanup,
+        ...(watchdog
+          ? {
+              touchActivity: () => {
+                if (!settled) watchdog?.touch();
+              },
+            }
+          : {}),
       });
 
       try {
         this.sendRaw({ id, method, params });
       } catch (err) {
-        clearTimeout(timer);
+        settled = true;
+        cleanup();
         this.pending.delete(id);
         rejectPromise(err instanceof Error ? err : new Error(String(err)));
       }
@@ -332,6 +475,7 @@ export class AcpProcessConnection {
     imagePaths?: string[];
     labeledImages?: LabeledImageInput[];
     timeoutMs: number;
+    signal?: AbortSignal;
     agentId?: string | null;
     mcpServers?: unknown[];
     onDelta?: (chunk: string) => void;
@@ -360,7 +504,8 @@ export class AcpProcessConnection {
           },
         },
       },
-      30_000
+      60_000,
+      { signal: input.signal }
     );
 
     const sessionId = sessionRes.sessionId;
@@ -441,6 +586,7 @@ export class AcpProcessConnection {
       reportedUsedTokens = Math.max(reportedUsedTokens, used);
     };
 
+    this.openToolCalls.clear();
     try {
       await this.request(
         "session/prompt",
@@ -448,9 +594,17 @@ export class AcpProcessConnection {
           sessionId,
           prompt: promptBlocks,
         },
-        input.timeoutMs
+        input.timeoutMs,
+        {
+          signal: input.signal,
+          resetOnActivity: true,
+          agentId: input.agentId,
+          enableAliveProbe: true,
+          onAbortSendCancelSessionId: sessionId,
+        }
       );
     } finally {
+      this.openToolCalls.clear();
       this.onChunkListener = null;
       this.onUsageListener = null;
       // Encerra sessão sem bloquear
@@ -475,8 +629,10 @@ export class AcpProcessConnection {
 
   public dispose(): void {
     this.closed = true;
+    this.openToolCalls.clear();
     for (const [id, wait] of this.pending.entries()) {
-      clearTimeout(wait.timer);
+      if (wait.timer) clearTimeout(wait.timer);
+      wait.cleanup?.();
       wait.reject(new Error("Sessão ACP encerrada."));
       this.pending.delete(id);
     }

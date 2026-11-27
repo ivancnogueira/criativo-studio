@@ -82,6 +82,7 @@ export async function tryAntigravityAttempt(ctx: ModelAttemptContext): Promise<s
           labeledImages: skipExtraImagesOnFollowUp ? [] : labeledVisualAssets,
           agentId: agente.agente_id,
           preferredAccountId: preferredAccId,
+          signal: options?.signal,
           mcpServers: turnAcpMcpServers,
           onDelta: (delta) => {
             onProgress?.({
@@ -109,6 +110,7 @@ export async function tryAntigravityAttempt(ctx: ModelAttemptContext): Promise<s
                 labeledImages: [],
                 agentId: agente.agente_id,
                 preferredAccountId: preferredAccId,
+                signal: options?.signal,
                 mcpServers: turnAcpMcpServers,
               });
               return next.text;
@@ -152,6 +154,9 @@ export async function tryAntigravityAttempt(ctx: ModelAttemptContext): Promise<s
           return liveFinalText;
         }
       } catch (liveErr) {
+        if ((liveErr instanceof Error && liveErr.name === "AbortError") || options?.signal?.aborted) {
+          throw liveErr;
+        }
         const classified = isRetryableQuotaOrProviderError(liveErr);
         execState.lastExecutionError = classified.message;
         execState.lastErrorRetryable = classified.retryable;

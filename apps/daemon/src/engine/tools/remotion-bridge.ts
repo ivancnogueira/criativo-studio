@@ -1,8 +1,16 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { spawnConfinedProcess } from "../sandbox/process-confinement.ts";
+import {
+  ensureVideoStudioProject,
+  resolveRemotionCompositionId,
+} from "./video-runtime-resolver.ts";
 
-export type RemotionCompositionId = "ReelsFaceless" | "ReelsTalkingHead";
+export type RemotionCompositionId =
+  | "ReelsFaceless"
+  | "ReelsTalkingHead"
+  | "FacelessReels"
+  | "TalkingHeadReels";
 
 export interface RemotionRenderParams {
   composicao: RemotionCompositionId;
@@ -11,12 +19,15 @@ export interface RemotionRenderParams {
   output_path: string;
   props?: Record<string, unknown>;
   remotionProjectDir?: string;
+  workspaceRoot?: string;
+  productRoot?: string;
+  appDataDir?: string;
   onProgress?: (percent: number, rawLine: string) => void;
 }
 
 export interface RemotionRenderResult {
   output_path: string;
-  composicao: RemotionCompositionId;
+  composicao: "ReelsFaceless" | "ReelsTalkingHead";
   props_file_path: string;
   duration_ms: number;
 }
@@ -26,13 +37,16 @@ export interface RemotionRenderResult {
  */
 export function buildRemotionCliArgs(
   params: RemotionRenderParams,
-  propsFilePath: string
+  propsFilePath: string,
+  entrypoint = "src/index.ts",
+  includeCommandPrefix = true
 ): string[] {
-  return [
-    "remotion",
+  const normalizedComp = resolveRemotionCompositionId(params.composicao);
+  const args = [
+    ...(includeCommandPrefix ? ["remotion"] : []),
     "render",
-    "src/index.ts",
-    params.composicao,
+    entrypoint,
+    normalizedComp,
     params.output_path,
     "--codec=h264",
     "--width=1080",
@@ -40,6 +54,7 @@ export function buildRemotionCliArgs(
     "--fps=30",
     `--props=${propsFilePath}`,
   ];
+  return args;
 }
 
 /**
@@ -51,13 +66,15 @@ export async function executeRemotionRender(
   const startedAt = Date.now();
   mkdirSync(dirname(params.output_path), { recursive: true });
 
+  const normalizedComp = resolveRemotionCompositionId(params.composicao);
   const propsFilePath = join(
     dirname(params.output_path),
-    `${params.composicao.toLowerCase()}-props.json`
+    `${normalizedComp.toLowerCase()}-props.json`
   );
 
   const renderProps = {
     audioPath: params.audio_path,
+    voiceAudioUrl: params.audio_path,
     subtitlesSrtPath: params.legendas_srt_path ?? null,
     width: 1080,
     height: 1920,
@@ -66,12 +83,26 @@ export async function executeRemotionRender(
   };
   writeFileSync(propsFilePath, JSON.stringify(renderProps, null, 2), "utf8");
 
-  const args = buildRemotionCliArgs(params, propsFilePath);
-  const cwd = params.remotionProjectDir ?? process.cwd();
+  let cwd = params.remotionProjectDir;
+  let entrypoint = "src/index.ts";
+  let remotionBin: string | null = null;
+  if (!cwd) {
+    const resolved = await ensureVideoStudioProject({
+      appDataDir: params.appDataDir,
+      productRoot: params.productRoot,
+      workspaceRoot: params.workspaceRoot,
+    });
+    cwd = resolved.projectDir;
+    entrypoint = resolved.entrypoint;
+    remotionBin = resolved.remotionBin;
+  }
+
+  const command = remotionBin ?? "npx";
+  const args = buildRemotionCliArgs(params, propsFilePath, entrypoint, !remotionBin);
 
   await new Promise<void>((resolvePromise, rejectPromise) => {
     const { child, dispose } = spawnConfinedProcess({
-      command: "npx",
+      command,
       args,
       workspaceRoot: cwd,
       requestedCwd: cwd,
@@ -116,7 +147,7 @@ export async function executeRemotionRender(
 
   return {
     output_path: params.output_path,
-    composicao: params.composicao,
+    composicao: normalizedComp,
     props_file_path: propsFilePath,
     duration_ms: Date.now() - startedAt,
   };

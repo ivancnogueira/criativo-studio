@@ -201,9 +201,19 @@ CRIATIVO_VAULT_KEY=$MASTER_KEY
 CRIATIVO_SERVER_ACCESS_TOKEN=$ACCESS_TOKEN
 CRIATIVO_LICENSE_HUB_URL=$HUB_URL
 CRIATIVO_ISOLATED_SERVER=1
+CRIATIVO_MAX_UPLOAD_MB=100
 EOF
   chmod 600 "$ENV_FILE"
   chown "$APP_USER:$APP_USER" "$ENV_FILE"
+fi
+
+# Caso Nginx esteja ativo com proxy reverso na VPS, garante suporte a uploads de até 100 MB
+if command -v nginx >/dev/null 2>&1 && [[ -d /etc/nginx/conf.d ]]; then
+  cat > /etc/nginx/conf.d/criativo-upload-limit.conf <<'NGINXEOF'
+# Limite para upload direto de mídias/vídeos até 100 MB no CriativoOS
+client_max_body_size 110m;
+NGINXEOF
+  nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || true
 fi
 
 echo "==> [4/5] Registrando serviço systemd (criativo.service) na porta ${SERVER_PORT}..."

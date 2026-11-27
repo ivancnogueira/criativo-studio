@@ -17,6 +17,12 @@ import { extractCleanCodexError, isCodexSchemaMismatchError } from "./codex-mode
 export async function executeCliAgentTurn(
   ctx: CliServiceRuntimeContext,
 input: CliExecutionInput): Promise<CliExecutionOutput> {
+    if (input.signal?.aborted) {
+      const abortErr = new Error("Turno interrompido.");
+      abortErr.name = "AbortError";
+      throw abortErr;
+    }
+
     const accounts = ctx.listAccounts(input.provedor);
     if (accounts.length === 0) {
       throw new Error(
@@ -102,6 +108,9 @@ input: CliExecutionInput): Promise<CliExecutionOutput> {
           cwd: ctx.workspaceCwd,
           stdinText: fullPrompt,
           timeoutMs: input.timeoutMs ?? EXEC_TIMEOUT_MS,
+          stallMode: true,
+          signal: input.signal,
+          agentId: input.agentId,
         });
       } finally {
         if (tempMcpDir) {
@@ -217,6 +226,9 @@ input: CliExecutionInput): Promise<CliExecutionOutput> {
         cwd: ctx.workspaceCwd,
         stdinText: fullPrompt,
         timeoutMs: input.timeoutMs ?? EXEC_TIMEOUT_MS,
+        stallMode: true,
+        signal: input.signal,
+        agentId: input.agentId,
       });
 
     let res = await runCodexExec(executable);

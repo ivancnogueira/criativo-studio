@@ -126,6 +126,7 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
           agentId: agente.agente_id,
           preferredAccountId: effAccountId,
           mcpConfig: turnCliMcpConfig,
+          signal: options?.signal,
         });
 
         const cliFinalText = await runTextModelWorkflowToolLoop({
@@ -143,6 +144,7 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
               agentId: agente.agente_id,
               preferredAccountId: effAccountId,
               mcpConfig: turnCliMcpConfig,
+              signal: options?.signal,
             });
             return next.text;
           },
@@ -183,6 +185,9 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
         });
         return cliFinalText;
       } catch (cliErr) {
+        if ((cliErr instanceof Error && cliErr.name === "AbortError") || options?.signal?.aborted) {
+          throw cliErr;
+        }
         const classified = isRetryableQuotaOrProviderError(cliErr);
         execState.lastExecutionError = classified.message;
         execState.lastErrorRetryable = classified.retryable;
@@ -227,6 +232,7 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
           modelId: targetModel,
           systemPrompt: ocSystemPrompt,
           messages: ocMsgs,
+          signal: options?.signal,
           agentId: agente.agente_id,
           channelOrigin: options?.channelOrigin,
           mcpServers: turnAcpMcpServers,
@@ -251,6 +257,7 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
                   { role: "assistant", text: ocResult.text },
                   { role: "user", text: followUpPrompt },
                 ],
+                signal: options?.signal,
                 agentId: agente.agente_id,
                 channelOrigin: options?.channelOrigin,
                 mcpServers: turnAcpMcpServers,
@@ -297,6 +304,9 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
           return ocFinalText;
         }
       } catch (ocErr) {
+        if ((ocErr instanceof Error && ocErr.name === "AbortError") || options?.signal?.aborted) {
+          throw ocErr;
+        }
         const classified = isRetryableQuotaOrProviderError(ocErr);
         execState.lastExecutionError = classified.message;
         execState.lastErrorRetryable = classified.retryable;

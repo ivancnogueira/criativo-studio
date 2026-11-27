@@ -53,6 +53,7 @@ export const TasksComposer: React.FC<TasksComposerProps> = ({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [listeningVoice, setListeningVoice] = useState(false);
 
   useEffect(() => {
@@ -66,6 +67,7 @@ export const TasksComposer: React.FC<TasksComposerProps> = ({
     const list = Array.from(files);
     if (list.length === 0) return;
     setUploading(true);
+    setUploadError(null);
     try {
       const next: AnexoChat[] = [...anexos];
       for (const file of list) {
@@ -73,6 +75,8 @@ export const TasksComposer: React.FC<TasksComposerProps> = ({
         next.push(uploaded);
       }
       onChangeAnexos(next);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Falha ao enviar arquivo.");
     } finally {
       setUploading(false);
     }
@@ -186,6 +190,19 @@ export const TasksComposer: React.FC<TasksComposerProps> = ({
               </button>
             </div>
           ))}
+        </div>
+      )}
+
+      {uploadError && (
+        <div className="flex items-start justify-between gap-2 rounded-lg border border-[#FD2F3B]/40 bg-[#FD2F3B]/10 px-3 py-2 text-[12px] text-[#FF8A91]">
+          <span>{uploadError}</span>
+          <button
+            type="button"
+            onClick={() => setUploadError(null)}
+            className="shrink-0 font-bold text-[#FF8A91] hover:text-white"
+          >
+            ×
+          </button>
         </div>
       )}
 

@@ -31,7 +31,14 @@ import type {
   WhatsAppPairingRequest,
   WhatsNewReleaseInfo,
 } from "@criativo/contracts";
-import { apiFetch, requestJson } from "../http-client";
+import { apiFetch, DaemonHttpError, requestJson } from "../http-client";
+
+export const MAX_DIRECT_UPLOAD_BYTES = 100 * 1024 * 1024;
+
+export function formatOversizedUploadGuidance(file: { name: string; size: number }): string {
+  const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+  return `O arquivo "${file.name}" (${sizeMb} MB) excede o limite de 100 MB para upload direto. Para vídeos ou arquivos maiores, envie o caminho completo da pasta/arquivo no chat ou autorize a pasta do vídeo em Inspetor do Agente → Pastas Autorizadas.`;
+}
 
 export const filesTablesApi = {
   async listFiles(): Promise<ArquivoStudio[]> {
@@ -65,14 +72,51 @@ export const filesTablesApi = {
       patch: Record<string, unknown>;
     };
   }> {
-    const dataUrl = await new Promise<string>((resolveRead, rejectRead) => {
-      const reader = new FileReader();
-      reader.onload = () => resolveRead(String(reader.result ?? ""));
-      reader.onerror = () => rejectRead(new Error("Falha ao ler arquivo local."));
-      reader.readAsDataURL(file);
+    if (file.size > MAX_DIRECT_UPLOAD_BYTES) {
+      throw new DaemonHttpError(formatOversizedUploadGuidance(file), 413, "CRV-UPLOAD-413");
+    }
+    const qs = new URLSearchParams();
+    qs.set("nome", file.name);
+    if (file.type) qs.set("mime_type", file.type);
+    if (categoria) qs.set("categoria", categoria);
+    if (agenteId) qs.set("agente_id", agenteId);
+
+    const res = await apiFetch(`/api/arquivos/upload?${qs.toString()}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-File-Name": encodeURIComponent(file.name),
+      },
+      body: file,
     });
-    const suffix = categoria ? `?categoria=${encodeURIComponent(categoria)}` : "";
-    const json = await requestJson<{
+    const text = await res.text();
+    let parsed: Record<string, unknown> = {};
+    if (text) {
+      try {
+        parsed = JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        parsed = {};
+      }
+    }
+    if (!res.ok) {
+      const baseErr =
+        typeof parsed.erro === "string"
+          ? parsed.erro
+          : res.status === 413
+            ? formatOversizedUploadGuidance(file)
+            : `Erro HTTP ${res.status} ao enviar arquivo.`;
+      const extraSugestao =
+        typeof parsed.sugestao === "string" && !baseErr.includes(parsed.sugestao)
+          ? ` ${parsed.sugestao}`
+          : "";
+      throw new DaemonHttpError(
+        `${baseErr}${extraSugestao}`.trim(),
+        res.status,
+        typeof parsed.codigo === "string" ? parsed.codigo : undefined,
+        parsed
+      );
+    }
+    const json = parsed as {
       arquivo: ArquivoStudio;
       onboarding?: OnboardingEstado;
       brandExtraction?: {
@@ -80,17 +124,7 @@ export const filesTablesApi = {
         extracted_chars: number;
         patch: Record<string, unknown>;
       };
-    }>(`/api/arquivos/upload${suffix}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        nome: file.name,
-        mime_type: file.type || "application/octet-stream",
-        conteudo_base64: dataUrl,
-        agente_id: agenteId ?? null,
-        ...(categoria ? { categoria } : {}),
-      }),
-    });
+    };
     return {
       anexo: {
         arquivo_id: json.arquivo.arquivo_id,

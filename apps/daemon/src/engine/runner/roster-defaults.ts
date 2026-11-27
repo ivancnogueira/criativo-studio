@@ -45,9 +45,18 @@ const DEFAULT_AGENT_TOOLS: Record<string, string[]> = {
   diretor_entregaveis: ["inspecionar_ativos_marca", "handoff_agente"],
   inteligencia_competitiva: ["inspecionar_url", "handoff_agente"],
   consistencia_visual: ["generate_image", "inspecionar_ativos_marca", "handoff_agente"],
-  editor_video: ["generate_video", "exec_remotion_render", "inspecionar_ativos_marca", "handoff_agente"],
-  roteirista_faceless: ["inspecionar_ativos_marca", "handoff_agente"],
-  roteirista_talking_head: ["inspecionar_ativos_marca", "handoff_agente"],
+  editor_video: [
+    "exec_remotion_render",
+    "video_inspect_and_silences",
+    "video_transcribe_words",
+    "exec_ffmpeg_edit",
+    "generate_video",
+    "read_video",
+    "inspecionar_ativos_marca",
+    "handoff_agente",
+  ],
+  roteirista_faceless: ["read_video", "generate_video", "inspecionar_ativos_marca", "handoff_agente"],
+  roteirista_talking_head: ["read_video", "video_inspect_and_silences", "inspecionar_ativos_marca", "handoff_agente"],
 };
 
 const DEFAULT_AVATAR_THEMES: Record<
@@ -278,9 +287,9 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     avatar_color: "#ef4444",
     effort: "alto",
     ordem_exibicao: 13,
-    skills_paths: ["../criativo-video-studio/skill/criar-video-reels/SKILL.md"],
+    skills_paths: [".agents/skills-upgrades/video/criar-video-reels/SKILL.md"],
     prompt_base:
-      "Você é o Diretor & Editor de Vídeo Remotion. Sincronize locução, legendas SRT e props cinematográficos e acione `exec_remotion_render` para gerar Reels 1080x1920 a 30fps.",
+      "Você é o Diretor & Editor de Vídeo do CriativoOS. Use as ferramentas nativas MCP (`video_inspect_and_silences`, `video_transcribe_words`, `exec_ffmpeg_edit` e `exec_remotion_render`) para cortar pausas/erros, aplicar legendas karaokê, letterings e trilha sonora em 1080x1920 a 30fps. Para vídeos maiores que 100 MB, peça ao usuário o caminho completo do arquivo ou para autorizar a pasta em Inspetor do Agente → Pastas Autorizadas.",
   },
   {
     agente_id: "roteirista_faceless",
@@ -294,7 +303,7 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     avatar_color: "#f59e0b",
     effort: "medio",
     ordem_exibicao: 14,
-    skills_paths: ["../criativo-video-studio/skill/roteirista-faceless/SKILL.md"],
+    skills_paths: [".agents/skills-upgrades/video/roteirista-faceless/SKILL.md"],
     prompt_base:
       "Você é o Roteirista Faceless. Escreva narrações magnéticas com marcação de tempo e direção visual cena a cena para vídeos sem aparição na câmera.",
   },
@@ -310,7 +319,7 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     avatar_color: "#a8324e",
     effort: "medio",
     ordem_exibicao: 15,
-    skills_paths: ["../criativo-video-studio/skill/roteirista-talking-head/SKILL.md"],
+    skills_paths: [".agents/skills-upgrades/video/roteirista-talking-head/SKILL.md"],
     prompt_base:
       "Você é o Roteirista Talking Head. Crie roteiros conversacionais formatados para teleprompter com marcações de ênfase e ganchos visuais nos primeiros 3 segundos.",
   },

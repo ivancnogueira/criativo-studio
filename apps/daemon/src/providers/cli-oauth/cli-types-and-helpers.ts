@@ -24,6 +24,13 @@ import {
   resolveManagedProviderRuntime,
   spawnProviderProcess,
 } from "../provider-runtime-resolver.ts";
+import {
+  createTurnStallWatchdog,
+  DEFAULT_CLI_TOOL_STALL_MS,
+  DEFAULT_CLI_TURN_STALL_MS,
+  getLastMcpActivityAt,
+  hasActiveMcpToolForAgent,
+} from "../turn-stall-watchdog.ts";
 
 export interface CliAccountRecord {
   id: string;
@@ -43,6 +50,7 @@ export interface CliExecutionInput {
   preferredAccountId?: string | null;
   mcpConfig?: Record<string, unknown> | null;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export interface CliExecutionOutput {
@@ -58,7 +66,7 @@ export interface CliExecutionOutput {
 }
 
 export const LOGIN_TIMEOUT_MS = 180_000;
-export const EXEC_TIMEOUT_MS = 90_000;
+export const EXEC_TIMEOUT_MS = DEFAULT_CLI_TURN_STALL_MS;
 export const MODEL_CATALOG_TTL_MS = 5 * 60_000;
 export const QUOTA_CACHE_TTL_MS = 2 * 60_000;
 
@@ -104,9 +112,19 @@ export function spawnCommandWithStdin(input: {
   keepStdinOpen?: boolean;
   interactiveWindow?: boolean;
   timeoutMs: number;
+  signal?: AbortSignal;
+  stallMode?: boolean;
+  toolStallMs?: number;
+  agentId?: string | null;
   onOutputLine?: (line: string) => void;
   onRegisterAbort?: (abortFn: () => void) => void;
 }): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  if (input.signal?.aborted) {
+    const abortErr = new Error("Turno interrompido.");
+    abortErr.name = "AbortError";
+    return Promise.reject(abortErr);
+  }
+
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawnProviderProcess(input.executable, input.args, {
       cwd: input.cwd,
@@ -119,35 +137,81 @@ export function spawnCommandWithStdin(input: {
     let stdout = "";
     let stderr = "";
     let finished = false;
+    let timer: NodeJS.Timeout | undefined;
+    let watchdog: ReturnType<typeof createTurnStallWatchdog> | null = null;
 
-    input.onRegisterAbort?.(() => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      watchdog?.stop();
+      if (input.signal && onSignalAbort) {
+        input.signal.removeEventListener("abort", onSignalAbort);
+      }
+    };
+
+    const killChildSafely = () => {
       try {
         child.stdin.end();
         child.kill();
       } catch {
         // ignora
       }
+    };
+
+    const onSignalAbort = () => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      killChildSafely();
+      const abortErr = new Error("Turno interrompido.");
+      abortErr.name = "AbortError";
+      rejectPromise(abortErr);
+    };
+
+    if (input.signal) {
+      input.signal.addEventListener("abort", onSignalAbort, { once: true });
+    }
+
+    input.onRegisterAbort?.(() => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      killChildSafely();
       rejectPromise(new Error("Autenticação no navegador cancelada pelo usuário."));
     });
 
-    const timer = setTimeout(() => {
-      if (finished) return;
-      finished = true;
-      try {
-        child.kill();
-      } catch {
-        // ignora
-      }
-      rejectPromise(
-        new Error(`Tempo limite (${Math.round(input.timeoutMs / 1000)}s) ao aguardar conclusão do processo.`)
-      );
-    }, input.timeoutMs);
-    timer.unref?.();
+    if (input.stallMode) {
+      watchdog = createTurnStallWatchdog({
+        stallMs: input.timeoutMs,
+        toolStallMs: input.toolStallMs ?? DEFAULT_CLI_TOOL_STALL_MS,
+        isToolRunning: () => hasActiveMcpToolForAgent(input.agentId),
+        getExternalActivityAt: () => getLastMcpActivityAt(input.agentId),
+        onStall: ({ limitMs }) => {
+          if (finished) return;
+          finished = true;
+          cleanup();
+          killChildSafely();
+          rejectPromise(
+            new Error(
+              `Tempo limite (${Math.round(limitMs / 1000)}s de silêncio) ao aguardar conclusão do processo.`
+            )
+          );
+        },
+      });
+    } else {
+      timer = setTimeout(() => {
+        if (finished) return;
+        finished = true;
+        cleanup();
+        killChildSafely();
+        rejectPromise(
+          new Error(`Tempo limite (${Math.round(input.timeoutMs / 1000)}s) ao aguardar conclusão do processo.`)
+        );
+      }, input.timeoutMs);
+      timer.unref?.();
+    }
 
     child.stdout.on("data", (chunk) => {
+      watchdog?.touch();
       const str = chunk.toString("utf8");
       stdout += str;
       if (input.onOutputLine) {
@@ -158,6 +222,7 @@ export function spawnCommandWithStdin(input: {
     });
 
     child.stderr.on("data", (chunk) => {
+      watchdog?.touch();
       const str = chunk.toString("utf8");
       stderr += str;
       if (input.onOutputLine) {
@@ -170,14 +235,14 @@ export function spawnCommandWithStdin(input: {
     child.on("error", (err) => {
       if (finished) return;
       finished = true;
-      clearTimeout(timer);
+      cleanup();
       rejectPromise(err);
     });
 
     child.on("close", (code) => {
       if (finished) return;
       finished = true;
-      clearTimeout(timer);
+      cleanup();
       resolvePromise({ code, stdout, stderr });
     });
 

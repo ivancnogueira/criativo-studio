@@ -87,6 +87,11 @@ export function prepareDesktopBundle(options = {}) {
   copyDirClean(join(repoRoot, "packages/contracts/dist"), join(outDir, "packages/contracts/dist"), skipDevSources);
   copyDirClean(join(repoRoot, "packages/whatsapp/dist"), join(outDir, "packages/whatsapp/dist"), skipDevSources);
   copyDirClean(join(repoRoot, "templates/marca"), join(outDir, "templates/marca"));
+  copyDirClean(
+    join(repoRoot, "templates/video-studio"),
+    join(outDir, "templates/video-studio"),
+    (srcPath) => !srcPath.replaceAll("\\", "/").includes("/node_modules"),
+  );
   copyDirClean(join(repoRoot, ".agents/skills"), join(outDir, ".agents/skills"));
   copyDirClean(join(repoRoot, ".agents/skills-upgrades"), join(outDir, ".agents/skills-upgrades"));
 
