@@ -244,6 +244,15 @@ export type WebSocketEventMap = {
     status: "agendado" | "executando" | "concluido" | "cancelado" | "falha";
     iteracao_atual: number;
   };
+  "background_job:updated": {
+    job_id: string;
+    agente_id: string;
+    thread_id: string;
+    kind: "command" | "async_task";
+    label: string;
+    status: "executando" | "concluido" | "falha" | "cancelado" | "timeout";
+    duracao_ms: number;
+  };
   "chat_queue:changed": {
     agente_id: string;
     thread_id: string | null;

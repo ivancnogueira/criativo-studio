@@ -37,6 +37,7 @@ export interface TurnContextPlannerInput {
   anexosCount: number;
   hasOpenBrowserTabs: boolean;
   hasActiveWakeups: boolean;
+  hasActiveBackgroundJobs?: boolean;
   hasWokenWaits: boolean;
   isHandoff: boolean;
   isRoutine: boolean;
@@ -65,6 +66,13 @@ const CORE_TOOLS = new Set([
   "react_message",
   "send_message",
   "interrupt_agent",
+  "schedule_wakeup",
+  "list_wakeups",
+  "cancel_wakeup",
+  "start_background_job",
+  "list_background_jobs",
+  "get_background_job",
+  "cancel_background_job",
 ]);
 
 const BROWSER_TOOLS = new Set([
@@ -285,6 +293,7 @@ export function planTurnContext(input: TurnContextPlannerInput): TurnContextPlan
     input.anexosCount === 0 &&
     !input.hasOpenBrowserTabs &&
     !input.hasActiveWakeups &&
+    !input.hasActiveBackgroundJobs &&
     !input.hasWokenWaits &&
     !input.isHandoff &&
     !input.isRoutine;

@@ -79,6 +79,7 @@ import { prepareAndGenerateVisualAssets } from "./agent-reply-visual-intent.ts";
 import { tryCliOrOpenCodeAttempt } from "./agent-reply-cli-opencode.ts";
 import { tryApiKeyOrOllamaAttempt } from "./agent-reply-api-provider.ts";
 import { tryAntigravityAttempt } from "./agent-reply-antigravity.ts";
+import { promisesBackgroundContinuationWithoutHandle } from "../../providers/turn-stall-watchdog.ts";
 import type { AgentReplyOptions, AgentReplyTarget } from "./agent-reply-types.ts";
 import { generateAgentChatReply } from "./agent-reply-runner.ts";
 
@@ -297,6 +298,40 @@ export async function executeAgentConversationTurn(params: {
 
   if (!isSubThread && deps.phase13?.contextReset.hasPendingReset(agente.agente_id)) {
     deps.phase13.contextReset.flushPendingResetIfIdle(agente.agente_id, params.entregaOrigemId);
+  }
+
+  const originTag = typeof params.extraMetadados?.origem === "string" ? params.extraMetadados.origem : "";
+  const isAlreadySafetyWakeup =
+    originTag === "background_safety_wakeup" ||
+    params.userPrompt.includes("Verificação automática de continuidade:");
+  if (
+    !isAlreadySafetyWakeup &&
+    originTag !== "background_job" &&
+    deps.phase13?.wakeupService &&
+    promisesBackgroundContinuationWithoutHandle(reply.markdown) &&
+    !deps.phase13.backgroundJobService?.hasActiveJobs(agente.agente_id) &&
+    !deps.phase13.wakeupService.hasActiveWakeups(agente.agente_id)
+  ) {
+    try {
+      deps.phase13.wakeupService.scheduleWakeup(
+        {
+          agenteId: agente.agente_id,
+          canalId,
+          threadId: effectiveThreadId,
+          channelOrigin: params.channelOrigin ?? "web",
+          whatsappContaId: params.whatsappContaId ?? null,
+          whatsappChatJid: params.whatsappChatJid ?? null,
+        },
+        {
+          delaySeconds: 45,
+          recurring: false,
+          instruction:
+            "Verificação automática de continuidade: na sua última resposta você indicou aguardar um processo em background concluir para prosseguir. Verifique agora se o processo ou arquivo já concluiu; se já terminou, continue imediatamente os próximos passos. Se ainda estiver rodando, use `start_background_job` ou `schedule_wakeup(delaySeconds: 60)` para monitorar até concluir.",
+        },
+      );
+    } catch {
+      // Rede de segurança não deve falhar o retorno do turno
+    }
   }
 
   return { agentMsg, reply };

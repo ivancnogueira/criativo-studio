@@ -41,6 +41,7 @@ import { ConversationPaginationReader } from "../threads/conversation-pagination
 import { AgentWaitStore } from "../waits/agent-wait-store.ts";
 import { AgentWaitsService } from "../waits/agent-waits-service.ts";
 import { AgentWakeupService } from "../waits/agent-wakeup-service.ts";
+import { BackgroundJobService } from "../waits/background-job-service.ts";
 import { ChatQueueStore } from "../queue/chat-queue-store.ts";
 import { QueueControlsService } from "../queue/queue-controls-service.ts";
 import { SideQuestionService } from "../chat/side-question-service.ts";
@@ -155,7 +156,12 @@ export async function createDaemonInfraServices(
         fetchImpl: options.fetchImpl,
       })
     : null;
+  let backgroundJobServiceRef: BackgroundJobService | null = null;
   const idleWaitCoordinator = new IdleWaitCoordinator(() => {
+    const runningBg = backgroundJobServiceRef?.getFirstActiveJobSummary();
+    if (runningBg) {
+      return { busy: true, reason: runningBg };
+    }
     const runningTask = db.connection
       .prepare("SELECT titulo FROM projecao_tarefas WHERE status = 'executando' LIMIT 1;")
       .get() as { titulo?: string } | undefined;
@@ -520,6 +526,12 @@ export async function createDaemonInfraServices(
   handoffBus.attachMailbox(mailboxStore, mailboxDeliveryGate);
   waitsService.attachMailbox(mailboxStore);
   const wakeupService = new AgentWakeupService({ db, wsHub });
+  const backgroundJobService = new BackgroundJobService({
+    db,
+    wsHub,
+    workspaceRoot: resolvedWorkspaceRoot,
+  });
+  backgroundJobServiceRef = backgroundJobService;
   const queueControls = new QueueControlsService({ db, queueStore, tasksService, wsHub });
   const sideQuestion = new SideQuestionService({ db, providers, providerConnection, wsHub });
   const contextReset = new ContextResetService({ db, wsHub, providers, providerConnection });
@@ -529,6 +541,8 @@ export async function createDaemonInfraServices(
     tasksService,
     waitsService,
     wakeupService,
+    backgroundJobService,
+    workspaceRoot: resolvedWorkspaceRoot,
     queueControls,
     contextReset,
     pinsService,
@@ -541,6 +555,7 @@ export async function createDaemonInfraServices(
     tasksService,
     waitsService,
     wakeupService,
+    backgroundJobService,
     queueControls,
     pagination,
     sideQuestion,
@@ -611,6 +626,7 @@ export async function createDaemonInfraServices(
     tasksService,
     waitsService,
     wakeupService,
+    backgroundJobService,
     queueControls,
     sideQuestion,
     contextReset,

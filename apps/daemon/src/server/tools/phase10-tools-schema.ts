@@ -10,6 +10,7 @@ import type { ProviderConnectionService } from "../../providers/provider-connect
 import type { LicenseClientService } from "../../license/license-service.ts";
 import type { TranscriptionService } from "../../voice/transcription-service.ts";
 import type { VaultService } from "../../vault/vault-service.ts";
+import type { BackgroundJobService } from "../../waits/background-job-service.ts";
 import type { WebSocketHub } from "../websocket-hub.ts";
 import { VIDEO_STUDIO_TOOLS_SCHEMA } from "./video-tools-schema.ts";
 export interface StudioExtensionToolDeps {
@@ -22,6 +23,11 @@ export interface StudioExtensionToolDeps {
   transcription?: TranscriptionService;
   agenteId?: string;
   canalId?: string | null;
+  threadId?: string | null;
+  channelOrigin?: "web" | "whatsapp";
+  whatsappContaId?: string | null;
+  whatsappChatJid?: string | null;
+  backgroundJobService?: BackgroundJobService;
   mcpGateway?: McpGateway;
   catalogService?: CatalogService;
   nativeStore?: NativeAppConnectionsStore;

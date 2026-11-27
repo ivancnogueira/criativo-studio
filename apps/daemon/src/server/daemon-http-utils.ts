@@ -29,6 +29,7 @@ import { WorkflowEngine } from "../workflows/workflow-engine.ts";
 import { WorkflowStore } from "../workflows/workflow-store.ts";
 import { WorkflowTriggers } from "../workflows/workflow-triggers.ts";
 import { VaultService } from "../vault/vault-service.ts";
+import type { BackgroundJobService } from "../waits/background-job-service.ts";
 import { ProviderRegistry } from "../engine/providers/provider-registry.ts";
 import type { FetchLike } from "../engine/providers/provider-interface.ts";
 import { AgentRunner, type CustomToolExecutor } from "../engine/runner/agent-runner.ts";
@@ -152,6 +153,7 @@ export interface DaemonRuntime {
   tasksService: AgentTasksService;
   waitsService: AgentWaitsService;
   wakeupService: AgentWakeupService;
+  backgroundJobService: BackgroundJobService;
   queueControls: QueueControlsService;
   pinsService: MessagePinsService;
   contextReset: ContextResetService;

@@ -115,6 +115,9 @@ export async function prepareAgentReplySetup(
   const hasOpenBrowserTabs =
     (deps.browserService?.sessionManager?.listTabSummaries(agente.agente_id)?.length ?? 0) > 0;
   const hasActiveWakeups = Boolean(deps.phase13?.wakeupService?.hasActiveWakeups(agente.agente_id));
+  const hasActiveBackgroundJobs = Boolean(
+    deps.phase13?.backgroundJobService?.hasActiveJobs(agente.agente_id),
+  );
   const recentHistoryText = history
     .slice(-3)
     .map((m) => m.conteudo_markdown ?? "")
@@ -127,6 +130,7 @@ export async function prepareAgentReplySetup(
     anexosCount: anexos.length,
     hasOpenBrowserTabs,
     hasActiveWakeups,
+    hasActiveBackgroundJobs,
     hasWokenWaits: Boolean(options?.wokenWaitsBlock),
     isHandoff: Boolean(options?.isHandoff),
     isRoutine: Boolean(options?.isRoutine),
@@ -253,16 +257,14 @@ export async function prepareAgentReplySetup(
       `## Ferramentas de Workflow em Grafo Disponíveis\nVocê pode inspecionar, criar/editar, executar (completo ou parcial a partir de um nó) e consultar histórico de workflows pelas ferramentas: list_workflows, read_workflow, edit_workflow, delete_workflow, run_workflow e read_workflow_runs. Regra crítica de segurança: JAMAIS execute delete_workflow sem confirmação humana explícita prévia (confirmed_by_human: true).`
     );
   }
-  if (
-    (deps.phase13 || options?.wokenWaitsBlock) &&
-    turnPlan.mode === "action" &&
-    (turnPlan.mcpScopes.includes("schedule") || Boolean(options?.wokenWaitsBlock))
-  ) {
+  if ((deps.phase13 || options?.wokenWaitsBlock) && turnPlan.mode === "action") {
     promptBaseParts.push(
       buildPhase13SystemGuidance({
         allowStartTask:
           !options?.threadId || options.threadId.startsWith("main:") || Boolean(options?.isRoutine),
         wokenWaitsBlock: options?.wokenWaitsBlock,
+        includeScheduleTools:
+          turnPlan.mcpScopes.includes("schedule") || Boolean(options?.wokenWaitsBlock),
       }),
     );
   }

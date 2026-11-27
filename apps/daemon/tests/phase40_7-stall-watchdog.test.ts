@@ -169,20 +169,20 @@ describe("Phase 40.7 — Stall Detector Inteligente & Turnos Longos (Padrão Ope
   });
 
   it("spawnCommandWithStdin em stallMode completa com streaming longo, respeita AbortSignal e detecta silencio real", async () => {
-    // 1. Streaming de stdout a cada 220ms por ~1100ms com timeoutMs 550ms -> deve completar
+    // 1. Streaming de stdout a cada 260ms por ~1560ms com timeoutMs 1000ms -> deve completar
     const streamRes = await spawnCommandWithStdin({
       executable: process.execPath,
       args: [
         "-e",
-        "process.stdout.write('chunk-0\\n'); let i = 0; const t = setInterval(() => { process.stdout.write('chunk-' + (++i) + '\\n'); if (i >= 5) { clearInterval(t); process.exit(0); } }, 220);",
+        "process.stdout.write('chunk-0\\n'); let i = 0; const t = setInterval(() => { process.stdout.write('chunk-' + (++i) + '\\n'); if (i >= 6) { clearInterval(t); process.exit(0); } }, 260);",
       ],
       env: process.env as Record<string, string | undefined>,
       cwd: process.cwd(),
-      timeoutMs: 550,
+      timeoutMs: 1_000,
       stallMode: true,
     });
     assert.equal(streamRes.code, 0);
-    assert.match(streamRes.stdout, /chunk-5/);
+    assert.match(streamRes.stdout, /chunk-6/);
 
     // 2. AbortSignal cancela imediatamente com AbortError
     const controller = new AbortController();

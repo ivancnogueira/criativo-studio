@@ -293,3 +293,43 @@ export function createAcpStreamPresentation() {
 
   return { reset, handleUpdate };
 }
+
+/**
+ * Detecta se a saída bruta de uma ferramenta ACP (`tool_call_update`) indica que o CLI
+ * moveu um comando ou subagente para segundo plano internamente.
+ */
+export function detectAcpBackgroundTaskOutput(rawOutput: unknown): boolean {
+  if (rawOutput == null) return false;
+  let serialized = "";
+  if (typeof rawOutput === "string") {
+    serialized = rawOutput;
+  } else {
+    try {
+      serialized = JSON.stringify(rawOutput);
+    } catch {
+      serialized = String(rawOutput);
+    }
+  }
+  if (!serialized) return false;
+  return /\b(?:running|started|moved|launched)\s+in\s+(?:the\s+)?background\b|rodando\s+em\s+background|background[_\s]?(?:task|job|pid|process|id)|"run_in_background"\s*:\s*true/i.test(
+    serialized,
+  );
+}
+
+/**
+ * Detecta se o texto final do modelo promete continuar após um processo em background terminar
+ * (rede de segurança agnóstica a modelo quando nenhum backgroundJob/wakeup foi registrado).
+ */
+export function promisesBackgroundContinuationWithoutHandle(replyText: string): boolean {
+  const clean = String(replyText ?? "").trim();
+  if (!clean || clean.length < 18) return false;
+  const recentTail = clean.slice(-700);
+  return (
+    /(?:assim\s+que|quando|logo\s+que|ap[oó]s)\s+[^.\n]{0,70}(?:fechar|terminar|concluir|acabar|finalizar|completar)[^.\n]{0,90}(?:sigo|continuo|prossigo|volto|aviso|rodo|executo|envio)/i.test(
+      recentTail,
+    ) ||
+    /(?:rodando|executando|renderizando)\s+em\s+(?:segundo\s+plano|background)[^.\n]{0,140}(?:assim\s+que|quando|sigo|continuo|volto)/i.test(
+      recentTail,
+    )
+  );
+}

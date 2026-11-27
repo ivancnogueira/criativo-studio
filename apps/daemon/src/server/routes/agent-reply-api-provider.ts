@@ -196,6 +196,11 @@ export async function tryApiKeyOrOllamaAttempt(ctx: ModelAttemptContext): Promis
                     workspaceRoot,
                     agenteId: agente.agente_id,
                     canalId: `agente:${agente.agente_id}`,
+                    threadId: options?.threadId ?? `main:${agente.agente_id}`,
+                    channelOrigin: options?.channelOrigin,
+                    whatsappContaId: options?.whatsappContaId ?? null,
+                    whatsappChatJid: options?.whatsappChatJid ?? null,
+                    backgroundJobService: deps.phase13?.backgroundJobService,
                     mcpGateway: deps.mcpGateway,
                     catalogService: deps.catalogService,
                     nativeStore: deps.catalogService?.nativeStore,
@@ -267,6 +272,7 @@ export async function tryApiKeyOrOllamaAttempt(ctx: ModelAttemptContext): Promis
                     {
                       ...deps.phase13,
                       db: deps.db,
+                      workspaceRoot,
                     },
                   );
                   return p13.result;

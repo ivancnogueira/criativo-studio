@@ -6,7 +6,14 @@ import type { QueueControlsService } from "../../queue/queue-controls-service.ts
 import type { AgentTasksService } from "../../threads/agent-tasks-service.ts";
 import type { AgentWaitsService } from "../../waits/agent-waits-service.ts";
 import type { AgentWakeupService } from "../../waits/agent-wakeup-service.ts";
+import type { BackgroundJobService } from "../../waits/background-job-service.ts";
 import { resolveAgentIdFromDb } from "../agent-resolver.ts";
+import {
+  BACKGROUND_JOB_TOOL_NAMES,
+  BACKGROUND_JOB_TOOLS_SCHEMA,
+  executeBackgroundJobTool,
+  isBackgroundJobToolName,
+} from "./background-job-tools.ts";
 import { readStringArg } from "./studio-tool-helpers.ts";
 export const PHASE13_TOOL_NAMES = new Set([
   "start_task",
@@ -19,6 +26,7 @@ export const PHASE13_TOOL_NAMES = new Set([
   "schedule_wakeup",
   "list_wakeups",
   "cancel_wakeup",
+  ...BACKGROUND_JOB_TOOL_NAMES,
 ]);
 
 export function isPhase13ToolName(name: string): boolean {
@@ -194,6 +202,7 @@ export const PHASE13_TOOLS_SCHEMA: ToolDefinition[] = [
       required: ["wakeupId"],
     },
   },
+  ...BACKGROUND_JOB_TOOLS_SCHEMA,
 ];
 
 export interface Phase13ToolServices {
@@ -201,6 +210,8 @@ export interface Phase13ToolServices {
   tasksService?: AgentTasksService;
   waitsService?: AgentWaitsService;
   wakeupService?: AgentWakeupService;
+  backgroundJobService?: BackgroundJobService;
+  workspaceRoot?: string;
   queueControls?: QueueControlsService;
   contextReset?: ContextResetService;
   pinsService?: MessagePinsService;
@@ -235,6 +246,13 @@ export async function executePhase13Tool(
   }
 
   try {
+    if (isBackgroundJobToolName(callName)) {
+      return await executeBackgroundJobTool(callName, args, context, {
+        db: services.db,
+        backgroundJobService: services.backgroundJobService,
+        workspaceRoot: services.workspaceRoot,
+      });
+    }
     switch (callName) {
       case "start_task": {
         if (!services.tasksService) {
@@ -447,14 +465,22 @@ export function readAgentContextCutoffAt(db: CriativoDatabase, agenteId: string)
 export function buildPhase13SystemGuidance(options?: {
   allowStartTask?: boolean;
   wokenWaitsBlock?: string | null;
+  includeScheduleTools?: boolean;
 }): string {
   const parts: string[] = [
-    "## Sub-tarefas, Wakeups/Timers, Esperas, Fila & Contexto (Ferramentas Nativas)",
-    "- Use `start_task(title, brief)` quando uma solicitação envolver uma entrega pesada paralela ou múltiplos eixos que possam rodar sem travar o chat principal.",
-    "- Use `schedule_wakeup(delaySeconds, instruction, recurring?, maxIterations?)` (10s–86400s), `list_wakeups()` e `cancel_wakeup(wakeupId)` para timers curtos (< 3 min), checagens periódicas de resposta ou retomadas automáticas na mesma conversa/tópico. PROIBIDO afirmar que agendou timer/checagem sem ter executado `schedule_wakeup` com sucesso (`ok: true`).",
-    "- Use `await_event(note, routineId?)` para processos externos longos (>15 min) ligados a uma rotina/webhook e `close_wait(waitId)` / `list_waits()` quando concluir.",
-    "- Use `pin_message(quote?, pinned?)` para fixar decisões-chave desta conversa, e `start_new_chat()` quando a conversa mudar totalmente de tópico e precisar renovar o contexto.",
+    "## Tarefas em Segundo Plano & Auto-Despertar (Todos os Modelos e Plataformas)",
+    "- Para comandos ou renders longos (> 60s), prefira `start_background_job(label, onCompleteInstruction, command | executable, args?)` (Windows/macOS/Linux) ou passe `background: true` e `on_complete_instruction` em `exec_ffmpeg_edit` / `exec_remotion_render`. Use `list_background_jobs`, `get_background_job` e `cancel_background_job` para acompanhar ou encerrar.",
+    "- Ao usar `start_background_job` ou render com `background: true`, o CriativoOS gerencia o processo e **acorda você automaticamente nesta mesma conversa** assim que terminar — informe o `jobId` ao usuário e finalize o turno sem ficar esperando.",
+    "- Para verificações cronometradas ou acompanhar algo externo, use `schedule_wakeup(delaySeconds, instruction, recurring?, maxIterations?)` (10s–86400s), `list_wakeups()` e `cancel_wakeup(wakeupId)`. PROIBIDO afirmar que agendou timer sem ter executado `schedule_wakeup` com sucesso (`ok: true`).",
+    "- **REGRA ANTI-SILÊNCIO**: NUNCA encerre o turno prometendo 'assim que fechar/terminar eu continuo/volto' ou 'rodando em background' sem ter disparado um `start_background_job`, um render com `background: true`, ou um `schedule_wakeup` ativo.",
   ];
+  if (options?.includeScheduleTools !== false) {
+    parts.push(
+      "- Use `start_task(title, brief)` quando uma solicitação envolver uma entrega pesada paralela ou múltiplos eixos que possam rodar sem travar o chat principal.",
+      "- Use `await_event(note, routineId?)` para processos externos longos (>15 min) ligados a uma rotina/webhook e `close_wait(waitId)` / `list_waits()` quando concluir.",
+      "- Use `pin_message(quote?, pinned?)` para fixar decisões-chave desta conversa, e `start_new_chat()` quando a conversa mudar totalmente de tópico e precisar renovar o contexto.",
+    );
+  }
   if (options?.wokenWaitsBlock) {
     parts.push("", options.wokenWaitsBlock);
   }

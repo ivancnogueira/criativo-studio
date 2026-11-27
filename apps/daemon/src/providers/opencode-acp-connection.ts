@@ -1,7 +1,7 @@
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { spawnProviderProcess } from "./provider-runtime-resolver.ts";
-import { createAcpStreamPresentation, createTurnStallWatchdog, getLastMcpActivityAt, hasActiveMcpToolForAgent, type AcpToolStepEvent } from "./turn-stall-watchdog.ts";
+import { createAcpStreamPresentation, createTurnStallWatchdog, detectAcpBackgroundTaskOutput, getLastMcpActivityAt, hasActiveMcpToolForAgent, type AcpToolStepEvent } from "./turn-stall-watchdog.ts";
 
 export const OPENCODE_SESSION_NEW_TIMEOUT_MS = 60_000;
 
@@ -24,7 +24,9 @@ export class OpenCodeAcpConnection {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<number, PendingRpc>();
   private readonly openToolCalls = new Set<string>();
+  private readonly deferredCloseTimers = new Set<NodeJS.Timeout>();
   private readonly streamPresentation = createAcpStreamPresentation();
+  private detectedBackgroundTaskInTurn = false;
   private nextId = 1;
   private closed = false;
   private initialized = false;
@@ -110,6 +112,7 @@ export class OpenCodeAcpConnection {
             title?: unknown;
             name?: unknown;
             kind?: unknown;
+            rawOutput?: unknown;
             content?: { type?: string; text?: string };
             used?: number;
           };
@@ -121,6 +124,9 @@ export class OpenCodeAcpConnection {
           const st = String(upd.status ?? "").toLowerCase();
           if (st === "completed" || st === "failed" || st === "cancelled" || st === "error") {
             this.openToolCalls.delete(upd.toolCallId);
+            if (detectAcpBackgroundTaskOutput(upd.rawOutput)) {
+              this.detectedBackgroundTaskInTurn = true;
+            }
           } else {
             this.openToolCalls.add(upd.toolCallId);
           }
@@ -362,6 +368,7 @@ export class OpenCodeAcpConnection {
     };
 
     this.openToolCalls.clear();
+    this.detectedBackgroundTaskInTurn = false;
     this.streamPresentation.reset(input.onToolStep);
     try {
       await this.request(
@@ -380,7 +387,20 @@ export class OpenCodeAcpConnection {
       this.streamPresentation.reset(null);
       this.onChunk = null;
       this.onUsage = null;
-      void this.request("session/close", { sessionId: sess.sessionId }, 3_000).catch(() => {});
+      if (this.detectedBackgroundTaskInTurn && !this.closed) {
+        const sid = sess.sessionId;
+        const holdTimer = setTimeout(() => {
+          this.deferredCloseTimers.delete(holdTimer);
+          if (!this.closed) {
+            void this.request("session/close", { sessionId: sid }, 3_000).catch(() => {});
+          }
+        }, 5 * 60_000);
+        holdTimer.unref?.();
+        this.deferredCloseTimers.add(holdTimer);
+      } else {
+        void this.request("session/close", { sessionId: sess.sessionId }, 3_000).catch(() => {});
+      }
+      this.detectedBackgroundTaskInTurn = false;
     }
 
     const finalText = chunks.join("").trim();
@@ -400,6 +420,10 @@ export class OpenCodeAcpConnection {
   public dispose(): void {
     this.closed = true;
     this.openToolCalls.clear();
+    for (const timer of this.deferredCloseTimers) {
+      clearTimeout(timer);
+    }
+    this.deferredCloseTimers.clear();
     this.streamPresentation.reset(null);
     for (const [id, wait] of this.pending.entries()) {
       if (wait.timer) clearTimeout(wait.timer);

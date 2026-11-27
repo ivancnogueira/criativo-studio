@@ -123,6 +123,7 @@ export async function createDaemonServer(
     tasksService,
     waitsService,
     wakeupService,
+    backgroundJobService,
     queueControls,
     pinsService,
     contextReset,
@@ -579,6 +580,7 @@ export async function createDaemonServer(
     tasksService,
     waitsService,
     wakeupService,
+    backgroundJobService,
     queueControls,
     pinsService,
     contextReset,
@@ -607,6 +609,7 @@ export async function createDaemonServer(
       cron.stop();
       routineTimer.dispose();
       wakeupService.dispose();
+      backgroundJobService.dispose();
       memoryReview.dispose();
       uiBlockRegistry.dispose();
       screenCapture.dispose();

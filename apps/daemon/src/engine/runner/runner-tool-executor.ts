@@ -193,6 +193,7 @@ export async function executeAgentToolCall(
         {
           ...deps.phase13Services,
           db: deps.db,
+          workspaceRoot: deps.workspaceRoot,
         },
       );
       if (res.handled) {
@@ -372,6 +373,13 @@ export async function executeAgentToolCall(
         workspaceRoot: deps.workspaceRoot,
         agenteId: context.agenteId,
         canalId: null,
+        threadId:
+          context.runtimeContext?.threadId ??
+          context.tarefa.thread_id ??
+          `main:${context.agenteId}`,
+        channelOrigin:
+          context.tarefa.canal_origem === "whatsapp" ? "whatsapp" : "web",
+        backgroundJobService: deps.phase13Services?.backgroundJobService,
         mcpGateway: deps.mcpGateway,
         catalogService: deps.catalogService,
         nativeStore: deps.catalogService?.nativeStore,

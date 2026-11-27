@@ -13,6 +13,7 @@ import {
 import { formatMarkdownForWhatsApp } from "../whatsapp/whatsapp-formatter.ts";
 import { executeAgentConversationTurn, tryHandleStudioRoute } from "./studio-routes.ts";
 import { QueueControlsService } from "../queue/queue-controls-service.ts";
+import { handleBackgroundJobCompletionWakeup } from "../waits/background-job-wakeup-handler.ts";
 import type { DaemonServerOptions } from "./daemon-http-utils.ts";
 import type { DaemonInfraServices } from "./daemon-infra-services.ts";
 import type { DaemonRuntimeServices } from "./daemon-runtime-services.ts";
@@ -40,6 +41,7 @@ export function createDaemonLaneScheduler(
     threadStore,
     waitsService,
     wakeupService,
+    backgroundJobService,
     queueStore,
     tasksService,
     queueControls,
@@ -170,6 +172,36 @@ export function createDaemonLaneScheduler(
         }
       }
     }
+  });
+
+  backgroundJobService.setOnComplete(async (job) => {
+    await handleBackgroundJobCompletionWakeup({
+      job,
+      db,
+      wsHub,
+      queueControls,
+      whatsappManager,
+      whatsappArchiveService,
+      executeTurn: (args) =>
+        executeAgentConversationTurn({
+          deps: {
+            ...baseStudioDepsForLanes,
+            phase13: phase13Bundle,
+            sharedTables,
+            memoryManager,
+            memoryReview,
+            skillLearning,
+            historySearch,
+            libraryFolders,
+            handoffBus,
+            visualPreview,
+            uiBlockRegistry,
+            apiKeysBridge,
+            phase14: phase14Services,
+          },
+          ...args,
+        }),
+    });
   });
 
   tasksService.setOnLaneWake(scheduleLaneDrain);

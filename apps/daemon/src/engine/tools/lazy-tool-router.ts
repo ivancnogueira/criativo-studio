@@ -26,6 +26,12 @@ export const DEFAULT_CORE_EXPOSED_TOOLS = new Set<string>([
   "meta_publicar",
   "generate_image",
   "schedule_wakeup",
+  "list_wakeups",
+  "cancel_wakeup",
+  "start_background_job",
+  "list_background_jobs",
+  "get_background_job",
+  "cancel_background_job",
 ]);
 
 export const LAZY_META_TOOLS_SCHEMA: ToolDefinition[] = [
@@ -75,7 +81,13 @@ function inferToolCategory(name: string): string {
   if (lower.includes("browser") || lower.includes("url") || lower.includes("cua_")) return "browser";
   if (lower.includes("meta_") || lower.includes("instagram")) return "meta";
   if (lower.includes("workflow")) return "workflow";
-  if (lower.includes("rotina") || lower.includes("routine") || lower.includes("wakeup")) return "rotina";
+  if (
+    lower.includes("rotina") ||
+    lower.includes("routine") ||
+    lower.includes("wakeup") ||
+    lower.includes("background_job")
+  )
+    return "rotina";
   if (lower.includes("whatsapp")) return "whatsapp";
   if (lower.includes("tabela") || lower.includes("sql")) return "dados";
   if (lower.includes("image") || lower.includes("video") || lower.includes("remotion")) return "midia";

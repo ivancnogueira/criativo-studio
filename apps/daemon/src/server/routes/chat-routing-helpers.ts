@@ -229,6 +229,11 @@ export async function runTextModelWorkflowToolLoop(params: {
             transcription: params.deps.transcription,
             agenteId: params.agenteId,
             canalId: effectiveCanalId,
+            threadId: params.threadId ?? `main:${params.agenteId}`,
+            channelOrigin: params.channelOrigin,
+            whatsappContaId: params.whatsappContaId ?? null,
+            whatsappChatJid: params.whatsappChatJid ?? null,
+            backgroundJobService: params.deps.phase13?.backgroundJobService,
             mcpGateway: params.deps.mcpGateway,
             catalogService: params.deps.catalogService,
             nativeStore: params.deps.catalogService?.nativeStore,
@@ -312,6 +317,7 @@ export async function runTextModelWorkflowToolLoop(params: {
             {
               ...params.deps.phase13,
               db: params.deps.db,
+              workspaceRoot,
             },
           );
           out = p13.result;

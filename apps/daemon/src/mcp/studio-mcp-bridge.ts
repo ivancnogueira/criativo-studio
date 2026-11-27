@@ -449,6 +449,11 @@ export class CriativoStudioMcpBridge {
         transcription: this.deps.transcription,
         agenteId: resolvedAgentId,
         canalId,
+        threadId: effectiveThreadId,
+        channelOrigin: callCtx?.channelOrigin,
+        whatsappContaId: callCtx?.whatsappContaId ?? null,
+        whatsappChatJid: callCtx?.whatsappChatJid ?? null,
+        backgroundJobService: this.deps.phase13?.backgroundJobService,
         mcpGateway: this.deps.mcpGateway,
         catalogService: this.deps.catalogService,
         nativeStore,
@@ -509,6 +514,7 @@ export class CriativoStudioMcpBridge {
         {
           ...this.deps.phase13,
           db: this.deps.db,
+          workspaceRoot: this.deps.workspaceRoot,
         }
       );
       output = p13.result;
@@ -667,13 +673,8 @@ export class CriativoStudioMcpBridge {
           id,
           result: {
             protocolVersion: requestedProtocol,
-            capabilities: {
-              tools: { listChanged: false },
-            },
-            serverInfo: {
-              name: "criativo-studio",
-              version: "1.0.0",
-            },
+            capabilities: { tools: { listChanged: false } },
+            serverInfo: { name: "criativo-studio", version: "1.0.0" },
           },
         },
         { "Mcp-Session-Id": sessionId }
@@ -687,11 +688,7 @@ export class CriativoStudioMcpBridge {
         description: t.description,
         inputSchema: sanitizeJsonSchemaForGemini(t.parameters ?? { type: "object", properties: {} }),
       }));
-      sendJsonRpc(res, 200, {
-        jsonrpc: "2.0",
-        id,
-        result: { tools },
-      });
+      sendJsonRpc(res, 200, { jsonrpc: "2.0", id, result: { tools } });
       return true;
     }
 
@@ -711,15 +708,14 @@ export class CriativoStudioMcpBridge {
           : {};
 
       try {
-        const result = await trackMcpToolExecution(resolvedAgentId, () => this.callToolForAgent(toolName, rawArgs, resolvedAgentId, callCtx));
+        const result = await trackMcpToolExecution(resolvedAgentId, () =>
+          this.callToolForAgent(toolName, rawArgs, resolvedAgentId, callCtx)
+        );
         const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
         sendJsonRpc(res, 200, {
           jsonrpc: "2.0",
           id,
-          result: {
-            content: [{ type: "text", text }],
-            isError: false,
-          },
+          result: { content: [{ type: "text", text }], isError: false },
         });
       } catch (err) {
         const rawErr = err instanceof Error ? err.message : String(err);
@@ -727,10 +723,7 @@ export class CriativoStudioMcpBridge {
         sendJsonRpc(res, 200, {
           jsonrpc: "2.0",
           id,
-          result: {
-            content: [{ type: "text", text: JSON.stringify({ erro: safeErr }) }],
-            isError: true,
-          },
+          result: { content: [{ type: "text", text: JSON.stringify({ erro: safeErr }) }], isError: true },
         });
       }
       return true;
@@ -739,10 +732,7 @@ export class CriativoStudioMcpBridge {
     sendJsonRpc(res, 200, {
       jsonrpc: "2.0",
       id,
-      error: {
-        code: -32601,
-        message: `Método JSON-RPC não implementado: ${rpcMethod}`,
-      },
+      error: { code: -32601, message: `Método JSON-RPC não implementado: ${rpcMethod}` },
     });
     return true;
   }

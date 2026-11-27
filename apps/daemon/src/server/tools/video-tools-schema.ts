@@ -29,6 +29,14 @@ export const VIDEO_STUDIO_TOOLS_SCHEMA: ToolDefinition[] = [
           type: "object",
           description: "Propriedades JSON da composição (scenes, infographics, subtitlesWords, brandHighlightColor, zoomMoments, brolls, backgroundMusicUrl).",
         },
+        background: {
+          type: "boolean",
+          description: "Se true, executa o render em segundo plano gerenciado pelo CriativoOS e acorda automaticamente o agente nesta conversa quando o MP4 finalizar.",
+        },
+        on_complete_instruction: {
+          type: "string",
+          description: "Instrução do próximo passo a executar automaticamente quando o render em background terminar (usada quando background=true).",
+        },
       },
       required: ["composicao", "audio_path"],
     },
@@ -118,6 +126,14 @@ export const VIDEO_STUDIO_TOOLS_SCHEMA: ToolDefinition[] = [
           type: "string",
           enum: ["9:16", "16:9", "1:1", "original"],
           description: "Proporção de saída (padrão original).",
+        },
+        background: {
+          type: "boolean",
+          description: "Se true, executa a renderização em segundo plano gerenciado pelo CriativoOS e acorda automaticamente o agente nesta conversa quando o MP4 finalizar.",
+        },
+        on_complete_instruction: {
+          type: "string",
+          description: "Instrução do próximo passo a executar automaticamente quando o render em background terminar (usada quando background=true).",
         },
       },
       required: ["input_path"],
