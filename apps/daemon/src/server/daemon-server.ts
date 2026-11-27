@@ -470,6 +470,7 @@ export async function createDaemonServer(
       process.execArgv.includes("--test") ||
       process.argv.includes("--test");
     if (!skipBgAutoInstall) {
+      autoUpdateService.startPeriodicCheck();
       void providerConnection
         .ensureOpenCodeRuntimeInBackground()
         .then((res) => {
@@ -597,6 +598,7 @@ export async function createDaemonServer(
     connectorsWebhook,
     port: resolvedPort,
     async close(): Promise<void> {
+      autoUpdateService.stopPeriodicCheck();
       licenseService.stopHeartbeatTimer();
       remoteOAuthBridge?.closeAll();
       if (localServerManager) {

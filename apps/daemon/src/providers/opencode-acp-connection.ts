@@ -1,7 +1,7 @@
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { spawnProviderProcess } from "./provider-runtime-resolver.ts";
-import { createTurnStallWatchdog, getLastMcpActivityAt, hasActiveMcpToolForAgent } from "./turn-stall-watchdog.ts";
+import { createAcpStreamPresentation, createTurnStallWatchdog, getLastMcpActivityAt, hasActiveMcpToolForAgent, type AcpToolStepEvent } from "./turn-stall-watchdog.ts";
 
 export const OPENCODE_SESSION_NEW_TIMEOUT_MS = 60_000;
 
@@ -24,6 +24,7 @@ export class OpenCodeAcpConnection {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<number, PendingRpc>();
   private readonly openToolCalls = new Set<string>();
+  private readonly streamPresentation = createAcpStreamPresentation();
   private nextId = 1;
   private closed = false;
   private initialized = false;
@@ -106,6 +107,9 @@ export class OpenCodeAcpConnection {
             sessionUpdate?: string;
             toolCallId?: string;
             status?: string;
+            title?: unknown;
+            name?: unknown;
+            kind?: unknown;
             content?: { type?: string; text?: string };
             used?: number;
           };
@@ -124,10 +128,10 @@ export class OpenCodeAcpConnection {
         for (const wait of this.pending.values()) {
           wait.touchActivity?.();
         }
-        if (upd.sessionUpdate === "agent_message_chunk" && upd.content?.type === "text" && upd.content.text) {
-          this.onChunk?.(upd.content.text);
-        } else if (upd.sessionUpdate === "usage_update" && typeof upd.used === "number") {
+        if (upd.sessionUpdate === "usage_update" && typeof upd.used === "number") {
           this.onUsage?.(upd.used);
+        } else {
+          this.streamPresentation.handleUpdate(upd, this.onChunk);
         }
         return;
       }
@@ -150,6 +154,7 @@ export class OpenCodeAcpConnection {
     this.child.on("exit", (code) => {
       this.closed = true;
       this.openToolCalls.clear();
+      this.streamPresentation.reset(null);
       const errDetail = this.stderrTail.length > 0 ? this.stderrTail[this.stderrTail.length - 1] : "";
       const errMessage = errDetail
         ? `Servidor OpenCode ACP encerrou (código ${code ?? "null"}): ${errDetail}`
@@ -301,6 +306,7 @@ export class OpenCodeAcpConnection {
     agentId?: string | null;
     mcpServers?: unknown[];
     onDelta?: (chunk: string) => void;
+    onToolStep?: (step: AcpToolStepEvent) => void;
   }): Promise<{
     text: string;
     modelUsed: string;
@@ -356,6 +362,7 @@ export class OpenCodeAcpConnection {
     };
 
     this.openToolCalls.clear();
+    this.streamPresentation.reset(input.onToolStep);
     try {
       await this.request(
         "session/prompt",
@@ -370,6 +377,7 @@ export class OpenCodeAcpConnection {
       );
     } finally {
       this.openToolCalls.clear();
+      this.streamPresentation.reset(null);
       this.onChunk = null;
       this.onUsage = null;
       void this.request("session/close", { sessionId: sess.sessionId }, 3_000).catch(() => {});
@@ -392,6 +400,7 @@ export class OpenCodeAcpConnection {
   public dispose(): void {
     this.closed = true;
     this.openToolCalls.clear();
+    this.streamPresentation.reset(null);
     for (const [id, wait] of this.pending.entries()) {
       if (wait.timer) clearTimeout(wait.timer);
       wait.cleanup?.();

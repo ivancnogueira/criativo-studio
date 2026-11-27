@@ -272,6 +272,7 @@ export class AntigravityAcpService {
           agentId: input.agentId,
           mcpServers: resolvedMcpServers,
           onDelta: input.onDelta,
+          onToolStep: input.onToolStep,
         }),
       input.agentId
     );

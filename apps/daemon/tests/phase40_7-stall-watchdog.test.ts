@@ -169,16 +169,16 @@ describe("Phase 40.7 — Stall Detector Inteligente & Turnos Longos (Padrão Ope
   });
 
   it("spawnCommandWithStdin em stallMode completa com streaming longo, respeita AbortSignal e detecta silencio real", async () => {
-    // 1. Streaming de stdout a cada 110ms por ~550ms com timeoutMs 320ms -> deve completar
+    // 1. Streaming de stdout a cada 220ms por ~1100ms com timeoutMs 550ms -> deve completar
     const streamRes = await spawnCommandWithStdin({
       executable: process.execPath,
       args: [
         "-e",
-        "process.stdout.write('chunk-0\\n'); let i = 0; const t = setInterval(() => { process.stdout.write('chunk-' + (++i) + '\\n'); if (i >= 5) { clearInterval(t); process.exit(0); } }, 110);",
+        "process.stdout.write('chunk-0\\n'); let i = 0; const t = setInterval(() => { process.stdout.write('chunk-' + (++i) + '\\n'); if (i >= 5) { clearInterval(t); process.exit(0); } }, 220);",
       ],
       env: process.env as Record<string, string | undefined>,
       cwd: process.cwd(),
-      timeoutMs: 320,
+      timeoutMs: 550,
       stallMode: true,
     });
     assert.equal(streamRes.code, 0);

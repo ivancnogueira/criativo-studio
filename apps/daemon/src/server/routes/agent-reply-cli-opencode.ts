@@ -243,6 +243,26 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
               delta,
             });
           },
+          onToolStep: (toolStep) => {
+            const passo: PassoChat = {
+              id: toolStep.id,
+              ferramenta: toolStep.toolName,
+              titulo: toolStep.title,
+              status: toolStep.status,
+              ...(toolStep.duracaoMs ? { duracao_ms: toolStep.duracaoMs } : {}),
+            };
+            const idx = steps.findIndex((s) => s.id === passo.id);
+            if (idx >= 0) steps[idx] = passo;
+            else steps.push(passo);
+            onProgress?.({
+              fase: "etapa",
+              mensagem_status:
+                toolStep.status === "executando"
+                  ? `${toolStep.title}...`
+                  : `Escrevendo resposta (${targetModel})...`,
+              step: passo,
+            });
+          },
         });
 
         if (ocResult.text) {

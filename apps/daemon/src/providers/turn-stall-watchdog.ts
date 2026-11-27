@@ -181,3 +181,115 @@ export function createTurnStallWatchdog(options: TurnStallWatchdogOptions): Turn
     isStopped: () => stopped,
   };
 }
+
+export interface AcpToolStepEvent {
+  id: string;
+  toolName: string;
+  title: string;
+  status: "executando" | "concluido" | "erro";
+  duracaoMs?: number;
+}
+
+export function formatAcpToolStepTitle(raw: {
+  title?: unknown;
+  name?: unknown;
+  kind?: unknown;
+}): { toolName: string; title: string } {
+  const rawTitle = typeof raw.title === "string" ? raw.title.trim() : "";
+  const rawName = typeof raw.name === "string" ? raw.name.trim() : "";
+  const rawKind = typeof raw.kind === "string" ? raw.kind.trim() : "";
+  const toolName = (rawName || rawKind || "acp_tool").slice(0, 60);
+  const title = (rawTitle || rawName || rawKind || "Executando ferramenta").slice(0, 110);
+  return { toolName, title };
+}
+
+/**
+ * Gerencia separação visual de blocos entre rodadas de ferramentas/pensamento ACP
+ * e traduz eventos `tool_call` / `tool_call_update` em etapas estruturadas do chat.
+ */
+export function createAcpStreamPresentation() {
+  const toolStartedAt = new Map<string, number>();
+  let onToolStep: ((step: AcpToolStepEvent) => void) | null = null;
+  let hasEmittedText = false;
+  let needsParagraphBreak = false;
+  let lastTextTail = "";
+
+  const reset = (listener?: ((step: AcpToolStepEvent) => void) | null) => {
+    toolStartedAt.clear();
+    onToolStep = listener ?? null;
+    hasEmittedText = false;
+    needsParagraphBreak = false;
+    lastTextTail = "";
+  };
+
+  const handleUpdate = (
+    upd: {
+      sessionUpdate?: string;
+      toolCallId?: string;
+      status?: string;
+      title?: unknown;
+      name?: unknown;
+      kind?: unknown;
+      content?: { type?: string; text?: string };
+    },
+    onChunk: ((txt: string) => void) | null
+  ) => {
+    if (upd.sessionUpdate === "tool_call" || upd.sessionUpdate === "tool_call_update") {
+      if (hasEmittedText) {
+        needsParagraphBreak = true;
+      }
+      if (typeof upd.toolCallId === "string" && upd.toolCallId) {
+        const st = String(
+          upd.status ?? (upd.sessionUpdate === "tool_call" ? "in_progress" : "")
+        ).toLowerCase();
+        const stepStatus: "executando" | "concluido" | "erro" =
+          st === "failed" || st === "error" || st === "cancelled"
+            ? "erro"
+            : st === "completed"
+              ? "concluido"
+              : "executando";
+        if (!toolStartedAt.has(upd.toolCallId)) {
+          toolStartedAt.set(upd.toolCallId, Date.now());
+        }
+        let duracaoMs: number | undefined;
+        if (stepStatus !== "executando") {
+          const startedAt = toolStartedAt.get(upd.toolCallId) ?? Date.now();
+          duracaoMs = Math.max(1, Date.now() - startedAt);
+          toolStartedAt.delete(upd.toolCallId);
+        }
+        const { toolName, title } = formatAcpToolStepTitle(upd);
+        onToolStep?.({
+          id: `acp-tool-${upd.toolCallId}`,
+          toolName,
+          title,
+          status: stepStatus,
+          ...(duracaoMs ? { duracaoMs } : {}),
+        });
+      }
+      return;
+    }
+
+    if (upd.sessionUpdate === "agent_thought_chunk") {
+      if (hasEmittedText) {
+        needsParagraphBreak = true;
+      }
+      return;
+    }
+
+    if (upd.sessionUpdate === "agent_message_chunk" && upd.content?.type === "text" && upd.content.text) {
+      let text = upd.content.text;
+      if (needsParagraphBreak) {
+        needsParagraphBreak = false;
+        if (hasEmittedText && !lastTextTail.endsWith("\n\n") && !text.startsWith("\n\n")) {
+          const sep = lastTextTail.endsWith("\n") || text.startsWith("\n") ? "\n" : "\n\n";
+          text = sep + text;
+        }
+      }
+      hasEmittedText = true;
+      lastTextTail = (lastTextTail + text).slice(-2);
+      onChunk?.(text);
+    }
+  };
+
+  return { reset, handleUpdate };
+}

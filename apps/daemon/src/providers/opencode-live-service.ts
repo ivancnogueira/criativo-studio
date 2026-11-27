@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import type { ModeloProvedorInfo } from "@criativo/contracts";
 import type { VaultService } from "../vault/vault-service.ts";
 import { OpenCodeAcpConnection } from "./opencode-acp-connection.ts";
+import { type AcpToolStepEvent } from "./turn-stall-watchdog.ts";
 import {
   ensureProviderRuntimeInstalled,
   resolveManagedProviderRuntime,
@@ -234,6 +235,7 @@ export class OpenCodeLiveService {
     channelOrigin?: "web" | "whatsapp";
     mcpServers?: unknown[];
     onDelta?: (chunk: string) => void;
+    onToolStep?: (step: AcpToolStepEvent) => void;
   }): Promise<{
     text: string;
     modelUsed: string;
@@ -293,6 +295,7 @@ export class OpenCodeLiveService {
           agentId: input.agentId,
           mcpServers: resolvedMcpServers,
           onDelta: input.onDelta,
+          onToolStep: input.onToolStep,
         })
       );
       activeWorker.queue = run.catch(() => {});

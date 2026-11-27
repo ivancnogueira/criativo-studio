@@ -448,6 +448,37 @@ export function useStudioBootstrap(state: StudioAppState) {
     void hydrateAll();
   }, [hydrateAll]);
 
+  // Re-checa atualizações silenciosamente ao retornar para a janela (throttle de 5 min)
+  const lastAutoUpdateCheckRef = useRef<number>(0);
+  useEffect(() => {
+    const CHECK_THROTTLE_MS = 5 * 60_000;
+    const triggerCheckIfDue = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
+      const now = Date.now();
+      if (now - lastAutoUpdateCheckRef.current < CHECK_THROTTLE_MS) {
+        return;
+      }
+      lastAutoUpdateCheckRef.current = now;
+      void daemonApi
+        .verificarAtualizacoes()
+        .then((nextStatus) => {
+          setUpdateStatus(nextStatus);
+        })
+        .catch(() => {});
+    };
+
+    const initialTimer = window.setTimeout(triggerCheckIfDue, 10_000);
+    window.addEventListener("focus", triggerCheckIfDue);
+    document.addEventListener("visibilitychange", triggerCheckIfDue);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.removeEventListener("focus", triggerCheckIfDue);
+      document.removeEventListener("visibilitychange", triggerCheckIfDue);
+    };
+  }, [setUpdateStatus]);
+
   // Carrega mensagens e metadados Fase 13 da conversa ativa
   useEffect(() => {
     if (

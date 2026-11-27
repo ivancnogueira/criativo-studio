@@ -78,6 +78,7 @@ export async function executeAntigravityCodeAssistGenerate(
             agentId: input.agentId,
             mcpServers: input.mcpServers,
             onDelta: attempt === 0 ? input.onDelta : undefined,
+            onToolStep: attempt === 0 ? input.onToolStep : undefined,
           });
 
           if (acpOut.text && acpOut.text.trim().length > 0) {

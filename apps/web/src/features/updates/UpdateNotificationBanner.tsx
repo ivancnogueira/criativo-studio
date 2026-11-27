@@ -1,6 +1,7 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import { ArrowUpCircle, CheckCircle2, Loader2, Sparkles } from "lucide-react";
 import type { UpdateStatusSnapshot } from "@criativo/contracts";
+import { triggerUpdateBeam } from "./update-beam-effect";
 
 export interface UpdateNotificationBannerProps {
   status: UpdateStatusSnapshot | null;
@@ -17,25 +18,80 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
   onForceRestart,
   onOpenDetails,
 }) => {
-  if (!status) return null;
+  const actionBtnRef = useRef<HTMLButtonElement | null>(null);
+  const downloadBeamVersionRef = useRef<string | null>(null);
 
   const isInProgress =
     applying ||
-    status.state === "downloading" ||
-    status.state === "verifying" ||
-    status.state === "applying";
-  const isWaitingIdle = status.state === "waiting_idle";
-  const isReady = status.state === "ready_to_restart";
-  const show = status.update_available || isInProgress || isWaitingIdle || isReady;
-  if (!show) return null;
+    status?.state === "downloading" ||
+    status?.state === "verifying" ||
+    status?.state === "applying";
+  const isWaitingIdle = status?.state === "waiting_idle";
+  const isReady = status?.state === "ready_to_restart";
+  const show = Boolean(status) && (Boolean(status?.update_available) || isInProgress || isWaitingIdle || isReady);
+  const targetVersion = status?.latest_version || status?.current_version || "";
 
-  const targetVersion = status.latest_version || status.current_version;
+  // Animação radial estilo OpenBot ao surgir atualização disponível ou iniciar download
+  useEffect(() => {
+    if (!show || !targetVersion) return;
+
+    if (status?.update_available) {
+      let seen = false;
+      const seenKey = `criativo:update-beam-seen:${targetVersion}`;
+      try {
+        seen = sessionStorage.getItem(seenKey) === "1";
+        if (!seen) sessionStorage.setItem(seenKey, "1");
+      } catch {
+        // ignora ambientes sem sessionStorage
+      }
+      if (!seen) {
+        const raf = requestAnimationFrame(() => {
+          void triggerUpdateBeam(actionBtnRef.current, "in");
+        });
+        return () => cancelAnimationFrame(raf);
+      }
+    }
+
+    if (status?.state === "downloading" && downloadBeamVersionRef.current !== targetVersion) {
+      downloadBeamVersionRef.current = targetVersion;
+      const raf = requestAnimationFrame(() => {
+        void triggerUpdateBeam(actionBtnRef.current, "in");
+      });
+      return () => cancelAnimationFrame(raf);
+    }
+    return undefined;
+  }, [show, status?.update_available, status?.state, targetVersion]);
+
+  if (!status || !show) return null;
+
+  const handleActionClick = () => {
+    const btn = actionBtnRef.current;
+    if (isWaitingIdle && onForceRestart) {
+      void triggerUpdateBeam(btn, "out");
+      onForceRestart();
+      return;
+    }
+    if (isReady && onApplyUpdate) {
+      const beamPromise = triggerUpdateBeam(btn, "out");
+      const hold = new Promise<void>((r) => setTimeout(r, 450));
+      void Promise.race([beamPromise, hold]).then(() => {
+        onApplyUpdate();
+      });
+      return;
+    }
+    void triggerUpdateBeam(btn, "out");
+    onApplyUpdate?.();
+  };
 
   return (
     <div
       role="status"
       aria-label="Atualização disponível"
-      className="mx-2.5 mb-2 rounded-xl bg-[#19241E] border border-[#31CF76]/35 p-3 text-[#F0F0F0] shadow-lg"
+      className={`mx-2.5 mb-2 rounded-xl bg-[#19241E] border p-3 text-[#F0F0F0] transition-all duration-300 ${
+        status.update_available || isReady
+          ? "border-[#B9FC01]/45 shadow-[0_0_24px_rgba(185,252,1,0.12)]"
+          : "border-[#31CF76]/35 shadow-lg"
+      }`}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 text-[12.5px] font-semibold text-white">
@@ -88,10 +144,11 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
       )}
 
       <button
+        ref={actionBtnRef}
         type="button"
         disabled={isInProgress}
-        onClick={() => (isWaitingIdle && onForceRestart ? onForceRestart() : onApplyUpdate?.())}
-        className="mt-2.5 w-full rounded-lg bg-[#31CF76] hover:bg-[#3EE086] disabled:opacity-60 text-[#081A0F] py-1.5 px-2.5 text-[12px] font-semibold flex items-center justify-center gap-1.5 transition-colors"
+        onClick={handleActionClick}
+        className="mt-2.5 w-full rounded-lg bg-[#31CF76] hover:bg-[#3EE086] active:scale-[0.97] disabled:opacity-60 text-[#081A0F] py-1.5 px-2.5 text-[12px] font-semibold flex items-center justify-center gap-1.5 transition-all"
       >
         {isWaitingIdle ? (
           <>

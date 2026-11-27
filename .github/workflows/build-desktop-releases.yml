@@ -225,3 +225,26 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notificar Painel Administrativo (Sync Automático de Release)
+        continue-on-error: true
+        env:
+          SYNC_URL: ${{ secrets.PAINEL_RELEASE_SYNC_URL }}
+          SYNC_SECRET: ${{ secrets.PAINEL_RELEASE_SYNC_SECRET }}
+          TARGET_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag_name }}
+          REPO_SLUG: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SYNC_URL}" ] && [ -z "${SYNC_SECRET}" ]; then
+            echo "Secrets PAINEL_RELEASE_SYNC_URL / PAINEL_RELEASE_SYNC_SECRET não configurados; painel sincronizará via polling automático."
+            exit 0
+          fi
+          ENDPOINT="${SYNC_URL:-https://painel.criativoaistudio.com.br/api/releases/sync-webhook}"
+          echo "Sincronizando release ${TARGET_TAG} (${REPO_SLUG}) com o Painel em ${ENDPOINT}..."
+          curl --fail-with-body --silent --show-error --max-time 25 \
+            -X POST "${ENDPOINT}" \
+            -H "Content-Type: application/json" \
+            -H "x-release-sync-secret: ${SYNC_SECRET}" \
+            -d "{\"repo\":\"${REPO_SLUG}\",\"tag\":\"${TARGET_TAG}\"}"
+          echo ""
+          echo "Painel sincronizado com sucesso para ${TARGET_TAG}."

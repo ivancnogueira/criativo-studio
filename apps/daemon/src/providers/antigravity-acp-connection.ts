@@ -15,7 +15,7 @@ import {
   createInterface,
 } from "node:readline";
 import { type AcpDiscoveredModel, type LabeledImageInput, formatLabeledImageInstruction, type AcpPromptExecutionOutput, type AcpSessionNewResult, resolveAcpModelSelection, inferMimeFromImagePath, normalizeJsonRpcError } from "./antigravity-acp-helpers.ts";
-import { createTurnStallWatchdog, getLastMcpActivityAt, hasActiveMcpToolForAgent } from "./turn-stall-watchdog.ts";
+import { createAcpStreamPresentation, createTurnStallWatchdog, getLastMcpActivityAt, hasActiveMcpToolForAgent, type AcpToolStepEvent } from "./turn-stall-watchdog.ts";
 
 interface ManagedPendingRpc {
   resolve: (result: unknown) => void;
@@ -29,6 +29,7 @@ export class AcpProcessConnection {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<number, ManagedPendingRpc>();
   private readonly openToolCalls = new Set<string>();
+  private readonly streamPresentation = createAcpStreamPresentation();
   private nextId = 1;
   private closed = false;
   private initialized = false;
@@ -112,6 +113,7 @@ export class AcpProcessConnection {
     this.child.on("exit", (code) => {
       this.closed = true;
       this.openToolCalls.clear();
+      this.streamPresentation.reset(null);
       const errMsg =
         this.stderrTail.length > 0
           ? `Processo Antigravity ACP encerrou (${code ?? "sinal"}): ${this.stderrTail[this.stderrTail.length - 1]}`
@@ -187,6 +189,9 @@ export class AcpProcessConnection {
           sessionUpdate?: string;
           toolCallId?: string;
           status?: string;
+          title?: unknown;
+          name?: unknown;
+          kind?: unknown;
           content?: { type?: string; text?: string };
           used?: number;
         };
@@ -206,10 +211,10 @@ export class AcpProcessConnection {
       for (const wait of this.pending.values()) {
         wait.touchActivity?.();
       }
-      if (upd.sessionUpdate === "agent_message_chunk" && upd.content?.type === "text" && upd.content.text) {
-        this.onChunkListener?.(upd.content.text);
-      } else if (upd.sessionUpdate === "usage_update" && typeof upd.used === "number") {
+      if (upd.sessionUpdate === "usage_update" && typeof upd.used === "number") {
         this.onUsageListener?.(upd.used);
+      } else {
+        this.streamPresentation.handleUpdate(upd, this.onChunkListener);
       }
       return;
     }
@@ -479,6 +484,7 @@ export class AcpProcessConnection {
     agentId?: string | null;
     mcpServers?: unknown[];
     onDelta?: (chunk: string) => void;
+    onToolStep?: (step: AcpToolStepEvent) => void;
   }): Promise<AcpPromptExecutionOutput> {
     await this.ensureInitializedAndAuthenticated(30_000);
 
@@ -587,6 +593,7 @@ export class AcpProcessConnection {
     };
 
     this.openToolCalls.clear();
+    this.streamPresentation.reset(input.onToolStep);
     try {
       await this.request(
         "session/prompt",
@@ -605,6 +612,7 @@ export class AcpProcessConnection {
       );
     } finally {
       this.openToolCalls.clear();
+      this.streamPresentation.reset(null);
       this.onChunkListener = null;
       this.onUsageListener = null;
       // Encerra sessão sem bloquear
@@ -630,6 +638,7 @@ export class AcpProcessConnection {
   public dispose(): void {
     this.closed = true;
     this.openToolCalls.clear();
+    this.streamPresentation.reset(null);
     for (const [id, wait] of this.pending.entries()) {
       if (wait.timer) clearTimeout(wait.timer);
       wait.cleanup?.();

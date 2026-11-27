@@ -12,6 +12,7 @@ import {
   type AcpDiscoveredModel,
   type LabeledImageInput,
 } from "../antigravity-acp-service.ts";
+import type { AcpToolStepEvent } from "../turn-stall-watchdog.ts";
 
 export const CODE_ASSIST_URL = "https://cloudcode-pa.googleapis.com/v1internal";
 export const DAILY_CODE_ASSIST_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal";
@@ -160,6 +161,7 @@ export interface CodeAssistGenerateInput {
   signal?: AbortSignal;
   mcpServers?: unknown[];
   onDelta?: (chunk: string) => void;
+  onToolStep?: (step: AcpToolStepEvent) => void;
 }
 
 export interface CodeAssistGenerateOutput {

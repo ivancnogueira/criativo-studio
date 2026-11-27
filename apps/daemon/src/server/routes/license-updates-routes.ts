@@ -108,7 +108,15 @@ export async function tryHandleLicenseAndUpdatesRoutes(ctx: StudioRouteContext):
       sendJson(res, 503, { erro: "AutoUpdateService indisponível." });
       return true;
     }
-    sendJson(res, 200, { ok: true, status: deps.autoUpdateService.getStatus() });
+    const status = deps.autoUpdateService.getStatus();
+    const isTestProcess =
+      process.env.NODE_ENV === "test" ||
+      process.execArgv.includes("--test") ||
+      process.argv.includes("--test");
+    if (!isTestProcess && !status.last_checked_at && status.state === "idle") {
+      void deps.autoUpdateService.checkForUpdates().catch(() => {});
+    }
+    sendJson(res, 200, { ok: true, status });
     return true;
   }
 

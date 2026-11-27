@@ -13,6 +13,7 @@ import {
 import {
   resolveManagedProviderRuntime,
 } from "./provider-runtime-resolver.ts";
+import type { AcpToolStepEvent } from "./turn-stall-watchdog.ts";
 
 /**
  * No Windows o Antigravity CLI abre a página de login Google diretamente (Chrome/rundll32)
@@ -117,6 +118,7 @@ export interface AcpPromptExecutionInput {
   agentId?: string | null;
   mcpServers?: unknown[];
   onDelta?: (chunk: string) => void;
+  onToolStep?: (step: AcpToolStepEvent) => void;
 }
 
 export interface AcpPromptExecutionOutput {

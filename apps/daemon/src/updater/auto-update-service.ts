@@ -15,6 +15,9 @@ import type { LicenseClientService } from "../license/license-service.ts";
 import type { WebSocketHub } from "../server/websocket-hub.ts";
 import type { IdleWaitCoordinator } from "./idle-wait-coordinator.ts";
 
+export const DEFAULT_UPDATE_POLL_INTERVAL_MS = 15 * 60_000;
+export const DEFAULT_UPDATE_INITIAL_DELAY_MS = 8_000;
+
 export interface UpdateRestartContext {
   mode: "hot_bundle" | "native_installer";
   stagedArtifactPath: string | null;
@@ -113,6 +116,8 @@ export class AutoUpdateService {
   #installMode: "hot_bundle" | "native_installer" | null = null;
   #stagedArtifactPath: string | null = null;
   #stagedArtifactName: string | null = null;
+  #initialCheckTimer: NodeJS.Timeout | null = null;
+  #periodicCheckTimer: NodeJS.Timeout | null = null;
 
   constructor(options: AutoUpdateServiceOptions) {
     this.#licenseService = options.licenseService;
@@ -128,6 +133,62 @@ export class AutoUpdateService {
 
   getStagedArtifactPath(): string | null {
     return this.#stagedArtifactPath;
+  }
+
+  #isBusyOrReady(): boolean {
+    return (
+      this.#state === "checking" ||
+      this.#state === "downloading" ||
+      this.#state === "verifying" ||
+      this.#state === "applying" ||
+      this.#state === "waiting_idle" ||
+      this.#state === "ready_to_restart"
+    );
+  }
+
+  /**
+   * Inicia verificação automática no boot e polling periódico em background,
+   * emitindo `update:status` via WebSocket sempre que houver nova release.
+   */
+  startPeriodicCheck(options?: { intervalMs?: number; initialDelayMs?: number }): void {
+    this.stopPeriodicCheck();
+
+    const envInterval = Number(process.env.CRIATIVO_UPDATE_CHECK_INTERVAL_MS || "");
+    const rawInterval =
+      options?.intervalMs ??
+      (Number.isFinite(envInterval) && envInterval > 0
+        ? envInterval
+        : DEFAULT_UPDATE_POLL_INTERVAL_MS);
+    const intervalMs = Math.max(50, rawInterval);
+    const initialDelayMs = Math.max(
+      0,
+      options?.initialDelayMs ?? DEFAULT_UPDATE_INITIAL_DELAY_MS
+    );
+
+    const runSilentCheck = () => {
+      if (this.#isBusyOrReady()) return;
+      void this.checkForUpdates().catch(() => {});
+    };
+
+    this.#initialCheckTimer = setTimeout(() => {
+      this.#initialCheckTimer = null;
+      runSilentCheck();
+    }, initialDelayMs);
+    this.#initialCheckTimer.unref?.();
+
+    this.#periodicCheckTimer = setInterval(runSilentCheck, intervalMs);
+    this.#periodicCheckTimer.unref?.();
+  }
+
+  stopPeriodicCheck(): void {
+    if (this.#initialCheckTimer) {
+      clearTimeout(this.#initialCheckTimer);
+      this.#initialCheckTimer = null;
+    }
+    if (this.#periodicCheckTimer) {
+      clearInterval(this.#periodicCheckTimer);
+      this.#periodicCheckTimer = null;
+    }
   }
 
   getStatus(): UpdateStatusSnapshot {
