@@ -6,6 +6,7 @@ import {
   type ArquivoStudio,
   type CanalEquipe,
   type ProvedorStatusInfo,
+  type WorkflowAresta,
   type WorkflowBranch,
   type WorkflowNo,
   type WorkflowOutputTarget,
@@ -43,7 +44,10 @@ import { WorkflowNodeActionFields } from "./WorkflowNodeActionFields";
 
 export interface WorkflowNodeCardProps {
   node: WorkflowNo;
+  allNodes?: WorkflowNo[];
+  allEdges?: WorkflowAresta[];
   selected: boolean;
+  collaboratorSelection?: { displayName: string; color: string } | null;
   readOnly?: boolean;
   agentes: AgenteRegistro[];
   canais: CanalEquipe[];
@@ -65,12 +69,51 @@ export interface WorkflowNodeCardProps {
   onRetryStep?: (stepId: string) => void;
   onDecideStep?: (stepId: string, approved: boolean) => void;
   onOpenTriggerModal?: (node: WorkflowNo) => void;
-  onUploadFile?: (file: File) => Promise<void>;
+  onUploadFile?: (file: File) => Promise<ArquivoStudio | void>;
+  onRefreshRunData?: () => Promise<void> | void;
+}
+
+function CollaboratorSelectionPill({
+  selection,
+}: {
+  selection: { displayName: string; color: string } | null;
+}) {
+  if (!selection) return null;
+  return (
+    <div
+      data-testid="workflow-node-collaborator-pill"
+      style={{ backgroundColor: selection.color }}
+      className="pointer-events-none absolute -top-5 right-0 z-20 flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold text-[#111111] shadow-md"
+    >
+      <span>{selection.displayName}</span>
+    </div>
+  );
+}
+
+function buildNodePositionStyle(
+  node: WorkflowNo,
+  width: number,
+  selected: boolean,
+  collaboratorSelection: { displayName: string; color: string } | null
+): React.CSSProperties {
+  if (!collaboratorSelection || selected) {
+    return { left: node.x, top: node.y, width };
+  }
+  return {
+    left: node.x,
+    top: node.y,
+    width,
+    borderColor: collaboratorSelection.color,
+    boxShadow: `0 0 0 1px ${collaboratorSelection.color}66`,
+  };
 }
 
 export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
   node,
+  allNodes = [],
+  allEdges = [],
   selected,
+  collaboratorSelection = null,
   readOnly = false,
   agentes,
   canais,
@@ -93,6 +136,7 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
   onDecideStep,
   onOpenTriggerModal,
   onUploadFile,
+  onRefreshRunData,
 }) => {
   const kind = normalizeNodeKind(node.tipo);
   const cfg = node.config ?? {};
@@ -124,7 +168,7 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
     const toneObj = NOTE_PALETTE.find((t) => t.id === toneId) ?? NOTE_PALETTE[0];
     return (
       <div
-        style={{ left: node.x, top: node.y, width }}
+        style={buildNodePositionStyle(node, width, selected, collaboratorSelection)}
         onPointerDown={(e) => onPointerDownNode(e, node)}
         onClick={(e) => {
           e.stopPropagation();
@@ -134,6 +178,7 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
           selected ? "ring-2 ring-[#007CF7]" : ""
         }`}
       >
+        <CollaboratorSelectionPill selection={collaboratorSelection} />
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1 text-[12px] font-semibold">
             <StickyNote className="h-3.5 w-3.5" />
@@ -184,7 +229,7 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
   if (kind === "text") {
     return (
       <div
-        style={{ left: node.x, top: node.y, width }}
+        style={buildNodePositionStyle(node, width, selected, collaboratorSelection)}
         onPointerDown={(e) => onPointerDownNode(e, node)}
         onClick={(e) => {
           e.stopPropagation();
@@ -194,6 +239,7 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
           selected ? "border-[#007CF7] bg-[#212121]/70" : "border-transparent hover:border-white/[0.06]"
         }`}
       >
+        <CollaboratorSelectionPill selection={collaboratorSelection} />
         <input
           type="text"
           readOnly={readOnly}
@@ -212,7 +258,7 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
     const shapeColor = node.color ?? "#42A0FF";
     return (
       <div
-        style={{ left: node.x, top: node.y, width }}
+        style={buildNodePositionStyle(node, width, selected, collaboratorSelection)}
         onPointerDown={(e) => onPointerDownNode(e, node)}
         onClick={(e) => {
           e.stopPropagation();
@@ -220,6 +266,7 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
         }}
         className={`absolute rounded-xl border bg-[#212121]/85 p-2 shadow-lg select-none ${borderClass}`}
       >
+        <CollaboratorSelectionPill selection={collaboratorSelection} />
         {selected && !readOnly && (
           <div className="mb-2 flex items-center justify-between gap-2" onPointerDown={(e) => e.stopPropagation()}>
             <CarbonMenuPicker
@@ -302,7 +349,7 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
 
   return (
     <div
-      style={{ left: node.x, top: node.y, width }}
+      style={buildNodePositionStyle(node, width, selected, collaboratorSelection)}
       onPointerDown={(e) => onPointerDownNode(e, node)}
       onClick={(e) => {
         e.stopPropagation();
@@ -310,6 +357,7 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
       }}
       className={`absolute rounded-xl border bg-[#212121] p-2 shadow-2xl transition-colors select-none ${borderClass}`}
     >
+      <CollaboratorSelectionPill selection={collaboratorSelection} />
       {/* Barra contextual superior do nó selecionado */}
       {selected && !readOnly && (
         <div
@@ -453,6 +501,8 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
       <WorkflowNodeBasicFields
         props={{
           node,
+          allNodes,
+          allEdges,
           selected,
           readOnly,
           agentes,
@@ -476,6 +526,7 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
           onDecideStep,
           onOpenTriggerModal,
           onUploadFile,
+          onRefreshRunData,
         }}
         kind={kind}
         cfg={cfg}
@@ -499,6 +550,8 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
       <WorkflowNodeActionFields
         props={{
           node,
+          allNodes,
+          allEdges,
           selected,
           readOnly,
           agentes,
@@ -522,6 +575,7 @@ export const WorkflowNodeCard: React.FC<WorkflowNodeCardProps> = ({
           onDecideStep,
           onOpenTriggerModal,
           onUploadFile,
+          onRefreshRunData,
         }}
         kind={kind}
         cfg={cfg}

@@ -43,7 +43,13 @@ export const mapCanalRow = (db: StudioRoutesDeps["db"], row: RawCanalRow): Canal
       .prepare(`SELECT COUNT(*) as total FROM projecao_agente_rotinas WHERE owner_kind = 'canal' AND owner_id = ?;`)
       .get(row.canal_id) as { total: number };
 
-    const membros = safeJsonParse<string[]>(row.membros_agentes_json, []);
+    const rawParsedMembros = JSON.parse(row.membros_agentes_json) as unknown;
+    if (!Array.isArray(rawParsedMembros)) {
+      throw new Error("membros_agentes_json inválido no banco SQLite.");
+    }
+    const membros = rawParsedMembros.filter(
+      (m): m is string => typeof m === "string" && m.trim().length > 0,
+    );
     const lider =
       typeof row.lider_agente_id === "string" && membros.includes(row.lider_agente_id)
         ? row.lider_agente_id
@@ -70,6 +76,34 @@ export const mapCanalRow = (db: StudioRoutesDeps["db"], row: RawCanalRow): Canal
     };
   };
 
+export const safeMapCanalRow = (db: StudioRoutesDeps["db"], row: RawCanalRow): CanalEquipe => {
+  try {
+    return mapCanalRow(db, row);
+  } catch (err) {
+    console.warn(`[Canais] Falha isolada ao carregar canal '${row.canal_id}':`, err);
+    return {
+      canal_id: row.canal_id,
+      nome: row.nome || "Canal indisponível",
+      descricao: row.descricao ?? "",
+      instrucoes: row.instrucoes ?? "",
+      pasta: row.pasta || "Canais em Equipe",
+      membros_agentes: [],
+      lider_agente_id: null,
+      navegador_modo: normalizeNavegadorModo(row.navegador_modo),
+      manter_memorias: Boolean(row.manter_memorias),
+      context_cutoff_at: row.context_cutoff_at ?? null,
+      context_summary: row.context_summary ?? null,
+      memorias_count: 0,
+      rotinas_count: 0,
+      nao_lidas: 0,
+      erro_leitura: true,
+      ultima_mensagem: "Falha isolada ao carregar canal",
+      criado_em: row.criado_em,
+      atualizado_em: row.atualizado_em,
+    };
+  }
+};
+
 export const getCanalRow = (db: StudioRoutesDeps["db"], canalId: string): RawCanalRow | undefined =>
   db.connection
     .prepare(`SELECT * FROM projecao_grupos_equipe WHERE canal_id = ?;`)
@@ -83,7 +117,7 @@ export async function tryHandleChannelsCrudRoutes(ctx: StudioRouteContext): Prom
     const rows = db.connection
       .prepare(`SELECT * FROM projecao_grupos_equipe ORDER BY atualizado_em DESC;`)
       .all() as unknown as RawCanalRow[];
-    sendJson(res, 200, { canais: rows.map((r) => mapCanalRow(db, r)) });
+    sendJson(res, 200, { canais: rows.map((r) => safeMapCanalRow(db, r)) });
     return true;
   }
 

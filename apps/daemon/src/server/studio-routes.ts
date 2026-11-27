@@ -14,6 +14,7 @@ import { tryHandleAgentMessagesRoutes } from "./routes/agent-messages-routes.ts"
 import { tryHandleChannelsCrudRoutes } from "./routes/channels-crud-routes.ts";
 import { tryHandleChannelsMessagesRoutes } from "./routes/channels-messages-routes.ts";
 import { tryHandleWorkflowsWebhooksAndRunsRoutes } from "./routes/workflows-webhooks-runs-routes.ts";
+import { tryHandleWorkflowsProRoutes } from "./routes/workflows-pro-routes.ts";
 import { tryHandleWorkflowsCrudRoutes } from "./routes/workflows-crud-routes.ts";
 import { tryHandleFilesRoutes } from "./routes/files-routes.ts";
 import { tryHandlePhase14Routes } from "./routes/phase14-routes.ts";
@@ -92,6 +93,7 @@ export async function tryHandleStudioRoute(
     tryHandleChannelsCrudRoutes,
     tryHandleChannelsMessagesRoutes,
     tryHandleWorkflowsWebhooksAndRunsRoutes,
+    tryHandleWorkflowsProRoutes,
     tryHandleWorkflowsCrudRoutes,
     tryHandleFilesRoutes,
     tryHandlePhase14Routes,

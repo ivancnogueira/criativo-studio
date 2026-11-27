@@ -44,10 +44,25 @@ import { StudioSecondaryPagesSwitch } from "./components/studio/StudioSecondaryP
 import { StudioModalsHost } from "./components/studio/StudioModalsHost";
 import { CommandPaletteModal } from "./components/CommandPaletteModal";
 import { ProviderCliUpdateBanner } from "./features/updates/ProviderCliUpdateBanner";
+import { VersionWhatsNewBanner } from "./features/updates/VersionWhatsNewBanner";
 import { getCriativoDesktopBridge } from "./types/desktop-bridge";
+import { DetachedBrowserWindowView } from "./features/browser/DetachedBrowserWindowView";
 import { I18nProvider } from "./i18n/I18nContext";
 
+function isDetachedBrowserRoute(): boolean {
+  if (typeof window === "undefined") return false;
+  const sp = new URLSearchParams(window.location.search);
+  return sp.get("detachedBrowser") === "1" || sp.get("browserPip") === "1";
+}
+
 export function App() {
+  if (isDetachedBrowserRoute()) {
+    return <DetachedBrowserWindowView />;
+  }
+  return <StudioApp />;
+}
+
+function StudioApp() {
   const state = useStudioState();
   const boot = useStudioBootstrap(state);
   useStudioWebSocketSync(state, boot);
@@ -231,6 +246,13 @@ export function App() {
           )}
 
           <ProviderCliUpdateBanner onProvidersUpdated={(list) => setProvedores(list)} />
+          <VersionWhatsNewBanner
+            whatsNew={state.whatsNew}
+            currentVersion={
+              state.updateStatus?.current_version ?? state.whatsNew?.versao_atual ?? null
+            }
+            onOpenUpdatesSettings={() => openSettings("atualizacoes")}
+          />
 
           <main className="flex-1 min-h-0 flex overflow-hidden">
             {activeSection === "agentes" && (

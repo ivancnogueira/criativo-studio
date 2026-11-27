@@ -86,6 +86,14 @@ export interface CriativoDesktopBridge {
   setGlobalShortcut: (accelerator: string) => Promise<boolean>;
   openBrowserPip: (payload?: { tabId?: string | null; agenteId?: string | null }) => Promise<boolean>;
   closeBrowserPip: () => Promise<boolean>;
+  openDetachedBrowser: (payload?: {
+    tabId?: string | null;
+    agenteId?: string | null;
+    displayId?: string | null;
+  }) => Promise<boolean>;
+  closeDetachedBrowser: () => Promise<boolean>;
+  listDetachedBrowserDisplays: () => Promise<Array<{ id: string; label: string; primary: boolean }>>;
+  onDetachedBrowserClosed: (listener: (info: { tabId: string | null }) => void) => () => void;
 }
 
 const bridge: CriativoDesktopBridge = {
@@ -184,6 +192,18 @@ const bridge: CriativoDesktopBridge = {
   openBrowserPip: (payload?: { tabId?: string | null; agenteId?: string | null }) =>
     ipcRenderer.invoke("criativo:browser-pip-open", payload ?? {}),
   closeBrowserPip: () => ipcRenderer.invoke("criativo:browser-pip-close"),
+  openDetachedBrowser: (payload) => ipcRenderer.invoke("criativo:browser-detached-open", payload ?? {}),
+  closeDetachedBrowser: () => ipcRenderer.invoke("criativo:browser-detached-close"),
+  listDetachedBrowserDisplays: () => ipcRenderer.invoke("criativo:browser-detached-displays"),
+  onDetachedBrowserClosed: (listener) => {
+    const wrapped = (_event: unknown, info: { tabId: string | null }) => {
+      listener(info ?? { tabId: null });
+    };
+    ipcRenderer.on("criativo:browser-detached-closed", wrapped);
+    return () => {
+      ipcRenderer.removeListener("criativo:browser-detached-closed", wrapped);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld("criativoDesktop", bridge);

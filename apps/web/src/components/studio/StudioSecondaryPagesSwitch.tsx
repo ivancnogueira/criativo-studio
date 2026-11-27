@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type {
   AgenteEspera,
   AgenteRegistro,
@@ -22,6 +23,7 @@ import type {
   DeletedNativeAgentInfo,
   FilaChatEntrega,
   FilaChatSnapshot,
+  GranularidadeAnalyticsUso,
   HabilidadeInstaladaInfo,
   LicenseActivationStatus,
   MensagemChat,
@@ -88,6 +90,8 @@ import { StudioRoutinesWorkspace } from "./StudioRoutinesWorkspace";
 
 export function StudioSecondaryPagesSwitch({ ctx }: { ctx: StudioUiCtx }) {
   const { state, boot, serverActions, nav, chatSend, threadActions } = ctx;
+  const [usoLoading, setUsoLoading] = useState(false);
+  const [usoGranularidade, setUsoGranularidade] = useState<"auto" | GranularidadeAnalyticsUso>("auto");
   const {
     onboarding,
     setOnboarding,
@@ -233,8 +237,12 @@ export function StudioSecondaryPagesSwitch({ ctx }: { ctx: StudioUiCtx }) {
               onStopStep={daemonApi.stopWorkflowStep}
               onRotateWebhook={daemonApi.rotateWorkflowWebhookSecret}
               onUploadFile={async (file) => {
-                await daemonApi.uploadFile(file);
+                const uploaded = await daemonApi.uploadFileCategorized(file);
                 setArquivos(await daemonApi.listFiles());
+                return uploaded.arquivo;
+              }}
+              onRefreshWorkflows={async () => {
+                setWorkflows(await daemonApi.listWorkflows());
               }}
             />
           )}
@@ -368,20 +376,44 @@ export function StudioSecondaryPagesSwitch({ ctx }: { ctx: StudioUiCtx }) {
               agentes={agentes}
               periodoDias={usoPeriodoDias}
               agenteFiltroId={usoAgenteFiltro}
-              onChangeFilters={async (dias, agId) => {
+              granularidade={usoGranularidade}
+              loading={usoLoading}
+              onChangeFilters={async (dias, agId, gran) => {
+                const nextGran = gran ?? usoGranularidade;
                 setUsoPeriodoDias(dias);
                 setUsoAgenteFiltro(agId);
-                setAnalyticsUso(await daemonApi.getUsageAnalytics({ dias, agente_id: agId }));
+                setUsoGranularidade(nextGran);
+                setUsoLoading(true);
+                try {
+                  setAnalyticsUso(
+                    await daemonApi.getUsageAnalytics({
+                      dias,
+                      agente_id: agId,
+                      granularidade: nextGran,
+                    }),
+                  );
+                } finally {
+                  setUsoLoading(false);
+                }
               }}
               onRefresh={async () => {
-                const [provList, usageSnap, analyticsData] = await Promise.all([
-                  daemonApi.listProvidersStatus(true),
-                  daemonApi.getProvidersUsage(true),
-                  daemonApi.getUsageAnalytics({ dias: usoPeriodoDias, agente_id: usoAgenteFiltro }),
-                ]);
-                setProvedores(provList);
-                setUso(usageSnap);
-                setAnalyticsUso(analyticsData);
+                setUsoLoading(true);
+                try {
+                  const [provList, usageSnap, analyticsData] = await Promise.all([
+                    daemonApi.listProvidersStatus(true),
+                    daemonApi.getProvidersUsage(true),
+                    daemonApi.getUsageAnalytics({
+                      dias: usoPeriodoDias,
+                      agente_id: usoAgenteFiltro,
+                      granularidade: usoGranularidade,
+                    }),
+                  ]);
+                  setProvedores(provList);
+                  setUso(usageSnap);
+                  setAnalyticsUso(analyticsData);
+                } finally {
+                  setUsoLoading(false);
+                }
               }}
             />
           )}
@@ -466,8 +498,11 @@ export function StudioSecondaryPagesSwitch({ ctx }: { ctx: StudioUiCtx }) {
                 setConectores(connList);
                 setHabilidades(skillsList);
               }}
-              onTogglePool={async (prov, habilitado) => {
-                const nextProvs = await daemonApi.setProviderPool(prov, { habilitado });
+              onTogglePool={async (prov, habilitado, estrategia) => {
+                const nextProvs = await daemonApi.setProviderPool(prov, {
+                  habilitado,
+                  ...(estrategia ? { estrategia } : {}),
+                });
                 setProvedores(nextProvs);
                 setUso(await daemonApi.getProvidersUsage(true));
               }}
@@ -655,7 +690,7 @@ export function StudioSecondaryPagesSwitch({ ctx }: { ctx: StudioUiCtx }) {
             />
           )}
 
-          {previewFile && (
+          {previewFile && activeSection !== "agentes" && (
             <FilePreviewPanel
               file={previewFile}
               onClose={() => setPreviewFile(null)}

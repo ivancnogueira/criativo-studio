@@ -1,28 +1,24 @@
 import React, { useMemo, useState } from "react";
-import type { EditorialPostRecord, EditorialSlideItem } from "@criativo/contracts";
+import type { EditorialPostRecord, EditorialSlideItem, MetaTrialGraduationStrategy } from "@criativo/contracts";
+import { MetaFirstCommentPanel } from "./MetaFirstCommentPanel";
+import { MetaTrialReelControlCard } from "./MetaTrialReelControlCard";
 import {
-  ArrowLeft,
-  ArrowRight,
-  Check,
-  Copy,
-  Eye,
-  Film,
-  Grid3x3,
-  Heart,
-  Image as ImageIcon,
-  Layers,
-  Loader2,
-  MessageCircle,
-  Plus,
-  Save,
-  Send,
-  ShieldAlert,
-  Smartphone,
-  Trash2,
-  X,
+  ArrowLeft, ArrowRight, Check, Copy, Eye, Film, Grid3x3, Heart, Image as ImageIcon,
+  Layers, Loader2, MessageCircle, Plus, Save, Send, ShieldAlert, Smartphone, Trash2, X,
 } from "lucide-react";
 
 type EditorAspectMode = "carousel_4_5" | "stories_9_16";
+
+export interface StudioEditorialSavePayload {
+  slides: EditorialSlideItem[];
+  legenda: string;
+  formato?: EditorialPostRecord["formato"];
+  trial_reel_enabled?: boolean;
+  trial_graduation_strategy?: MetaTrialGraduationStrategy;
+  primeiro_comentario?: string | null;
+  primeiro_comentario_aprovado?: boolean;
+  primeiro_comentario_delay_seg?: number;
+}
 
 export interface CarouselStoriesStudioEditorProps {
   open: boolean;
@@ -32,15 +28,8 @@ export interface CarouselStoriesStudioEditorProps {
   initialSlides: EditorialSlideItem[];
   initialCaption: string;
   editorialPost?: EditorialPostRecord | null;
-  onSaveEditorial?: (payload: {
-    slides: EditorialSlideItem[];
-    legenda: string;
-    formato?: EditorialPostRecord["formato"];
-  }) => Promise<void>;
-  onApproveCreative?: (payload: {
-    slides: EditorialSlideItem[];
-    legenda: string;
-  }) => Promise<void>;
+  onSaveEditorial?: (payload: StudioEditorialSavePayload) => Promise<void>;
+  onApproveCreative?: (payload: StudioEditorialSavePayload) => Promise<void>;
 }
 
 const IG_CAPTION_LIMIT = 2200;
@@ -81,6 +70,11 @@ export const CarouselStoriesStudioEditor: React.FC<CarouselStoriesStudioEditorPr
   const [saving, setSaving] = useState(false);
   const [approving, setApproving] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [trialReelEnabled, setTrialReelEnabled] = useState(Boolean(editorialPost?.trial_reel_enabled));
+  const [trialStrategy, setTrialStrategy] = useState<MetaTrialGraduationStrategy>(editorialPost?.trial_graduation_strategy ?? "SS_PERFORMANCE");
+  const [firstComment, setFirstComment] = useState(editorialPost?.primeiro_comentario ?? "");
+  const [firstCommentApproved, setFirstCommentApproved] = useState(Boolean(editorialPost?.primeiro_comentario_aprovado));
+  const [firstCommentDelay, setFirstCommentDelay] = useState(editorialPost?.primeiro_comentario_delay_seg ?? 30);
 
   const safeActiveIndex = slides.length > 0 ? Math.min(activeIndex, slides.length - 1) : 0;
   const currentSlide = slides[safeActiveIndex] ?? null;
@@ -152,37 +146,44 @@ export const CarouselStoriesStudioEditor: React.FC<CarouselStoriesStudioEditorPr
     );
   };
 
-  const handleSaveEditorial = async () => {
-    if (!onSaveEditorial) return;
-    setSaving(true);
+  const resolvedFormato: EditorialPostRecord["formato"] =
+    editorialPost?.formato === "reels" ? "reels"
+      : mode === "stories_9_16" ? "story"
+        : slides.length > 1 ? "carrossel" : "feed_4_5";
+
+  const buildSavePayload = (includeFormato: boolean): StudioEditorialSavePayload => ({
+    slides,
+    legenda: caption,
+    ...(includeFormato ? { formato: resolvedFormato } : {}),
+    trial_reel_enabled: trialReelEnabled,
+    trial_graduation_strategy: trialStrategy,
+    primeiro_comentario: firstComment.trim() || null,
+    primeiro_comentario_aprovado: firstCommentApproved,
+    primeiro_comentario_delay_seg: firstCommentDelay,
+  });
+
+  const runEditorialAction = async (
+    action: ((p: StudioEditorialSavePayload) => Promise<void>) | undefined,
+    includeFormato: boolean, setBusy: (v: boolean) => void, okMsg: string, errMsg: string
+  ) => {
+    if (!action) return;
+    setBusy(true);
     setFeedback(null);
     try {
-      await onSaveEditorial({
-        slides,
-        legenda: caption,
-        formato: mode === "stories_9_16" ? "story" : slides.length > 1 ? "carrossel" : "feed_4_5",
-      });
-      setFeedback("Alterações salvas no Post Editorial.");
+      await action(buildSavePayload(includeFormato));
+      setFeedback(okMsg);
     } catch (err) {
-      setFeedback(err instanceof Error ? err.message : "Erro ao salvar no Post Editorial.");
+      setFeedback(err instanceof Error ? err.message : errMsg);
     } finally {
-      setSaving(false);
+      setBusy(false);
     }
   };
 
-  const handleApprove = async () => {
-    if (!onApproveCreative) return;
-    setApproving(true);
-    setFeedback(null);
-    try {
-      await onApproveCreative({ slides, legenda: caption });
-      setFeedback("Criativo aprovado com sucesso.");
-    } catch (err) {
-      setFeedback(err instanceof Error ? err.message : "Falha ao aprovar criativo.");
-    } finally {
-      setApproving(false);
-    }
-  };
+  const handleSaveEditorial = () =>
+    runEditorialAction(onSaveEditorial, true, setSaving, "Alterações salvas no Post Editorial.", "Erro ao salvar no Post Editorial.");
+
+  const handleApprove = () =>
+    runEditorialAction(onApproveCreative, false, setApproving, "Criativo aprovado com sucesso.", "Falha ao aprovar criativo.");
 
   return (
     <div
@@ -637,6 +638,25 @@ export const CarouselStoriesStudioEditor: React.FC<CarouselStoriesStudioEditorPr
                   )}
                 </p>
               </div>
+
+              <MetaTrialReelControlCard
+                visible={mode === "stories_9_16" || editorialPost?.formato === "reels"}
+                enabled={trialReelEnabled}
+                strategy={trialStrategy}
+                onChangeEnabled={setTrialReelEnabled}
+                onChangeStrategy={setTrialStrategy}
+              />
+
+              <MetaFirstCommentPanel
+                commentText={firstComment}
+                approved={firstCommentApproved}
+                delaySeconds={firstCommentDelay}
+                mediaId={editorialPost?.meta_media_id}
+                editorialPostId={editorialPost?.id}
+                onChangeCommentText={setFirstComment}
+                onChangeApproved={setFirstCommentApproved}
+                onChangeDelaySeconds={setFirstCommentDelay}
+              />
 
               <div className="rounded-xl border border-white/[0.06] bg-[#1A1A1A] p-3 text-[11px] text-[#979797] space-y-1">
                 <p className="font-medium text-[#DCDCDC] flex items-center gap-1.5">

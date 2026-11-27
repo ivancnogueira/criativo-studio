@@ -217,6 +217,15 @@ function main() {
   for (const item of result.updatedFiles) {
     console.log(`  - ${item.file}: ${item.from} -> ${item.to}`);
   }
+  const anchor = `v${result.version.replace(/\./g, "-")}`;
+  console.log("");
+  console.log("Checklist obrigatorio da release:");
+  console.log(
+    `  [OBRIGATORIO] Atualizar changelog publico em ../criativoos-site/src/data/changelogData.ts (ancora #${anchor}) + npm run verify + push do site`,
+  );
+  console.log(
+    "  [OBRIGATORIO] Atualizar notas da versao em apps/daemon/src/server/release-notes-catalog.ts para o banner de novidades no CriativoOS",
+  );
 }
 
 const isEntryPoint =

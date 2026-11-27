@@ -4,6 +4,7 @@ import {
   type TipoNoWorkflow,
   type TipoNoWorkflowAnotacao,
   type TipoNoWorkflowExecutavel,
+  type WorkflowBatchVariantResult,
   type WorkflowNo,
   type WorkflowPortType,
   type WorkflowRunDetail,
@@ -231,6 +232,7 @@ export interface WorkflowNodeRunView {
   output: string | null;
   outputTipo: WorkflowPortType | null;
   artifacts: string[];
+  variants?: WorkflowBatchVariantResult[];
   erro: string | null;
   iniciadoEm: string | null;
   encerradoEm: string | null;
@@ -263,6 +265,62 @@ function parseArtifactsSafe(raw: string): string[] {
   }
 }
 
+export function parseBatchVariantsFromArtifacts(raw: string): WorkflowBatchVariantResult[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const items: WorkflowBatchVariantResult[] = [];
+    parsed.forEach((entry, idx) => {
+      if (typeof entry === "string" && entry.trim()) {
+        items.push({ slotIndex: idx, status: "done", relPath: entry.trim() });
+      } else if (entry && typeof entry === "object") {
+        const obj = entry as Record<string, unknown>;
+        const slotIndex =
+          typeof obj.slotIndex === "number" && Number.isInteger(obj.slotIndex)
+            ? obj.slotIndex
+            : idx;
+        const relPath =
+          typeof obj.path === "string"
+            ? obj.path
+            : typeof obj.caminho === "string"
+              ? obj.caminho
+              : typeof obj.relPath === "string"
+                ? obj.relPath
+                : undefined;
+        const status =
+          obj.status === "pending" ||
+          obj.status === "running" ||
+          obj.status === "done" ||
+          obj.status === "failed"
+            ? obj.status
+            : relPath
+              ? "done"
+              : "failed";
+        items.push({
+          slotIndex,
+          status,
+          ...(typeof obj.arquivoId === "string"
+            ? { arquivoId: obj.arquivoId }
+            : typeof obj.arquivo_id === "string"
+              ? { arquivoId: obj.arquivo_id }
+              : {}),
+          ...(relPath ? { relPath } : {}),
+          ...(typeof obj.mimeType === "string"
+            ? { mimeType: obj.mimeType }
+            : typeof obj.mime_type === "string"
+              ? { mimeType: obj.mime_type }
+              : {}),
+          ...(typeof obj.error === "string" ? { error: obj.error } : {}),
+        });
+      }
+    });
+    return items.sort((a, b) => a.slotIndex - b.slotIndex);
+  } catch {
+    return [];
+  }
+}
+
 export function buildNodeRunViewMap(
   runDetail: WorkflowRunDetail | null,
   soloSteps: readonly WorkflowStepRecord[]
@@ -280,6 +338,7 @@ export function buildNodeRunViewMap(
         output: step.output,
         outputTipo: step.output_tipo,
         artifacts: parseArtifactsSafe(step.artefatos_json),
+        variants: parseBatchVariantsFromArtifacts(step.artefatos_json),
         erro: step.erro,
         iniciadoEm: step.iniciado_em,
         encerradoEm: step.encerrado_em,
@@ -299,6 +358,7 @@ export function buildNodeRunViewMap(
         output: step.output,
         outputTipo: step.output_tipo,
         artifacts: parseArtifactsSafe(step.artefatos_json),
+        variants: parseBatchVariantsFromArtifacts(step.artefatos_json),
         erro: step.erro,
         iniciadoEm: step.iniciado_em,
         encerradoEm: step.encerrado_em,

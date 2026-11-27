@@ -168,6 +168,7 @@ export interface BrowserAutomationRuntimeContext {
   };
   getStatus: (agenteId?: string) => BrowserStatusReport;
   requireRealTab: (tabId?: string) => ManagedTabEntry;
+  ensureRealTabLoaded: (tabId?: string) => Promise<ManagedTabEntry>;
   ensureTabPreviewStream: (tab: ManagedTabEntry) => void;
   broadcastTabsAndFrame: (tab?: ManagedTabEntry | null) => void;
   captureTabSnapshot: (tab: ManagedTabEntry, includeImage?: boolean) => Promise<BrowserSnapshotResult>;

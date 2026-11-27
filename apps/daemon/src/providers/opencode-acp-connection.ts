@@ -1,11 +1,12 @@
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createInterface } from "node:readline";
 import { spawnProviderProcess } from "./provider-runtime-resolver.ts";
+import { ACP_MAX_MESSAGE_BYTES, NdjsonBufferedLineReader } from "./acp-stream-framing.ts";
 import { createAcpStreamPresentation, createTurnStallWatchdog, detectAcpBackgroundTaskOutput, getLastMcpActivityAt, hasActiveMcpToolForAgent, type AcpToolStepEvent } from "./turn-stall-watchdog.ts";
 
 export const OPENCODE_SESSION_NEW_TIMEOUT_MS = 60_000;
 
 interface PendingRpc {
+  method: string;
   resolve: (result: unknown) => void;
   reject: (err: Error) => void;
   timer?: NodeJS.Timeout;
@@ -22,6 +23,7 @@ interface OpenCodeConfigOption {
 
 export class OpenCodeAcpConnection {
   private readonly child: ChildProcessWithoutNullStreams;
+  private readonly stdoutReader: NdjsonBufferedLineReader;
   private readonly pending = new Map<number, PendingRpc>();
   private readonly openToolCalls = new Set<string>();
   private readonly deferredCloseTimers = new Set<NodeJS.Timeout>();
@@ -37,7 +39,8 @@ export class OpenCodeAcpConnection {
   constructor(
     executable: string,
     cwd: string,
-    extraEnv: Record<string, string | undefined>
+    extraEnv: Record<string, string | undefined>,
+    options?: { maxMessageBytes?: number },
   ) {
     this.child = spawnProviderProcess(executable, ["acp"], {
       cwd,
@@ -64,8 +67,24 @@ export class OpenCodeAcpConnection {
       if (this.stderrTail.length > 6) this.stderrTail.shift();
     });
 
-    const rl = createInterface({ input: this.child.stdout });
-    rl.on("line", (line) => {
+    this.stdoutReader = new NdjsonBufferedLineReader({
+      stream: this.child.stdout,
+      maxMessageBytes: options?.maxMessageBytes ?? ACP_MAX_MESSAGE_BYTES,
+      onOversizedLine: (info) => {
+        const err = new Error(
+          `Payload ACP excedeu o limite seguro de 256 MB (${Math.round(info.byteLength / 1024)} KB) e foi descartado sem afetar outras sessões.`,
+        );
+        const target =
+          Array.from(this.pending.entries()).find(([, w]) => w.method === "session/prompt") ??
+          Array.from(this.pending.entries())[0];
+        if (!target) return;
+        const [id, wait] = target;
+        this.pending.delete(id);
+        if (wait.timer) clearTimeout(wait.timer);
+        wait.cleanup?.();
+        wait.reject(err);
+      },
+      onLine: (line) => {
       const trimmed = line.trim();
       if (!trimmed.startsWith("{")) return;
       let msg: Record<string, unknown>;
@@ -155,6 +174,7 @@ export class OpenCodeAcpConnection {
           wait.resolve(msg.result);
         }
       }
+      },
     });
 
     this.child.on("exit", (code) => {
@@ -171,7 +191,7 @@ export class OpenCodeAcpConnection {
         wait.reject(new Error(errMessage));
         this.pending.delete(id);
       }
-      rl.close();
+      this.stdoutReader.dispose();
     });
   }
 
@@ -271,6 +291,7 @@ export class OpenCodeAcpConnection {
       }
 
       this.pending.set(id, {
+        method,
         resolve: (res) => {
           if (settled) return;
           settled = true;

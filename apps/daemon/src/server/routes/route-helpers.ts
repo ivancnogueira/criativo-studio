@@ -35,6 +35,8 @@ import {
 } from "@criativo/contracts";
 import type { WhatsAppOrchestrator, WhatsAppSessionManager } from "@criativo/whatsapp";
 import type { CriativoDatabase } from "../../database/client.ts";
+import type { FetchLike } from "../../engine/providers/provider-interface.ts";
+import type { MetaFirstCommentService } from "../../social/meta-first-comment-service.ts";
 import type { ProviderRegistry } from "../../engine/providers/provider-registry.ts";
 import { HandoffBus } from "../../engine/runner/handoff-bus.ts";
 import type { CatalogService } from "../../marketplace/catalog-service.ts";
@@ -206,6 +208,8 @@ export interface StudioRoutesDeps {
   themePaletteFiles?: ThemePaletteFilesService;
   agentTemplatePublisher?: AgentTemplatePublisher;
   resourceMonitor?: HostResourceMonitorService;
+  metaFirstCommentService?: MetaFirstCommentService;
+  fetchImpl?: FetchLike;
 }
 
 export interface StudioRouteContext {
@@ -228,9 +232,11 @@ export const RAW_MIME_MAP: Record<string, string> = {
   ".gif": "image/gif",
   ".svg": "image/svg+xml",
   ".mp4": "video/mp4",
+  ".mov": "video/quicktime",
   ".webm": "video/webm",
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
+  ".m4a": "audio/mp4",
   ".ogg": "audio/ogg",
   ".srt": "text/plain; charset=utf-8",
   ".txt": "text/plain; charset=utf-8",

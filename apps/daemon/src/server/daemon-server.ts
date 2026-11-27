@@ -75,6 +75,7 @@ export async function createDaemonServer(
     studioPaths,
     resolvedWorkspaceRoot,
     db,
+    eventRetention,
     structuredLogger,
     recoveryReport,
     queue,
@@ -159,6 +160,8 @@ export async function createDaemonServer(
     routineFlowsEngine,
     routineToolsDeps,
     memoryReview,
+    cacheExpiryCompaction,
+    metaFirstCommentService,
     phase14Services,
     studioMcpBridge,
   } = rt;
@@ -313,6 +316,8 @@ export async function createDaemonServer(
         themePaletteFiles,
         agentTemplatePublisher,
         resourceMonitor,
+        metaFirstCommentService,
+        fetchImpl: options.fetchImpl,
       };
 
       if (
@@ -458,6 +463,7 @@ export async function createDaemonServer(
     await routineExecutionService.skipMissed();
     routineTimer.arm();
     wakeupService.start();
+    metaFirstCommentService.start();
     await routineFlowsEngine.sweep();
     whatsappArchiveService.startPeriodicCleanup();
     workerTimer = setInterval(() => {
@@ -631,9 +637,12 @@ export async function createDaemonServer(
       }
       cron.stop();
       routineTimer.dispose();
+      eventRetention.dispose();
       wakeupService.dispose();
       backgroundJobService.dispose();
       memoryReview.dispose();
+      cacheExpiryCompaction.dispose();
+      metaFirstCommentService.dispose();
       uiBlockRegistry.dispose();
       screenCapture.dispose();
       telegramBot.stopPolling();

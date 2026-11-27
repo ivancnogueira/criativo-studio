@@ -19,7 +19,11 @@ import {
   type ManagedRuntimeFolder,
 } from "./provider-runtime-resolver.ts";
 import { type ProviderConnectionDeps, PROVIDER_CATALOG, API_MODELS_CACHE_TTL_MS, apiKeyModelsCache, fetchApiModelsForProvider } from "./provider-catalog-helpers.ts";
-import { detectOllamaModels, selectPoolAccount } from "./provider-local-detection.ts";
+import {
+  accountTurnCoordinator,
+  detectOllamaModels,
+  selectPoolAccount,
+} from "./provider-local-detection.ts";
 
 export async function getProvidersStatusOp(deps: ProviderConnectionDeps, forceProbe = false): Promise<ProvedorStatusInfo[]> {
   if (forceProbe) {
@@ -89,7 +93,10 @@ export async function getProvidersStatusOp(deps: ProviderConnectionDeps, forcePr
 
       const hasValidAccount = contas.some((c) => c.estado === "conectado" || c.token_valido);
       if (pool && contas.length > 0 && pool.habilitado) {
-        const picked = selectPoolAccount(contas, pool, pool.conta_em_uso);
+        const picked = selectPoolAccount(contas, pool, pool.conta_em_uso, {
+          activeTurnsByAccount: accountTurnCoordinator.getActiveTurnsMap(meta.provedor),
+          drainingAccountIds: accountTurnCoordinator.getDrainingAccountIds(meta.provedor),
+        });
         if (picked) {
           pool = { ...pool, conta_em_uso: picked.id };
         }
@@ -285,13 +292,20 @@ export async function pickPoolAccountOp(deps: ProviderConnectionDeps, provedor: 
   if (!info || !info.contas || info.contas.length === 0) {
     return null;
   }
-  return selectPoolAccount(info.contas, info.pool, preferredAccountId);
+  return selectPoolAccount(info.contas, info.pool, preferredAccountId, {
+    activeTurnsByAccount: accountTurnCoordinator.getActiveTurnsMap(provedor),
+    drainingAccountIds: accountTurnCoordinator.getDrainingAccountIds(provedor),
+  });
 }
 
 export function selectPoolAccountOp(deps: ProviderConnectionDeps, contas: ContaProvedorInfo[],
     pool: PoolContasConfig | null | undefined,
     preferredAccountId?: string | null,): ContaProvedorInfo | null {
-  return selectPoolAccount(contas, pool, preferredAccountId);
+  const inferredProvider = contas[0]?.provedor ?? "gemini";
+  return selectPoolAccount(contas, pool, preferredAccountId, {
+    activeTurnsByAccount: accountTurnCoordinator.getActiveTurnsMap(inferredProvider),
+    drainingAccountIds: accountTurnCoordinator.getDrainingAccountIds(inferredProvider),
+  });
 }
 
 export async function connectProviderViaBrowserOp(deps: ProviderConnectionDeps, provedor: "gemini" | "claude" | "openai",

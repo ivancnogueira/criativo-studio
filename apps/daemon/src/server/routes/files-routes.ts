@@ -84,6 +84,11 @@ import {
   type Phase14ToolServices,
 } from "../studio-tools-bridge.ts";
 import { readRawBody as defaultReadRawBody } from "../daemon-http-utils.ts";
+import {
+  resolveSafeAllowedFilePath,
+  tryHandleFilesPreviewRoutes,
+  UnsafeFilePathError,
+} from "./files-preview-routes.ts";
 import type { StudioRouteContext } from "./route-helpers.ts";
 import { inferTipoUso, RAW_MIME_MAP, sanitizeFileName } from "./route-helpers.ts";
 
@@ -111,6 +116,9 @@ function sendUploadTooLarge(
 }
 
 export async function tryHandleFilesRoutes(ctx: StudioRouteContext): Promise<boolean> {
+  if (await tryHandleFilesPreviewRoutes(ctx)) {
+    return true;
+  }
   const { req, res, path, method, url, deps, db, wsHub, workspaceRoot } = ctx;
   const { sendJson, readJsonBody, providerConnection } = deps;
   const readRawBody = deps.readRawBody ?? defaultReadRawBody;
@@ -404,25 +412,12 @@ export async function tryHandleFilesRoutes(ctx: StudioRouteContext): Promise<boo
     const requestedRel = path.startsWith("/api/arquivos/raw/")
       ? decodeURIComponent(path.slice("/api/arquivos/raw/".length))
       : (url.searchParams.get("path") ?? "");
-    if (!requestedRel || requestedRel.includes("..") || requestedRel.startsWith("/") || requestedRel.startsWith("\\")) {
-      sendJson(res, 403, { erro: "Caminho não permitido." });
-      return true;
-    }
-
-    const allowedRoots = [
-      resolve(workspaceRoot, "recursos"),
-      resolve(workspaceRoot, "conteudos"),
-      resolve(workspaceRoot, "saidas"),
-      resolve(workspaceRoot, "previas"),
-    ];
-    const resolvedTarget = resolve(workspaceRoot, requestedRel);
-    const isAllowed = allowedRoots.some((root) => {
-      const rel = relative(root, resolvedTarget);
-      return rel === "" || (!rel.startsWith("..") && !rel.includes(`..${sep}`));
-    });
-
-    if (!isAllowed) {
-      sendJson(res, 403, { erro: "Acesso negado fora dos diretórios de mídia permitidos." });
+    let resolvedTarget: string;
+    try {
+      resolvedTarget = resolveSafeAllowedFilePath(workspaceRoot, requestedRel);
+    } catch (err) {
+      const status = err instanceof UnsafeFilePathError ? err.statusCode : 403;
+      sendJson(res, status, { erro: err instanceof Error ? err.message : "Caminho não permitido." });
       return true;
     }
 

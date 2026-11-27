@@ -1,39 +1,26 @@
-import { randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, extname, join, relative, resolve, sep } from "node:path";
+import { existsSync } from "node:fs";
+import { relative, resolve, sep } from "node:path";
 import {
-  isAnnotationNodeKind,
-  normalizeNodeKind,
-  normalizeWorkflowGraph,
-  workflowGraphProblemAt,
-  workflowLoopEdges,
   type TarefaRegistro,
   type WorkflowAresta,
   type WorkflowBranch,
+  type WorkflowDeterministicRule,
   type WorkflowNo,
-  type WorkflowOutputTarget,
   type WorkflowPortType,
-  type WorkflowRunDetail,
-  type WorkflowRunOrigin,
-  type WorkflowRunRecord,
   type WorkflowStepRecord,
 } from "@criativo/contracts";
-import type { AgentRunner } from "../../engine/runner/agent-runner.ts";
-import { generateImageTool } from "../../engine/tools/generate-image.ts";
-import { executeRemotionRender } from "../../engine/tools/remotion-bridge.ts";
+import { conditionAnswer, conditionPrompt, type WorkflowBuiltInputs } from "../workflow-walk.ts";
+import { type WorkflowEngineRuntimeContext } from "./workflow-engine-types.ts";
+import { executeBatchMediaNode } from "./workflow-batch-media-exec.ts";
 import {
-  buildNodeInputs,
-  conditionAnswer,
-  conditionPrompt,
-  currentAnswers,
-  hasUpstreamApprovedStep,
-  MAX_LOOP_PASSES,
-  nextActions,
-  runScope,
-  soloInputs,
-  type WorkflowBuiltInputs,
-} from "../workflow-walk.ts";
-import { safeJsonParse, type WorkflowEngineRuntimeContext } from "./workflow-engine-types.ts";
+  buildAnswerFieldsInstruction,
+  collectUpstreamStructuredVariables,
+  extractWebhookAnswerFields,
+  interpolateWorkflowVariables,
+  parseAndValidateAnswerFields,
+  resolveNodeAnswerFields,
+} from "../workflow-structured-fields.ts";
+import { evaluateDeterministicCondition } from "../workflow-deterministic-condition.ts";
 
 export async function executeWorkflowCoreOrAiNode(
   ctx: WorkflowEngineRuntimeContext,
@@ -42,19 +29,32 @@ export async function executeWorkflowCoreOrAiNode(
     step: WorkflowStepRecord;
     node: WorkflowNo;
     cfg: Record<string, unknown>;
+    graph?: { nos: WorkflowNo[]; arestas: WorkflowAresta[] };
     inputs: WorkflowBuiltInputs;
+    stepsByNode?: Map<string, WorkflowStepRecord>;
     runPayload: string | null;
     signal?: AbortSignal;
   }
 ): Promise<boolean> {
   const { kind, step, node, cfg, inputs, runPayload, signal } = params;
+  const upstreamVars = collectUpstreamStructuredVariables(
+    node,
+    params.graph?.arestas ?? [],
+    params.stepsByNode ?? new Map(),
+    inputs.inputText
+  );
+
       if (kind === "gatilho") {
+        const answerFields = resolveNodeAnswerFields(node);
+        const structuredOutput =
+          answerFields.length > 0 ? extractWebhookAnswerFields(runPayload, answerFields) : null;
         const out = runPayload ?? inputs.inputText ?? "Disparado manualmente";
         const updated = ctx.deps.store.updateStep(step.step_id, {
           status: "done",
           output: out,
           outputTipo: "text",
           artefatos: [],
+          ...(structuredOutput ? { structuredOutput } : {}),
         });
         if (updated) ctx.emitStepUpdated(updated);
       } else if (kind === "prompt") {
@@ -62,8 +62,8 @@ export async function executeWorkflowCoreOrAiNode(
           node.prompt ??
           (typeof cfg.prompt === "string" ? cfg.prompt : undefined) ??
           "";
-        let resolvedText = template.includes("{{input}}")
-          ? template.replaceAll("{{input}}", inputs.inputText)
+        let resolvedText = template.includes("{{")
+          ? interpolateWorkflowVariables(template, upstreamVars, inputs.inputText)
           : template && inputs.inputText
             ? `${template}\n\n${inputs.inputText}`
             : template || inputs.inputText;
@@ -112,14 +112,20 @@ export async function executeWorkflowCoreOrAiNode(
         });
         if (updated) ctx.emitStepUpdated(updated);
       } else if (kind === "llm") {
-        const basePrompt =
+        const rawBasePrompt =
           node.prompt ??
           (typeof cfg.prompt === "string" ? cfg.prompt : undefined) ??
           "";
-        const fullPrompt =
-          basePrompt && inputs.inputText
+        const basePrompt = interpolateWorkflowVariables(rawBasePrompt, upstreamVars, inputs.inputText);
+        const answerFields = resolveNodeAnswerFields(node);
+        const structuredInstruction = buildAnswerFieldsInstruction(answerFields);
+        const joinedPrompt =
+          basePrompt && inputs.inputText && !rawBasePrompt.includes("{{")
             ? `${basePrompt}\n\n${inputs.inputText}`
             : basePrompt || inputs.inputText || "Responda de forma objetiva.";
+        const fullPrompt = structuredInstruction
+          ? `${joinedPrompt}\n\n${structuredInstruction}`
+          : joinedPrompt;
         const sysPrompt =
           node.systemPrompt ??
           (typeof cfg.systemPrompt === "string" ? cfg.systemPrompt : undefined);
@@ -148,11 +154,14 @@ export async function executeWorkflowCoreOrAiNode(
           signal
         );
 
+        const parsedFields =
+          answerFields.length > 0 ? parseAndValidateAnswerFields(result.text, answerFields) : null;
         const updated = ctx.deps.store.updateStep(step.step_id, {
           status: "done",
-          output: result.text,
+          output: parsedFields ? parsedFields.formattedJson : result.text,
           outputTipo: "text",
           artefatos: [],
+          ...(parsedFields ? { structuredOutput: parsedFields.data } : {}),
         });
         if (updated) ctx.emitStepUpdated(updated);
       } else if (kind === "agente") {
@@ -161,14 +170,20 @@ export async function executeWorkflowCoreOrAiNode(
           (typeof cfg.agenteId === "string" ? cfg.agenteId : undefined) ??
           "estrategista";
 
-        const promptBase =
+        const rawPromptBase =
           node.prompt ??
           (typeof cfg.prompt === "string" ? cfg.prompt : undefined) ??
           "";
-        const combinedPrompt =
-          promptBase && inputs.inputText
+        const promptBase = interpolateWorkflowVariables(rawPromptBase, upstreamVars, inputs.inputText);
+        const answerFields = resolveNodeAnswerFields(node);
+        const structuredInstruction = buildAnswerFieldsInstruction(answerFields);
+        const joinedAgentPrompt =
+          promptBase && inputs.inputText && !rawPromptBase.includes("{{")
             ? `${promptBase}\n\n[Entrada do workflow]\n${inputs.inputText}`
             : promptBase || inputs.inputText || `Executar etapa '${node.titulo}'`;
+        const combinedPrompt = structuredInstruction
+          ? `${joinedAgentPrompt}\n\n${structuredInstruction}`
+          : joinedAgentPrompt;
 
         const mediaPaths = inputs.mediaInputs
           .map((m) => {
@@ -212,6 +227,10 @@ export async function executeWorkflowCoreOrAiNode(
           throw new Error(runnerRes.failureReason);
         }
 
+        const parsedFields =
+          answerFields.length > 0
+            ? parseAndValidateAnswerFields(runnerRes.finalText, answerFields)
+            : null;
         const relArtifacts = runnerRes.generatedArtifacts.map((p) => {
           try {
             const abs = resolve(ctx.deps.workspaceRoot, p);
@@ -226,191 +245,61 @@ export async function executeWorkflowCoreOrAiNode(
 
         const updated = ctx.deps.store.updateStep(step.step_id, {
           status: "done",
-          output: runnerRes.finalText,
+          output: parsedFields ? parsedFields.formattedJson : runnerRes.finalText,
           outputTipo: relArtifacts.length > 0 ? "file" : "text",
           artefatos: relArtifacts,
+          ...(parsedFields ? { structuredOutput: parsedFields.data } : {}),
         });
         if (updated) ctx.emitStepUpdated(updated);
-      } else if (kind === "gerar_imagem") {
-        const promptBase =
+      } else if (kind === "gerar_imagem" || kind === "render_video") {
+        const rawPromptBase =
           node.prompt ??
           (typeof cfg.prompt === "string" ? cfg.prompt : undefined) ??
           "";
+        const promptBase = interpolateWorkflowVariables(rawPromptBase, upstreamVars, inputs.inputText);
+        const defaultFallback =
+          kind === "gerar_imagem"
+            ? "Arte visual profissional em estética limpa"
+            : "Vídeo Reels profissional";
         const promptFinal =
-          promptBase && inputs.inputText
+          promptBase && inputs.inputText && !rawPromptBase.includes("{{")
             ? `${promptBase}\n\n${inputs.inputText}`
-            : promptBase || inputs.inputText || "Arte visual profissional em estética limpa";
-        const aspect =
-          cfg.aspectRatio === "9:16" || cfg.aspectRatio === "1:1" || cfg.aspectRatio === "3:4"
-            ? cfg.aspectRatio
-            : "3:4";
+            : promptBase || inputs.inputText || defaultFallback;
 
-        const safeRefs = inputs.mediaInputs
-          .filter((m) => m.portType === "image")
-          .map((m) => {
-            try {
-              return ctx.resolveWithinRoot(m.path);
-            } catch {
-              return null;
-            }
-          })
-          .filter((p): p is string => Boolean(p && existsSync(p)));
-
-        const result = await ctx.mediaLock.withLock(async () => {
-          const arquivoId = `arte-wf-${randomUUID().slice(0, 8)}`;
-          const relPath = `saidas/artes/${arquivoId}.png`;
-          const outputPath = resolve(ctx.deps.workspaceRoot, relPath);
-          mkdirSync(resolve(outputPath, ".."), { recursive: true });
-
-          const providerId =
-            node.mediaProviderId ??
-            (typeof cfg.mediaProviderId === "string" ? cfg.mediaProviderId : undefined);
-          const modelId =
-            node.mediaModelId ??
-            (typeof cfg.mediaModelId === "string" ? cfg.mediaModelId : undefined);
-
-          const hasImgApiKey =
-            Boolean(ctx.deps.vault.getSecret("gemini_api_key")) ||
-            Boolean(ctx.deps.vault.getSecret("google_api_key")) ||
-            Boolean(ctx.deps.vault.getSecret("openai_api_key")) ||
-            Boolean(ctx.deps.vault.getSecret("fal_api_key"));
-
-          if (ctx.deps.mediaCatalog && (providerId || hasImgApiKey)) {
-            await ctx.deps.mediaCatalog.executeImageStep({
-              providerId,
-              modelId,
-              generateParams: {
-                aspect_ratio: aspect,
-                prompt: promptFinal,
-                image_paths: safeRefs,
-                output_path: outputPath,
-              },
-            });
-          } else if (hasImgApiKey) {
-            await generateImageTool(
-              {
-                aspect_ratio: aspect,
-                prompt: promptFinal,
-                image_paths: safeRefs,
-                output_path: outputPath,
-              },
-              { vault: ctx.deps.vault, fetchImpl: ctx.deps.fetchImpl }
-            );
-          } else {
-            const agRes = await ctx.deps.providerConnection
-              .getAntigravityService()
-              .executeCodeAssistGenerate({
-                model: modelId || "gemini-3.1-flash-image",
-                messages: [{ role: "user", text: promptFinal }],
-                generateImage: true,
-                imagePaths: safeRefs,
-              });
-            if (!agRes.images || agRes.images.length === 0) {
-              throw new Error("Nenhuma imagem retornada pelo provedor de geração.");
-            }
-            writeFileSync(outputPath, Buffer.from(agRes.images[0].dataBase64, "base64"));
-          }
-
-          const sizeBytes = existsSync(outputPath) ? readFileSync(outputPath).length : 0;
-          ctx.deps.db.connection
-            .prepare(
-              `INSERT INTO projecao_arquivos (arquivo_id, nome_original, caminho_relativo, mime_type, tamanho_bytes, tipo_uso, agente_id, tarefa_id, criado_em)
-               VALUES (?, ?, ?, 'image/png', ?, 'gerado', NULL, NULL, ?);`
-            )
-            .run(arquivoId, `${arquivoId}.png`, relPath, sizeBytes, new Date().toISOString());
-
-          return { arquivoId, relPath };
-        }, signal);
-
-        const updated = ctx.deps.store.updateStep(step.step_id, {
-          status: "done",
-          output: result.arquivoId,
-          outputTipo: "image",
-          artefatos: [result.relPath],
+        await executeBatchMediaNode(ctx, {
+          kind,
+          step,
+          node,
+          cfg,
+          inputs,
+          promptFinal,
+          signal,
         });
-        if (updated) ctx.emitStepUpdated(updated);
-      } else if (kind === "render_video") {
-        const audioInput = inputs.mediaInputs.find(
-          (m) => m.portType === "file" && /\.(mp3|wav|m4a|ogg)$/i.test(m.path)
-        );
-        const composicao =
-          cfg.composicao === "ReelsTalkingHead" ? "ReelsTalkingHead" : "ReelsFaceless";
-
-        const result = await ctx.mediaLock.withLock(async () => {
-          const arquivoId = `video-wf-${randomUUID().slice(0, 8)}`;
-          const relPath = `saidas/videos/${arquivoId}.mp4`;
-          const outputPath = resolve(ctx.deps.workspaceRoot, relPath);
-          const audioAbs = audioInput
-            ? ctx.resolveWithinRoot(audioInput.path)
-            : typeof cfg.audioPath === "string"
-              ? ctx.resolveWithinRoot(cfg.audioPath)
-              : "";
-
-          const mediaProviderId =
-            node.mediaProviderId ??
-            (typeof cfg.mediaProviderId === "string" ? cfg.mediaProviderId : undefined);
-          const mediaModelId =
-            node.mediaModelId ??
-            (typeof cfg.mediaModelId === "string" ? cfg.mediaModelId : undefined);
-
-          if (ctx.deps.mediaCatalog) {
-            await ctx.deps.mediaCatalog.executeVideoStep({
-              providerId: mediaProviderId,
-              modelId: mediaModelId,
-              videoParams: {
-                prompt: inputs.inputText || node.prompt || "Vídeo Reels profissional",
-                output_path: outputPath,
-                image_paths: inputs.mediaInputs
-                  .filter((m) => m.portType === "image")
-                  .map((m) => m.path),
-              },
-              remotionArgs: {
-                composicao,
-                audio_path: audioAbs,
-                output_path: outputPath,
-                remotionProjectDir: ctx.deps.workspaceRoot,
-                props: {
-                  roteiroTexto: inputs.inputText,
-                  imagens: inputs.mediaInputs
-                    .filter((m) => m.portType === "image")
-                    .map((m) => m.path),
-                },
-              },
-            });
-          } else {
-            await executeRemotionRender({
-              composicao,
-              audio_path: audioAbs,
-              output_path: outputPath,
-              remotionProjectDir: ctx.deps.workspaceRoot,
-              props: {
-                roteiroTexto: inputs.inputText,
-                imagens: inputs.mediaInputs
-                  .filter((m) => m.portType === "image")
-                  .map((m) => m.path),
-              },
-            });
-          }
-
-          const sizeBytes = existsSync(outputPath) ? readFileSync(outputPath).length : 0;
-          ctx.deps.db.connection
-            .prepare(
-              `INSERT INTO projecao_arquivos (arquivo_id, nome_original, caminho_relativo, mime_type, tamanho_bytes, tipo_uso, agente_id, tarefa_id, criado_em)
-               VALUES (?, ?, ?, 'video/mp4', ?, 'video', NULL, NULL, ?);`
-            )
-            .run(arquivoId, `${arquivoId}.mp4`, relPath, sizeBytes, new Date().toISOString());
-
-          return { arquivoId, relPath };
-        }, signal);
-
-        const updated = ctx.deps.store.updateStep(step.step_id, {
-          status: "done",
-          output: result.arquivoId,
-          outputTipo: "file",
-          artefatos: [result.relPath],
-        });
-        if (updated) ctx.emitStepUpdated(updated);
       } else if (kind === "condition") {
+        const conditionMode =
+          node.conditionMode ??
+          (cfg.conditionMode === "deterministic" ? "deterministic" : "ai");
+        const deterministicRule =
+          node.deterministicRule ??
+          (cfg.deterministicRule as WorkflowDeterministicRule | undefined);
+
+        if (conditionMode === "deterministic" && deterministicRule) {
+          const branch = evaluateDeterministicCondition(
+            deterministicRule,
+            upstreamVars,
+            inputs.inputText
+          );
+          const updated = ctx.deps.store.updateStep(step.step_id, {
+            status: "done",
+            output: inputs.inputText,
+            outputTipo: "text",
+            artefatos: [],
+            branch,
+          });
+          if (updated) ctx.emitStepUpdated(updated);
+          return false;
+        }
+
         const rule =
           node.rule ??
           (typeof cfg.rule === "string" ? cfg.rule : undefined) ??

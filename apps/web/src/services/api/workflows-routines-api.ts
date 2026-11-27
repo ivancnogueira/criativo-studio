@@ -17,6 +17,7 @@ import type {
   WorkflowAresta,
   WorkflowDetail,
   WorkflowNo,
+  WorkflowPresenceMember,
   WorkflowRunDetail,
   WorkflowStepRecord,
   WorkflowSummary,
@@ -613,5 +614,41 @@ export const workflowsRoutinesApi = {
       throw new Error(json.erro ?? "Falha ao carregar conversa da rotina.");
     }
     return json.mensagens ?? [];
+  },
+
+  async listWorkflowPresence(workflowId: string): Promise<WorkflowPresenceMember[]> {
+    const res = await apiFetch(
+      `/api/workflows/presence?workflowId=${encodeURIComponent(workflowId)}`
+    );
+    const json = (await res.json()) as { members?: WorkflowPresenceMember[] };
+    return json.members ?? [];
+  },
+
+  async updateWorkflowPresence(
+    workflowId: string,
+    action: "join" | "leave" | "heartbeat" = "join",
+    opts?: {
+      memberId?: string;
+      displayName?: string;
+      selectedNodeId?: string | null;
+      cursorX?: number | null;
+      cursorY?: number | null;
+    }
+  ): Promise<WorkflowPresenceMember[]> {
+    const res = await apiFetch("/api/workflows/presence", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workflowId,
+        action,
+        ...(opts?.memberId !== undefined ? { memberId: opts.memberId } : {}),
+        ...(opts?.displayName !== undefined ? { displayName: opts.displayName } : {}),
+        ...(opts?.selectedNodeId !== undefined ? { selectedNodeId: opts.selectedNodeId } : {}),
+        ...(opts?.cursorX !== undefined ? { cursorX: opts.cursorX } : {}),
+        ...(opts?.cursorY !== undefined ? { cursorY: opts.cursorY } : {}),
+      }),
+    });
+    const json = (await res.json()) as { members?: WorkflowPresenceMember[] };
+    return json.members ?? [];
   },
 };

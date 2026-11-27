@@ -3,6 +3,9 @@ import type {
   AgenteRegistro,
   MediaProviderDescriptor,
   ProviderName,
+  WorkflowAnswerField,
+  WorkflowConditionMode,
+  WorkflowDeterministicRule,
   WorkflowOutputTarget,
 } from "@criativo/contracts";
 import { daemonApi } from "../../services/websocket-client";
@@ -16,6 +19,11 @@ import {
 } from "../../components/MascoteAvatar";
 import { ProviderLogo } from "../../components/ProviderLogo";
 import { WORKFLOW_PORT_META } from "./workflow-canvas-helpers";
+import { collectAvailableNodeTokens } from "./workflow-variable-catalog";
+import { WorkflowAnswerFieldsEditor } from "./WorkflowAnswerFieldsEditor";
+import { WorkflowBatchGallery } from "./WorkflowBatchGallery";
+import { WorkflowConditionEditor } from "./WorkflowConditionEditor";
+import { WorkflowTokenTextarea } from "./WorkflowTokenTextarea";
 import {
   CarbonMenuPicker,
   EFFORT_OPTIONS,
@@ -169,18 +177,36 @@ export function WorkflowNodeActionFields(ctx: WorkflowNodeActionFieldsProps) {
               </div>
             )}
           </div>
-          <textarea
+          <WorkflowTokenTextarea
+            nodeId={node.id}
+            allNodes={ctx.props.allNodes}
+            allEdges={ctx.props.allEdges}
             readOnly={readOnly}
             rows={2}
             value={node.prompt ?? (typeof cfg.prompt === "string" ? cfg.prompt : "")}
-            onChange={(e) =>
+            onChange={(nextPrompt) =>
               onPatchNode(node.id, {
-                prompt: e.target.value,
-                config: { ...cfg, prompt: e.target.value },
+                prompt: nextPrompt,
+                config: { ...cfg, prompt: nextPrompt },
               })
             }
-            placeholder="Briefing ou tarefa do especialista..."
-            className="w-full resize-none rounded-lg border border-white/[0.06] bg-[#242424] p-2 text-[14px] text-[#DCDCDC] placeholder:text-[#6A6A6A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
+            placeholder="Briefing do especialista (digite {{ para campos)..."
+          />
+          <WorkflowAnswerFieldsEditor
+            fields={
+              Array.isArray(node.answerFields)
+                ? node.answerFields
+                : Array.isArray(cfg.answerFields)
+                  ? (cfg.answerFields as WorkflowAnswerField[])
+                  : []
+            }
+            disabled={readOnly}
+            onChange={(nextFields) =>
+              onPatchNode(node.id, {
+                answerFields: nextFields,
+                config: { ...cfg, answerFields: nextFields },
+              })
+            }
           />
         </div>
       )}
@@ -206,62 +232,94 @@ export function WorkflowNodeActionFields(ctx: WorkflowNodeActionFieldsProps) {
               })
             }
           />
-          <textarea
+          <WorkflowTokenTextarea
+            nodeId={node.id}
+            allNodes={ctx.props.allNodes}
+            allEdges={ctx.props.allEdges}
             readOnly={readOnly}
             rows={2}
             value={node.prompt ?? (typeof cfg.prompt === "string" ? cfg.prompt : "")}
-            onChange={(e) =>
+            onChange={(nextPrompt) =>
               onPatchNode(node.id, {
-                prompt: e.target.value,
-                config: { ...cfg, prompt: e.target.value },
+                prompt: nextPrompt,
+                config: { ...cfg, prompt: nextPrompt },
               })
             }
             placeholder={
               kind === "gerar_imagem"
-                ? "Direção visual / composição para gerar imagem..."
+                ? "Direção visual / composição (use {{campo}})..."
                 : "Instrução / estilo do vídeo Reels MP4..."
             }
-            className="w-full resize-none rounded-lg border border-white/[0.06] bg-[#242424] p-2 text-[14px] text-[#DCDCDC] placeholder:text-[#6A6A6A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
           />
-          {nodeRunView?.artifacts[0] && (
-            <div className="overflow-hidden rounded-lg border border-white/[0.06] bg-[#101010] p-1">
-              {kind === "gerar_imagem" ? (
-                <img
-                  src={`/api/arquivos/raw?path=${encodeURIComponent(nodeRunView.artifacts[0])}`}
-                  alt="Arte gerada"
-                  className="max-h-28 w-full rounded object-cover"
-                />
-              ) : (
-                <p className="truncate font-mono text-[12px] text-[#31CF76]">
-                  {nodeRunView.artifacts[0]}
-                </p>
-              )}
-            </div>
-          )}
+          <WorkflowBatchGallery
+            kind={kind === "render_video" ? "render_video" : "gerar_imagem"}
+            stepId={nodeRunView?.stepId}
+            batchCount={
+              node.batchCount === 2 || node.batchCount === 3 || node.batchCount === 4
+                ? node.batchCount
+                : 1
+            }
+            selectedVariantIndex={node.selectedVariantIndex ?? 0}
+            variants={nodeRunView?.variants}
+            readOnly={readOnly}
+            onChangeBatchCount={(count) =>
+              onPatchNode(node.id, {
+                batchCount: count,
+                config: { ...cfg, batchCount: count },
+              })
+            }
+            onSelectPrimaryVariant={(slotIndex) =>
+              onPatchNode(node.id, {
+                selectedVariantIndex: slotIndex,
+                config: { ...cfg, selectedVariantIndex: slotIndex },
+              })
+            }
+            onVariantRetried={() => {
+              void ctx.props.onRefreshRunData?.();
+            }}
+          />
         </div>
       )}
 
       {kind === "condition" && (
         <div className="space-y-2" onPointerDown={(e) => e.stopPropagation()}>
-          <textarea
+          <WorkflowConditionEditor
+            mode={
+              node.conditionMode ??
+              (cfg.conditionMode === "deterministic" ? "deterministic" : "ai")
+            }
+            ruleText={node.rule ?? (typeof cfg.rule === "string" ? cfg.rule : "")}
+            deterministicRule={
+              node.deterministicRule ??
+              (cfg.deterministicRule as WorkflowDeterministicRule | undefined)
+            }
+            modelValue={node.model ?? ""}
+            modelOptions={modelOptions}
+            availableTokens={collectAvailableNodeTokens(
+              node.id,
+              ctx.props.allNodes ?? [],
+              ctx.props.allEdges ?? []
+            )}
             readOnly={readOnly}
-            rows={2}
-            value={node.rule ?? (typeof cfg.rule === "string" ? cfg.rule : "")}
-            onChange={(e) =>
+            onChangeMode={(nextMode: WorkflowConditionMode) =>
               onPatchNode(node.id, {
-                rule: e.target.value,
-                config: { ...cfg, rule: e.target.value },
+                conditionMode: nextMode,
+                config: { ...cfg, conditionMode: nextMode },
               })
             }
-            placeholder="Ex.: A legenda tem menos de 2200 caracteres e inclui CTA?"
-            className="w-full resize-none rounded-lg border border-white/[0.06] bg-[#242424] p-2 text-[14px] text-[#DCDCDC] placeholder:text-[#6A6A6A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
-          />
-          <CarbonMenuPicker
-            value={node.model ?? ""}
-            disabled={readOnly}
-            options={modelOptions}
-            ariaLabel="Selecionar modelo da condição"
-            onChange={(m) =>
+            onChangeRuleText={(nextRuleText) =>
+              onPatchNode(node.id, {
+                rule: nextRuleText,
+                config: { ...cfg, rule: nextRuleText },
+              })
+            }
+            onChangeDeterministicRule={(nextDetRule) =>
+              onPatchNode(node.id, {
+                deterministicRule: nextDetRule,
+                config: { ...cfg, deterministicRule: nextDetRule },
+              })
+            }
+            onChangeModel={(m) =>
               onPatchNode(node.id, { model: m || undefined, config: { ...cfg, model: m } })
             }
           />

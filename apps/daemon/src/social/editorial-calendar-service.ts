@@ -6,9 +6,13 @@ import type {
   EditorialPostsFilter,
   EditorialPostStatus,
   EditorialSlideItem,
+  MetaPostingIntelligencePeriod,
+  MetaPostingIntelligenceReport,
+  MetaTrialGraduationStrategy,
   UpdateEditorialPostInput,
 } from "@criativo/contracts";
 import type { CriativoDatabase } from "../database/client.ts";
+import { MetaPostingIntelligenceService } from "./meta-posting-intelligence-service.ts";
 
 interface EditorialPostRow {
   id: string;
@@ -22,11 +26,17 @@ interface EditorialPostRow {
   legenda: string;
   slides_json: string;
   meta_media_id: string | null;
+  trial_reel_enabled?: number | null;
+  trial_graduation_strategy?: string | null;
+  primeiro_comentario?: string | null;
+  primeiro_comentario_aprovado?: number | null;
+  primeiro_comentario_delay_seg?: number | null;
   criado_em: string;
   atualizado_em: string;
 }
 
 const FORMATOS_VALIDOS = new Set<EditorialPostFormato>(["feed_4_5", "carrossel", "reels", "story"]);
+const TRIAL_STRATEGIES_VALIDAS = new Set<MetaTrialGraduationStrategy>(["MANUAL", "SS_PERFORMANCE"]);
 const STATUS_VALIDOS = new Set<EditorialPostStatus>([
   "ideia",
   "rascunho",
@@ -68,6 +78,15 @@ function parseSlidesJson(raw: string): EditorialSlideItem[] {
   }
 }
 
+function normalizeTrialStrategy(value: unknown): MetaTrialGraduationStrategy {
+  return value === "MANUAL" ? "MANUAL" : "SS_PERFORMANCE";
+}
+
+function normalizeCommentDelay(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 30;
+  return Math.max(0, Math.min(3600, Math.round(value)));
+}
+
 function mapEditorialRow(row: EditorialPostRow): EditorialPostRecord {
   return {
     id: row.id,
@@ -81,6 +100,11 @@ function mapEditorialRow(row: EditorialPostRow): EditorialPostRecord {
     legenda: row.legenda ?? "",
     slides: parseSlidesJson(row.slides_json),
     meta_media_id: row.meta_media_id ?? null,
+    trial_reel_enabled: Number(row.trial_reel_enabled ?? 0) === 1,
+    trial_graduation_strategy: normalizeTrialStrategy(row.trial_graduation_strategy),
+    primeiro_comentario: row.primeiro_comentario ?? null,
+    primeiro_comentario_aprovado: Number(row.primeiro_comentario_aprovado ?? 0) === 1,
+    primeiro_comentario_delay_seg: normalizeCommentDelay(row.primeiro_comentario_delay_seg),
     criado_em: row.criado_em,
     atualizado_em: row.atualizado_em,
   };
@@ -160,6 +184,14 @@ export class EditorialCalendarService {
     const id = input.id?.trim() || `ed-${randomUUID().slice(0, 12)}`;
     const agora = new Date().toISOString();
     const slides = normalizeSlides(input.slides ?? []);
+    const trialReelEnabled = input.trial_reel_enabled === true ? 1 : 0;
+    const trialStrategy =
+      input.trial_graduation_strategy && TRIAL_STRATEGIES_VALIDAS.has(input.trial_graduation_strategy)
+        ? input.trial_graduation_strategy
+        : "SS_PERFORMANCE";
+    const primeiroComentario = input.primeiro_comentario?.trim() || null;
+    const primeiroComentarioAprovado = input.primeiro_comentario_aprovado === true ? 1 : 0;
+    const primeiroComentarioDelaySeg = normalizeCommentDelay(input.primeiro_comentario_delay_seg);
 
     this.db.connection
       .prepare(
@@ -167,8 +199,10 @@ export class EditorialCalendarService {
         INSERT INTO calendario_editorial_posts (
           id, titulo, formato, status, pilar, data_agendada,
           agente_id, tarefa_id, legenda, slides_json, meta_media_id,
+          trial_reel_enabled, trial_graduation_strategy,
+          primeiro_comentario, primeiro_comentario_aprovado, primeiro_comentario_delay_seg,
           criado_em, atualizado_em
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
       `
       )
       .run(
@@ -183,6 +217,11 @@ export class EditorialCalendarService {
         String(input.legenda ?? ""),
         JSON.stringify(slides),
         input.meta_media_id?.trim() || null,
+        trialReelEnabled,
+        trialStrategy,
+        primeiroComentario,
+        primeiroComentarioAprovado,
+        primeiroComentarioDelaySeg,
         agora,
         agora
       );
@@ -225,6 +264,27 @@ export class EditorialCalendarService {
       patch.slides !== undefined ? normalizeSlides(patch.slides) : existing.slides;
     const nextMetaId =
       patch.meta_media_id !== undefined ? (patch.meta_media_id?.trim() || null) : existing.meta_media_id;
+    const nextTrialEnabled =
+      patch.trial_reel_enabled !== undefined
+        ? patch.trial_reel_enabled === true
+        : Boolean(existing.trial_reel_enabled);
+    const nextTrialStrategy =
+      patch.trial_graduation_strategy !== undefined &&
+      TRIAL_STRATEGIES_VALIDAS.has(patch.trial_graduation_strategy)
+        ? patch.trial_graduation_strategy
+        : normalizeTrialStrategy(existing.trial_graduation_strategy);
+    const nextPrimeiroComentario =
+      patch.primeiro_comentario !== undefined
+        ? patch.primeiro_comentario?.trim() || null
+        : (existing.primeiro_comentario ?? null);
+    const nextPrimeiroComentarioAprovado =
+      patch.primeiro_comentario_aprovado !== undefined
+        ? patch.primeiro_comentario_aprovado === true
+        : Boolean(existing.primeiro_comentario_aprovado);
+    const nextPrimeiroComentarioDelaySeg =
+      patch.primeiro_comentario_delay_seg !== undefined
+        ? normalizeCommentDelay(patch.primeiro_comentario_delay_seg)
+        : normalizeCommentDelay(existing.primeiro_comentario_delay_seg);
     const agora = new Date().toISOString();
 
     this.db.connection
@@ -233,7 +293,9 @@ export class EditorialCalendarService {
         UPDATE calendario_editorial_posts
         SET titulo = ?, formato = ?, status = ?, pilar = ?, data_agendada = ?,
             agente_id = ?, tarefa_id = ?, legenda = ?, slides_json = ?,
-            meta_media_id = ?, atualizado_em = ?
+            meta_media_id = ?, trial_reel_enabled = ?, trial_graduation_strategy = ?,
+            primeiro_comentario = ?, primeiro_comentario_aprovado = ?, primeiro_comentario_delay_seg = ?,
+            atualizado_em = ?
         WHERE id = ?;
       `
       )
@@ -248,6 +310,11 @@ export class EditorialCalendarService {
         nextLegenda,
         JSON.stringify(nextSlides),
         nextMetaId,
+        nextTrialEnabled ? 1 : 0,
+        nextTrialStrategy,
+        nextPrimeiroComentario,
+        nextPrimeiroComentarioAprovado ? 1 : 0,
+        nextPrimeiroComentarioDelaySeg,
         agora,
         id
       );
@@ -271,5 +338,15 @@ export class EditorialCalendarService {
       status: "publicado",
       meta_media_id: metaMediaId,
     });
+  }
+
+  public getPostingIntelligence(options?: {
+    periodo?: MetaPostingIntelligencePeriod;
+    formato?: "carrossel" | "reels" | "imagem" | "story";
+    contaId?: string;
+    timezone?: string;
+    referenceNow?: Date;
+  }): MetaPostingIntelligenceReport {
+    return new MetaPostingIntelligenceService(this.db).analyze(options);
   }
 }

@@ -7,6 +7,7 @@
  * - Pausa automaticamente enquanto houver ferramenta MCP ou `tool_call` ACP em andamento.
  * - Compensa hibernação/suspensão do sistema operacional para evitar falso timeout.
  */
+import { sanitizeAcpRawOutputPreview } from "./acp-stream-framing.ts";
 
 export const DEFAULT_ACP_STALL_MS = 10 * 60_000;
 export const DEFAULT_CLI_TURN_STALL_MS = 15 * 60_000;
@@ -299,15 +300,16 @@ export function createAcpStreamPresentation() {
  * moveu um comando ou subagente para segundo plano internamente.
  */
 export function detectAcpBackgroundTaskOutput(rawOutput: unknown): boolean {
-  if (rawOutput == null) return false;
+  const preview = sanitizeAcpRawOutputPreview(rawOutput);
+  if (preview == null) return false;
   let serialized = "";
-  if (typeof rawOutput === "string") {
-    serialized = rawOutput;
+  if (typeof preview === "string") {
+    serialized = preview;
   } else {
     try {
-      serialized = JSON.stringify(rawOutput);
+      serialized = JSON.stringify(preview);
     } catch {
-      serialized = String(rawOutput);
+      serialized = String(preview);
     }
   }
   if (!serialized) return false;

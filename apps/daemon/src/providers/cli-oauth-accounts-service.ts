@@ -5,8 +5,14 @@ import type {
   GrupoCotaConta,
   ModeloProvedorInfo,
   PoolContasConfig,
+  PoolEstrategiaContas,
   ProviderName,
 } from "@criativo/contracts";
+import {
+  accountTurnCoordinator,
+  executeSafeAccountRemoval,
+  type SafeAccountRemovalResult,
+} from "./provider-account-pool.ts";
 import type { CriativoDatabase } from "../database/client.ts";
 import {
   decodeJwtPayload,
@@ -110,7 +116,12 @@ export class CliOAuthAccountsService {
     const accounts = this.listAccounts(provedor);
     if (accounts.length === 0) return null;
 
-    let override: { habilitado?: boolean; contas_excluidas?: string[]; conta_em_uso?: string | null } = {};
+    let override: {
+      habilitado?: boolean;
+      contas_excluidas?: string[];
+      conta_em_uso?: string | null;
+      estrategia?: PoolEstrategiaContas;
+    } = {};
     try {
       const row = this.db.connection
         .prepare(`SELECT valor_json FROM projecao_studio_config WHERE chave = ?;`)
@@ -124,9 +135,13 @@ export class CliOAuthAccountsService {
 
     const excluidas = override.contas_excluidas ?? [];
     const habilitado = override.habilitado !== undefined ? override.habilitado : accounts.length > 1;
+    const estrategia: PoolEstrategiaContas =
+      override.estrategia === "spread" ? "spread" : "fill_first";
+    const activeAccounts = accounts.filter((a) => !a.removendo);
     const elegivel =
-      accounts.find((a) => override.conta_em_uso && a.id === override.conta_em_uso) ??
-      accounts.find((a) => !excluidas.includes(a.id)) ??
+      activeAccounts.find((a) => override.conta_em_uso && a.id === override.conta_em_uso) ??
+      activeAccounts.find((a) => !excluidas.includes(a.id)) ??
+      activeAccounts[0] ??
       accounts[0] ??
       null;
 
@@ -134,18 +149,25 @@ export class CliOAuthAccountsService {
       habilitado,
       contas_excluidas: excluidas,
       conta_em_uso: elegivel?.id ?? null,
+      estrategia,
     };
   }
 
   public setPoolSettings(
     provedor: "claude" | "openai",
-    patch: { habilitado?: boolean; contas_excluidas?: string[]; conta_em_uso?: string | null }
+    patch: {
+      habilitado?: boolean;
+      contas_excluidas?: string[];
+      conta_em_uso?: string | null;
+      estrategia?: PoolEstrategiaContas;
+    }
   ): void {
     const current = this.getPoolConfig(provedor);
     const next = {
       habilitado: patch.habilitado ?? current?.habilitado ?? true,
       contas_excluidas: patch.contas_excluidas ?? current?.contas_excluidas ?? [],
       conta_em_uso: patch.conta_em_uso !== undefined ? patch.conta_em_uso : current?.conta_em_uso ?? null,
+      estrategia: patch.estrategia ?? current?.estrategia ?? "fill_first",
     };
     this.db.connection
       .prepare(
@@ -215,6 +237,8 @@ export class CliOAuthAccountsService {
         token_valido: true,
         grupos_cota: [],
         origem: "criativo",
+        removendo: accountTurnCoordinator.isDraining(provedor, rec.id),
+        turnos_ativos: accountTurnCoordinator.getActiveTurns(provedor, rec.id),
       });
     }
 
@@ -320,6 +344,26 @@ export class CliOAuthAccountsService {
     this.invalidateModelCache(provedor);
     this.invalidateQuotaCache(provedor);
     return true;
+  }
+
+  public requestSafeRemoveAccount(
+    provedor: "claude" | "openai",
+    contaId: string,
+    onFinalized?: () => void,
+    timeoutMs?: number,
+  ): SafeAccountRemovalResult {
+    return executeSafeAccountRemoval({
+      provedor,
+      accountId: contaId,
+      accounts: this.listAccounts(provedor),
+      pool: this.getPoolConfig(provedor),
+      updatePoolAccountInUse: (nextId) => this.setPoolSettings(provedor, { conta_em_uso: nextId }),
+      performPhysicalRemove: () => {
+        this.removeAccount(provedor, contaId);
+      },
+      onFinalized,
+      timeoutMs,
+    });
   }
 
 

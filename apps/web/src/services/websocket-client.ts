@@ -31,11 +31,13 @@ import { socialStudioApi } from "./api/social-studio-api";
 import { threadsQueueUiApi } from "./api/threads-queue-api";
 import { whatsappApi } from "./api/whatsapp-api";
 import { workflowsRoutinesApi } from "./api/workflows-routines-api";
+import { workflowsProApi } from "./api/workflows-pro-api";
 
 export const daemonApi = {
   ...agentsChatApi,
   ...threadsQueueUiApi,
   ...workflowsRoutinesApi,
+  ...workflowsProApi,
   ...providersMcpApi,
   ...marketplaceApi,
   ...filesTablesApi,

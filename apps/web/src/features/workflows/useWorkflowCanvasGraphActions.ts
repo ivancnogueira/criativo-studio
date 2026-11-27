@@ -19,10 +19,11 @@ import {
 import {
   canvasSnapshotsEqual,
   cloneCanvasSnapshot,
-  computeWorkflowAutoLayout,
   type CanvasHistorySnapshot,
   type WorkflowsCanvasPageProps,
 } from "./workflow-canvas-types";
+import { resolveFirstConnectedModel } from "./workflow-model-picker";
+import { tidyWorkflowLayout } from "./workflow-tidy-layout";
 
 export interface UseWorkflowCanvasGraphActionsParams {
   props: WorkflowsCanvasPageProps;
@@ -213,13 +214,28 @@ export function useWorkflowCanvasGraphActions({
         ? Math.max(...displayNos.map((n) => n.x)) + 360
         : 220;
     const y = displayNos.length > 0 ? displayNos[0].y : 180;
+    const autoViable =
+      (tipo === "llm" || tipo === "condition") && !extra?.model
+        ? resolveFirstConnectedModel(props.provedores ?? [])
+        : null;
     const rawNode: WorkflowNo = {
       id: `no_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
       tipo,
       titulo: extra?.titulo ?? defaultTitleForNodeType(tipo),
       x,
       y,
-      config: extra?.config ?? {},
+      ...(autoViable
+        ? {
+            model: autoViable.model,
+            provider: autoViable.provider,
+          }
+        : {}),
+      config: {
+        ...(autoViable
+          ? { model: autoViable.model, provider: autoViable.provider }
+          : {}),
+        ...(extra?.config ?? {}),
+      },
       ...extra,
     };
     const newNode = normalizeWorkflowNode(rawNode);
@@ -526,15 +542,18 @@ export function useWorkflowCanvasGraphActions({
     if (isReadOnly || localNosRef.current.length === 0) return;
     pushUndoSnapshot();
     patchCoalesceRef.current = null;
-    const arranged = computeWorkflowAutoLayout(
+    const arranged = tidyWorkflowLayout(
       localNosRef.current,
       localArestasRef.current
     );
     localNosRef.current = arranged;
     setLocalNos(arranged);
     scheduleDebouncedSave(arranged, localArestasRef.current);
-    setStatusFeedback("Nós organizados automaticamente.");
-  }, [isReadOnly, pushUndoSnapshot, scheduleDebouncedSave]);
+    setStatusFeedback("Nós organizados (Tidy up).");
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => fitView());
+    }
+  }, [fitView, isReadOnly, pushUndoSnapshot, scheduleDebouncedSave]);
 
   const handleSaveNow = useCallback(async () => {
     if (isReadOnly || !currentWf) return;

@@ -63,9 +63,12 @@ params: {
         note?: string;
       }
   > {
-    const tab = ctx.sessionManager.getTab(params.tabId);
+    let tab = ctx.sessionManager.getTab(params.tabId);
     if (!tab) {
       throw new Error(`Aba '${params.tabId}' não encontrada para iniciar BrowserTakeover.`);
+    }
+    if (tab.unloaded) {
+      tab = await ctx.ensureRealTabLoaded(tab.tabId);
     }
 
     tab.userControl = true;
@@ -206,9 +209,16 @@ export async function dispatchBrowserTakeoverInput(
     event: HumanCdpInputEvent,
     options?: { autoAssume?: boolean },
   ): Promise<{ ok: boolean }> {
-    const tab = ctx.sessionManager.getTab(tabId);
+    let tab = ctx.sessionManager.getTab(tabId);
     if (!tab) {
       throw new Error(`Aba '${tabId}' não encontrada.`);
+    }
+    if (tab.unloaded && !tab.userControl) {
+      tab = await ctx.ensureRealTabLoaded(tab.tabId);
+    } else if (tab.unloaded && tab.userControl) {
+      tab.userControl = false;
+      tab = await ctx.ensureRealTabLoaded(tab.tabId);
+      tab.userControl = true;
     }
     if (!tab.userControl) {
       if (options?.autoAssume) {
@@ -413,15 +423,22 @@ tab: ManagedTabEntry): void {
     });
   }
 
-export function startBrowserTeachRecording(
+export async function startBrowserTeachRecording(
   ctx: BrowserAutomationRuntimeContext,
 
     tabId: string,
     agenteId?: string | null,
-  ): { ok: boolean; tabId: string; agenteId: string; startedAt: number } {
-    const tab = ctx.sessionManager.getTab(tabId);
+  ): Promise<{ ok: boolean; tabId: string; agenteId: string; startedAt: number }> {
+    let tab = ctx.sessionManager.getTab(tabId);
     if (!tab) {
       throw new Error(`Aba '${tabId}' não encontrada.`);
+    }
+    if (tab.unloaded && !tab.userControl) {
+      tab = await ctx.ensureRealTabLoaded(tab.tabId);
+    } else if (tab.unloaded && tab.userControl) {
+      tab.userControl = false;
+      tab = await ctx.ensureRealTabLoaded(tab.tabId);
+      tab.userControl = true;
     }
     const effectiveAgent = agenteId?.trim() || tab.agenteId || "estrategista";
     tab.agenteId = effectiveAgent;

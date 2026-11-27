@@ -1,10 +1,19 @@
-import { resolveMetaGraphApiBase } from "@criativo/contracts";
+import {
+  resolveMetaGraphApiBase,
+  type MetaFirstCommentStatus,
+  type MetaTrialGraduationStrategy,
+} from "@criativo/contracts";
 import type { CriativoDatabase } from "../../database/client.ts";
 import type { NativeAppConnectionsStore } from "../../marketplace/native-app-connections-store.ts";
 import { EditorialCalendarService } from "../../social/editorial-calendar-service.ts";
+import { MetaFirstCommentService } from "../../social/meta-first-comment-service.ts";
 import type { FetchLike } from "../providers/provider-interface.ts";
 import type { VaultService } from "../../vault/vault-service.ts";
 import { resolveMetaCredentials } from "./meta-insights.ts";
+import {
+  checkMetaTrialReelEligibility,
+  mapTrialReelContainerError,
+} from "./meta-trial-eligibility.ts";
 
 export interface MetaPublishParams {
   media_type: "IMAGE" | "CAROUSEL" | "REELS" | "STORIES";
@@ -13,6 +22,11 @@ export interface MetaPublishParams {
   approved_by_human: boolean;
   conta_id?: string;
   editorial_post_id?: string;
+  trial_reel?: boolean;
+  trial_graduation_strategy?: MetaTrialGraduationStrategy;
+  first_comment?: string;
+  first_comment_approved?: boolean;
+  first_comment_delay_seconds?: number;
 }
 
 export interface MetaPublishResult {
@@ -20,6 +34,11 @@ export interface MetaPublishResult {
   media_id: string;
   permalink: string;
   editorial_post_id?: string | null;
+  is_trial_reel?: boolean;
+  trial_graduation_strategy?: MetaTrialGraduationStrategy;
+  followers_count_checked?: number | null;
+  first_comment_job_id?: string | null;
+  first_comment_status?: MetaFirstCommentStatus | null;
 }
 
 /**
@@ -53,27 +72,56 @@ export async function metaPublishTool(
 
   const fetchFn = deps.fetchImpl ?? fetch;
   const graphBase = resolveMetaGraphApiBase();
+  const isTrialReel = params.trial_reel === true;
+  const trialStrategy: MetaTrialGraduationStrategy =
+    params.trial_graduation_strategy === "MANUAL" ? "MANUAL" : "SS_PERFORMANCE";
+  let followersCountChecked: number | null | undefined;
+
+  if (isTrialReel) {
+    if (params.media_type !== "REELS") {
+      throw new Error(
+        "CRV-META-TRIAL-TYPE: Trial Reels só são suportados para publicações do tipo REELS (vídeo vertical 9:16)."
+      );
+    }
+    const eligibility = await checkMetaTrialReelEligibility({
+      accessToken,
+      igUserId,
+      fetchImpl: fetchFn,
+    });
+    if (!eligibility.eligible) {
+      throw new Error(
+        `${eligibility.error_code ?? "CRV-META-TRIAL-ELIGIBILITY"}: ${eligibility.reason}`
+      );
+    }
+    followersCountChecked = eligibility.followers_count;
+  }
 
   // 1. Criação do container de mídia
+  const containerBody: Record<string, unknown> = {
+    image_url: params.media_type === "IMAGE" || params.media_type === "STORIES" ? params.media_urls[0] : undefined,
+    video_url: params.media_type === "REELS" ? params.media_urls[0] : undefined,
+    media_type: params.media_type === "REELS" ? "REELS" : params.media_type === "STORIES" ? "STORIES" : undefined,
+    caption: params.caption,
+    access_token: accessToken,
+    ...(isTrialReel ? { trial_params: { graduation_strategy: trialStrategy } } : {}),
+  };
+
   const containerRes = await fetchFn(
     `${graphBase}/${encodeURIComponent(igUserId)}/media`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        image_url: params.media_type === "IMAGE" || params.media_type === "STORIES" ? params.media_urls[0] : undefined,
-        video_url: params.media_type === "REELS" ? params.media_urls[0] : undefined,
-        media_type: params.media_type === "REELS" ? "REELS" : params.media_type === "STORIES" ? "STORIES" : undefined,
-        caption: params.caption,
-        access_token: accessToken,
-      }),
+      body: JSON.stringify(containerBody),
     }
   );
   const containerData = (await containerRes.json()) as {
     id?: string;
-    error?: { message?: string };
+    error?: { message?: string; code?: number; error_subcode?: number };
   };
   if (!containerRes.ok || !containerData.id) {
+    if (isTrialReel) {
+      throw new Error(mapTrialReelContainerError(containerData.error, containerRes.status));
+    }
     throw new Error(
       containerData.error?.message ?? `Erro ao criar container Meta API: HTTP ${containerRes.status}`
     );
@@ -110,10 +158,56 @@ export async function metaPublishTool(
     linkedEditorialId = updated?.id ?? null;
   }
 
+  let firstCommentJobId: string | null = null;
+  let firstCommentStatus: MetaFirstCommentStatus | null = null;
+  const trimmedFirstComment = params.first_comment?.trim();
+  if (trimmedFirstComment && deps.db) {
+    const commentService = new MetaFirstCommentService({
+      db: deps.db,
+      vault: deps.vault,
+      nativeStore: deps.nativeStore,
+      fetchImpl: fetchFn,
+    });
+    const job = commentService.enqueueFirstComment({
+      mediaId: publishData.id,
+      commentText: trimmedFirstComment,
+      approvedByHuman: params.first_comment_approved === true,
+      delaySeconds: params.first_comment_delay_seconds,
+      editorialPostId: params.editorial_post_id ?? null,
+      contaId: params.conta_id ?? null,
+    });
+    firstCommentJobId = job.comment_job_id;
+    firstCommentStatus = job.status;
+    const effectiveDelay =
+      typeof params.first_comment_delay_seconds === "number"
+        ? params.first_comment_delay_seconds
+        : 30;
+    if (params.first_comment_approved === true && effectiveDelay === 0) {
+      await commentService.dispatchDueComments();
+      const refreshed = commentService.getCommentJob(job.comment_job_id);
+      if (refreshed) {
+        firstCommentStatus = refreshed.status;
+      }
+    }
+  }
+
   return {
     published: true,
     media_id: publishData.id,
     permalink: `https://www.instagram.com/p/${publishData.id}/`,
     ...(linkedEditorialId ? { editorial_post_id: linkedEditorialId } : {}),
+    ...(isTrialReel
+      ? {
+          is_trial_reel: true,
+          trial_graduation_strategy: trialStrategy,
+          followers_count_checked: followersCountChecked ?? null,
+        }
+      : {}),
+    ...(firstCommentJobId
+      ? {
+          first_comment_job_id: firstCommentJobId,
+          first_comment_status: firstCommentStatus,
+        }
+      : {}),
   };
 }

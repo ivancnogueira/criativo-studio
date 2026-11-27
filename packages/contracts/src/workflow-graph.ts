@@ -1,3 +1,9 @@
+import type {
+  WorkflowAnswerField,
+  WorkflowConditionMode,
+  WorkflowDeterministicRule,
+} from "./workflow-pro.ts";
+
 export type TipoNoWorkflowExecutavel =
   | "gatilho"
   | "prompt"
@@ -129,6 +135,11 @@ export interface WorkflowNo {
   color?: string;
   locked?: boolean;
   textSize?: "sm" | "md" | "lg";
+  answerFields?: WorkflowAnswerField[];
+  conditionMode?: WorkflowConditionMode;
+  deterministicRule?: WorkflowDeterministicRule;
+  batchCount?: 1 | 2 | 3 | 4;
+  selectedVariantIndex?: number;
 }
 
 export interface WorkflowAresta {
@@ -207,6 +218,7 @@ export interface WorkflowStepRecord {
   artefatos_json: string;
   branch: WorkflowBranch | null;
   erro: string | null;
+  structured_output_json?: string | null;
   iniciado_em: string | null;
   encerrado_em: string | null;
   criado_em: string;

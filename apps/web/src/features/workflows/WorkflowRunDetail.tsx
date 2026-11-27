@@ -337,6 +337,34 @@ export const WorkflowRunDetail: React.FC<WorkflowRunDetailProps> = ({
                           </pre>
                         </div>
                       )}
+                      {step.structured_output_json && (() => {
+                        try {
+                          const parsed = JSON.parse(step.structured_output_json) as Record<string, unknown>;
+                          const entries = Object.entries(parsed);
+                          if (entries.length === 0) return null;
+                          return (
+                            <div>
+                              <span className="font-semibold text-[#31CF76]">
+                                Campos estruturados extraídos:
+                              </span>
+                              <div className="mt-1 space-y-1 rounded-lg border border-[#31CF76]/25 bg-[#101010] p-2">
+                                {entries.map(([k, v]) => (
+                                  <div key={k} className="flex items-start justify-between gap-2 text-[11px]">
+                                    <span className="font-mono text-[#31CF76]">{k}</span>
+                                    <span className="break-all text-right text-[#DCDCDC]">
+                                      {typeof v === "string" || typeof v === "number" || typeof v === "boolean"
+                                        ? String(v)
+                                        : JSON.stringify(v)}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        } catch {
+                          return null;
+                        }
+                      })()}
                       {step.output && (
                         <div>
                           <span className="font-semibold text-[#979797]">Saída:</span>

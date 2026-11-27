@@ -81,6 +81,12 @@ export interface BrowserTabSummary {
   userControl: boolean;
   screencastActive: boolean;
   lastActivityAt: string;
+  /** Indica se a aba foi descarregada para liberar RAM (auto-unload). */
+  unloaded?: boolean;
+  /** ISO timestamp do momento do descarregamento, ou null. */
+  unloadedAt?: string | null;
+  /** Motivo do descarregamento (pressão de RAM ou manual). */
+  unloadReason?: string | null;
 }
 
 export interface BrowserStatusReport {
@@ -90,6 +96,10 @@ export interface BrowserStatusReport {
   activeContexts: number;
   activeTabs: number;
   tabs: BrowserTabSummary[];
+  /** Número de abas atualmente descarregadas (auto-unload). */
+  unloadedTabs?: number;
+  /** Nível de pressão de memória atual do host. */
+  memoryPressure?: "normal" | "elevated" | "critical";
 }
 
 export type BrowserTakeoverReason =

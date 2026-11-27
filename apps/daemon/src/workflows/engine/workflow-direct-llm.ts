@@ -22,6 +22,7 @@ import type { ProviderRegistry } from "../../engine/providers/provider-registry.
 import { recordChatTurnUsage } from "../../server/analytics-skills-service.ts";
 import { getBrandIdentity } from "../../server/brand-onboarding-service.ts";
 import { VAULT_KEYS_BY_PROVIDER, type WorkflowEngineRuntimeContext } from "./workflow-engine-types.ts";
+import { resolveViableWorkflowModel } from "../workflow-model-resolver.ts";
 
 
 export function resolveWorkflowPathWithinRoot(
@@ -94,9 +95,29 @@ params: {
       throw new Error("Execução cancelada.");
     }
 
-    const model = params.model?.trim() || "gemini-2.5-pro";
-    const resolvedProvider =
-      params.provider?.trim() || ctx.deps.providers.resolveProviderName(model);
+    let model = params.model?.trim() || "";
+    let resolvedProvider = params.provider?.trim() || "";
+
+    if (!model) {
+      const viable = await resolveViableWorkflowModel(
+        {
+          providers: ctx.deps.providers,
+          providerConnection: ctx.deps.providerConnection,
+          hasVaultApiKey: (prov) => hasWorkflowVaultApiKey(ctx, prov),
+        },
+        undefined,
+        resolvedProvider || undefined
+      );
+      if (viable.source !== "none" && viable.model) {
+        model = viable.model;
+        resolvedProvider = viable.provider ?? ctx.deps.providers.resolveProviderName(model);
+      } else {
+        model = "gemini-2.5-pro";
+      }
+    }
+    if (!resolvedProvider) {
+      resolvedProvider = ctx.deps.providers.resolveProviderName(model);
+    }
     const turnId = `wft_${randomUUID().slice(0, 12)}`;
     const sessionId = `workflow:${params.agentId ?? "llm"}`;
 

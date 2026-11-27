@@ -310,6 +310,47 @@ export function registerSystemWsHandlers(
       }
     });
 
+    const unsubBrowserTabUnloaded = ws.on("browser:tab_unloaded", (evt) => {
+      setBrowserTabs((prev) =>
+        prev.map((t) =>
+          t.tabId === evt.tabId
+            ? {
+                ...t,
+                url: evt.url || t.url,
+                title: evt.title || t.title,
+                unloaded: true,
+                unloadedAt: evt.unloadedAt,
+                unloadReason: evt.reason,
+              }
+            : t
+        )
+      );
+      setBrowserFramesByTab((prev) => {
+        if (!(evt.tabId in prev)) return prev;
+        const next = { ...prev };
+        delete next[evt.tabId];
+        return next;
+      });
+      setBrowserStatus((prev) => {
+        if (!prev) return prev;
+        const updatedTabs = prev.tabs.map((t) =>
+          t.tabId === evt.tabId
+            ? {
+                ...t,
+                unloaded: true,
+                unloadedAt: evt.unloadedAt,
+                unloadReason: evt.reason,
+              }
+            : t
+        );
+        return {
+          ...prev,
+          tabs: updatedTabs,
+          unloadedTabs: updatedTabs.filter((t) => t.unloaded).length,
+        };
+      });
+    });
+
     const unsubTakeoverReq = ws.on("browser:takeover_requested", (evt) => {
       const agKey = evt.agenteId ?? "global";
       setTakeoverByAgent((prev) => ({ ...prev, [agKey]: evt }));
@@ -462,6 +503,7 @@ export function registerSystemWsHandlers(
     unsubAgentMessageQueued();
     unsubBrowserFrame();
     unsubBrowserTabs();
+    unsubBrowserTabUnloaded();
     unsubTakeoverReq();
     unsubTakeoverRes();
     unsubChallengeDetected();

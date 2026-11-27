@@ -209,7 +209,8 @@ runDetail: WorkflowRunDetail): Promise<WorkflowRunDetail> {
         }
       }
 
-      if (initialActions.length === 0) {
+      const dispatchedAsyncRun = initialActions.some((a) => a.action === "run");
+      if (!dispatchedAsyncRun) {
         await sweepSingleWorkflowRun(ctx, run.run_id);
       }
     }

@@ -1,6 +1,7 @@
 /**
  * Descoberta de binário Chromium/Chrome/Edge, pool de BrowserContext persistentes com proxy,
  * screencast JPEG por CDPSession com backpressure (<= 8 fps) e dispatch de input humano (BRWS-01, BRWS-02).
+ * Auto-unload seletivo de abas ociosas sob pressão de RAM com recarga transparente (SCALE41-01).
  */
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
@@ -12,6 +13,14 @@ import {
   NativeCdpBrowserSession,
 } from "./browser-native-cdp.ts";
 import type { SnapshotRefMeta } from "./browser-snapshot.ts";
+import {
+  type BrowserMemoryHostReader,
+  type MemoryPressureLevel,
+  closeContextIfNoLoadedPages,
+  executeNonDestructiveTabUnload,
+  rehydrateUnloadedTabEntry,
+  runMemoryPressureUnloadSweep,
+} from "./browser/browser-tab-unload.ts";
 
 export const CONTEXT_IDLE_TTL_MS = 15 * 60_000;
 export const MIN_SCREENCAST_FRAME_INTERVAL_MS = 125; // <= 8 fps
@@ -53,6 +62,12 @@ export interface ManagedTabEntry {
   lastActivityAt: number;
   virtualUrl: string;
   virtualTitle: string;
+  userDataDir: string;
+  unloaded: boolean;
+  unloadedAt: number | null;
+  unloadReason: string | null;
+  suppressCloseCleanup?: boolean;
+  onPageNavigated?: (tab: ManagedTabEntry, url: string, title: string) => void;
 }
 
 export interface HumanCdpInputEvent {
@@ -145,13 +160,33 @@ export class BrowserCdpSessionManager {
   >();
   private readonly tabs = new Map<string, ManagedTabEntry>();
   private readonly idleSweepTimer: ReturnType<typeof setInterval>;
+  private memoryReader?: BrowserMemoryHostReader;
+  private onTabUnloadedCb?: (
+    tab: ManagedTabEntry,
+    pressureLevel: "elevated" | "critical" | "manual",
+  ) => void;
 
   constructor(workspaceRoot: string) {
     this.workspaceRoot = resolve(workspaceRoot);
     this.idleSweepTimer = setInterval(() => {
       void this.sweepIdleContexts();
+      void this.sweepMemoryPressureTabs();
     }, 60_000);
     this.idleSweepTimer.unref?.();
+  }
+
+  public setMemoryPressureReader(reader: BrowserMemoryHostReader): void {
+    this.memoryReader = reader;
+  }
+
+  public getMemoryPressureLevel(): MemoryPressureLevel {
+    return this.memoryReader ? this.memoryReader().level : "normal";
+  }
+
+  public setOnTabUnloaded(
+    cb: (tab: ManagedTabEntry, pressureLevel: "elevated" | "critical" | "manual") => void,
+  ): void {
+    this.onTabUnloadedCb = cb;
   }
 
   public detectBinary(): ChromiumDetectionResult {
@@ -176,6 +211,9 @@ export class BrowserCdpSessionManager {
         userControl: entry.userControl,
         screencastActive: entry.screencastActive,
         lastActivityAt: new Date(entry.lastActivityAt).toISOString(),
+        unloaded: entry.unloaded || undefined,
+        unloadedAt: entry.unloadedAt ? new Date(entry.unloadedAt).toISOString() : undefined,
+        unloadReason: entry.unloadReason ?? undefined,
       });
     }
     return out;
@@ -326,8 +364,24 @@ export class BrowserCdpSessionManager {
       lastActivityAt: Date.now(),
       virtualUrl: params.url,
       virtualTitle: "",
+      userDataDir: params.userDataDir,
+      unloaded: false,
+      unloadedAt: null,
+      unloadReason: null,
+      onPageNavigated: params.onPageNavigated,
     };
 
+    this.attachPageListeners(entry, page);
+    this.tabs.set(tabId, entry);
+    await page.goto(params.url, { waitUntil: "domcontentloaded", timeout: 25_000 });
+    entry.virtualUrl = page.url();
+    entry.virtualTitle = await page.title().catch(() => "");
+    entry.lastActivityAt = Date.now();
+
+    return entry;
+  }
+
+  private attachPageListeners(entry: ManagedTabEntry, page: Page): void {
     page.on("dialog", (dialog) => {
       entry.lastDialog = {
         type: dialog.type(),
@@ -336,29 +390,20 @@ export class BrowserCdpSessionManager {
       };
       entry.pendingDialogObj = dialog;
     });
-
     page.on("framenavigated", async (frame) => {
       if (frame === page.mainFrame()) {
         entry.revision += 1;
         entry.lastActivityAt = Date.now();
         entry.virtualUrl = frame.url();
         entry.virtualTitle = await page.title().catch(() => "");
-        params.onPageNavigated?.(entry, entry.virtualUrl, entry.virtualTitle);
+        entry.onPageNavigated?.(entry, entry.virtualUrl, entry.virtualTitle);
       }
     });
-
     page.on("close", () => {
+      if (entry.suppressCloseCleanup) return;
       if (entry.screencastTimer) clearInterval(entry.screencastTimer);
-      this.tabs.delete(tabId);
+      this.tabs.delete(entry.tabId);
     });
-
-    this.tabs.set(tabId, entry);
-    await page.goto(params.url, { waitUntil: "domcontentloaded", timeout: 25_000 });
-    entry.virtualUrl = page.url();
-    entry.virtualTitle = await page.title().catch(() => "");
-    entry.lastActivityAt = Date.now();
-
-    return entry;
   }
 
   /**
@@ -391,6 +436,10 @@ export class BrowserCdpSessionManager {
       lastActivityAt: Date.now(),
       virtualUrl: params.url,
       virtualTitle: params.title ?? "Sessão de Navegador",
+      userDataDir: "",
+      unloaded: false,
+      unloadedAt: null,
+      unloadReason: null,
     };
     this.tabs.set(tabId, entry);
     return entry;
@@ -626,6 +675,50 @@ export class BrowserCdpSessionManager {
         await this.closeProfileContext(perfilId);
       }
     }
+  }
+
+  public async unloadTab(
+    tabId: string,
+    reason = "Pressão de memória",
+    pressureLevel: "elevated" | "critical" | "manual" = "manual",
+  ): Promise<boolean> {
+    const entry = this.tabs.get(tabId);
+    if (!entry || entry.unloaded) return false;
+    await executeNonDestructiveTabUnload(entry, reason, (id) => this.stopScreencast(id));
+    await closeContextIfNoLoadedPages(entry.perfilId, Array.from(this.tabs.values()), this.contexts);
+    this.onTabUnloadedCb?.(entry, pressureLevel);
+    return true;
+  }
+
+  public async sweepMemoryPressureTabs(
+    forceLevel?: "elevated" | "critical",
+    options?: { elevatedIdleMs?: number; criticalIdleMs?: number; maxUnloadPerSweep?: number; nowMs?: number },
+  ): Promise<string[]> {
+    return await runMemoryPressureUnloadSweep({
+      tabs: this.tabs,
+      level: forceLevel ?? this.getMemoryPressureLevel(),
+      options,
+      unloadById: (id, reason, lvl) => this.unloadTab(id, reason, lvl),
+    });
+  }
+
+  public async reloadUnloadedTab(
+    tabId: string,
+    resolveLaunchOpts: (entry: ManagedTabEntry) => LaunchProfileContextOptions,
+  ): Promise<ManagedTabEntry> {
+    const entry = this.tabs.get(tabId);
+    if (!entry) throw new Error(`Aba '${tabId}' não encontrada para recarga.`);
+    if (entry.page && !entry.unloaded) return entry;
+    return await rehydrateUnloadedTabEntry(
+      entry,
+      async () => {
+        const context = await this.ensurePersistentContext(resolveLaunchOpts(entry));
+        const page = await context.newPage();
+        const cdpSession = await context.newCDPSession(page);
+        return { page, cdpSession };
+      },
+      (t, p) => this.attachPageListeners(t, p),
+    );
   }
 
   public async closeAll(): Promise<void> {

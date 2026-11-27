@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ArrowUpCircle, CheckCircle2, Loader2, Sparkles } from "lucide-react";
+import { ArrowUpCircle, CheckCircle2, ExternalLink, Loader2, Sparkles } from "lucide-react";
 import type { UpdateStatusSnapshot } from "@criativo/contracts";
 import { triggerUpdateBeam } from "./update-beam-effect";
+import { buildChangelogAnchorUrl, openExternalChangelogUrl } from "./VersionWhatsNewBanner";
 
 export interface UpdateNotificationBannerProps {
   status: UpdateStatusSnapshot | null;
@@ -38,7 +39,7 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
     }
   }, [status?.state]);
 
-  // Animação radial estilo OpenBot ao surgir atualização disponível/pronta ou iniciar download
+  // Animação radial focada ao surgir atualização disponível/pronta ou iniciar download
   useEffect(() => {
     if (!show || !targetVersion) return;
 
@@ -120,15 +121,27 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
           </span>
         </div>
 
-        {onOpenDetails && (
-          <button
-            type="button"
-            onClick={onOpenDetails}
-            className="text-[11px] text-[#9BCFB0] hover:text-white underline underline-offset-2 shrink-0"
-          >
-            Notas
-          </button>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          {targetVersion && (
+            <button
+              type="button"
+              onClick={() => openExternalChangelogUrl(buildChangelogAnchorUrl(targetVersion))}
+              className="inline-flex items-center gap-0.5 text-[11px] text-[#B9FC01] hover:text-white underline underline-offset-2"
+            >
+              <span>Changelog</span>
+              <ExternalLink className="h-2.5 w-2.5" />
+            </button>
+          )}
+          {onOpenDetails && (
+            <button
+              type="button"
+              onClick={onOpenDetails}
+              className="text-[11px] text-[#9BCFB0] hover:text-white underline underline-offset-2 shrink-0"
+            >
+              Notas
+            </button>
+          )}
+        </div>
       </div>
 
       <p className="mt-1 text-[11px] text-[#B8D8C5] leading-snug">
@@ -146,6 +159,12 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
                     : `Baixando em segundo plano (${Math.round(status.progress_percent)}%)...`
                 : "Clique para baixar, atualizar e reiniciar automaticamente mantendo seus dados seguros."}
       </p>
+
+      {!restarting && !isInProgress && status.changelog_markdown && (
+        <p className="mt-1.5 line-clamp-2 rounded-md bg-black/25 px-2 py-1 text-[10.5px] text-[#D7EBD9] leading-snug">
+          {status.changelog_markdown}
+        </p>
+      )}
 
       {isInProgress && (
         <div className="mt-2 h-1.5 w-full rounded-full bg-black/40 overflow-hidden">

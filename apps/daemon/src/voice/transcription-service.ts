@@ -1,7 +1,27 @@
 import type { FetchLike } from "../engine/providers/provider-interface.ts";
 import { sanitizeProviderError } from "../engine/providers/provider-interface.ts";
 import type { VaultService } from "../vault/vault-service.ts";
+import { splitAudioBufferForTranscription } from "./audio-chunker.ts";
 import type { VoiceHostService } from "./voice-host-service.ts";
+import {
+  analyzeAudioVoiceActivity,
+  sanitizeTranscriptHallucinations,
+  VAD_MIN_SPEECH_MS,
+  type VadAnalysisResult,
+} from "./voice-vad.ts";
+
+export interface DetailedTranscriptionOptions {
+  vadEnabled?: boolean;
+  clientSpeechMs?: number;
+  maxDurationSec?: number;
+}
+
+export interface DetailedTranscriptionResult {
+  texto: string;
+  silent: boolean;
+  chunks: number;
+  vad: VadAnalysisResult;
+}
 
 export interface TranscriptionOptions {
   vault: VaultService;
@@ -35,6 +55,64 @@ export class TranscriptionService {
       }
     }
     return null;
+  }
+
+  private hasConfiguredTranscriptionProvider(): boolean {
+    if (this.voiceHost) {
+      const cfg = this.voiceHost.getSettings();
+      if (cfg.mode === "local") {
+        return true;
+      }
+      if (cfg.mode === "auto") {
+        const hasLocalStt = this.voiceHost
+          .listModels()
+          .some((m) => m.kind === "stt" && m.installed);
+        if (hasLocalStt) {
+          return true;
+        }
+      }
+    }
+
+    const openaiKey = this.getSecretAnyCase(["OPENAI_API_KEY", "openai_api_key"]);
+    const geminiKey = this.getSecretAnyCase([
+      "GEMINI_API_KEY",
+      "gemini_api_key",
+      "GOOGLE_API_KEY",
+      "google_api_key",
+    ]);
+    return Boolean(geminiKey || openaiKey);
+  }
+
+  /**
+   * Transcrição com VAD pré-STT (silêncio não gasta cota) e fatiamento automático de ditados longos.
+   */
+  public async transcribeAudioDetailed(
+    audioBuffer: Buffer,
+    mimeType = "audio/ogg",
+    options: DetailedTranscriptionOptions = {}
+  ): Promise<DetailedTranscriptionResult> {
+    if (!this.hasConfiguredTranscriptionProvider()) {
+      throw new Error(
+        "MISSING_TRANSCRIPTION_KEY: Nenhuma chave de transcrição (GEMINI_API_KEY ou OPENAI_API_KEY) configurada no Cofre."
+      );
+    }
+
+    const vad = analyzeAudioVoiceActivity(audioBuffer, mimeType);
+    const clientHeardSpeech =
+      typeof options.clientSpeechMs === "number" && options.clientSpeechMs >= VAD_MIN_SPEECH_MS;
+    if (options.vadEnabled !== false && !vad.hasSpeech && !clientHeardSpeech) {
+      return { texto: "", silent: true, chunks: 0, vad };
+    }
+
+    const chunks = splitAudioBufferForTranscription(audioBuffer, mimeType);
+    const parts: string[] = [];
+    for (const chunk of chunks) {
+      const raw = await this.transcribeAudio(chunk, mimeType);
+      const clean = sanitizeTranscriptHallucinations(raw, vad);
+      if (clean) parts.push(clean);
+    }
+    const texto = parts.join(" ").trim();
+    return { texto, silent: texto.length === 0, chunks: chunks.length, vad };
   }
 
   public async transcribeAudio(

@@ -4,6 +4,7 @@ import type {
   EditorialPostFormato,
   EditorialPostRecord,
   EditorialPostStatus,
+  MetaTrialGraduationStrategy,
 } from "@criativo/contracts";
 import {
   Calendar,
@@ -22,6 +23,7 @@ import {
 import { daemonApi } from "../../services/websocket-client";
 import { CarbonSelect } from "../../components/ui/CarbonControls";
 import { CarouselStoriesStudioEditor } from "./CarouselStoriesStudioEditor";
+import { EditorialBestTimesBar } from "./EditorialBestTimesBar";
 import { EditorialPostCreateModal } from "./EditorialPostCreateModal";
 import {
   FORMAT_META,
@@ -65,6 +67,8 @@ export const EditorialCalendarPage: React.FC<EditorialCalendarPageProps> = ({
   const [newData, setNewData] = useState(() => toIsoDate(new Date()));
   const [newAgenteId, setNewAgenteId] = useState(() => agentes[0]?.agente_id ?? "designer_chefe");
   const [newLegenda, setNewLegenda] = useState("");
+  const [newTrialReelEnabled, setNewTrialReelEnabled] = useState(false);
+  const [newTrialStrategy, setNewTrialStrategy] = useState<MetaTrialGraduationStrategy>("SS_PERFORMANCE");
   const [creating, setCreating] = useState(false);
 
   const loadPosts = useCallback(async () => {
@@ -137,12 +141,16 @@ export const EditorialCalendarPage: React.FC<EditorialCalendarPageProps> = ({
         data_agendada: newData || null,
         agente_id: newAgenteId || null,
         legenda: newLegenda,
+        ...(newFormato === "reels"
+          ? { trial_reel_enabled: newTrialReelEnabled, trial_graduation_strategy: newTrialStrategy }
+          : {}),
       });
       setPosts((prev) => [created, ...prev]);
       setCreateOpen(false);
       setNewTitulo("");
       setNewPilar("");
       setNewLegenda("");
+      setNewTrialReelEnabled(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro ao criar pauta.");
     } finally {
@@ -326,6 +334,14 @@ export const EditorialCalendarPage: React.FC<EditorialCalendarPageProps> = ({
           </button>
         </div>
       </div>
+
+      <EditorialBestTimesBar
+        onApplyRecommendation={(dataIso, formato) => {
+          setNewData(dataIso);
+          setNewFormato(formato);
+          setCreateOpen(true);
+        }}
+      />
 
       {error && (
         <div className="rounded-xl border border-[#FD2F3B]/30 bg-[#FD2F3B]/10 px-4 py-2.5 text-xs text-[#FF8A90]">
@@ -632,6 +648,10 @@ export const EditorialCalendarPage: React.FC<EditorialCalendarPageProps> = ({
         agenteId={newAgenteId}
         legenda={newLegenda}
         agentes={agentes}
+        trialReelEnabled={newTrialReelEnabled}
+        trialStrategy={newTrialStrategy}
+        onChangeTrialReelEnabled={setNewTrialReelEnabled}
+        onChangeTrialStrategy={setNewTrialStrategy}
         onClose={() => setCreateOpen(false)}
         onChangeTitulo={setNewTitulo}
         onChangeFormato={setNewFormato}
@@ -655,18 +675,13 @@ export const EditorialCalendarPage: React.FC<EditorialCalendarPageProps> = ({
           initialCaption={editorPost.legenda}
           editorialPost={editorPost}
           onSaveEditorial={async (payload) => {
-            const updated = await daemonApi.updateEditorialPost(editorPost.id, {
-              slides: payload.slides,
-              legenda: payload.legenda,
-              ...(payload.formato ? { formato: payload.formato } : {}),
-            });
+            const updated = await daemonApi.updateEditorialPost(editorPost.id, { ...payload });
             setPosts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
             setEditorPost(updated);
           }}
           onApproveCreative={async (payload) => {
             const updated = await daemonApi.updateEditorialPost(editorPost.id, {
-              slides: payload.slides,
-              legenda: payload.legenda,
+              ...payload,
               status: "agendado",
             });
             setPosts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));

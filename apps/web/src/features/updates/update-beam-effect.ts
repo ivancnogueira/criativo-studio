@@ -1,5 +1,5 @@
 /**
- * Efeito luminoso radial ("update beam") inspirado no `theme-sweep` do OpenBot.
+ * Efeito luminoso radial ("update beam") com foco animado no botão de atualização.
  *
  * Quando uma atualização é detectada/iniciada (`"in"`), um anel de luz orgânico
  * converge das bordas da janela até o botão de atualização. Ao clicar para

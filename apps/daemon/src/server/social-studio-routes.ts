@@ -3,11 +3,13 @@ import type {
   EditorialPostFormato,
   EditorialPostStatus,
   MetaGalleryPeriod,
+  MetaPostingIntelligencePeriod,
   UpdateEditorialPostInput,
 } from "@criativo/contracts";
 import { EditorialCalendarService } from "../social/editorial-calendar-service.ts";
 import { MetaGalleryService } from "../social/meta-gallery-service.ts";
 import type { StudioRouteContext } from "./routes/route-helpers.ts";
+import { tryHandleSocialMeta2026Routes } from "./social-meta-2026-routes.ts";
 import { resolveNativeAppConnectionsStore } from "./studio-tools-bridge.ts";
 
 /**
@@ -176,6 +178,31 @@ export async function tryHandleSocialStudioRoutes(ctx: StudioRouteContext): Prom
     return true;
   }
 
+  if (path === "/api/editorial/inteligencia-horarios" && method === "GET") {
+    const periodoParam = url.searchParams.get("periodo");
+    const periodo: MetaPostingIntelligencePeriod =
+      periodoParam === "90d" || periodoParam === "all" ? periodoParam : "30d";
+    const formatoRaw = url.searchParams.get("formato");
+    const formato =
+      formatoRaw === "carrossel" ||
+      formatoRaw === "reels" ||
+      formatoRaw === "imagem" ||
+      formatoRaw === "story"
+        ? formatoRaw
+        : undefined;
+    const contaId = url.searchParams.get("conta_id")?.trim() || undefined;
+    const timezone = url.searchParams.get("timezone")?.trim() || undefined;
+
+    const report = new EditorialCalendarService(db).getPostingIntelligence({
+      periodo,
+      formato,
+      contaId,
+      timezone,
+    });
+    sendJson(res, 200, report);
+    return true;
+  }
+
   if (path === "/api/instagram/galeria-metricas" && method === "GET") {
     const periodoParam = url.searchParams.get("periodo");
     const periodo: MetaGalleryPeriod =
@@ -206,6 +233,10 @@ export async function tryHandleSocialStudioRoutes(ctx: StudioRouteContext): Prom
       limitePosts,
     });
     sendJson(res, 200, report);
+    return true;
+  }
+
+  if (await tryHandleSocialMeta2026Routes(ctx)) {
     return true;
   }
 

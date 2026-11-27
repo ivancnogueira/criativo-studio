@@ -178,7 +178,8 @@ export interface WorkflowsCanvasPageProps {
     workflowId: string,
     nodeId: string
   ) => Promise<{ route_id: string; webhook_url: string; secret: string }>;
-  onUploadFile?: (file: File) => Promise<void>;
+  onUploadFile?: (file: File) => Promise<ArquivoStudio | void>;
+  onRefreshWorkflows?: () => Promise<void>;
 }
 
 export const TRIGGER_PRESETS: Array<{

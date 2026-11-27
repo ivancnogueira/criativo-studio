@@ -33,6 +33,10 @@ import {
   type WorkflowBuiltInputs,
 } from "../workflow-walk.ts";
 import type { WorkflowEngineRuntimeContext } from "./workflow-engine-types.ts";
+import {
+  collectUpstreamStructuredVariables,
+  interpolateWorkflowVariables,
+} from "../workflow-structured-fields.ts";
 
 export async function executeWorkflowOutputNode(
   ctx: WorkflowEngineRuntimeContext,
@@ -46,15 +50,31 @@ export async function executeWorkflowOutputNode(
     loops: Set<string>;
   }
 ): Promise<void> {
-  const { step, node, cfg, graph, inputs, stepsByNode, loops } = params;
+  const { step, node, cfg, graph, inputs: rawInputs, stepsByNode, loops } = params;
+  const upstreamVars = collectUpstreamStructuredVariables(
+    node,
+    graph.arestas,
+    stepsByNode,
+    rawInputs.inputText
+  );
+  const resolvedInputText = interpolateWorkflowVariables(
+    rawInputs.inputText,
+    upstreamVars,
+    rawInputs.inputText
+  );
+  const inputs: WorkflowBuiltInputs = {
+    ...rawInputs,
+    inputText: resolvedInputText,
+  };
         const target: WorkflowOutputTarget =
           node.target ??
           (typeof cfg.target === "string" ? (cfg.target as WorkflowOutputTarget) : undefined) ??
           "notificacao";
-        const targetRef =
+        const rawTargetRef =
           node.targetRef ??
           (typeof cfg.targetRef === "string" ? cfg.targetRef : undefined) ??
           "";
+        const targetRef = interpolateWorkflowVariables(rawTargetRef, upstreamVars, resolvedInputText);
 
         const mediaPaths = inputs.mediaInputs.map((m) => m.path);
         const delivery = ctx.deps.store.upsertDelivery({

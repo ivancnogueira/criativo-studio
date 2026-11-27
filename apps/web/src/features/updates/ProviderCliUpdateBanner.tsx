@@ -18,7 +18,7 @@ export interface ProviderCliUpdateBannerProps {
 }
 
 /**
- * Banner fino no topo estilo OpenBot avisando quando há nova versão de CLI conectada
+ * Banner fino no topo avisando quando há nova versão de CLI conectada
  * (Codex, Claude, Antigravity ou OpenCode) com atualização e recarga de modelos em 1 clique.
  */
 export const ProviderCliUpdateBanner: React.FC<ProviderCliUpdateBannerProps> = ({

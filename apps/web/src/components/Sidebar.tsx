@@ -19,6 +19,7 @@ import { useSidebarController } from "./sidebar/useSidebarController";
 import { SidebarPinnedTile, SidebarAgentRow } from "./sidebar/SidebarAgentItems";
 import { SidebarChannelsAndSections } from "./sidebar/SidebarChannelsAndSections";
 import { SidebarModals } from "./sidebar/SidebarModals";
+import { SidebarQuickFilterBar } from "./sidebar/SidebarQuickFilterBar";
 import { useI18n } from "../i18n/I18nContext";
 
 export type { SidebarProps };
@@ -54,6 +55,9 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
   const {
     search,
     setSearch,
+    quickFilter,
+    setQuickFilter,
+    totalUnreadCount,
     menuOpen,
     setMenuOpen,
     dismissWhatsAppCard,
@@ -214,6 +218,15 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
             </button>
           </div>
         </div>
+      )}
+
+      {/* Filtros rápidos (Todas / Não lidas / Pastas) acima da lista rolável */}
+      {effectiveMode === "agents" && (
+        <SidebarQuickFilterBar
+          value={quickFilter}
+          totalUnreadCount={totalUnreadCount}
+          onChange={setQuickFilter}
+        />
       )}
 
       {/* Lista rolável por seções e pastas */}

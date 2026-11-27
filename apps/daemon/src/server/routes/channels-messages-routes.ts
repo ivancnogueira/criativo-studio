@@ -54,6 +54,10 @@ import { applyBrandToMessage, mapChatRow, safeJsonParse, type BrandSummary } fro
 import { extractMentionedAgentIds, isGreetingOrCapabilityQuestion } from "./chat-routing-helpers.ts";
 import { generateAgentChatReply } from "./agent-reply-runner.ts";
 import { getCanalRow, mapCanalRow, normalizeNavegadorModo } from "./channels-crud-routes.ts";
+import {
+  INITIAL_CONVERSATION_PAGE_SIZE,
+  MAX_UNREAD_INITIAL_PAGE_SIZE,
+} from "../../threads/conversation-pagination.ts";
 
 export async function tryHandleChannelsMessagesRoutes(ctx: StudioRouteContext): Promise<boolean> {
   const { req, res, path, method, url, deps, db, wsHub, workspaceRoot } = ctx;
@@ -181,11 +185,26 @@ export async function tryHandleChannelsMessagesRoutes(ctx: StudioRouteContext): 
     const canalId = decodeURIComponent(canalMsgMatch[1]);
     if (method === "GET") {
       const currentBrand = getBrandIdentity(providerConnection);
-      const rows = db.connection
-        .prepare(
-          `SELECT * FROM projecao_conversas_chat WHERE canal_id = ? ORDER BY criado_em ASC, COALESCE(ordinal, 0) ASC LIMIT 150;`
-        )
-        .all(canalId) as Array<Parameters<typeof mapChatRow>[0]>;
+      const limitParam = url.searchParams.get("limit");
+      const parsedLimit = limitParam !== null ? Number(limitParam) : undefined;
+      const unreadRow = db.connection
+        .prepare(`SELECT COUNT(*) AS total FROM projecao_conversas_chat WHERE canal_id = ? AND lida = 0;`)
+        .get(canalId) as { total?: number } | undefined;
+      const defaultLimit = Math.min(
+        MAX_UNREAD_INITIAL_PAGE_SIZE,
+        Math.max(INITIAL_CONVERSATION_PAGE_SIZE, Number(unreadRow?.total ?? 0)),
+      );
+      const limit =
+        parsedLimit !== undefined && Number.isFinite(parsedLimit)
+          ? Math.max(1, Math.min(MAX_UNREAD_INITIAL_PAGE_SIZE, Math.floor(parsedLimit)))
+          : defaultLimit;
+      const rows = (
+        db.connection
+          .prepare(
+            `SELECT * FROM projecao_conversas_chat WHERE canal_id = ? ORDER BY criado_em DESC, COALESCE(ordinal, 0) DESC, mensagem_id DESC LIMIT ?;`
+          )
+          .all(canalId, limit) as Array<Parameters<typeof mapChatRow>[0]>
+      ).reverse();
       sendJson(res, 200, { mensagens: rows.map((r) => mapChatRow(r, db, currentBrand)) });
       return true;
     }

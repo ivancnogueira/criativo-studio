@@ -5,24 +5,14 @@ import type {
   MetaGalleryResponse,
 } from "@criativo/contracts";
 import {
-  BarChart3,
-  Bookmark,
-  ExternalLink,
-  Eye,
-  Film,
-  Heart,
-  Image as ImageIcon,
-  Layers,
-  Loader2,
-  MessageCircle,
-  Plug,
-  RefreshCw,
-  Share2,
-  Sparkles,
-  TrendingUp,
+  BarChart3, Bookmark, ExternalLink, Eye, Film, Heart, History, Image as ImageIcon, Layers,
+  Loader2, MessageCircle, Plug, RefreshCw, Share2, Sparkles, Trash2, TrendingUp,
 } from "lucide-react";
 import { CarbonSelect } from "../../components/ui/CarbonControls";
 import { daemonApi } from "../../services/websocket-client";
+import { MetaAuditLogDrawer } from "./MetaAuditLogDrawer";
+import { MetaMediaDeleteModal } from "./MetaMediaDeleteModal";
+import { MetaRetentionInsightsPanel } from "./MetaRetentionInsightsPanel";
 
 export interface PublishedGalleryMetricsPageProps {
   onOpenInstagramConfig: () => void;
@@ -31,6 +21,11 @@ export interface PublishedGalleryMetricsPageProps {
 
 type SortKey = "recent" | "reach" | "saved" | "save_rate";
 type FormatFilter = "todos" | "carrossel" | "reels" | "imagem";
+
+function skipRateColorClass(val: number | null | undefined): string {
+  if (typeof val !== "number") return "text-[#979797]";
+  return val <= 35 ? "text-[#31CF76]" : val <= 50 ? "text-[#FDCB6E]" : "text-[#FD2F3B]";
+}
 
 function formatNumberPt(val: number | null | undefined): string {
   if (val === null || val === undefined || !Number.isFinite(val)) return "—";
@@ -68,6 +63,9 @@ export const PublishedGalleryMetricsPage: React.FC<PublishedGalleryMetricsPagePr
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<MetaGalleryResponse | null>(null);
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<MetaGalleryPostItem | null>(null);
+  const [intelligenceNonce, setIntelligenceNonce] = useState(0);
 
   const loadGallery = useCallback(async (targetPeriod: MetaGalleryPeriod, refresh: boolean) => {
     if (refresh) {
@@ -82,6 +80,7 @@ export const PublishedGalleryMetricsPage: React.FC<PublishedGalleryMetricsPagePr
         refresh,
       });
       setData(res);
+      if (refresh) setIntelligenceNonce((n) => n + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro ao consultar galeria de métricas.");
     } finally {
@@ -118,7 +117,7 @@ export const PublishedGalleryMetricsPage: React.FC<PublishedGalleryMetricsPagePr
       `- Alcance: ${post.reach ?? "N/D"} · Visualizações: ${post.views ?? "N/D"}`,
       `- Curtidas: ${post.likes ?? "N/D"} · Comentários: ${post.comments ?? "N/D"}`,
       `- Salvamentos: ${post.saved ?? "N/D"} · Taxa de salvamento: ${post.taxa_salvamento_pct ?? "N/D"}%`,
-      `- Compartilhamentos: ${post.shares ?? "N/D"}`,
+      `- Compartilhamentos: ${post.shares ?? "N/D"} · Reposts: ${post.reposts ?? "N/D"} · Skip Rate 3s: ${post.skip_rate_3s_pct ?? "N/D"}%`,
     ].join("\n");
     onAnalyzeWithAgent(summaryPrompt);
   };
@@ -164,6 +163,15 @@ export const PublishedGalleryMetricsPage: React.FC<PublishedGalleryMetricsPagePr
                 </button>
               ))}
             </div>
+
+            <button
+              type="button"
+              onClick={() => setAuditOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-[#141414] px-3 py-2 text-xs font-medium text-[#DCDCDC] hover:bg-[#212121] hover:text-white"
+            >
+              <History className="h-3.5 w-3.5 text-[#42A0FF]" />
+              <span>Auditoria Meta</span>
+            </button>
 
             <button
               type="button"
@@ -270,6 +278,13 @@ export const PublishedGalleryMetricsPage: React.FC<PublishedGalleryMetricsPagePr
           </div>
         ) : (
           <>
+            <MetaRetentionInsightsPanel
+              periodo={periodo}
+              formatFilter={formatFilter}
+              refreshNonce={intelligenceNonce}
+              onAnalyzeWithAgent={onAnalyzeWithAgent}
+            />
+
             {/* Barra de filtros e ordenação da grade */}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-1.5">
@@ -388,6 +403,20 @@ export const PublishedGalleryMetricsPage: React.FC<PublishedGalleryMetricsPagePr
                                 {formatNumberPt(post.shares)}
                               </p>
                             </div>
+                            <div>
+                              <p className="text-[10px] text-[#979797]">Reposts</p>
+                              <p className="mt-0.5 text-xs font-medium text-[#DCDCDC] tabular-nums">
+                                {formatNumberPt(post.reposts)}
+                              </p>
+                            </div>
+                            {(post.formato_normalizado === "reels" || typeof post.skip_rate_3s_pct === "number") && (
+                              <div className="col-span-2">
+                                <p className="text-[10px] text-[#979797]">Skip 3s</p>
+                                <p className={`mt-0.5 text-xs font-semibold tabular-nums ${skipRateColorClass(post.skip_rate_3s_pct)}`}>
+                                  {typeof post.skip_rate_3s_pct === "number" ? `${post.skip_rate_3s_pct}%` : "—"}
+                                </p>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -413,6 +442,15 @@ export const PublishedGalleryMetricsPage: React.FC<PublishedGalleryMetricsPagePr
                             <ExternalLink className="h-3.5 w-3.5" />
                           </a>
                         )}
+                        <button
+                          type="button"
+                          aria-label={`Excluir mídia ${post.id}`}
+                          title="Excluir publicação"
+                          onClick={() => setDeleteTarget(post)}
+                          className="rounded-xl border border-white/10 p-1.5 text-[#979797] hover:border-[#FD2F3B]/40 hover:bg-[#FD2F3B]/15 hover:text-[#FD2F3B]"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
                       </div>
                     </article>
                   );
@@ -422,6 +460,18 @@ export const PublishedGalleryMetricsPage: React.FC<PublishedGalleryMetricsPagePr
           </>
         )}
       </div>
+
+      <MetaMediaDeleteModal
+        post={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onCompleted={({ mediaId }) => {
+          setData((prev) =>
+            prev ? { ...prev, posts: prev.posts.filter((item) => item.id !== mediaId) } : prev
+          );
+          void loadGallery(periodo, false);
+        }}
+      />
+      <MetaAuditLogDrawer open={auditOpen} onClose={() => setAuditOpen(false)} />
     </section>
   );
 };

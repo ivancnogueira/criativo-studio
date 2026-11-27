@@ -107,6 +107,9 @@ export function readsOf(
     question: normalized.question ?? null,
     target: normalized.target ?? null,
     targetRef: normalized.targetRef ?? null,
+    answerFields: normalized.answerFields ?? null,
+    conditionMode: normalized.conditionMode ?? null,
+    deterministicRule: normalized.deterministicRule ?? null,
     config: cleanConfig,
     incoming,
   };

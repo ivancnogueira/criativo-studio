@@ -12,6 +12,7 @@ import type { TranscriptionService } from "../../voice/transcription-service.ts"
 import type { VaultService } from "../../vault/vault-service.ts";
 import type { BackgroundJobService } from "../../waits/background-job-service.ts";
 import type { WebSocketHub } from "../websocket-hub.ts";
+import { META_2026_TOOLS_SCHEMA } from "./meta-2026-tools-schema.ts";
 import { VIDEO_STUDIO_TOOLS_SCHEMA } from "./video-tools-schema.ts";
 export interface StudioExtensionToolDeps {
   db: CriativoDatabase;
@@ -311,7 +312,7 @@ export const PHASE10_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "consultar_metricas_meta",
     description:
-      "Consulta métricas reais da conta Instagram Business/Creator e dos posts/Reels recentes via Meta Graph API v27.0 (views, reach, saved, shares, total_interactions, taxa de salvamento e ig_reels_avg_watch_time).",
+      "Consulta métricas reais da conta Instagram Business/Creator e dos posts/Reels recentes via Meta Graph API v27.0 (views, reach, saved, shares, reposts, total_interactions, taxa de salvamento, ig_reels_avg_watch_time, reels_skip_rate [skip_rate_3s_pct] e hook_retention_3s_pct).",
     parameters: {
       type: "object",
       properties: {
@@ -348,6 +349,27 @@ export const PHASE10_TOOL_DEFINITIONS: ToolDefinition[] = [
         approved_by_human: { type: "boolean" },
         conta_id: { type: "string" },
         editorial_post_id: { type: "string" },
+        trial_reel: {
+          type: "boolean",
+          description: "Quando true e media_type='REELS', publica como Trial Reel (teste com não seguidores; exige >= 1.000 seguidores).",
+        },
+        trial_graduation_strategy: {
+          type: "string",
+          enum: ["MANUAL", "SS_PERFORMANCE"],
+          description: "Estratégia de graduação do Trial Reel (padrão SS_PERFORMANCE).",
+        },
+        first_comment: {
+          type: "string",
+          description: "Texto opcional do 1º comentário pós-publicação (hashtags, CTA ou link).",
+        },
+        first_comment_approved: {
+          type: "boolean",
+          description: "Exige aprovação humana explícita para agendar/disparar o 1º comentário; se false, fica pendente.",
+        },
+        first_comment_delay_seconds: {
+          type: "number",
+          description: "Atraso em segundos após a publicação para disparar o 1º comentário (0 a 3600, padrão 30).",
+        },
       },
       required: ["media_type", "media_urls", "caption", "approved_by_human"],
     },
@@ -532,6 +554,7 @@ export const PHASE10_TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   ...VIDEO_STUDIO_TOOLS_SCHEMA,
+  ...META_2026_TOOLS_SCHEMA,
 ];
 
 export const PHASE10_TOOL_NAMES: ReadonlySet<string> = new Set(

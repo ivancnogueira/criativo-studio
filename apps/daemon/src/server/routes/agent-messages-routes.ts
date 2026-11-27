@@ -52,6 +52,10 @@ import {
 import type { StudioRouteContext } from "./route-helpers.ts";
 import { applyBrandToMessage, mapChatRow, safeJsonParse, type BrandSummary } from "./route-helpers.ts";
 import { extractExplicitAgentHandoffTags, extractMentionedAgentIds, isGreetingOrCapabilityQuestion, loadResolvableAgentsForRouting } from "./chat-routing-helpers.ts";
+import {
+  INITIAL_CONVERSATION_PAGE_SIZE,
+  MAX_UNREAD_INITIAL_PAGE_SIZE,
+} from "../../threads/conversation-pagination.ts";
 import { executeAgentConversationTurn, generateAgentChatReply } from "./agent-reply-runner.ts";
 
 export async function tryHandleAgentMessagesRoutes(ctx: StudioRouteContext): Promise<boolean> {
@@ -164,24 +168,25 @@ export async function tryHandleAgentMessagesRoutes(ctx: StudioRouteContext): Pro
       const limitParam = url.searchParams.get("limit");
       if (
         deps.phase13?.pagination &&
-        !canalIdQuery?.startsWith("rotina:") &&
-        (beforeCursor || aroundMessageId || limitParam)
+        !canalIdQuery?.startsWith("rotina:")
       ) {
         try {
-          const limitNum = limitParam ? Number(limitParam) : 50;
+          const parsedLimit = limitParam !== null ? Number(limitParam) : undefined;
+          const explicitLimit =
+            parsedLimit !== undefined && Number.isFinite(parsedLimit) ? parsedLimit : undefined;
           const mainThreadId = `main:${agenteId}`;
           const pagina = aroundMessageId
             ? deps.phase13.pagination.readAround({
                 threadId: mainThreadId,
                 agenteId,
                 aroundMessageId,
-                limit: Number.isFinite(limitNum) ? limitNum : 50,
+                limit: explicitLimit ?? INITIAL_CONVERSATION_PAGE_SIZE,
               })
             : deps.phase13.pagination.readPage({
                 threadId: mainThreadId,
                 agenteId,
                 beforeCursor,
-                limit: Number.isFinite(limitNum) ? limitNum : 50,
+                limit: explicitLimit,
               });
           sendJson(res, 200, {
             mensagens: pagina.mensagens.map((m) => applyBrandToMessage(m, currentBrand)),
@@ -196,11 +201,24 @@ export async function tryHandleAgentMessagesRoutes(ctx: StudioRouteContext): Pro
         return true;
       }
 
-      const rows = db.connection
-        .prepare(
-          `SELECT * FROM projecao_conversas_chat WHERE canal_id = ? ORDER BY criado_em ASC, COALESCE(ordinal, 0) ASC, mensagem_id ASC LIMIT 120;`
-        )
-        .all(canalId) as Array<Parameters<typeof mapChatRow>[0]>;
+      const unreadRow = db.connection
+        .prepare(`SELECT COUNT(*) AS total FROM projecao_conversas_chat WHERE canal_id = ? AND lida = 0;`)
+        .get(canalId) as { total?: number } | undefined;
+      const parsedFallbackLimit = limitParam !== null ? Number(limitParam) : undefined;
+      const fallbackLimit =
+        parsedFallbackLimit !== undefined && Number.isFinite(parsedFallbackLimit)
+          ? Math.max(1, Math.min(MAX_UNREAD_INITIAL_PAGE_SIZE, Math.floor(parsedFallbackLimit)))
+          : Math.min(
+              MAX_UNREAD_INITIAL_PAGE_SIZE,
+              Math.max(INITIAL_CONVERSATION_PAGE_SIZE, Number(unreadRow?.total ?? 0)),
+            );
+      const rows = (
+        db.connection
+          .prepare(
+            `SELECT * FROM projecao_conversas_chat WHERE canal_id = ? ORDER BY criado_em DESC, COALESCE(ordinal, 0) DESC, mensagem_id DESC LIMIT ?;`
+          )
+          .all(canalId, fallbackLimit) as Array<Parameters<typeof mapChatRow>[0]>
+      ).reverse();
       sendJson(res, 200, { mensagens: rows.map((r) => mapChatRow(r, db, currentBrand)) });
       return true;
     }

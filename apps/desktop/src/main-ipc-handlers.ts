@@ -8,6 +8,7 @@ import { registerTrustedIpcHandle } from "./desktop-security.ts";
 import { showDesktopNotification, type NativeDesktopNotificationPayload } from "./desktop-notifications.ts";
 import type { FloatingDockController } from "./floating-dock.ts";
 import type { BrowserPipWindowController } from "./browser-pip-window.ts";
+import type { DetachedBrowserWindowController } from "./browser-window-detached.ts";
 
 export interface DesktopIpcDeps {
   userDataDir: string;
@@ -16,6 +17,7 @@ export interface DesktopIpcDeps {
   getMainWindow: () => BrowserWindow | null;
   getFloatingDock: () => FloatingDockController | null;
   browserPipController?: BrowserPipWindowController;
+  detachedBrowserController?: DetachedBrowserWindowController;
   registerCommandPaletteShortcut?: (accelerator: string) => boolean;
   resolveIconPath: (productRoot: string) => string | undefined;
   isLocalDaemonOrigin: (rawUrl: string, daemonPort: number) => boolean;
@@ -370,5 +372,37 @@ export function registerDesktopIpcHandlers(deps: DesktopIpcDeps): void {
 
   handleTrusted("criativo:browser-pip-close", () => {
     return deps.browserPipController?.close() ?? false;
+  });
+
+  handleTrusted("criativo:browser-detached-open", async (_evt, rawPayload: unknown) => {
+    const handle = deps.getDaemonHandle();
+    if (!handle || !deps.detachedBrowserController) return false;
+    const payload =
+      rawPayload && typeof rawPayload === "object"
+        ? (rawPayload as { tabId?: unknown; agenteId?: unknown; displayId?: unknown })
+        : {};
+    return await deps.detachedBrowserController.open({
+      daemonBaseUrl: handle.baseUrl,
+      tabId: typeof payload.tabId === "string" ? payload.tabId : null,
+      agenteId: typeof payload.agenteId === "string" ? payload.agenteId : null,
+      displayId: typeof payload.displayId === "string" ? payload.displayId : null,
+      preloadPath: deps.preloadPath,
+      isLocalOrigin: (rawUrl) => deps.isLocalDaemonOrigin(rawUrl, handle.port),
+      openExternalValidated: deps.openExternalValidated,
+      onClosed: (info) => {
+        const mainWin = deps.getMainWindow();
+        if (mainWin && !mainWin.isDestroyed()) {
+          mainWin.webContents.send("criativo:browser-detached-closed", info);
+        }
+      },
+    });
+  });
+
+  handleTrusted("criativo:browser-detached-close", () => {
+    return deps.detachedBrowserController?.close() ?? false;
+  });
+
+  handleTrusted("criativo:browser-detached-displays", () => {
+    return deps.detachedBrowserController?.getDisplays() ?? [];
   });
 }

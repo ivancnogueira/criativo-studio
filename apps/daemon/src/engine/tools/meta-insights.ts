@@ -2,6 +2,10 @@ import { resolveMetaGraphApiBase, resolveMetaGraphApiVersion } from "@criativo/c
 import type { FetchLike } from "../providers/provider-interface.ts";
 import type { VaultService } from "../../vault/vault-service.ts";
 import type { NativeAppConnectionsStore } from "../../marketplace/native-app-connections-store.ts";
+import {
+  buildCandidateMetricSets,
+  extractRetentionMetricsFromMap,
+} from "./meta-retention-metrics.ts";
 
 export interface MetaCredentialsResolved {
   accessToken: string | null;
@@ -54,6 +58,9 @@ export interface MetaPostMetricItem {
   avg_watch_time_ms: number | null;
   video_view_total_time_ms: number | null;
   taxa_salvamento_pct: number | null;
+  skip_rate_3s_pct: number | null;
+  hook_retention_3s_pct: number | null;
+  reposts: number | null;
 }
 
 export interface MetaInsightsReport {
@@ -77,7 +84,15 @@ export interface MetaInsightsReport {
   posts: MetaPostMetricItem[];
   resumo_por_formato: Record<
     string,
-    { quantidade: number; avg_salvamento_pct: number | null; total_saved: number; total_reach: number; total_views: number }
+    {
+      quantidade: number;
+      avg_salvamento_pct: number | null;
+      total_saved: number;
+      total_reach: number;
+      total_views: number;
+      avg_skip_rate_3s_pct: number | null;
+      total_reposts: number;
+    }
   >;
   amostra_insuficiente: boolean;
   avisos: string[];
@@ -441,25 +456,18 @@ export async function fetchMetaAccountAndMediaInsights(
   });
 
   const posts: MetaPostMetricItem[] = [];
+  let hadRetentionOrRepostsFallback = false;
   for (const item of filteredMedia) {
     const productType = (item.media_product_type || item.media_type || "FEED").toUpperCase();
     const isReel = productType === "REELS" || productType === "REEL";
     if (!includeReels && isReel) continue;
 
-    const candidateMetricSets = isReel
-      ? [
-          "views,reach,saved,shares,likes,comments,ig_reels_avg_watch_time,ig_reels_video_view_total_time",
-          "views,reach,saved,shares,likes,comments",
-          "reach,saved,likes,comments",
-        ]
-      : [
-          "views,reach,saved,shares,total_interactions",
-          "views,reach,saved,shares",
-          "reach,saved",
-        ];
+    const candidateMetricSets = buildCandidateMetricSets(isReel);
 
     let metricMap: Record<string, number | null> = {};
-    for (const metricSet of candidateMetricSets) {
+    let matchedMetricSet: string | null = null;
+    for (let idx = 0; idx < candidateMetricSets.length; idx += 1) {
+      const metricSet = candidateMetricSets[idx];
       const mUrl = `${graphBase}/${encodeURIComponent(item.id)}/insights?metric=${encodeURIComponent(
         metricSet
       )}&access_token=${encodeURIComponent(creds.accessToken)}`;
@@ -469,14 +477,23 @@ export async function fetchMetaAccountAndMediaInsights(
           data?: Array<{ name?: string; total_value?: { value?: unknown }; values?: Array<{ value?: unknown }> }>;
         };
         metricMap = extractInsightEntryMap(j.data ?? []);
+        matchedMetricSet = metricSet;
+        if (idx > 0) {
+          hadRetentionOrRepostsFallback = true;
+        }
         break;
       }
+    }
+
+    if (matchedMetricSet === null) {
+      hadRetentionOrRepostsFallback = true;
     }
 
     const reach = metricMap.reach ?? null;
     const saved = metricMap.saved ?? null;
     const taxaSalvamento =
       reach !== null && reach > 0 && saved !== null ? Number(((saved / reach) * 100).toFixed(2)) : null;
+    const retention = extractRetentionMetricsFromMap(metricMap, isReel);
 
     posts.push({
       id: item.id,
@@ -495,10 +512,20 @@ export async function fetchMetaAccountAndMediaInsights(
       avg_watch_time_ms: metricMap.ig_reels_avg_watch_time ?? null,
       video_view_total_time_ms: metricMap.ig_reels_video_view_total_time ?? null,
       taxa_salvamento_pct: taxaSalvamento,
+      skip_rate_3s_pct: retention.skip_rate_3s_pct,
+      hook_retention_3s_pct: retention.hook_retention_3s_pct,
+      reposts: retention.reposts,
     });
   }
 
+  if (hadRetentionOrRepostsFallback) {
+    avisos.push(
+      "Métricas avançadas de retenção (reels_skip_rate) e/ou reposts estavam indisponíveis para parte das mídias nesta conta/permissão e foram mantidas como null."
+    );
+  }
+
   const resumoPorFormato: MetaInsightsReport["resumo_por_formato"] = {};
+  const skipAccumulator = new Map<string, { sum: number; count: number }>();
   for (const p of posts) {
     const key = p.media_product_type || p.media_type;
     if (!resumoPorFormato[key]) {
@@ -508,6 +535,8 @@ export async function fetchMetaAccountAndMediaInsights(
         total_saved: 0,
         total_reach: 0,
         total_views: 0,
+        avg_skip_rate_3s_pct: null,
+        total_reposts: 0,
       };
     }
     const bucket = resumoPorFormato[key];
@@ -515,11 +544,21 @@ export async function fetchMetaAccountAndMediaInsights(
     bucket.total_saved += p.saved ?? 0;
     bucket.total_reach += p.reach ?? 0;
     bucket.total_views += p.views ?? 0;
+    bucket.total_reposts += p.reposts ?? 0;
+    if (p.skip_rate_3s_pct !== null) {
+      const acc = skipAccumulator.get(key) ?? { sum: 0, count: 0 };
+      acc.sum += p.skip_rate_3s_pct;
+      acc.count += 1;
+      skipAccumulator.set(key, acc);
+    }
   }
 
-  for (const bucket of Object.values(resumoPorFormato)) {
+  for (const [key, bucket] of Object.entries(resumoPorFormato)) {
     bucket.avg_salvamento_pct =
       bucket.total_reach > 0 ? Number(((bucket.total_saved / bucket.total_reach) * 100).toFixed(2)) : null;
+    const acc = skipAccumulator.get(key);
+    bucket.avg_skip_rate_3s_pct =
+      acc && acc.count > 0 ? Number((acc.sum / acc.count).toFixed(2)) : null;
   }
 
   return {

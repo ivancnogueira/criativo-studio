@@ -12,12 +12,14 @@ import {
   resolve,
 } from "node:path";
 import {
-  createInterface,
-} from "node:readline";
+  ACP_MAX_MESSAGE_BYTES,
+  NdjsonBufferedLineReader,
+} from "./acp-stream-framing.ts";
 import { type AcpDiscoveredModel, type LabeledImageInput, formatLabeledImageInstruction, type AcpPromptExecutionOutput, type AcpSessionNewResult, resolveAcpModelSelection, inferMimeFromImagePath, normalizeJsonRpcError } from "./antigravity-acp-helpers.ts";
 import { createAcpStreamPresentation, createTurnStallWatchdog, detectAcpBackgroundTaskOutput, getLastMcpActivityAt, hasActiveMcpToolForAgent, type AcpToolStepEvent } from "./turn-stall-watchdog.ts";
 
 interface ManagedPendingRpc {
+  method: string;
   resolve: (result: unknown) => void;
   reject: (err: Error) => void;
   timer?: NodeJS.Timeout;
@@ -27,6 +29,7 @@ interface ManagedPendingRpc {
 
 export class AcpProcessConnection {
   private readonly child: ChildProcessWithoutNullStreams;
+  private readonly stdoutReader: NdjsonBufferedLineReader;
   private readonly pending = new Map<number, ManagedPendingRpc>();
   private readonly openToolCalls = new Set<string>();
   private readonly deferredCloseTimers = new Set<NodeJS.Timeout>();
@@ -53,6 +56,7 @@ export class AcpProcessConnection {
           spawnArgsOverride?: string[];
           interactiveLogin?: boolean;
           onAuthUrl?: (url: string) => void;
+          maxMessageBytes?: number;
         }
   ) {
     this.executable = executable;
@@ -90,8 +94,12 @@ export class AcpProcessConnection {
       this.closed = true;
     });
 
-    const rl = createInterface({ input: this.child.stdout });
-    rl.on("line", (line) => this.handleStdoutLine(line));
+    this.stdoutReader = new NdjsonBufferedLineReader({
+      stream: this.child.stdout,
+      maxMessageBytes: opts.maxMessageBytes ?? ACP_MAX_MESSAGE_BYTES,
+      onLine: (line) => this.handleStdoutLine(line),
+      onOversizedLine: (info) => this.handleOversizedStdoutLine(info),
+    });
 
     let authUrlEmitted = false;
     this.child.stderr.on("data", (chunk) => {
@@ -126,8 +134,23 @@ export class AcpProcessConnection {
         wait.reject(new Error(errMsg));
         this.pending.delete(id);
       }
-      rl.close();
+      this.stdoutReader.dispose();
     });
+  }
+
+  private handleOversizedStdoutLine(info: { byteLength: number }): void {
+    const err = new Error(
+      `Payload ACP excedeu o limite seguro de 256 MB (${Math.round(info.byteLength / 1024)} KB recebidos) e foi descartado sem afetar outras sessões.`,
+    );
+    const targetEntry =
+      Array.from(this.pending.entries()).find(([, w]) => w.method === "session/prompt") ??
+      Array.from(this.pending.entries())[0];
+    if (!targetEntry) return;
+    const [id, wait] = targetEntry;
+    this.pending.delete(id);
+    if (wait.timer) clearTimeout(wait.timer);
+    wait.cleanup?.();
+    wait.reject(err);
   }
 
   public isAlive(): boolean {
@@ -345,6 +368,7 @@ export class AcpProcessConnection {
       }
 
       this.pending.set(id, {
+        method,
         resolve: (res) => {
           if (settled) return;
           settled = true;

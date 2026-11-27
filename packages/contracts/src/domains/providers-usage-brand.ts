@@ -92,6 +92,8 @@ export interface GrupoCotaConta {
   janela_semanal: JanelaCotaConta | null;
 }
 
+export type PoolEstrategiaContas = "fill_first" | "spread";
+
 export interface ContaProvedorInfo {
   id: string;
   provedor: ProviderName;
@@ -106,12 +108,18 @@ export interface ContaProvedorInfo {
   grupos_cota: GrupoCotaConta[];
   modelos_disponiveis?: string[];
   origem?: "sistema" | "externo" | "criativo";
+  /** Indica que a conta está aguardando conclusão de turnos ativos antes da remoção definitiva. */
+  removendo?: boolean;
+  /** Quantidade de turnos ativos em execução nesta conta. */
+  turnos_ativos?: number;
 }
 
 export interface PoolContasConfig {
   habilitado: boolean;
   contas_excluidas: string[];
   conta_em_uso: string | null;
+  /** Estratégia de roteamento entre contas no pool: preenchimento sequencial ou distribuição equilibrada. */
+  estrategia?: PoolEstrategiaContas;
 }
 
 export interface ProvedorStatusInfo {
@@ -180,6 +188,26 @@ export interface LinhaDetalheUso extends TotaisAnalyticsUso {
   participacao_percentual: number | null;
 }
 
+export type GranularidadeAnalyticsUso = "diario" | "semanal" | "mensal";
+
+export interface PontoSerieUsoPorProvedor {
+  provedor: string;
+  rotulo: string;
+  tokens: number;
+  custo_usd: number;
+}
+
+export interface PontoSerieTemporalUso {
+  chave: string;
+  rotulo: string;
+  inicio_iso: string;
+  fim_iso: string;
+  tokens: number;
+  custo_usd: number;
+  turnos: number;
+  por_provedor: PontoSerieUsoPorProvedor[];
+}
+
 export interface PontoDiarioUso {
   data: string;
   rotulo: string;
@@ -193,6 +221,7 @@ export interface RelatorioAnalyticsHost {
   agente_id: string | null;
   coleta_iniciada_em: string;
   atualizado_em: string;
+  granularidade?: GranularidadeAnalyticsUso;
   totais: TotaisAnalyticsUso;
   provedores: Array<{
     provedor: string;
@@ -204,6 +233,7 @@ export interface RelatorioAnalyticsHost {
   por_modelo: LinhaDetalheUso[];
   por_agente: LinhaDetalheUso[];
   por_dia: PontoDiarioUso[];
+  serie_empilhada?: PontoSerieTemporalUso[];
   por_habilidade: Array<{
     habilidade: string;
     carregamentos: number;

@@ -107,7 +107,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "navigate": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         const safeUrl = assertSafeNavigationUrl(input.url ?? "");
         loadAgentBrowserPolicy(ctx.db, input.agenteId ?? entry.agenteId).assertUrlAllowed(safeUrl.toString());
         await entry.page!.goto(safeUrl.toString(), {
@@ -121,7 +121,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "go_back": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         const pageAny = entry.page as unknown as { goBack?: () => Promise<unknown> };
         if (typeof pageAny.goBack === "function") {
           await pageAny.goBack().catch(() => {});
@@ -137,7 +137,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "go_forward": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         const pageAny = entry.page as unknown as { goForward?: () => Promise<unknown> };
         if (typeof pageAny.goForward === "function") {
           await pageAny.goForward().catch(() => {});
@@ -153,7 +153,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "reload": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         const pageAny = entry.page as unknown as { reload?: () => Promise<unknown> };
         if (typeof pageAny.reload === "function") {
           await pageAny.reload().catch(() => {});
@@ -169,15 +169,18 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "snapshot": {
-        const tab = input.tabId ? ctx.sessionManager.getTab(input.tabId) : null;
+        let tab = input.tabId ? ctx.sessionManager.getTab(input.tabId) : null;
         if (!tab) {
           throw new Error(`Aba '${input.tabId ?? ""}' não encontrada.`);
+        }
+        if (tab.unloaded) {
+          tab = await ctx.ensureRealTabLoaded(tab.tabId);
         }
         return await ctx.captureTabSnapshot(tab, Boolean(input.image));
       }
 
       case "click": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         if (!input.target) throw new Error("Informe 'target' em click.");
         const targetHint = JSON.stringify(input.target);
         if (looksLikePaymentSubmitHint(targetHint)) {
@@ -204,7 +207,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "type": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         if (!input.target) throw new Error("Informe 'target' em type.");
         const resolved = resolveBrowserTarget(
           entry.page!,
@@ -235,7 +238,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "fill_fields": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         const fields = Array.isArray(input.fields) ? input.fields : [];
         if (fields.length < 1 || fields.length > BROWSER_FILL_FIELDS_MAX_FIELDS) {
           throw new Error(
@@ -291,7 +294,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "press": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         const key = input.key?.trim();
         if (!key) throw new Error("Informe a tecla em 'key' (ex.: 'Enter', 'Escape', 'Tab').");
         if (input.target) {
@@ -312,7 +315,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "hover": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         if (!input.target) throw new Error("Informe 'target' em hover.");
         const resolved = resolveBrowserTarget(
           entry.page!,
@@ -329,7 +332,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "scroll": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         if (input.target && input.target.kind !== "point") {
           const resolved = resolveBrowserTarget(
             entry.page!,
@@ -348,7 +351,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "select_option": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         if (!input.target) throw new Error("Informe 'target' em select_option.");
         const vals = Array.isArray(input.values) ? input.values : [];
         if (vals.length === 0) throw new Error("Informe 'values' em select_option.");
@@ -364,7 +367,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "set_checked": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         if (!input.target) throw new Error("Informe 'target' em set_checked.");
         const resolved = resolveBrowserTarget(
           entry.page!,
@@ -378,7 +381,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "drag": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         if (!input.target || !input.toTarget) {
           throw new Error("Informe 'target' e 'toTarget' em drag.");
         }
@@ -407,7 +410,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "upload_files": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         if (!input.target) throw new Error("Informe 'target' em upload_files.");
         const safeFiles = assertSafeUploadPaths(
           input.paths ?? [],
@@ -426,7 +429,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "wait_for": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         const timeout = Math.min(Math.max(input.timeoutMs ?? 10_000, 200), 30_000);
         const kind = input.waitKind ?? "load";
         if (kind === "text" && input.waitValue) {
@@ -443,7 +446,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "screenshot": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         const buf = await entry.page!.screenshot({ type: "png" });
         const shotsDir = resolve(ctx.workspaceRoot, "dados", "browser-screenshots");
         mkdirSync(shotsDir, { recursive: true });
@@ -464,7 +467,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
             "A ação 'evaluate' requer nível de permissão 'ask' ou 'full' no agente para executar scripts arbitrários.",
           );
         }
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         const expr = input.expression?.trim();
         if (!expr) throw new Error("Informe 'expression' em evaluate.");
         const rawOut = await Promise.race([
@@ -481,7 +484,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "handle_dialog": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         if (!entry.pendingDialogObj) {
           return { ok: false, note: "Nenhum diálogo nativo pendente nesta aba." };
         }
@@ -496,7 +499,7 @@ input: BrowserExecuteActionInput): Promise<unknown> {
       }
 
       case "set_environment": {
-        const entry = ctx.requireRealTab(input.tabId);
+        const entry = await ctx.ensureRealTabLoaded(input.tabId);
         if (input.viewport) {
           await entry.page!.setViewportSize({
             width: Math.min(Math.max(320, Math.round(input.viewport.width)), 2560),

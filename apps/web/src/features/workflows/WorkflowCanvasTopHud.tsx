@@ -4,6 +4,7 @@ import {
   ChevronDown,
   LayoutGrid,
   ListChecks,
+  Pause,
   Play,
   Redo2,
   Save,
@@ -163,7 +164,79 @@ export function WorkflowCanvasTopHud({
               const rec = await onGetVersion(currentWf.workflow_id, verId);
               setPreviewVersion(rec);
             }}
+            onExportWorkflow={async (wf) => {
+              try {
+                const bundle = await daemonApi.exportWorkflowBundle(wf.workflow_id);
+                const slug =
+                  wf.nome.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") ||
+                  wf.workflow_id;
+                const blob = new Blob([JSON.stringify(bundle, null, 2)], {
+                  type: "application/json",
+                });
+                const url = URL.createObjectURL(blob);
+                const anchor = document.createElement("a");
+                anchor.href = url;
+                anchor.download = `${slug}.workflow.json`;
+                document.body.appendChild(anchor);
+                anchor.click();
+                anchor.remove();
+                URL.revokeObjectURL(url);
+                setStatusFeedback(`Fluxo "${wf.nome}" exportado (${bundle.assets.length} asset(s)).`);
+              } catch (err) {
+                setStatusFeedback(err instanceof Error ? err.message : "Falha ao exportar fluxo.");
+              }
+            }}
+            onImportWorkflowFile={async (file) => {
+              try {
+                const rawText = await file.text();
+                const parsed = JSON.parse(rawText) as unknown;
+                const result = await daemonApi.importWorkflowBundle(parsed);
+                await props.onRefreshWorkflows?.();
+                const norm = normalizeWorkflowGraph(result.workflow);
+                setLocalNos(norm.nos);
+                setLocalArestas(norm.arestas);
+                setLocalTracos(norm.tracos);
+                setLocalRevision(result.workflow.revisao_grafo ?? 0);
+                setActiveWfId(result.workflow.workflow_id);
+                await hydrateWorkflowSideData(result.workflow.workflow_id);
+                setStatusFeedback(
+                  "Fluxo importado em estado pausado (ativo: false). Revise gatilhos antes de ativar."
+                );
+              } catch (err) {
+                setStatusFeedback(err instanceof Error ? err.message : "Falha ao importar arquivo .workflow.");
+              }
+            }}
           />
+          {currentWf && !isReadOnly && (
+            <button
+              type="button"
+              data-testid="workflow-active-toggle-btn"
+              onClick={() => {
+                const nextActive = !currentWf.ativo;
+                void onSaveWorkflow({
+                  workflow_id: currentWf.workflow_id,
+                  nome: currentWf.nome,
+                  descricao: currentWf.descricao,
+                  nos: localNos,
+                  arestas: localArestas,
+                  tracos: localTracos,
+                  ativo: nextActive,
+                  base_revision: localRevRef.current,
+                }).then((saved) => {
+                  setLocalRevision(saved.revisao_grafo ?? localRevRef.current + 1);
+                  setStatusFeedback(nextActive ? "Fluxo ativado." : "Fluxo pausado.");
+                });
+              }}
+              className={`mt-1.5 inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors ${
+                currentWf.ativo
+                  ? "border-[#31CF76]/40 bg-[#31CF76]/15 text-[#31CF76] hover:bg-[#31CF76]/25"
+                  : "border-[#F59E0B]/40 bg-[#F59E0B]/15 text-[#F59E0B] hover:bg-[#F59E0B]/25"
+              }`}
+            >
+              {currentWf.ativo ? <Play className="h-2.5 w-2.5 fill-current" /> : <Pause className="h-2.5 w-2.5" />}
+              <span>{currentWf.ativo ? "Ativo" : "Pausado"}</span>
+            </button>
+          )}
         </div>
 
         {/* Barra de versão somente leitura centrada */}
@@ -239,14 +312,15 @@ export function WorkflowCanvasTopHud({
               <div className="mx-0.5 h-4 w-px bg-white/[0.08]" />
               <button
                 type="button"
+                data-testid="workflow-tidy-up-btn"
                 disabled={localNos.length === 0}
                 onClick={handleAutoLayout}
-                title="Organizar nós automaticamente"
-                aria-label="Organizar nós"
+                title="Organizar nós em camadas topológicas (Tidy up)"
+                aria-label="Organizar (Tidy up)"
                 className="flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] font-medium text-[#DCDCDC] hover:bg-[#2A2A2A] hover:text-white disabled:opacity-35 disabled:hover:bg-transparent"
               >
                 <LayoutGrid className="h-3.5 w-3.5 text-[#42A0FF]" />
-                <span className="hidden xl:inline">Organizar nós</span>
+                <span className="hidden xl:inline">Organizar (Tidy up)</span>
               </button>
             </div>
           )}

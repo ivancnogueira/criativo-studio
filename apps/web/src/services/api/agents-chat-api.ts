@@ -544,8 +544,9 @@ export const agentsChatApi = {
     );
   },
 
-  async listChannelMessages(canalId: string): Promise<MensagemChat[]> {
-    const res = await apiFetch(`/api/canais/${encodeURIComponent(canalId)}/mensagens`);
+  async listChannelMessages(canalId: string, limit?: number): Promise<MensagemChat[]> {
+    const qs = limit ? `?limit=${encodeURIComponent(String(limit))}` : "";
+    const res = await apiFetch(`/api/canais/${encodeURIComponent(canalId)}/mensagens${qs}`);
     const json = (await res.json()) as { mensagens: MensagemChat[] };
     return json.mensagens ?? [];
   },

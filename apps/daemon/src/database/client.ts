@@ -1,13 +1,46 @@
 import { mkdirSync } from "node:fs";
+import os from "node:os";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { runPhase10Migrations } from "./migrations.ts";
 import { SCHEMA_TABLES } from "./schema.ts";
 
+/** Teto máximo do cache de páginas SQLite em KiB (64 MB = 65536 KiB). */
+export const MAX_SQLITE_CACHE_KB = 65_536;
+export const MIN_SQLITE_CACHE_KB = 8_192;
+
+/**
+ * Resolve o tamanho positivo em KiB para `PRAGMA cache_size = -<kb>` com teto de 64 MB.
+ */
+export function resolveSqliteCacheSizeKb(
+  totalMemBytes = os.totalmem(),
+  requestedMb?: number,
+): number {
+  const envRaw = process.env.CRIATIVO_SQLITE_CACHE_MB;
+  const envMb = envRaw !== undefined && envRaw.trim() !== "" ? Number(envRaw) : undefined;
+  const explicitMb =
+    typeof requestedMb === "number" && Number.isFinite(requestedMb) && requestedMb > 0
+      ? requestedMb
+      : typeof envMb === "number" && Number.isFinite(envMb) && envMb > 0
+        ? envMb
+        : undefined;
+
+  if (explicitMb !== undefined) {
+    return Math.max(MIN_SQLITE_CACHE_KB, Math.min(MAX_SQLITE_CACHE_KB, Math.round(explicitMb * 1024)));
+  }
+  if (totalMemBytes >= 1024 * 1024 * 1024) {
+    return MAX_SQLITE_CACHE_KB;
+  }
+  const proportionalKb = Math.round((totalMemBytes / 1024) * 0.05);
+  return Math.max(MIN_SQLITE_CACHE_KB, Math.min(MAX_SQLITE_CACHE_KB, proportionalKb));
+}
+
 export interface DatabaseClientOptions {
   dbPath?: string;
   /** Permite simular runtime sem módulo SQLite FTS5 (útil para testar fallback de VPS Linux). */
   disableFts5?: boolean;
+  /** Tamanho desejado de cache em MB (teto máximo de 64 MB). */
+  cacheSizeMb?: number;
 }
 
 /**
@@ -28,7 +61,7 @@ export class CriativoDatabase {
       mkdirSync(dirname(this.dbPath), { recursive: true });
     }
     this.connection = new DatabaseSync(this.dbPath);
-    this.configurePragmas();
+    this.configurePragmas(options.cacheSizeMb);
     this.fts5Enabled = this.detectFts5Support(options.disableFts5 === true);
   }
 
@@ -57,11 +90,14 @@ export class CriativoDatabase {
     return this.fts5Enabled && this.hasTable("agente_memorias_fts");
   }
 
-  private configurePragmas(): void {
+  private configurePragmas(cacheSizeMb?: number): void {
+    const cacheKb = resolveSqliteCacheSizeKb(os.totalmem(), cacheSizeMb);
     this.connection.exec("PRAGMA journal_mode = WAL;");
     this.connection.exec("PRAGMA synchronous = NORMAL;");
     this.connection.exec("PRAGMA foreign_keys = ON;");
     this.connection.exec("PRAGMA busy_timeout = 5000;");
+    this.connection.exec(`PRAGMA cache_size = -${cacheKb};`);
+    this.connection.exec("PRAGMA temp_store = MEMORY;");
   }
 
   /**
@@ -88,6 +124,10 @@ export class CriativoDatabase {
       this.applyPhase15Migrations();
       this.applyPhase17Migrations();
       this.applyChannelSettingsMigrations();
+      this.applyPhase44Migrations();
+      this.connection.exec(
+        "CREATE INDEX IF NOT EXISTS idx_eventos_ocorrido_em ON eventos_orquestracao(ocorrido_em);",
+      );
     });
   }
 
@@ -169,6 +209,29 @@ export class CriativoDatabase {
       },
       { name: "context_cutoff_at", definition: "TEXT" },
       { name: "context_summary", definition: "TEXT" },
+    ]);
+  }
+
+  private applyPhase44Migrations(): void {
+    this.ensureColumns("calendario_editorial_posts", [
+      {
+        name: "trial_reel_enabled",
+        definition: "INTEGER NOT NULL DEFAULT 0 CHECK(trial_reel_enabled IN (0, 1))",
+      },
+      {
+        name: "trial_graduation_strategy",
+        definition:
+          "TEXT NOT NULL DEFAULT 'SS_PERFORMANCE' CHECK(trial_graduation_strategy IN ('MANUAL', 'SS_PERFORMANCE'))",
+      },
+      { name: "primeiro_comentario", definition: "TEXT" },
+      {
+        name: "primeiro_comentario_aprovado",
+        definition: "INTEGER NOT NULL DEFAULT 0 CHECK(primeiro_comentario_aprovado IN (0, 1))",
+      },
+      {
+        name: "primeiro_comentario_delay_seg",
+        definition: "INTEGER NOT NULL DEFAULT 30",
+      },
     ]);
   }
 
@@ -331,6 +394,11 @@ export class CriativoDatabase {
     }
     if (!taskCols.has("origem")) {
       this.connection.exec("ALTER TABLE projecao_tarefas ADD COLUMN origem TEXT NOT NULL DEFAULT 'usuario';");
+    }
+
+    const wfStepCols = this.getTableColumns("projecao_workflow_etapas");
+    if (!wfStepCols.has("structured_output_json")) {
+      this.connection.exec("ALTER TABLE projecao_workflow_etapas ADD COLUMN structured_output_json TEXT;");
     }
   }
 

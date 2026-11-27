@@ -9,6 +9,7 @@ import {
 import { CODE_ASSIST_URL, DAILY_CODE_ASSIST_URL, GENERATE_TIMEOUT_MS, type AntigravityGenerateRuntimeContext, type CodeAssistGenerateInput, type CodeAssistGenerateOutput, type DiscoveredTokenEntry } from "./live-types.ts";
 import { getAntigravityUserAgent, inferImageMimeFromPath } from "./quota-helpers.ts";
 import { callCodeAssistEndpoint, safeReadJson } from "./model-filter-helpers.ts";
+import { accountTurnCoordinator, selectPoolAccount } from "../provider-account-pool.ts";
 
 export async function executeAntigravityCodeAssistGenerate(
   ctx: AntigravityGenerateRuntimeContext,
@@ -21,11 +22,23 @@ export async function executeAntigravityCodeAssistGenerate(
       throw new Error("Nenhuma conta Google conectada no Studio.");
     }
 
+    const drainingIds = accountTurnCoordinator.getDrainingAccountIds("gemini");
+    const pickedPoolAccount = selectPoolAccount(
+      snapshot.contas,
+      snapshot.pool,
+      input.preferredAccountId,
+      {
+        activeTurnsByAccount: accountTurnCoordinator.getActiveTurnsMap("gemini"),
+        drainingAccountIds: drainingIds,
+      },
+    );
     const poolExcluded = new Set(snapshot.pool?.contas_excluidas ?? []);
     const candidateAccountIds = [
+      pickedPoolAccount?.id,
       input.preferredAccountId,
       snapshot.pool?.conta_em_uso,
-      ...snapshot.contas.filter((c) => !poolExcluded.has(c.id)).map((c) => c.id),
+      ...snapshot.contas.filter((c) => !poolExcluded.has(c.id) && !drainingIds.has(c.id)).map((c) => c.id),
+      ...snapshot.contas.filter((c) => !drainingIds.has(c.id)).map((c) => c.id),
       ...snapshot.contas.map((c) => c.id),
     ].filter((v): v is string => Boolean(v));
 
@@ -33,9 +46,13 @@ export async function executeAntigravityCodeAssistGenerate(
     const chosenEntry =
       uniqueAccountIds
         .map((id) => entries.find((e) => e.id === id))
-        .find((e): e is DiscoveredTokenEntry => Boolean(e)) ?? entries[0];
+        .find((e): e is DiscoveredTokenEntry => Boolean(e)) ??
+      entries.find((e) => !drainingIds.has(e.id)) ??
+      entries[0];
 
     const cliAvailable = Boolean(ctx.acpService.getCliExecutable());
+    const releaseTurn = accountTurnCoordinator.beginTurn("gemini", chosenEntry.id);
+    try {
 
     // 1. Chamadas de TEXTO/CHAT preferem o protocolo ACP aquecido (renova token sozinho e injeta MCPs autorizados ao agente)
     //    com retry automático e fallback transparente para Code Assist REST se a sessão ACP oscilar.
@@ -280,4 +297,7 @@ export async function executeAntigravityCodeAssistGenerate(
     }
 
     throw lastError instanceof Error ? lastError : new Error("Falha ao executar Code Assist.");
+    } finally {
+      releaseTurn?.();
+    }
 }

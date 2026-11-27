@@ -16,6 +16,7 @@ export * from "./mcp-contracts.ts";
 export * from "./marketplace-contracts.ts";
 export * from "./routines.ts";
 export * from "./workflow-graph.ts";
+export * from "./workflow-pro.ts";
 export * from "./license-crypto.ts";
 export * from "./social-studio.ts";
 export * from "./phase33-automation-media.ts";

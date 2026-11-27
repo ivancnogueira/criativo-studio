@@ -34,6 +34,8 @@ import {
 } from "../mcp/studio-mcp-bridge.ts";
 import { executeAgentConversationTurn, tryHandleStudioRoute } from "./studio-routes.ts";
 import { MemoryReviewService } from "../engine/runner/memory-review-service.ts";
+import { CacheExpiryCompactionService } from "../chat/cache-expiry-compaction-service.ts";
+import { MetaFirstCommentService } from "../social/meta-first-comment-service.ts";
 import type { Phase14ToolServices } from "./studio-tools-bridge.ts";
 import { readJsonBody, readRawBody, sendJson, type DaemonServerOptions, type TaskExecutorHook } from "./daemon-http-utils.ts";
 import type { DaemonInfraServices } from "./daemon-infra-services.ts";
@@ -225,6 +227,7 @@ export async function createDaemonRuntimeServices(
   const resourceMonitor = new HostResourceMonitorService({
     workspaceRoot: resolvedWorkspaceRoot,
   });
+  browserService.sessionManager.setMemoryPressureReader(() => resourceMonitor.getMemoryPressure());
   const browserAutofillService = new BrowserAutofillService({
     loginVault,
     passwordManagers: passwordManagerRegistry,
@@ -376,6 +379,13 @@ export async function createDaemonRuntimeServices(
     redactSecrets: (t) => apiKeysBridge.redactSecretValues(t),
     isInteractiveSlotBusy: () => runtimeState.isInteractiveSlotBusy(),
   });
+  const cacheExpiryCompaction = new CacheExpiryCompactionService({
+    db,
+    contextReset: infra.contextReset,
+  });
+  if (options.autoStartLoops !== false) {
+    cacheExpiryCompaction.start(60_000);
+  }
 
   const phase14Services: Phase14ToolServices = {
     db,
@@ -545,6 +555,14 @@ export async function createDaemonRuntimeServices(
   };
   messagingDepsReady = true;
 
+  const metaFirstCommentService = new MetaFirstCommentService({
+    db,
+    vault,
+    nativeStore: catalogService.nativeStore,
+    wsHub,
+    fetchImpl: options.fetchImpl,
+  });
+
   const studioMcpBridge = new CriativoStudioMcpBridge({
     db,
     vault,
@@ -607,6 +625,8 @@ export async function createDaemonRuntimeServices(
     routineFlowsEngine,
     routineToolsDeps,
     memoryReview,
+    cacheExpiryCompaction,
+    metaFirstCommentService,
     phase14Services,
     baseStudioDepsForLanes,
     studioMcpBridge,

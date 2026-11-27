@@ -285,6 +285,8 @@ export class ContextResetService {
     estimatedTokens: number;
     maxContextTokens: number;
     thresholdRatio?: number;
+    reasonLabel?: string;
+    forceThresholdOverride?: boolean;
   }): {
     compacted: boolean;
     ratio: number;
@@ -310,7 +312,7 @@ export class ContextResetService {
     } catch {
       cfg = {};
     }
-    if (cfg.auto_compact_enabled === false || ratio < threshold) {
+    if (cfg.auto_compact_enabled === false || (!input.forceThresholdOverride && ratio < threshold)) {
       return { compacted: false, ratio, memorias_salvas: 0, summaryText: null };
     }
 
@@ -362,7 +364,17 @@ export class ContextResetService {
     const cutoffAt = new Date().toISOString();
     const dividerMsgId = `msg-autocompact-${randomUUID().slice(0, 8)}`;
     const pctLabel = Math.round(ratio * 100);
-    const dividerText = `Contexto compactado automaticamente (${pctLabel}% da janela) · histórico visual preservado`;
+    const reasonClean = input.reasonLabel?.trim();
+    const isCachePreExpiry = Boolean(
+      reasonClean &&
+        (reasonClean.toLowerCase().includes("expira") || reasonClean.toLowerCase().includes("cache")),
+    );
+    const badgeText = isCachePreExpiry
+      ? "Contexto pré-compactado antes da expiração do cache (1h)"
+      : reasonClean || "Contexto compactado automaticamente";
+    const dividerText = reasonClean
+      ? `${badgeText} · histórico visual preservado`
+      : `Contexto compactado automaticamente (${pctLabel}% da janela) · histórico visual preservado`;
 
     const mensagemDivisor: MensagemChat = {
       mensagem_id: dividerMsgId,
@@ -380,7 +392,8 @@ export class ContextResetService {
       ordinal: 0,
       metadados: {
         auto_compact: true,
-        badge: "Contexto compactado automaticamente",
+        badge: badgeText,
+        ...(reasonClean ? { reason_label: reasonClean } : {}),
         cutoff_at: cutoffAt,
         memorias_salvas: memoriasSalvas,
         usage_ratio: Number(ratio.toFixed(3)),

@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ArrowUpCircle,
   CheckCircle2,
+  ExternalLink,
   Loader2,
   RefreshCw,
   Server,
@@ -11,6 +12,7 @@ import {
 } from "lucide-react";
 import type { UpdateStatusSnapshot, WhatsNewReleaseInfo } from "@criativo/contracts";
 import { WhatsNewPanel } from "./StorageUsageBar";
+import { buildChangelogAnchorUrl, openExternalChangelogUrl } from "../updates/VersionWhatsNewBanner";
 
 export interface SettingsUpdatesTabProps {
   updateStatus: UpdateStatusSnapshot | null;
@@ -107,7 +109,16 @@ export const SettingsUpdatesTab: React.FC<SettingsUpdatesTabProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => openExternalChangelogUrl(buildChangelogAnchorUrl(currentVersion))}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-[#B9FC01]/35 bg-[#B9FC01]/10 hover:bg-[#B9FC01]/20 px-3.5 py-2 text-[12.5px] font-semibold text-[#B9FC01]"
+            >
+              <span>Changelog no site</span>
+              <ExternalLink className="h-3.5 w-3.5" />
+            </button>
+
             <button
               type="button"
               disabled={checking || isDownloadingOrApplying}

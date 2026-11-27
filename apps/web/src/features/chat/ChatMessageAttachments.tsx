@@ -1,5 +1,6 @@
 import { Download, Eye, FileText } from "lucide-react";
 import type { AnexoChat } from "@criativo/contracts";
+import { OptimizedChatThumbnail } from "./OptimizedChatThumbnail";
 
 export function ChatMessageAttachments({
   anexos,
@@ -35,8 +36,8 @@ export function ChatMessageAttachments({
                 aria-label={`Ampliar imagem ${anexo.nome}`}
                 className="block w-full text-left"
               >
-                <img
-                  src={anexo.url}
+                <OptimizedChatThumbnail
+                  url={anexo.url}
                   alt={anexo.nome}
                   className="max-h-[240px] w-full object-cover cursor-zoom-in"
                 />

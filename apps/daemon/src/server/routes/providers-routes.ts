@@ -23,6 +23,7 @@ import {
   type OnboardingEstado,
   type PassoChat,
   type PermissionLevel,
+  type PoolEstrategiaContas,
   type ProviderName,
   type SkillSugestaoItem,
   type ToolDefinition,
@@ -61,6 +62,34 @@ function reconcileAndBroadcastSidebar(
   if (rec.updatedIds.length > 0) {
     wsHub.broadcast("sidebar:updated", { revision: Date.now() });
   }
+}
+
+function migrateBoundAgentsFromRemovedAccount(
+  db: StudioRouteContext["db"],
+  contaId: string,
+  nextAccountId: string | null,
+): number {
+  const rows = db.connection
+    .prepare(`SELECT agente_id, config_json FROM projecao_agentes;`)
+    .all() as Array<{ agente_id: string; config_json: string }>;
+  let updated = 0;
+  const nowIso = new Date().toISOString();
+  const stmt = db.connection.prepare(
+    `UPDATE projecao_agentes SET config_json = ?, atualizado_em = ? WHERE agente_id = ?;`,
+  );
+  for (const row of rows) {
+    const cfg = safeJsonParse<Record<string, unknown>>(row.config_json, {});
+    if (cfg.provider_account_id === contaId) {
+      if (nextAccountId) {
+        cfg.provider_account_id = nextAccountId;
+      } else {
+        delete cfg.provider_account_id;
+      }
+      stmt.run(JSON.stringify(cfg), nowIso, row.agente_id);
+      updated += 1;
+    }
+  }
+  return updated;
 }
 
 export async function tryHandleProvidersRoutes(ctx: StudioRouteContext): Promise<boolean> {
@@ -201,9 +230,14 @@ export async function tryHandleProvidersRoutes(ctx: StudioRouteContext): Promise
     }
     const dias = Number(url.searchParams.get("dias") ?? "30");
     const agenteId = url.searchParams.get("agente_id");
+    const granularidade = url.searchParams.get("granularidade");
     const relatorio = computeHostAnalytics(db, {
       dias: Number.isFinite(dias) ? dias : 30,
       agenteId: agenteId || null,
+      granularidade:
+        granularidade === "diario" || granularidade === "semanal" || granularidade === "mensal"
+          ? granularidade
+          : "auto",
     });
     sendJson(res, 200, { analytics: relatorio });
     return true;
@@ -318,10 +352,17 @@ export async function tryHandleProvidersRoutes(ctx: StudioRouteContext): Promise
   if (method === "POST" && poolMatch) {
     const provId = decodeURIComponent(poolMatch[1]);
     const body = await readJsonBody(req);
+    const estrategia: PoolEstrategiaContas | undefined =
+      body.estrategia === "spread"
+        ? "spread"
+        : body.estrategia === "fill_first"
+          ? "fill_first"
+          : undefined;
     const patch = {
       habilitado: typeof body.habilitado === "boolean" ? body.habilitado : undefined,
       contas_excluidas: Array.isArray(body.contas_excluidas) ? (body.contas_excluidas as string[]) : undefined,
       conta_em_uso: typeof body.conta_em_uso === "string" || body.conta_em_uso === null ? body.conta_em_uso : undefined,
+      estrategia,
     };
     if (provId === "claude" || provId === "openai") {
       providerConnection.getCliOAuthService().setPoolSettings(provId, patch);
@@ -407,16 +448,51 @@ export async function tryHandleProvidersRoutes(ctx: StudioRouteContext): Promise
   if (method === "DELETE" && accountDelMatch) {
     const provId = decodeURIComponent(accountDelMatch[1]);
     const contaId = decodeURIComponent(accountDelMatch[2]);
-    const removed =
+    const onDrainDone = () => {
+      void (async () => {
+        try {
+          const updatedProvs = await providerConnection.getProvidersStatus(true);
+          const st = updatedProvs.find((p) => p.provedor === provId);
+          wsHub.broadcast("provider:updated", {
+            provedor: provId as ProviderName,
+            conectado: st?.conectado ?? false,
+            modo: st?.modo_conexao ?? "nenhum",
+          });
+          reconcileAndBroadcastSidebar(db, wsHub, updatedProvs);
+          wsHub.broadcast("sidebar:updated", { revision: Date.now() });
+        } catch {
+          // ignora erro secundário de notificação pós-drenagem
+        }
+      })();
+    };
+    const removal =
       provId === "claude" || provId === "openai"
-        ? providerConnection.getCliOAuthService().removeAccount(provId, contaId)
-        : providerConnection.getAntigravityService().removeAccount(contaId);
+        ? providerConnection.getCliOAuthService().requestSafeRemoveAccount(provId, contaId, onDrainDone)
+        : providerConnection.getAntigravityService().requestSafeRemoveAccount(contaId, onDrainDone);
+    if (removal.exists) {
+      migrateBoundAgentsFromRemovedAccount(db, contaId, removal.migratedToAccountId);
+    }
     const provedores = await providerConnection.getProvidersStatus(true);
     const uso = await providerConnection.getUsageSnapshot(true);
-    if (removed) {
+    if (removal.exists) {
+      const st = provedores.find((p) => p.provedor === provId);
+      wsHub.broadcast("provider:updated", {
+        provedor: provId as ProviderName,
+        conectado: st?.conectado ?? false,
+        modo: st?.modo_conexao ?? "nenhum",
+      });
       reconcileAndBroadcastSidebar(db, wsHub, provedores);
+      wsHub.broadcast("sidebar:updated", { revision: Date.now() });
     }
-    sendJson(res, removed ? 200 : 404, { ok: removed, provedores, uso });
+    const statusCode = !removal.exists ? 404 : removal.pendingRemoval ? 202 : 200;
+    sendJson(res, statusCode, {
+      ok: removal.exists,
+      pending_removal: removal.pendingRemoval,
+      active_turns: removal.activeTurns,
+      migrated_to_account_id: removal.migratedToAccountId,
+      provedores,
+      uso,
+    });
     return true;
   }
 

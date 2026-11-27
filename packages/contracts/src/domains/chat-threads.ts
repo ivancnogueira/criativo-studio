@@ -245,6 +245,8 @@ export interface CanalEquipe {
   rotinas_count?: number;
   nao_lidas?: number;
   ultima_mensagem?: string | null;
+  /** Sinaliza que o registro teve erro isolado de leitura/mapeamento e foi degradado com segurança. */
+  erro_leitura?: boolean;
   criado_em: string;
   atualizado_em: string;
 }

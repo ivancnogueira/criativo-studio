@@ -352,8 +352,8 @@ describe("Fase 5 — Componentes React do Cockpit Web & Mobile", () => {
         onExecuteWorkflow: async () => ({ tarefas_criadas: [] }),
       })
     );
-    assert.match(wfHtml, /Comece com um gatilho/);
-    assert.match(wfHtml, /Adicionar gatilho/);
+    assert.match(wfHtml, /Comece com um template de marketing ou um gatilho/);
+    assert.match(wfHtml, /Começar do zero com um gatilho/);
     assert.match(wfHtml, /Adicionar nó/);
     assert.match(wfHtml, /Uso/);
   });

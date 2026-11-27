@@ -1,9 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import type { AvatarShape, BrowserTabSummary } from "@criativo/contracts";
 import {
   ArrowLeft,
   ArrowRight,
-  ArrowUp,
   Check,
   Globe,
   Lock,
@@ -19,41 +18,20 @@ import {
   type AgentAvatarVisual,
 } from "../../components/MascoteAvatar";
 import { BrowserTeachBar } from "./BrowserTeachBar";
+import { BrowserWindowActionsBar } from "./BrowserWindowActionsBar";
 import { InAppBrowserRecorderPipControls } from "./InAppBrowserRecorderPipControls";
+import {
+  InAppBrowserViewport,
+  type BrowserLiveFrame,
+  type BrowserMouseKeyboardInput,
+} from "./InAppBrowserViewport";
 
-export interface BrowserLiveFrame {
-  tabId: string;
-  dataUrl: string;
-  width: number;
-  height: number;
-  url: string;
-  title: string;
-  userControl: boolean;
-}
-
-export interface BrowserMouseKeyboardInput {
-  type:
-    | "mousePressed"
-    | "mouseReleased"
-    | "mouseMoved"
-    | "wheel"
-    | "keyDown"
-    | "keyUp"
-    | "insertText";
-  x?: number;
-  y?: number;
-  button?: "left" | "right" | "middle";
-  clickCount?: number;
-  deltaX?: number;
-  deltaY?: number;
-  key?: string;
-  code?: string;
-  text?: string;
-  modifiers?: number;
-}
+export type { BrowserLiveFrame, BrowserMouseKeyboardInput };
 
 export interface InAppBrowserPanelProps {
   mode: "sidebar" | "expanded";
+  /** `true` quando renderizado na janela separada multi-monitor (sem ações de destacar). */
+  detached?: boolean;
   tabs: BrowserTabSummary[];
   activeTabId: string | null;
   framesByTab: Record<string, BrowserLiveFrame>;
@@ -100,6 +78,7 @@ function normalizeUrlInput(raw: string): string {
 
 export const InAppBrowserPanel: React.FC<InAppBrowserPanelProps> = ({
   mode,
+  detached = false,
   tabs,
   activeTabId,
   framesByTab,
@@ -137,68 +116,51 @@ export const InAppBrowserPanel: React.FC<InAppBrowserPanelProps> = ({
   const currentUrl = liveFrame?.url || activeTab?.url || "about:blank";
   const currentTitle = liveFrame?.title || activeTab?.title || "Navegador";
   const isUserControlling = Boolean(liveFrame?.userControl ?? activeTab?.userControl);
-  const frameWidth = liveFrame?.width || 1280;
-  const frameHeight = liveFrame?.height || 800;
+  const isActiveTabUnloaded = Boolean(activeTab?.unloaded && !liveFrame?.dataUrl);
 
   const [addressDraft, setAddressDraft] = useState(currentUrl);
-  const [quickChatDraft, setQuickChatDraft] = useState("");
-  const [sendingQuickChat, setSendingQuickChat] = useState(false);
   const [showTeachBar, setShowTeachBar] = useState(false);
+  const [tabOrder, setTabOrder] = useState<string[]>([]);
+  const [dragTabId, setDragTabId] = useState<string | null>(null);
 
-  const imgRef = useRef<HTMLImageElement | null>(null);
-  const surfaceRef = useRef<HTMLDivElement | null>(null);
-  const lastMoveAtRef = useRef<number>(0);
+  const orderedTabs = useMemo(() => {
+    const idx = new Map(tabOrder.map((id, i) => [id, i] as const));
+    const rank = (t: BrowserTabSummary): number =>
+      idx.get(t.tabId) ?? tabOrder.length + tabs.indexOf(t);
+    return [...tabs].sort((a, b) => rank(a) - rank(b));
+  }, [tabs, tabOrder]);
+  const activeOrderIndex = orderedTabs.findIndex((t) => t.tabId === resolvedTabId);
+
+  const moveTab = (tabId: string, direction: "left" | "right"): void => {
+    const ids = orderedTabs.map((t) => t.tabId);
+    const from = ids.indexOf(tabId);
+    const to = direction === "left" ? from - 1 : from + 1;
+    if (from < 0 || to < 0 || to >= ids.length) return;
+    [ids[from], ids[to]] = [ids[to]!, ids[from]!];
+    setTabOrder(ids);
+  };
+
+  const dropTabBefore = (targetId: string): void => {
+    if (!dragTabId || dragTabId === targetId) return;
+    const ids = orderedTabs.map((t) => t.tabId).filter((id) => id !== dragTabId);
+    ids.splice(ids.indexOf(targetId), 0, dragTabId);
+    setTabOrder(ids);
+    setDragTabId(null);
+  };
+
+  const windowActions =
+    !detached && resolvedTabId ? (
+      <BrowserWindowActionsBar
+        tabId={resolvedTabId}
+        canMoveLeft={activeOrderIndex > 0}
+        canMoveRight={activeOrderIndex >= 0 && activeOrderIndex < orderedTabs.length - 1}
+        onMoveTab={(dir) => moveTab(resolvedTabId, dir)}
+      />
+    ) : null;
 
   useEffect(() => {
     setAddressDraft(currentUrl);
   }, [currentUrl, resolvedTabId]);
-
-  const mapPointerCoords = (
-    event: React.PointerEvent<HTMLElement> | React.WheelEvent<HTMLElement>
-  ): { x: number; y: number } => {
-    const targetEl = imgRef.current ?? surfaceRef.current;
-    if (!targetEl) return { x: 0, y: 0 };
-    const rect = targetEl.getBoundingClientRect();
-    const normX = Math.min(1, Math.max(0, (event.clientX - rect.left) / Math.max(1, rect.width)));
-    const normY = Math.min(1, Math.max(0, (event.clientY - rect.top) / Math.max(1, rect.height)));
-    return {
-      x: Math.round(normX * frameWidth),
-      y: Math.round(normY * frameHeight),
-    };
-  };
-
-  const resolveButton = (btn: number): "left" | "right" | "middle" => {
-    if (btn === 2) return "right";
-    if (btn === 1) return "middle";
-    return "left";
-  };
-
-  const computeModifiers = (e: {
-    altKey: boolean;
-    ctrlKey: boolean;
-    metaKey: boolean;
-    shiftKey: boolean;
-  }): number => {
-    return (
-      (e.altKey ? 1 : 0) |
-      (e.ctrlKey ? 2 : 0) |
-      (e.metaKey ? 4 : 0) |
-      (e.shiftKey ? 8 : 0)
-    );
-  };
-
-  const handleQuickChatSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const text = quickChatDraft.trim();
-    if (!text || !onSendQuickChat || sendingQuickChat) return;
-    setSendingQuickChat(true);
-    setQuickChatDraft("");
-    try {
-      await onSendQuickChat(text);
-    } finally {
-      setSendingQuickChat(false);
-    }
-  };
 
   if (mode === "sidebar") {
     return (
@@ -241,22 +203,24 @@ export const InAppBrowserPanel: React.FC<InAppBrowserPanelProps> = ({
 
         {/* Corpo com preview clicável ao vivo */}
         <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
+          {windowActions}
           {tabs.length > 1 && (
             <div className="flex items-center gap-1 overflow-x-auto pb-1 no-scrollbar">
-              {tabs.map((tab) => {
+              {orderedTabs.map((tab) => {
                 const selected = tab.tabId === resolvedTabId;
                 return (
                   <button
                     key={tab.tabId}
                     type="button"
                     onClick={() => onSelectTab(tab.tabId)}
+                    title={tab.unloaded ? `${tab.title || tab.url} (Suspensa)` : tab.title || tab.url}
                     className={`px-2.5 py-1 rounded-lg text-[11px] font-medium truncate max-w-[140px] border transition-colors ${
                       selected
                         ? "bg-[#212126] border-[#42A0FF]/40 text-white"
                         : "bg-[#19191C] border-white/[0.06] text-[#979797] hover:text-white"
-                    }`}
+                    } ${tab.unloaded ? "opacity-65" : ""}`}
                   >
-                    {tab.title || tab.url}
+                    {tab.unloaded ? `⏸ ${tab.title || tab.url}` : tab.title || tab.url}
                   </button>
                 );
               })}
@@ -277,6 +241,13 @@ export const InAppBrowserPanel: React.FC<InAppBrowserPanelProps> = ({
                   className="h-full w-full object-contain select-none"
                   draggable={false}
                 />
+              ) : isActiveTabUnloaded ? (
+                <div className="flex flex-col items-center gap-2 p-4 text-center">
+                  <Monitor className="h-6 w-6 text-[#979797]" />
+                  <span className="text-[11.5px] font-medium text-[#DCDCDC]">
+                    Aba suspensa para economizar memória
+                  </span>
+                </div>
               ) : (
                 <div className="flex flex-col items-center gap-2 p-4 text-center">
                   <Monitor className="h-6 w-6 text-[#42A0FF]" />
@@ -351,11 +322,15 @@ export const InAppBrowserPanel: React.FC<InAppBrowserPanelProps> = ({
       {/* Top Bar com abas + Dynamic Pill do Agente + Voltar ao chat */}
       <header className="relative h-[46px] shrink-0 border-b border-white/[0.06] bg-[#0D0D0D] px-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-x-auto no-scrollbar">
-          {tabs.map((tab) => {
+          {orderedTabs.map((tab) => {
             const active = tab.tabId === resolvedTabId;
             return (
               <div
                 key={tab.tabId}
+                draggable
+                onDragStart={() => setDragTabId(tab.tabId)}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => dropTabBefore(tab.tabId)}
                 className={`group flex items-center gap-1.5 h-[30px] pl-2.5 pr-1.5 rounded-lg text-[12px] max-w-[200px] shrink-0 transition-colors ${
                   active
                     ? "bg-[#1A1A1E] text-white border border-white/10"
@@ -365,12 +340,18 @@ export const InAppBrowserPanel: React.FC<InAppBrowserPanelProps> = ({
                 <button
                   type="button"
                   onClick={() => onSelectTab(tab.tabId)}
-                  className="flex items-center gap-1.5 min-w-0 text-left"
+                  title={tab.unloaded ? `${tab.title || tab.url || "Nova aba"} — Suspensa para economizar RAM` : undefined}
+                  className={`flex items-center gap-1.5 min-w-0 text-left ${tab.unloaded ? "opacity-65" : ""}`}
                 >
-                  <Globe className="h-3.5 w-3.5 text-[#31CF76] shrink-0" />
+                  <Globe className={`h-3.5 w-3.5 shrink-0 ${tab.unloaded ? "text-[#979797]" : "text-[#31CF76]"}`} />
                   <span className="truncate font-medium">
                     {tab.title || tab.url || "Nova aba"}
                   </span>
+                  {tab.unloaded && (
+                    <span className="shrink-0 rounded bg-white/10 px-1 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-[#B4B4BD]">
+                      Suspensa
+                    </span>
+                  )}
                 </button>
                 <button
                   type="button"
@@ -439,6 +420,7 @@ export const InAppBrowserPanel: React.FC<InAppBrowserPanelProps> = ({
         {/* Direita: Gravar + PiP + Ensinar + Voltar ao chat */}
         <div className="flex items-center gap-2 shrink-0 flex-1 justify-end">
           <InAppBrowserRecorderPipControls tabId={resolvedTabId} />
+          {windowActions}
           {onStartTeach && onStopTeach && (
             <button
               type="button"
@@ -458,7 +440,7 @@ export const InAppBrowserPanel: React.FC<InAppBrowserPanelProps> = ({
             className="inline-flex items-center gap-1.5 h-[30px] rounded-full bg-[#242428] hover:bg-[#2E2E34] border border-white/10 px-3 text-[12px] font-semibold text-[#F0F0F0] transition"
           >
             <Minimize2 className="h-3.5 w-3.5" />
-            <span>Voltar ao chat</span>
+            <span>{detached ? "Fechar janela" : "Voltar ao chat"}</span>
           </button>
         </div>
       </header>
@@ -537,204 +519,26 @@ export const InAppBrowserPanel: React.FC<InAppBrowserPanelProps> = ({
         />
       )}
 
-      {/* Viewport interativa ao vivo */}
-      <div className="relative flex-1 overflow-hidden bg-[#18181B] flex items-center justify-center p-2 pb-20">
-        <div
-          ref={surfaceRef}
-          tabIndex={0}
-          aria-label="Viewport interativa do navegador integrado"
-          onContextMenu={(e) => e.preventDefault()}
-          onPointerDown={(e) => {
-            surfaceRef.current?.focus();
-            if (!resolvedTabId) return;
-            const coords = mapPointerCoords(e);
-            void onSendInput(
-              resolvedTabId,
-              {
-                type: "mousePressed",
-                x: coords.x,
-                y: coords.y,
-                button: resolveButton(e.button),
-                clickCount: 1,
-                modifiers: computeModifiers(e),
-              },
-              true
-            );
-          }}
-          onPointerUp={(e) => {
-            if (!resolvedTabId) return;
-            const coords = mapPointerCoords(e);
-            void onSendInput(
-              resolvedTabId,
-              {
-                type: "mouseReleased",
-                x: coords.x,
-                y: coords.y,
-                button: resolveButton(e.button),
-                clickCount: 1,
-                modifiers: computeModifiers(e),
-              },
-              true
-            );
-          }}
-          onPointerMove={(e) => {
-            if (!resolvedTabId || !isUserControlling) return;
-            const now = Date.now();
-            if (now - lastMoveAtRef.current < 50) return;
-            lastMoveAtRef.current = now;
-            const coords = mapPointerCoords(e);
-            void onSendInput(resolvedTabId, {
-              type: "mouseMoved",
-              x: coords.x,
-              y: coords.y,
-            });
-          }}
-          onWheel={(e) => {
-            if (!resolvedTabId) return;
-            const coords = mapPointerCoords(e);
-            void onSendInput(
-              resolvedTabId,
-              {
-                type: "wheel",
-                x: coords.x,
-                y: coords.y,
-                deltaX: Math.round(e.deltaX),
-                deltaY: Math.round(e.deltaY),
-              },
-              true
-            );
-          }}
-          onKeyDown={(e) => {
-            if (!resolvedTabId) return;
-            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
-              return; // Deixa onPaste lidar com colagem do clipboard
-            }
-            e.preventDefault();
-            const modifiers = computeModifiers(e);
-            void onSendInput(
-              resolvedTabId,
-              {
-                type: "keyDown",
-                key: e.key,
-                code: e.code,
-                modifiers,
-              },
-              true
-            );
-            if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-              void onSendInput(
-                resolvedTabId,
-                {
-                  type: "insertText",
-                  text: e.key,
-                },
-                true
-              );
-            }
-          }}
-          onKeyUp={(e) => {
-            if (!resolvedTabId) return;
-            e.preventDefault();
-            void onSendInput(
-              resolvedTabId,
-              {
-                type: "keyUp",
-                key: e.key,
-                code: e.code,
-                modifiers: computeModifiers(e),
-              },
-              true
-            );
-          }}
-          onPaste={(e) => {
-            if (!resolvedTabId) return;
-            const clipText = e.clipboardData?.getData("text/plain");
-            if (!clipText) return;
-            e.preventDefault();
-            void onSendInput(
-              resolvedTabId,
-              {
-                type: "insertText",
-                text: clipText,
-              },
-              true
-            );
-          }}
-          className="relative flex h-full w-full max-w-[1360px] items-center justify-center overflow-hidden rounded-xl border border-white/[0.08] bg-[#101012] outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
-        >
-          {liveFrame?.dataUrl ? (
-            <img
-              ref={imgRef}
-              src={liveFrame.dataUrl}
-              alt={currentTitle}
-              draggable={false}
-              className="max-h-full max-w-full select-none object-contain cursor-pointer"
-            />
-          ) : (
-            <div className="flex flex-col items-center gap-2 p-6 text-center">
-              <Monitor className="h-9 w-9 text-[#42A0FF]" />
-              <p className="text-[14px] font-semibold text-white">
-                Navegador integrado aguardando quadro da página...
-              </p>
-              <p className="max-w-md text-[12px] text-[#979797]">
-                Digite um endereço acima ou clique para interagir diretamente sem sair do CriativoOS.
-              </p>
-            </div>
-          )}
-        </div>
-
-        {/* Barra inferior flutuante: aviso de takeover + quick chat input */}
-        <div className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex flex-col items-center gap-2 px-4">
-          {(takeoverPending || isUserControlling) && resolvedTabId && (
-            <div className="pointer-events-auto inline-flex items-center gap-3 rounded-full border border-white/15 bg-[#1B1B20]/95 backdrop-blur-xl px-4 py-1.5 shadow-2xl">
-              <span className="h-2 w-2 rounded-full bg-[#31CF76] animate-pulse" />
-              <span className="text-[12px] font-medium text-[#E5E5EA]">
-                {agentName} aguarda você concluir nesta página
-              </span>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void onCompleteControl(resolvedTabId)}
-                className="rounded-full bg-[#F0F0F0] hover:bg-white px-3 py-0.5 text-[11.5px] font-semibold text-[#141414] transition disabled:opacity-50"
-              >
-                Terminei
-              </button>
-            </div>
-          )}
-
-          {onSendQuickChat && (
-            <form
-              onSubmit={(e) => void handleQuickChatSubmit(e)}
-              className="pointer-events-auto flex w-full max-w-[460px] items-center gap-2 rounded-full border border-white/12 bg-[#1B1B20]/95 backdrop-blur-xl p-1.5 pl-2.5 shadow-2xl"
-            >
-              <MascoteAvatar
-                avatar={agentAvatar}
-                shape={agentAvatarShape}
-                color={agentAvatarColor}
-                size={22}
-                animated={agentWorking}
-                mood={takeoverPending ? "waiting" : agentWorking ? "working" : "idle"}
-                activity={takeoverPending ? "approval" : agentWorking ? "research" : "idle"}
-              />
-              <input
-                type="text"
-                value={quickChatDraft}
-                onChange={(e) => setQuickChatDraft(e.target.value)}
-                placeholder={`Mensagem para ${agentName}`}
-                className="flex-1 min-w-0 bg-transparent text-[13px] text-white outline-none placeholder:text-[#8E8E93]"
-              />
-              <button
-                type="submit"
-                disabled={!quickChatDraft.trim() || sendingQuickChat}
-                aria-label={`Enviar mensagem para ${agentName}`}
-                className="h-7 w-7 rounded-full bg-[#F0F0F0] hover:bg-white text-[#141414] flex items-center justify-center transition disabled:opacity-40 shrink-0"
-              >
-                <ArrowUp className="h-3.5 w-3.5" />
-              </button>
-            </form>
-          )}
-        </div>
-      </div>
+      {/* Viewport interativa ao vivo extraída */}
+      <InAppBrowserViewport
+        activeTab={activeTab}
+        resolvedTabId={resolvedTabId}
+        liveFrame={liveFrame}
+        currentUrl={currentUrl}
+        currentTitle={currentTitle}
+        isUserControlling={isUserControlling}
+        takeoverPending={takeoverPending}
+        agentName={agentName}
+        agentAvatar={agentAvatar}
+        agentAvatarShape={agentAvatarShape}
+        agentAvatarColor={agentAvatarColor}
+        agentWorking={agentWorking}
+        busy={busy}
+        onReload={onReload}
+        onCompleteControl={onCompleteControl}
+        onSendInput={onSendInput}
+        onSendQuickChat={onSendQuickChat}
+      />
     </div>
   );
 };

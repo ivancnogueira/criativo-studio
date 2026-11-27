@@ -89,6 +89,10 @@ import {
   type PreviewableFileItem,
 } from "../features/chat/FilePreviewPanel";
 import { RightInspectorPanel, type InspectorSubView } from "../features/inspector/RightInspectorPanel";
+import {
+  readStoredSideSplitLayout,
+  type SideSplitLayoutState,
+} from "../features/inspector/side-split-layout";
 import type { AgentStepLog } from "../features/trace/AgentStepsWaterfall";
 import {
   InAppBrowserPanel,
@@ -249,6 +253,9 @@ export function useStudioState() {
   const [sharedTablesOpen, setSharedTablesOpen] = useState(false);
   const [sharedTablesRefreshNonce, setSharedTablesRefreshNonce] = useState(0);
   const [previewFile, setPreviewFile] = useState<PreviewableFileItem | null>(null);
+  const [sideSplitLayout, setSideSplitLayout] = useState<SideSplitLayoutState>(() =>
+    readStoredSideSplitLayout()
+  );
   const [lightboxImage, setLightboxImage] = useState<{ url: string; alt?: string } | null>(null);
   const [foldersSnapshot, setFoldersSnapshot] = useState<BibliotecasPastasSnapshot | null>(null);
 
@@ -533,6 +540,8 @@ export function useStudioState() {
     setSharedTablesRefreshNonce,
     previewFile,
     setPreviewFile,
+    sideSplitLayout,
+    setSideSplitLayout,
     lightboxImage,
     setLightboxImage,
     foldersSnapshot,

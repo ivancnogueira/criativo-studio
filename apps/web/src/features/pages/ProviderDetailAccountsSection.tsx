@@ -8,6 +8,7 @@ import {
   ProviderLogo,
 } from "../../components/ProviderLogo";
 import { SwitchPill, browserConnectLabel } from "./providers-catalog-helpers";
+import { ProviderPoolStrategyCard } from "./ProviderPoolStrategyCard";
 import type { ProvidersCatalogController } from "./useProvidersCatalogController";
 
 export function ProviderDetailAccountsSection({ ctrl }: { ctrl: ProvidersCatalogController }) {
@@ -237,39 +238,55 @@ export function ProviderDetailAccountsSection({ ctrl }: { ctrl: ProvidersCatalog
               contas.length > 0 ? (
                 <>
                   {detailProvider.pool && onTogglePool && (
-                    <div className="px-4 py-3.5 flex items-center justify-between gap-4">
-                      <div className="min-w-0">
-                        <div className="text-[13px] font-medium text-white">
-                          Agrupar contas
+                    <>
+                      <div className="px-4 py-3.5 flex items-center justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="text-[13px] font-medium text-white">
+                            Agrupar contas
+                          </div>
+                          <p className="text-[11.5px] text-[#8E8E93] mt-0.5 leading-relaxed">
+                            {(detailProvider.pool.estrategia ?? "fill_first") === "spread"
+                              ? "Os Criativos distribuem o trabalho entre as contas com maior folga de cota."
+                              : "Os Criativos usam uma conta até ela chegar perto de um limite de uso e depois a conta cujo limite reinicia primeiro."}
+                          </p>
                         </div>
-                        <p className="text-[11.5px] text-[#8E8E93] mt-0.5 leading-relaxed">
-                          Os Criativos usam uma conta até ela chegar perto de um limite de uso e
-                          depois a conta cujo limite reinicia primeiro.
-                        </p>
+                        <SwitchPill
+                          checked={detailProvider.pool.habilitado}
+                          onChange={() =>
+                            void onTogglePool(
+                              detailProvider.provedor,
+                              !detailProvider.pool?.habilitado
+                            )
+                          }
+                          ariaLabel="Agrupar contas"
+                        />
                       </div>
-                      <SwitchPill
-                        checked={detailProvider.pool.habilitado}
-                        onChange={() =>
-                          void onTogglePool(
-                            detailProvider.provedor,
-                            !detailProvider.pool?.habilitado
-                          )
-                        }
-                        ariaLabel="Agrupar contas"
-                      />
-                    </div>
+                      {detailProvider.pool.habilitado && contas.length > 1 && (
+                        <ProviderPoolStrategyCard
+                          strategy={detailProvider.pool.estrategia ?? "fill_first"}
+                          onChangeStrategy={async (nextStrategy) => {
+                            await onTogglePool(detailProvider.provedor, true, nextStrategy);
+                          }}
+                        />
+                      )}
+                    </>
                   )}
 
                   {contas.map((acc) => {
+                    const isDraining = acc.removendo === true;
                     const isExcluded =
                       detailProvider.pool?.contas_excluidas?.includes(acc.id) ?? false;
                     const isInUse =
-                      detailProvider.pool?.conta_em_uso === acc.id || acc.padrao;
-                    const statusLabel = isExcluded
-                      ? "Fora do grupo"
-                      : isInUse
-                        ? "Padrão"
-                        : "Disponível";
+                      !isDraining && (detailProvider.pool?.conta_em_uso === acc.id || acc.padrao);
+                    const statusLabel = isDraining
+                      ? acc.turnos_ativos && acc.turnos_ativos > 0
+                        ? `Encerrando turno (${acc.turnos_ativos})...`
+                        : "Encerrando turno..."
+                      : isExcluded
+                        ? "Fora do grupo"
+                        : isInUse
+                          ? "Padrão"
+                          : "Disponível";
                     const menuOpen = openAccountMenuId === acc.id;
 
                     return (
@@ -303,7 +320,15 @@ export function ProviderDetailAccountsSection({ ctrl }: { ctrl: ProvidersCatalog
                         </div>
 
                         <div className="flex items-center gap-2 shrink-0 relative">
-                          <span className="text-[12px] text-[#8E8E93]">{statusLabel}</span>
+                          <span
+                            className={`text-[12px] ${
+                              isDraining
+                                ? "rounded-full bg-[#FFAD33]/15 px-2 py-0.5 font-medium text-[#FFC46B]"
+                                : "text-[#8E8E93]"
+                            }`}
+                          >
+                            {statusLabel}
+                          </span>
                           <button
                             type="button"
                             aria-label={`Ações para ${acc.email ?? acc.id}`}
@@ -348,13 +373,14 @@ export function ProviderDetailAccountsSection({ ctrl }: { ctrl: ProvidersCatalog
                               {onRemoveAccount && (
                                 <button
                                   type="button"
+                                  disabled={isDraining}
                                   onClick={async () => {
                                     await onRemoveAccount(detailProvider.provedor, acc.id);
                                     setOpenAccountMenuId(null);
                                   }}
-                                  className="w-full text-left px-3 py-1.5 rounded-lg text-[12px] text-[#FF858B] hover:bg-[#FD2F3B]/15"
+                                  className="w-full text-left px-3 py-1.5 rounded-lg text-[12px] text-[#FF858B] hover:bg-[#FD2F3B]/15 disabled:opacity-45 disabled:cursor-not-allowed"
                                 >
-                                  Remover conta
+                                  {isDraining ? "Encerrando turno..." : "Remover conta"}
                                 </button>
                               )}
                             </div>

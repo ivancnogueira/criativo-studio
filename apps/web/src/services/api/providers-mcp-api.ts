@@ -2,6 +2,7 @@ import type {
   ApiKeyMetadata,
   ConectorIntegracaoInfo,
   ContaProvedorInfo,
+  GranularidadeAnalyticsUso,
   HabilidadeInstaladaInfo,
   IdentidadeMarcaStudio,
   McpAcessoAgentes,
@@ -146,6 +147,7 @@ export const providersMcpApi = {
       habilitado?: boolean;
       contas_excluidas?: string[];
       conta_em_uso?: string | null;
+      estrategia?: "fill_first" | "spread";
     }
   ): Promise<ProvedorStatusInfo[]> {
     const res = await apiFetch(`/api/provedores/${encodeURIComponent(provedor)}/pool`, {
@@ -242,10 +244,14 @@ export const providersMcpApi = {
   async getUsageAnalytics(params?: {
     dias?: number;
     agente_id?: string | null;
+    granularidade?: "auto" | GranularidadeAnalyticsUso;
   }): Promise<RelatorioAnalyticsHost> {
     const qs = new URLSearchParams();
     if (params?.dias !== undefined) qs.set("dias", String(params.dias));
     if (params?.agente_id) qs.set("agente_id", params.agente_id);
+    if (params?.granularidade && params.granularidade !== "auto") {
+      qs.set("granularidade", params.granularidade);
+    }
     const query = qs.toString();
     const res = await apiFetch(`/api/uso/analytics${query ? `?${query}` : ""}`);
     const json = (await res.json()) as { analytics: RelatorioAnalyticsHost };

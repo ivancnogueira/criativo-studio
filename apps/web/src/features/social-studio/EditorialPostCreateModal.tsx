@@ -3,9 +3,11 @@ import type {
   AgenteRegistro,
   EditorialPostFormato,
   EditorialPostStatus,
+  MetaTrialGraduationStrategy,
 } from "@criativo/contracts";
 import { Loader2, X } from "lucide-react";
 import { CarbonSelect } from "../../components/ui/CarbonControls";
+import { MetaTrialReelControlCard } from "./MetaTrialReelControlCard";
 
 export interface EditorialPostCreateModalProps {
   open: boolean;
@@ -18,6 +20,10 @@ export interface EditorialPostCreateModalProps {
   agenteId: string;
   legenda: string;
   agentes: AgenteRegistro[];
+  trialReelEnabled?: boolean;
+  trialStrategy?: MetaTrialGraduationStrategy;
+  onChangeTrialReelEnabled?: (enabled: boolean) => void;
+  onChangeTrialStrategy?: (strategy: MetaTrialGraduationStrategy) => void;
   onClose: () => void;
   onChangeTitulo: (v: string) => void;
   onChangeFormato: (v: EditorialPostFormato) => void;
@@ -40,6 +46,10 @@ export const EditorialPostCreateModal: React.FC<EditorialPostCreateModalProps> =
   agenteId,
   legenda,
   agentes,
+  trialReelEnabled = false,
+  trialStrategy = "SS_PERFORMANCE",
+  onChangeTrialReelEnabled,
+  onChangeTrialStrategy,
   onClose,
   onChangeTitulo,
   onChangeFormato,
@@ -162,6 +172,16 @@ export const EditorialPostCreateModal: React.FC<EditorialPostCreateModalProps> =
               className="w-full rounded-xl border border-white/10 bg-[#0D0D0D] p-3 text-xs text-white"
             />
           </div>
+
+          {formato === "reels" && onChangeTrialReelEnabled && onChangeTrialStrategy && (
+            <MetaTrialReelControlCard
+              visible={true}
+              enabled={trialReelEnabled}
+              strategy={trialStrategy}
+              onChangeEnabled={onChangeTrialReelEnabled}
+              onChangeStrategy={onChangeTrialStrategy}
+            />
+          )}
         </div>
 
         <div className="flex justify-end gap-2 pt-2">

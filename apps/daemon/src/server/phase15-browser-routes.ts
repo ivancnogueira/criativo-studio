@@ -187,6 +187,40 @@ export async function handlePhase15BrowserRoutes(
   // 2. Sessões CDP, Takeover Remoto, Credencial Direta e BrowserTeachBar
   // =========================================================================
 
+  if (method === "POST" && path === "/api/navegador/sessoes/unload-ociosas") {
+    try {
+      const body = await readJsonBody(req).catch(
+        (): Record<string, unknown> => ({}),
+      );
+      const forceLevel =
+        body.level === "elevated" || body.level === "critical" ? body.level : undefined;
+      const unloadedTabIds = await browserService.sessionManager.sweepMemoryPressureTabs(forceLevel);
+      sendJson(res, 200, { ok: true, unloadedTabIds });
+    } catch (err) {
+      sendJson(res, mapHttpErrorStatus(err), {
+        erro: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return true;
+  }
+
+  const reloadTabMatch = path.match(/^\/api\/navegador\/sessoes\/([^/]+)\/recarregar$/);
+  if (method === "POST" && reloadTabMatch) {
+    try {
+      const tabId = decodeURIComponent(reloadTabMatch[1]!);
+      const reloaded = await browserService.ensureRealTabLoaded(tabId);
+      const summary =
+        browserService.sessionManager.listTabSummaries().find((t) => t.tabId === reloaded.tabId) ??
+        null;
+      sendJson(res, 200, { ok: true, tab: summary });
+    } catch (err) {
+      sendJson(res, mapHttpErrorStatus(err), {
+        erro: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return true;
+  }
+
   if (method === "POST" && path === "/api/navegador/sessoes/acao") {
     try {
       const body = await readJsonBody(req);
@@ -322,7 +356,7 @@ export async function handlePhase15BrowserRoutes(
       const tabId = decodeURIComponent(teachStartMatch[1]!);
       const body = await readJsonBody(req);
       const agenteId = typeof body.agenteId === "string" ? body.agenteId : undefined;
-      sendJson(res, 200, browserService.startTeachRecording(tabId, agenteId));
+      sendJson(res, 200, await browserService.startTeachRecording(tabId, agenteId));
     } catch (err) {
       sendJson(res, mapHttpErrorStatus(err), {
         erro: err instanceof Error ? err.message : String(err),

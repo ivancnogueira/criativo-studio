@@ -12,6 +12,7 @@ import { ChannelMascoteCluster, resolveAgentAvatarConfig } from "../MascoteAvata
 import { stripMarkdownPreview, type SidebarProps } from "./sidebar-types-helpers";
 import type { SidebarController } from "./useSidebarController";
 import { SidebarAgentRow } from "./SidebarAgentItems";
+import { SidebarErrorBoundary } from "./SidebarErrorBoundary";
 
 function SidebarSectionNodeItem({
   sec,
@@ -266,11 +267,26 @@ export function SidebarChannelsAndSections({
     sectionIdsSet,
     hiddenAgents,
     folders,
-    orderedSections
+    orderedSections,
+    quickFilter,
+    unreadAgents,
   } = ctrl;
+
+  const emptyUnread =
+    effectiveMode === "agents" &&
+    quickFilter === "unread" &&
+    filteredChannels.length === 0 &&
+    orderedSections.length === 0 &&
+    folders.length === 0 &&
+    unreadAgents.length === 0;
 
   return (
     <>
+      {emptyUnread && (
+        <div className="px-3 py-6 text-center text-[12px] text-[#8E8E93]">
+          Nenhuma conversa não lida
+        </div>
+      )}
         {/* Equipes (Multi-agente) — oculto em modo Rotinas */}
         {effectiveMode === "agents" && filteredChannels.length > 0 && (
           <div>
@@ -293,7 +309,10 @@ export function SidebarChannelsAndSections({
               <div className="mt-1 space-y-0.5">
                 {filteredChannels.map((canal) => {
                   const selected = selectedChannelId === canal.canal_id;
-                  const members = canal.membros_agentes.map((id) => {
+                  const safeMembers = Array.isArray(canal.membros_agentes)
+                    ? canal.membros_agentes
+                    : [];
+                  const members = safeMembers.map((id) => {
                     const match = agentes.find((a) => a.agente_id === id);
                     const vis = resolveAgentAvatarConfig(match, id);
                     return { agente_id: id, ...vis };
@@ -301,41 +320,48 @@ export function SidebarChannelsAndSections({
                   const canManageChannel = Boolean(onEditChannel || onDeleteChannel);
                   const isChMenuOpen = channelMenuId === canal.canal_id;
                   return (
-                    <div
+                    <SidebarErrorBoundary
                       key={canal.canal_id}
-                      onContextMenu={(e) => {
-                        if (!canManageChannel) return;
-                        e.preventDefault();
-                        setAgentMenuKey(null);
-                        setSectionMenuId(null);
-                        setChannelMenuId((prev) =>
-                          prev === canal.canal_id ? null : canal.canal_id
-                        );
-                      }}
-                      className="group relative flex items-center"
+                      fallbackLabel={canal.nome || "Canal indisponível"}
                     >
-                      <button
-                        type="button"
-                        onClick={() => onSelectChannel?.(canal.canal_id)}
-                        className={`w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-left transition-colors ${
-                          canManageChannel ? "pr-8" : ""
-                        } ${selected ? "bg-[#252527]" : "hover:bg-[#202022]"}`}
+                      <div
+                        onContextMenu={(e) => {
+                          if (!canManageChannel) return;
+                          e.preventDefault();
+                          setAgentMenuKey(null);
+                          setSectionMenuId(null);
+                          setChannelMenuId((prev) =>
+                            prev === canal.canal_id ? null : canal.canal_id
+                          );
+                        }}
+                        className="group relative flex items-center"
                       >
-                        <ChannelMascoteCluster members={members} size={38} />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[13.5px] font-medium text-white truncate">
-                              {canal.nome}
-                            </span>
-                            <span className="text-[11px] text-[#737378] tabular-nums shrink-0">
-                              {canal.membros_agentes.length} Criativos
-                            </span>
+                        <button
+                          type="button"
+                          onClick={() => onSelectChannel?.(canal.canal_id)}
+                          className={`w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-left transition-colors ${
+                            canManageChannel ? "pr-8" : ""
+                          } ${selected ? "bg-[#252527]" : "hover:bg-[#202022]"} ${
+                            canal.erro_leitura ? "opacity-75" : ""
+                          }`}
+                        >
+                          <ChannelMascoteCluster members={members} size={38} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[13.5px] font-medium text-white truncate">
+                                {canal.nome}
+                              </span>
+                              <span className="text-[11px] text-[#737378] tabular-nums shrink-0">
+                                {canal.erro_leitura
+                                  ? "Leitura parcial"
+                                  : `${safeMembers.length} Criativos`}
+                              </span>
+                            </div>
+                            <p className="text-[12px] text-[#8E8E93] truncate mt-0.5">
+                              {stripMarkdownPreview(canal.ultima_mensagem) || canal.descricao || "Canal colaborativo de criação"}
+                            </p>
                           </div>
-                          <p className="text-[12px] text-[#8E8E93] truncate mt-0.5">
-                            {stripMarkdownPreview(canal.ultima_mensagem) || canal.descricao || "Canal colaborativo de criação"}
-                          </p>
-                        </div>
-                      </button>
+                        </button>
 
                       {canManageChannel && (
                         <button
@@ -380,23 +406,24 @@ export function SidebarChannelsAndSections({
                               <span>Configurações da equipe</span>
                             </button>
                           )}
-                          {onDeleteChannel && (
-                            <button
-                              type="button"
-                              role="menuitem"
-                              onClick={() => {
-                                setChannelMenuId(null);
-                                setConfirmDeleteChannel(canal);
-                              }}
-                              className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#FF7675] hover:bg-[#FD2F3B]/15 flex items-center gap-2"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                              <span>Excluir equipe</span>
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
+                            {onDeleteChannel && (
+                              <button
+                                type="button"
+                                role="menuitem"
+                                onClick={() => {
+                                  setChannelMenuId(null);
+                                  setConfirmDeleteChannel(canal);
+                                }}
+                                className="w-full px-2.5 py-1.5 rounded-lg text-left text-[12px] text-[#FF7675] hover:bg-[#FD2F3B]/15 flex items-center gap-2"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                <span>Excluir equipe</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </SidebarErrorBoundary>
                   );
                 })}
               </div>

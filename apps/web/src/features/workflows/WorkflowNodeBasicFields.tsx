@@ -2,6 +2,7 @@ import React from "react";
 import type {
   ArquivoStudio,
   ProviderName,
+  WorkflowAnswerField,
   WorkflowNo,
   WorkflowTriggerState,
 } from "@criativo/contracts";
@@ -14,6 +15,9 @@ import {
   Upload,
 } from "lucide-react";
 import { ProviderLogo } from "../../components/ProviderLogo";
+import { describeAutoModelLabel, resolveFirstConnectedModel } from "./workflow-model-picker";
+import { WorkflowAnswerFieldsEditor } from "./WorkflowAnswerFieldsEditor";
+import { WorkflowTokenTextarea } from "./WorkflowTokenTextarea";
 import {
   CarbonMenuPicker,
   EFFORT_OPTIONS,
@@ -102,6 +106,24 @@ export function WorkflowNodeBasicFields(ctx: WorkflowNodeBasicFieldsProps) {
               {triggerState.webhook_url}
             </p>
           )}
+          {triggerKind === "webhook" && (
+            <WorkflowAnswerFieldsEditor
+              fields={
+                Array.isArray(node.answerFields)
+                  ? node.answerFields
+                  : Array.isArray(cfg.answerFields)
+                    ? (cfg.answerFields as WorkflowAnswerField[])
+                    : []
+              }
+              disabled={readOnly}
+              onChange={(nextFields) =>
+                onPatchNode(node.id, {
+                  answerFields: nextFields,
+                  config: { ...cfg, answerFields: nextFields },
+                })
+              }
+            />
+          )}
           <div className="flex items-center gap-2 pt-1">
             {onOpenTriggerModal && !readOnly && (
               <button
@@ -129,18 +151,20 @@ export function WorkflowNodeBasicFields(ctx: WorkflowNodeBasicFieldsProps) {
 
       {kind === "prompt" && (
         <div className="space-y-2" onPointerDown={(e) => e.stopPropagation()}>
-          <textarea
+          <WorkflowTokenTextarea
+            nodeId={node.id}
+            allNodes={ctx.props.allNodes}
+            allEdges={ctx.props.allEdges}
             readOnly={readOnly}
             rows={4}
             value={node.prompt ?? (typeof cfg.prompt === "string" ? cfg.prompt : "")}
-            onChange={(e) =>
+            onChange={(nextPrompt) =>
               onPatchNode(node.id, {
-                prompt: e.target.value,
-                config: { ...cfg, prompt: e.target.value },
+                prompt: nextPrompt,
+                config: { ...cfg, prompt: nextPrompt },
               })
             }
-            placeholder="Escreva o texto ou use {{input}} e [NOME_DA_MARCA]"
-            className="w-full resize-none rounded-lg border border-white/[0.06] bg-[#242424] p-2 text-[14px] font-normal text-[#DCDCDC] placeholder:text-[#6A6A6A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
+            placeholder="Escreva o texto ou digite {{ para inserir variáveis..."
           />
           <div className="flex justify-end">
             <button
@@ -182,6 +206,27 @@ export function WorkflowNodeBasicFields(ctx: WorkflowNodeBasicFieldsProps) {
                   alt={selectedAsset.nome_original}
                   className="aspect-[4/3] w-full object-cover"
                 />
+              ) : selectedAsset.mime_type.startsWith("video/") ? (
+                <div className="space-y-1 bg-black p-1">
+                  <video
+                    src={selectedAsset.url}
+                    controls
+                    muted
+                    playsInline
+                    className="aspect-[4/3] w-full rounded bg-black object-contain"
+                  />
+                  <p className="truncate px-1 text-[11px] text-[#979797]">
+                    {selectedAsset.nome_original}
+                  </p>
+                </div>
+              ) : selectedAsset.mime_type.startsWith("audio/") ? (
+                <div className="space-y-1.5 p-2">
+                  <div className="flex items-center gap-1.5 text-[11px] text-[#DCDCDC]">
+                    <FileText className="h-3.5 w-3.5 shrink-0 text-[#42A0FF]" />
+                    <span className="truncate">{selectedAsset.nome_original}</span>
+                  </div>
+                  <audio src={selectedAsset.url} controls className="h-8 w-full" />
+                </div>
               ) : (
                 <div className="flex items-center gap-2 p-2 text-[12px] text-[#DCDCDC]">
                   <FileText className="h-4 w-4 text-[#31CF76]" />
@@ -277,18 +322,20 @@ export function WorkflowNodeBasicFields(ctx: WorkflowNodeBasicFieldsProps) {
 
       {kind === "llm" && (
         <div className="space-y-2" onPointerDown={(e) => e.stopPropagation()}>
-          <textarea
+          <WorkflowTokenTextarea
+            nodeId={node.id}
+            allNodes={ctx.props.allNodes}
+            allEdges={ctx.props.allEdges}
             readOnly={readOnly}
             rows={3}
             value={node.prompt ?? (typeof cfg.prompt === "string" ? cfg.prompt : "")}
-            onChange={(e) =>
+            onChange={(nextPrompt) =>
               onPatchNode(node.id, {
-                prompt: e.target.value,
-                config: { ...cfg, prompt: e.target.value },
+                prompt: nextPrompt,
+                config: { ...cfg, prompt: nextPrompt },
               })
             }
-            placeholder="Instrução da etapa (recebe automaticamente entradas conectadas)..."
-            className="w-full resize-none rounded-lg border border-white/[0.06] bg-[#242424] p-2 text-[14px] text-[#DCDCDC] placeholder:text-[#6A6A6A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#007CF7]"
+            placeholder="Instrução da etapa (digite {{ para usar variáveis)..."
           />
           <button
             type="button"
@@ -317,14 +364,24 @@ export function WorkflowNodeBasicFields(ctx: WorkflowNodeBasicFieldsProps) {
               <CarbonMenuPicker
                 value={node.model ?? ""}
                 disabled={readOnly}
-                options={modelOptions}
+                options={[
+                  { value: "", label: describeAutoModelLabel(ctx.props.provedores ?? []) },
+                  ...modelOptions.filter((opt) => opt.value !== ""),
+                ]}
                 ariaLabel="Selecionar modelo de IA"
                 onChange={(m) =>
                   onPatchNode(node.id, { model: m || undefined, config: { ...cfg, model: m } })
                 }
                 renderTrigger={(sel) => (
                   <span className="flex items-center gap-1.5">
-                    <ProviderLogo provider={(sel?.subtitle as ProviderName) ?? "gemini"} size={14} />
+                    <ProviderLogo
+                      provider={
+                        (sel?.subtitle as ProviderName) ??
+                        resolveFirstConnectedModel(ctx.props.provedores ?? [])?.provider ??
+                        "gemini"
+                      }
+                      size={14}
+                    />
                     <span className="truncate">{sel?.label ?? "Modelo"}</span>
                   </span>
                 )}
@@ -340,6 +397,27 @@ export function WorkflowNodeBasicFields(ctx: WorkflowNodeBasicFieldsProps) {
               }
             />
           </div>
+          {!node.model && resolveFirstConnectedModel(ctx.props.provedores ?? []) === null && (
+            <p className="text-[11px] text-[#F59E0B]">
+              Conecte um provedor em Conectores para usar modelos de IA neste nó.
+            </p>
+          )}
+          <WorkflowAnswerFieldsEditor
+            fields={
+              Array.isArray(node.answerFields)
+                ? node.answerFields
+                : Array.isArray(cfg.answerFields)
+                  ? (cfg.answerFields as WorkflowAnswerField[])
+                  : []
+            }
+            disabled={readOnly}
+            onChange={(nextFields) =>
+              onPatchNode(node.id, {
+                answerFields: nextFields,
+                config: { ...cfg, answerFields: nextFields },
+              })
+            }
+          />
         </div>
       )}
     </>

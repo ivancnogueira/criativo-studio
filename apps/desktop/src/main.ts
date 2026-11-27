@@ -11,6 +11,7 @@ import {
   type UpdateRestartPayload,
 } from "./daemon-launcher.ts";
 import { BrowserPipWindowController } from "./browser-pip-window.ts";
+import { DetachedBrowserWindowController } from "./browser-window-detached.ts";
 import { installDesktopCsp } from "./desktop-security.ts";
 import { registerDesktopIpcHandlers } from "./main-ipc-handlers.ts";
 import { launchNativeUpdateAndRelaunch } from "./update-relauncher.ts";
@@ -29,6 +30,7 @@ let daemonHandle: EmbeddedDaemonHandle | null = null;
 let trayHandle: Tray | null = null;
 let cuaRuntime: CuaDesktopRuntimeHandle | null = null;
 const browserPipController = new BrowserPipWindowController();
+const detachedBrowserController = new DetachedBrowserWindowController();
 let activeGlobalPaletteShortcut = "CommandOrControl+Shift+Space";
 
 function registerCommandPaletteGlobalShortcut(accelerator: string): boolean {
@@ -195,6 +197,7 @@ function registerIpcHandlers(userDataDir: string): void {
     getMainWindow: () => mainWindow,
     getFloatingDock: () => floatingDock,
     browserPipController,
+    detachedBrowserController,
     registerCommandPaletteShortcut: registerCommandPaletteGlobalShortcut,
     resolveIconPath: resolveWindowIconPath,
     isLocalDaemonOrigin,
@@ -473,6 +476,7 @@ app.on("will-quit", (event: { preventDefault: () => void }) => {
     // ignore
   }
   browserPipController.close();
+  detachedBrowserController.close();
   void cuaRuntime?.dispose();
   cuaRuntime = null;
   floatingDock?.destroy();

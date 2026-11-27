@@ -97,7 +97,7 @@ describe("Fase 33 — UI Provedores Custom/Locais, Feed .ics, Notificações, Id
       })
     );
     assert.match(bannerHtml, /aguardando ociosidade/);
-    assert.match(bannerHtml, /Reiniciar agora \(forçar\)/);
+    assert.match(bannerHtml, /Reiniciar para atualizar \(forçar\)/);
 
     const settingsHtml = renderToStaticMarkup(
       React.createElement(SettingsNotificationsTab, {

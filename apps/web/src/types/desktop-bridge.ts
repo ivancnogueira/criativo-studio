@@ -84,6 +84,14 @@ export interface CriativoDesktopWindowBridge {
   setGlobalShortcut?: (accelerator: string) => Promise<boolean>;
   openBrowserPip?: (payload?: { tabId?: string | null; agenteId?: string | null }) => Promise<boolean>;
   closeBrowserPip?: () => Promise<boolean>;
+  openDetachedBrowser?: (payload?: {
+    tabId?: string | null;
+    agenteId?: string | null;
+    displayId?: string | null;
+  }) => Promise<boolean>;
+  closeDetachedBrowser?: () => Promise<boolean>;
+  listDetachedBrowserDisplays?: () => Promise<Array<{ id: string; label: string; primary: boolean }>>;
+  onDetachedBrowserClosed?: (listener: (info: { tabId: string | null }) => void) => () => void;
 }
 
 export function getCriativoDesktopBridge(): CriativoDesktopWindowBridge | null {

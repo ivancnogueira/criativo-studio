@@ -7,6 +7,9 @@ import type {
 } from "@criativo/contracts";
 import type { CriativoDatabase } from "../database/client.ts";
 
+export const INITIAL_CONVERSATION_PAGE_SIZE = 24;
+export const MAX_UNREAD_INITIAL_PAGE_SIZE = 100;
+
 export interface CursorPayload {
   schemaVersion: 1;
   criado_em: string;
@@ -223,6 +226,36 @@ export class ConversationPaginationReader {
   }
 
   /**
+   * Resolve dinamicamente quantas mensagens carregar inicialmente:
+   * padrão enxuto de 24 mensagens, expandindo até 100 quando houver mais não lidas.
+   */
+  public resolveInitialPageLimit(threadId: string, agenteId: string): number {
+    const legacyMainCanal = threadId === `main:${agenteId}` ? `agente:${agenteId}` : null;
+    const row = (legacyMainCanal
+      ? this.db.connection
+          .prepare(
+            `
+            SELECT COUNT(*) AS total FROM projecao_conversas_chat
+            WHERE (thread_id = ? OR (thread_id IS NULL AND canal_id = ?)) AND lida = 0;
+          `,
+          )
+          .get(threadId, legacyMainCanal)
+      : this.db.connection
+          .prepare(
+            `
+            SELECT COUNT(*) AS total FROM projecao_conversas_chat
+            WHERE thread_id = ? AND lida = 0;
+          `,
+          )
+          .get(threadId)) as { total?: number } | undefined;
+    const unreadCount = Number(row?.total ?? 0);
+    return Math.min(
+      MAX_UNREAD_INITIAL_PAGE_SIZE,
+      Math.max(INITIAL_CONVERSATION_PAGE_SIZE, unreadCount),
+    );
+  }
+
+  /**
    * Lê uma página cronológica terminando antes do cursor informado (ou a janela mais recente).
    */
   public readPage(params: {
@@ -231,7 +264,16 @@ export class ConversationPaginationReader {
     beforeCursor?: string | null;
     limit?: number;
   }): PaginaConversaThread {
-    const safeLimit = Math.max(1, Math.min(100, Math.floor(params.limit ?? 50)));
+    const requestedLimit =
+      params.limit !== undefined
+        ? params.limit
+        : params.beforeCursor
+          ? INITIAL_CONVERSATION_PAGE_SIZE
+          : this.resolveInitialPageLimit(params.threadId, params.agenteId);
+    const safeLimit = Math.max(
+      1,
+      Math.min(MAX_UNREAD_INITIAL_PAGE_SIZE, Math.floor(requestedLimit)),
+    );
     const allMessages = this.loadAllThreadMessages(params.threadId, params.agenteId);
 
     let eligible = allMessages;

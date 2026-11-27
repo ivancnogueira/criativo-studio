@@ -97,6 +97,21 @@ export class BrowserAutomationService {
     this.wsHub = wsHub;
     this.workspaceRoot = resolve(workspaceRoot ?? process.cwd());
     this.sessionManager = new BrowserCdpSessionManager(this.workspaceRoot);
+    this.sessionManager.setOnTabUnloaded((tab, pressureLevel) => {
+      this.wsHub?.broadcast("browser:tab_unloaded", {
+        tabId: tab.tabId,
+        perfilId: tab.perfilId,
+        agenteId: tab.agenteId,
+        url: tab.virtualUrl,
+        title: tab.virtualTitle,
+        reason: tab.unloadReason ?? "pressão de memória",
+        unloadedAt: tab.unloadedAt
+          ? new Date(tab.unloadedAt).toISOString()
+          : new Date().toISOString(),
+        pressureLevel,
+      });
+      this.broadcastTabsAndFrame(null);
+    });
     this.browsingLog = new UserBrowsingLogService(db);
     this.sessionRecorder = new BrowserSessionRecorder(this.workspaceRoot);
   }
@@ -120,6 +135,7 @@ export class BrowserAutomationService {
       resolveProfileAndLaunchProxy: (reqId, agId) => this.resolveProfileAndLaunchProxy(reqId, agId),
       getStatus: (agId) => this.getStatus(agId),
       requireRealTab: (tabId) => this.requireRealTab(tabId),
+      ensureRealTabLoaded: (tabId) => this.ensureRealTabLoaded(tabId),
       ensureTabPreviewStream: (tab) => this.ensureTabPreviewStream(tab),
       broadcastTabsAndFrame: (tab) => this.broadcastTabsAndFrame(tab),
       captureTabSnapshot: (tab, includeImage) => this.captureTabSnapshot(tab, includeImage),
@@ -192,13 +208,16 @@ export class BrowserAutomationService {
   public getStatus(agenteId?: string): BrowserStatusReport {
     const bin = this.sessionManager.detectBinary();
     const tabs = this.sessionManager.listTabSummaries(agenteId);
+    const unloadedTabs = tabs.filter((t) => t.unloaded === true).length;
     return {
       available: bin.available,
       executablePath: bin.executablePath,
       reason: bin.reason ?? null,
       activeContexts: this.sessionManager.getActiveContextCount(),
-      activeTabs: tabs.length,
+      activeTabs: Math.max(0, tabs.length - unloadedTabs),
       tabs,
+      unloadedTabs,
+      memoryPressure: this.sessionManager.getMemoryPressureLevel(),
     };
   }
 
@@ -291,6 +310,35 @@ export class BrowserAutomationService {
     }
     entry.lastActivityAt = Date.now();
     return entry;
+  }
+
+  public async ensureRealTabLoaded(tabId?: string): Promise<ManagedTabEntry> {
+    if (!tabId) {
+      throw new Error("Informe 'tabId' da aba ativa para executar esta ação.");
+    }
+    const entry = this.sessionManager.getTab(tabId);
+    if (!entry) {
+      throw new Error(`Aba '${tabId}' não encontrada ou já encerrada.`);
+    }
+    if (entry.userControl) {
+      throw new Error(
+        `A aba '${tabId}' está atualmente sob controle interativo humano (BrowserTakeover). Aguarde o usuário concluir a sessão.`,
+      );
+    }
+    if (entry.unloaded || (!entry.page && entry.userDataDir)) {
+      const reloaded = await this.sessionManager.reloadUnloadedTab(tabId, (tab) => {
+        const resolved = this.resolveProfileAndLaunchProxy(tab.perfilId, tab.agenteId);
+        return {
+          perfilId: tab.perfilId,
+          userDataDir: tab.userDataDir || resolved.profile.user_data_dir,
+          cdpUrl: resolved.profile.cdp_porta ? `http://127.0.0.1:${resolved.profile.cdp_porta}` : null,
+          proxy: resolved.proxy,
+        };
+      });
+      this.broadcastTabsAndFrame(reloaded);
+      return reloaded;
+    }
+    return this.requireRealTab(tabId);
   }
 
   private ensureTabPreviewStream(tab: ManagedTabEntry): void {
@@ -395,8 +443,8 @@ export class BrowserAutomationService {
     broadcastBrowserTeachStatus(this.getCtx(), tab);
   }
 
-  public startTeachRecording(tabId: string, agenteId?: string | null) {
-    return startBrowserTeachRecording(this.getCtx(), tabId, agenteId);
+  public async startTeachRecording(tabId: string, agenteId?: string | null) {
+    return await startBrowserTeachRecording(this.getCtx(), tabId, agenteId);
   }
 
   public stopTeachRecording(tabId: string, action: "save" | "discard" = "save") {

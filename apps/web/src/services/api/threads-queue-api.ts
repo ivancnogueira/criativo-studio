@@ -84,11 +84,12 @@ export const threadsQueueUiApi = {
     opts?: { limit?: number; beforeCursor?: string | null; aroundMessageId?: string | null }
   ): Promise<PaginaConversaThread> {
     const q = new URLSearchParams();
-    q.set("limit", String(opts?.limit ?? 50));
+    if (opts?.limit) q.set("limit", String(opts.limit));
     if (opts?.beforeCursor) q.set("beforeCursor", opts.beforeCursor);
     if (opts?.aroundMessageId) q.set("aroundMessageId", opts.aroundMessageId);
+    const suffix = q.toString() ? `?${q.toString()}` : "";
     const data = await requestJson<{ pagina: PaginaConversaThread; mensagens: MensagemChat[] }>(
-      `/api/agentes/${encodeURIComponent(agenteId)}/mensagens?${q.toString()}`
+      `/api/agentes/${encodeURIComponent(agenteId)}/mensagens${suffix}`
     );
     return data.pagina;
   },
@@ -401,14 +402,18 @@ export const threadsQueueUiApi = {
 
   async transcribeAudio(
     audioBase64: string,
-    mimeType = "audio/webm"
-  ): Promise<{ ok: boolean; texto: string }> {
+    mimeType = "audio/webm",
+    options?: { vadEnabled?: boolean; clientSpeechMs?: number; durationSec?: number }
+  ): Promise<{ ok: boolean; texto: string; silent?: boolean; chunks_processados?: number }> {
     return await requestJson("/api/voz/transcrever", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         audio_base64: audioBase64,
         mime_type: mimeType,
+        ...(options?.vadEnabled !== undefined ? { vad_enabled: options.vadEnabled } : {}),
+        ...(options?.clientSpeechMs !== undefined ? { client_speech_ms: options.clientSpeechMs } : {}),
+        ...(options?.durationSec !== undefined ? { duration_sec: options.durationSec } : {}),
       }),
     });
   },

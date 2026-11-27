@@ -5,7 +5,9 @@ import type {
   ModeloProvedorInfo,
   NivelEsforco,
   PoolContasConfig,
+  PoolEstrategiaContas,
 } from "@criativo/contracts";
+import { accountTurnCoordinator, selectPoolAccount } from "../provider-account-pool.ts";
 import {
   formatResetCountdownPtBr,
   refreshCachedQuotaGroupCountdowns,
@@ -326,6 +328,8 @@ export async function computeAntigravityLiveSnapshot(
           grupos_cota: grupos,
           modelos_disponiveis: modelosConta,
           origem: "criativo",
+          removendo: accountTurnCoordinator.isDraining("gemini", entry.id),
+          turnos_ativos: accountTurnCoordinator.getActiveTurns("gemini", entry.id),
         });
       })
     );
@@ -338,20 +342,21 @@ export async function computeAntigravityLiveSnapshot(
     const excluidas = poolOverride?.contas_excluidas ?? [];
     const habilitado =
       poolOverride?.habilitado !== undefined ? poolOverride.habilitado : contas.length > 1;
+    const rawPoolStrategy = (poolOverride as { estrategia?: PoolEstrategiaContas } | null | undefined)?.estrategia;
+    const estrategia: PoolEstrategiaContas = rawPoolStrategy === "spread" ? "spread" : "fill_first";
 
+    const draftPool: PoolContasConfig = {
+      habilitado,
+      contas_excluidas: excluidas,
+      conta_em_uso: poolOverride?.conta_em_uso ?? null,
+      estrategia,
+    };
     const contaElegivel =
-      contas.find((c) => poolOverride?.conta_em_uso && c.id === poolOverride.conta_em_uso && c.estado === "conectado") ??
-      contas
-        .filter((c) => c.estado === "conectado" && !excluidas.includes(c.id))
-        .sort((a, b) => {
-          const minA = Math.min(
-            ...a.grupos_cota.flatMap((g) => [g.janela_5h?.restante_percentual ?? 100, g.janela_semanal?.restante_percentual ?? 100])
-          );
-          const minB = Math.min(
-            ...b.grupos_cota.flatMap((g) => [g.janela_5h?.restante_percentual ?? 100, g.janela_semanal?.restante_percentual ?? 100])
-          );
-          return minB - minA;
-        })[0] ??
+      selectPoolAccount(contas, draftPool, poolOverride?.conta_em_uso, {
+        activeTurnsByAccount: accountTurnCoordinator.getActiveTurnsMap("gemini"),
+        drainingAccountIds: accountTurnCoordinator.getDrainingAccountIds("gemini"),
+      }) ??
+      contas.find((c) => !c.removendo) ??
       contas[0] ??
       null;
 
@@ -361,6 +366,7 @@ export async function computeAntigravityLiveSnapshot(
             habilitado,
             contas_excluidas: excluidas,
             conta_em_uso: contaElegivel?.id ?? null,
+            estrategia,
           }
         : null;
 

@@ -1,4 +1,12 @@
 import { SplitResizeHandle } from "../../components/ui/SplitResizeHandle";
+import { SideSplitContainer } from "../../features/inspector/SideSplitContainer";
+import {
+  reconcileSideSplitLayout,
+  writeStoredSideSplitLayout,
+  type SideSplitGroupKind,
+  type SideSplitLayoutState,
+} from "../../features/inspector/side-split-layout";
+import { FilePreviewPanel } from "../../features/chat/FilePreviewPanel";
 import { RightInspectorPanel, type InspectorSubView } from "../../features/inspector/RightInspectorPanel";
 import {
   InAppBrowserPanel,
@@ -61,6 +69,11 @@ export function StudioAgentInspectorPane({ ctx }: { ctx: StudioUiCtx }) {
     takeoverByAgent,
     teachStatusByTab,
     setBrowsingLogInspector,
+    previewFile,
+    setPreviewFile,
+    setLightboxImage,
+    sideSplitLayout,
+    setSideSplitLayout,
   } = state;
   const { refreshRoutineCounts, refreshAgentThreadsState } = boot;
   const { persistLayoutWidths } = serverActions;
@@ -108,7 +121,9 @@ export function StudioAgentInspectorPane({ ctx }: { ctx: StudioUiCtx }) {
                       onResizeEnd={(finalW) => persistLayoutWidths({ inspector_width: finalW })}
                     />
                   )}
-                  {browserPanelMode === "sidebar" && browserTabs.length > 0 ? (
+                  {(() => {
+                  const showBrowser = browserPanelMode === "sidebar" && browserTabs.length > 0;
+                  const browserNode = (
                     <div
                       style={{ width: `${inspectorWidth}px` }}
                       className="shrink-0 h-full overflow-hidden flex flex-col"
@@ -199,7 +214,8 @@ export function StudioAgentInspectorPane({ ctx }: { ctx: StudioUiCtx }) {
                         }}
                       />
                     </div>
-                  ) : (
+                  );
+                  const inspectorNode = (
                     <RightInspectorPanel
                       open={inspectorOpen}
                       widthPx={inspectorWidth}
@@ -452,7 +468,70 @@ export function StudioAgentInspectorPane({ ctx }: { ctx: StudioUiCtx }) {
                         );
                       }}
                     />
-                  )}
+                  );
+
+                  const activeKinds: SideSplitGroupKind[] = [];
+                  if (inspectorOpen) activeKinds.push("inspector");
+                  if (showBrowser) activeKinds.push("browser");
+                  if (previewFile) activeKinds.push("preview");
+                  const layout = reconcileSideSplitLayout(sideSplitLayout, activeKinds);
+                  const persistLayout = (next: SideSplitLayoutState) => {
+                    setSideSplitLayout(next);
+                    writeStoredSideSplitLayout(next);
+                  };
+                  const multi = layout.groups.length >= 2;
+                  const previewNode = previewFile ? (
+                    <FilePreviewPanel
+                      file={previewFile}
+                      embedded={multi}
+                      onClose={() => setPreviewFile(null)}
+                      onOpenImageLightbox={(url, alt) => setLightboxImage({ url, alt })}
+                    />
+                  ) : null;
+                  const renderKind = (kind: SideSplitGroupKind) =>
+                    kind === "browser"
+                      ? browserNode
+                      : kind === "preview"
+                        ? previewNode
+                        : kind === "inspector"
+                          ? inspectorNode
+                          : null;
+
+                  if (multi) {
+                    const openable: SideSplitGroupKind[] = [];
+                    if (!inspectorOpen) openable.push("inspector");
+                    if (!showBrowser && browserTabs.length > 0) openable.push("browser");
+                    return (
+                      <div
+                        style={{ width: `${inspectorWidth}px` }}
+                        className="shrink-0 h-full overflow-hidden"
+                      >
+                        <SideSplitContainer
+                          layout={layout}
+                          onChange={persistLayout}
+                          renderGroup={renderKind}
+                          openableKinds={openable}
+                          onOpenKind={(kind) => {
+                            if (kind === "inspector") setInspectorOpen(true);
+                            if (kind === "browser") setBrowserPanelMode("sidebar");
+                          }}
+                          onCloseKind={(kind) => {
+                            if (kind === "inspector") {
+                              setInspectorOpen(false);
+                              persistLayoutWidths({ inspector_open: false });
+                            } else if (kind === "browser") {
+                              setBrowserPanelMode("closed");
+                            } else if (kind === "preview") {
+                              setPreviewFile(null);
+                            }
+                          }}
+                        />
+                      </div>
+                    );
+                  }
+                  const single = layout.groups[0];
+                  return single ? renderKind(single.kind) : null;
+                  })()}
     </>
   );
 }

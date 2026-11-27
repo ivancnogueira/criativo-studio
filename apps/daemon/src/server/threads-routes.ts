@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AnexoChat, MensagemChat } from "@criativo/contracts";
+import { CacheExpiryCompactionService } from "../chat/cache-expiry-compaction-service.ts";
 import type { ContextResetService } from "../chat/context-reset-service.ts";
 import type { MessagePinsService } from "../chat/message-pins-service.ts";
 import type { SideQuestionService } from "../chat/side-question-service.ts";
@@ -160,8 +161,12 @@ export async function tryHandleThreadsRoute(
 
     if (method === "GET") {
       try {
-        const limitRaw = Number(url.searchParams.get("limit") ?? 50);
-        const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, Math.floor(limitRaw))) : 50;
+        const rawLimitParam = url.searchParams.get("limit");
+        const parsedLimit = rawLimitParam !== null ? Number(rawLimitParam) : undefined;
+        const limit =
+          parsedLimit !== undefined && Number.isFinite(parsedLimit)
+            ? Math.max(1, Math.min(100, Math.floor(parsedLimit)))
+            : undefined;
         const beforeCursor = url.searchParams.get("beforeCursor");
         const aroundMessageId = url.searchParams.get("aroundMessageId");
 
@@ -170,7 +175,7 @@ export async function tryHandleThreadsRoute(
               threadId,
               agenteId: thread.agente_id,
               aroundMessageId,
-              limit,
+              limit: limit ?? 24,
             })
           : pagination.readPage({
               threadId,
@@ -577,6 +582,41 @@ export async function tryHandleThreadsRoute(
       sendDomainError(sendJson, res, err);
     }
     return true;
+  }
+
+  // 13. Preferências de pré-compactação do cache 1h
+  if (path === "/api/chat/cache-compaction-prefs") {
+    const cachePrefs = new CacheExpiryCompactionService({ db, contextReset });
+    if (method === "GET") {
+      sendJson(res, 200, { ok: true, prefs: cachePrefs.getPreferences() });
+      return true;
+    }
+    if (method === "PUT") {
+      try {
+        const body = await readJsonBody(req);
+        const minTokens =
+          typeof body.minTokens === "number"
+            ? body.minTokens
+            : typeof body.min_tokens === "number"
+              ? body.min_tokens
+              : undefined;
+        const idleMinutes =
+          typeof body.idleMinutes === "number"
+            ? body.idleMinutes
+            : typeof body.idle_minutes === "number"
+              ? body.idle_minutes
+              : undefined;
+        const prefs = cachePrefs.updatePreferences({
+          enabled: typeof body.enabled === "boolean" ? body.enabled : undefined,
+          minTokens,
+          idleMinutes,
+        });
+        sendJson(res, 200, { ok: true, prefs });
+      } catch (err) {
+        sendDomainError(sendJson, res, err);
+      }
+      return true;
+    }
   }
 
   return false;

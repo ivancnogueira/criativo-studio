@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { CriativoDatabase, initializeDatabase } from "../database/client.ts";
+import { EventRetentionService } from "../database/event-retention-service.ts";
 import { FifoQueueManager } from "../queue/fifo-queue.ts";
 import { recoverInterruptedTasks } from "../queue/task-recovery.ts";
 import {
@@ -102,6 +103,10 @@ export async function createDaemonInfraServices(
     options.dbPath ??
     (studioPaths.separatedRoots || studioPaths.isPackaged ? studioPaths.dbPath : undefined);
   const db = initializeDatabase({ dbPath: resolvedDbPath });
+  const eventRetention = new EventRetentionService({ db });
+  if (options.autoStartLoops !== false) {
+    eventRetention.startPeriodicCleanup();
+  }
   const recoveryReport = recoverInterruptedTasks(db);
   if (recoveryReport.totalInterrompidas > 0) {
     console.info("[Daemon] Crash recovery executado:", recoveryReport);
@@ -569,6 +574,7 @@ export async function createDaemonInfraServices(
     studioPaths,
     resolvedWorkspaceRoot,
     db,
+    eventRetention,
     structuredLogger,
     recoveryReport,
     queue,

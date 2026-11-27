@@ -28,6 +28,13 @@ export const SCHEMA_CORE_TABLES: readonly SchemaTableDefinition[] = [
     `,
   },
   {
+    nome: "idx_eventos_ocorrido_em",
+    sql: `
+      CREATE INDEX IF NOT EXISTS idx_eventos_ocorrido_em
+      ON eventos_orquestracao(ocorrido_em);
+    `,
+  },
+  {
     nome: "projecao_agentes",
     sql: `
       CREATE TABLE IF NOT EXISTS projecao_agentes (

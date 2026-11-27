@@ -27,6 +27,7 @@ import type {
 import type {
   WebSocketHub,
 } from "./websocket-hub.ts";
+import { getReleaseNotesForVersion } from "./release-notes-catalog.ts";
 
 export const CONFIG_KEY_USER_SETTINGS = "preferencias_usuario_v1";
 
@@ -389,25 +390,7 @@ export function getWhatsNewInfo(
     }
   }
 
-  const notas: WhatsNewReleaseInfo["notas"] = [
-    {
-      versao: versaoAtual,
-      data: "2026-11-19",
-      added: [
-        "CriativoOS v1.0.0: equipe multiagente de Criativos com Copilot no Chat (`/` comandos e `@` menções), Cofre AES-256-GCM e Memórias FTS5.",
-        "Motor de automação Chromium CDP nativo com perfis isolados, Takeover remoto e modo Ensinar ao Criativo.",
-        "Pareamento WhatsApp Baileys multi-número com suporte explícito ao modo Conversa Interna (meu número).",
-        "Workflows visuais com Undo/Redo, Auto-layout e gatilhos por Cron, Webhook HMAC e WhatsApp.",
-      ],
-      changed: [
-        "Modelos reais filtrados apenas por provedores conectados e sanitização estrita de schemas para Gemini.",
-        "Configurações em página In-Focus e Rotinas promovidas como seção dedicada na barra lateral.",
-      ],
-      fixed: [
-        "Estabilidade do daemon local com logs persistentes e watchdog automático, gravação real de voz via Microfone e badges da Loja.",
-      ],
-    },
-  ];
+  const notas: WhatsNewReleaseInfo["notas"] = getReleaseNotesForVersion(versaoAtual);
 
   const changelogPath = join(workspaceRoot, "docs", "CHANGELOG.md");
   if (existsSync(changelogPath)) {

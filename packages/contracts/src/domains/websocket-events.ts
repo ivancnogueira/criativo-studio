@@ -325,6 +325,16 @@ export type WebSocketEventMap = {
     activeTabId?: string | null;
     agenteId?: string | null;
   };
+  "browser:tab_unloaded": {
+    tabId: string;
+    perfilId: string;
+    agenteId: string | null;
+    url: string;
+    title: string;
+    reason: string;
+    unloadedAt: string;
+    pressureLevel: "elevated" | "critical" | "manual";
+  };
   "browser:takeover_requested": BrowserTakeoverSession;
   "browser:takeover_resolved": {
     takeoverId: string;
@@ -367,6 +377,18 @@ export type WebSocketEventMap = {
     acao: "criado" | "atualizado" | "excluido" | "em_producao";
     id: string;
     tarefa_id?: string;
+  };
+  "meta:first_comment_updated": {
+    comment_job_id: string;
+    media_id: string;
+    status: string;
+    editorial_post_id?: string | null;
+  };
+  "meta:media_audit_updated": {
+    audit_id: string;
+    media_id: string;
+    action: string;
+    outcome: string;
   };
   "license:updated": LicenseActivationStatus;
   "servers:updated": {

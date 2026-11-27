@@ -90,7 +90,14 @@ export async function tryHandleAgentsCrudRoutes(ctx: StudioRouteContext): Promis
     const enriched = rows
       .filter((row) => row.agente_id !== SETUP_ASSISTANT_AGENT_DEF.agente_id || setupVisible)
       .filter((row) => row.agente_id !== "assistente_servidor_vps" || vpsVisible)
-      .map((row) => enrichAgentRow(db, row, workspaceRoot, deps.licenseService, currentBrand));
+      .flatMap((row) => {
+        try {
+          return [enrichAgentRow(db, row, workspaceRoot, deps.licenseService, currentBrand)];
+        } catch (err) {
+          console.warn(`[Agentes] Falha isolada ao carregar agente '${row.agente_id}':`, err);
+          return [];
+        }
+      });
     const filtered = apenasDesbloqueados
       ? enriched.filter((a) => a.config.upgrade_desbloqueado !== false)
       : enriched;

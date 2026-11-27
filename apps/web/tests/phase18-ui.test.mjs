@@ -64,7 +64,7 @@ describe("Fase 18 — UI Auto-Update 1 Clique Carbon Dark SSR & Auditoria Estát
       }),
     );
     assert.match(availableHtml, /Nova versão v1\.2\.0/);
-    assert.match(availableHtml, /Atualizar agora/);
+    assert.match(availableHtml, /Atualizar e reiniciar/);
 
     const downloadingHtml = renderToStaticMarkup(
       React.createElement(UpdateNotificationBanner, {
@@ -83,8 +83,8 @@ describe("Fase 18 — UI Auto-Update 1 Clique Carbon Dark SSR & Auditoria Estát
         },
       }),
     );
-    assert.match(downloadingHtml, /Baixando atualização \(45%\)/);
-    assert.match(downloadingHtml, /Atualizando\.\.\./);
+    assert.match(downloadingHtml, /Baixando em segundo plano \(45%\)/);
+    assert.match(downloadingHtml, /Baixando atualização\.\.\./);
 
     const readyHtml = renderToStaticMarkup(
       React.createElement(UpdateNotificationBanner, {
@@ -103,8 +103,8 @@ describe("Fase 18 — UI Auto-Update 1 Clique Carbon Dark SSR & Auditoria Estát
         },
       }),
     );
-    assert.match(readyHtml, /Atualização v1\.2\.0 aplicada/);
-    assert.match(readyHtml, /Pronto · Reiniciar agora/);
+    assert.match(readyHtml, /Nova versão v1\.2\.0 pronta/);
+    assert.match(readyHtml, /Reiniciar para atualizar/);
   });
 
   it("Teste 2 — Renderiza SSR SettingsUpdatesTab (up_to_date, available, license_blocked)", async () => {

@@ -6,6 +6,45 @@ import type {
   TrackedBackgroundProcessKind,
 } from "@criativo/contracts";
 
+/** Nível de pressão de memória do host. */
+export type MemoryPressureLevel = "normal" | "elevated" | "critical";
+
+/** Snapshot do estado de pressão de memória do host. */
+export interface MemoryPressureSnapshot {
+  level: MemoryPressureLevel;
+  totalMemMb: number;
+  freeMemMb: number;
+  usedPercent: number;
+  daemonRssMb: number;
+}
+
+/**
+ * Avalia o nível de pressão de memória com base em métricas de RAM.
+ * - `"critical"`: usedPercent >= 90 ou freeMemMb <= 256
+ * - `"elevated"`: usedPercent >= 80 ou freeMemMb <= 512
+ * - `"normal"`: demais casos
+ */
+export function evaluateMemoryPressure(metrics?: {
+  totalMemMb: number;
+  freeMemMb: number;
+  daemonRssMb?: number;
+}): MemoryPressureSnapshot {
+  const totalMemMb = metrics?.totalMemMb ?? Math.round(os.totalmem() / (1024 * 1024));
+  const freeMemMb = metrics?.freeMemMb ?? Math.round(os.freemem() / (1024 * 1024));
+  const daemonRssMb = metrics?.daemonRssMb ?? Math.round(process.memoryUsage().rss / (1024 * 1024));
+  const usedMemMb = Math.max(0, totalMemMb - freeMemMb);
+  const usedPercent = totalMemMb > 0 ? Math.round((usedMemMb / totalMemMb) * 1000) / 10 : 0;
+
+  let level: MemoryPressureLevel = "normal";
+  if (usedPercent >= 90 || freeMemMb <= 256) {
+    level = "critical";
+  } else if (usedPercent >= 80 || freeMemMb <= 512) {
+    level = "elevated";
+  }
+
+  return { level, totalMemMb, freeMemMb, usedPercent, daemonRssMb };
+}
+
 interface TrackedProcessEntry {
   pid: number;
   kind: TrackedBackgroundProcessKind;
@@ -123,6 +162,13 @@ export class HostResourceMonitorService {
     }
     this.trackedProcesses.delete(pid);
     return { ok: true, pid, label: entry.label };
+  }
+
+  /**
+   * Retorna o snapshot de pressão de memória atual usando métricas reais do OS.
+   */
+  public getMemoryPressure(): MemoryPressureSnapshot {
+    return evaluateMemoryPressure();
   }
 
   public getSnapshot(): HostResourceSnapshot {

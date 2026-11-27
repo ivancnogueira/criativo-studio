@@ -76,11 +76,13 @@ import {
 } from "../studio-tools-bridge.ts";
 import { resolveAgentRecord } from "../agent-resolver.ts";
 import type { StudioRoutesDeps } from "./route-helpers.ts";
+import {
+  detectUnparsedTextToolAttempt,
+  parseTextToolCalls,
+  type ParsedTextToolCall,
+} from "./text-tool-call-detector.ts";
 
-export interface ParsedTextToolCall {
-  name: string;
-  arguments: Record<string, unknown>;
-}
+export { type ParsedTextToolCall, parseTextToolCalls as parseWorkflowTextToolCalls };
 
 export function compactRecentHistory(
   history: MensagemChat[],
@@ -98,43 +100,6 @@ export function compactRecentHistory(
       text,
     };
   });
-}
-
-export function parseWorkflowTextToolCalls(text: string): ParsedTextToolCall[] {
-  const calls: ParsedTextToolCall[] = [];
-  const regex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(text)) !== null) {
-    try {
-      const parsed = JSON.parse(match[1]) as {
-        name?: unknown;
-        arguments?: unknown;
-      };
-      if (typeof parsed.name === "string") {
-        const normalizedName = parsed.name
-          .replace(/^(?:mcp__criativo_studio__|criativo_studio_|criativo-studio_)/, "")
-          .trim();
-        if (
-          isWorkflowToolName(normalizedName) ||
-          isPhase13ToolName(normalizedName) ||
-          isPhase14ToolName(normalizedName) ||
-          isPhase15ToolName(normalizedName) ||
-          isPhase10ExtensionTool(normalizedName)
-        ) {
-          calls.push({
-            name: normalizedName,
-            arguments:
-              parsed.arguments && typeof parsed.arguments === "object"
-                ? (parsed.arguments as Record<string, unknown>)
-                : {},
-          });
-        }
-      }
-    } catch {
-      // ignora bloco inválido
-    }
-  }
-  return calls;
 }
 
 export async function runTextModelWorkflowToolLoop(params: {
@@ -162,6 +127,7 @@ export async function runTextModelWorkflowToolLoop(params: {
   }) => void;
 }): Promise<string> {
   let currentText = params.initialText;
+  let attemptedUnparsedRecovery = false;
   const hasWorkflow = Boolean(params.deps.workflowStore && params.deps.workflowEngine);
   const workspaceRoot = params.deps.workspaceRoot ?? process.cwd();
 
@@ -171,8 +137,24 @@ export async function runTextModelWorkflowToolLoop(params: {
       abortErr.name = "AbortError";
       throw abortErr;
     }
-    const calls = parseWorkflowTextToolCalls(currentText);
-    if (calls.length === 0) break;
+    const calls = parseTextToolCalls(currentText);
+    if (calls.length === 0) {
+      const unparsed = detectUnparsedTextToolAttempt(currentText);
+      if (unparsed.detected && !attemptedUnparsedRecovery) {
+        attemptedUnparsedRecovery = true;
+        currentText = await params.invokeFollowUp(
+          `Sua resposta anterior continha uma tentativa literal de ferramenta (${unparsed.matchedTag ?? "<execute>"}) escrita como texto inválido que não pôde ser executada.\nExecute a ferramenta real agora via MCP ou emita uma chamada JSON estritamente válida dentro de <tool_call>{"name":"nome_da_ferramenta","arguments":{...}}</tool_call>, sem envolver em XML/Markdown inválido.`,
+        );
+        continue;
+      }
+      if (unparsed.detected) {
+        return (
+          unparsed.sanitizedText ||
+          "Não foi possível concluir a chamada de ferramenta solicitada neste turno. Tente reformular o pedido."
+        );
+      }
+      break;
+    }
 
     const toolResults: Array<{ name: string; output: unknown }> = [];
     for (const call of calls) {

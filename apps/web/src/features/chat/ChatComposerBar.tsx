@@ -69,6 +69,9 @@ export function ChatComposerBar({
     recordingLevel,
     transcribingVoice,
     voiceError,
+    speechDetected,
+    transcriptionProgress,
+    maxDurationSec,
     setVoiceError,
     pendingFailedAudio,
     setPendingFailedAudio,
@@ -213,7 +216,12 @@ export function ChatComposerBar({
                 <span className="h-2.5 w-2.5 rounded-full bg-[#FD2F3B] animate-pulse shrink-0" />
                 <span className="font-semibold text-[#F8FAFC]">Gravando áudio</span>
                 <span className="font-mono text-[11.5px] text-[#FCA5A5] tabular-nums">
-                  {formatRecordingTimer(recordingSeconds)}
+                  {formatRecordingTimer(recordingSeconds)} / {formatRecordingTimer(maxDurationSec)}
+                </span>
+                <span
+                  className={`text-[11px] font-medium ${speechDetected ? "text-[#31CF76]" : "text-[#979797]"}`}
+                >
+                  {speechDetected ? "Fala detectada" : "Aguardando fala..."}
                 </span>
                 <div
                   className="flex items-end gap-0.5 h-4 ml-1"
@@ -256,7 +264,7 @@ export function ChatComposerBar({
           {transcribingVoice && (
             <div className="mb-2 flex items-center gap-2 rounded-xl border border-[#42A0FF]/35 bg-[#42A0FF]/10 px-3 py-2 text-[12px] text-[#E0F2FE]">
               <Loader2 className="h-3.5 w-3.5 animate-spin text-[#42A0FF]" />
-              <span>Transcrevendo áudio...</span>
+              <span>{transcriptionProgress ?? "Transcrevendo áudio..."}</span>
             </div>
           )}
 

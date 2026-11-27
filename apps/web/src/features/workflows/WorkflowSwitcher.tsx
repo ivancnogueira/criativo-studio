@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { WorkflowVersionSummary, WorkflowVisual } from "@criativo/contracts";
-import { Check, ChevronDown, ChevronRight, Copy, Edit3, History, Plus, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy, Download, Edit3, History, Plus, Trash2, Upload } from "lucide-react";
 
 const VERSION_KIND_LABELS: Record<WorkflowVersionSummary["kind"], string> = {
   auto: "Automática",
@@ -18,6 +18,8 @@ export interface WorkflowSwitcherProps {
   onDuplicateWorkflow: (workflow: WorkflowVisual) => void;
   onDeleteWorkflow: (workflow: WorkflowVisual) => void;
   onPreviewVersion: (versionId: string) => void;
+  onExportWorkflow?: (workflow: WorkflowVisual) => void;
+  onImportWorkflowFile?: (file: File) => void;
 }
 
 export const WorkflowSwitcher: React.FC<WorkflowSwitcherProps> = ({
@@ -30,12 +32,15 @@ export const WorkflowSwitcher: React.FC<WorkflowSwitcherProps> = ({
   onDuplicateWorkflow,
   onDeleteWorkflow,
   onPreviewVersion,
+  onExportWorkflow,
+  onImportWorkflowFile,
 }) => {
   const [open, setOpen] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState("");
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -198,6 +203,33 @@ export const WorkflowSwitcher: React.FC<WorkflowSwitcherProps> = ({
               </button>
             )}
 
+            {activeWorkflow && onExportWorkflow && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  onExportWorkflow(activeWorkflow);
+                  setOpen(false);
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-[14px] font-normal text-[#DCDCDC] hover:bg-[#2A2A2A]"
+              >
+                <Download className="h-4 w-4 text-[#42A0FF]" />
+                <span>Exportar fluxo (.workflow)</span>
+              </button>
+            )}
+
+            {onImportWorkflowFile && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => importInputRef.current?.click()}
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-[14px] font-normal text-[#DCDCDC] hover:bg-[#2A2A2A]"
+              >
+                <Upload className="h-4 w-4 text-[#31CF76]" />
+                <span>Importar fluxo (.workflow)</span>
+              </button>
+            )}
+
             {activeWorkflow && (
               <div>
                 <button
@@ -267,6 +299,20 @@ export const WorkflowSwitcher: React.FC<WorkflowSwitcherProps> = ({
           </div>
         </div>
       )}
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".json,.workflow,.workflow.json"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file && onImportWorkflowFile) {
+            onImportWorkflowFile(file);
+          }
+          e.target.value = "";
+          setOpen(false);
+        }}
+      />
     </div>
   );
 };

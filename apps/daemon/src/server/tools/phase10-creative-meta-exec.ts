@@ -26,6 +26,7 @@ import {
 import type { StudioExtensionToolDeps } from "./phase10-tools-schema.ts";
 import { selectBalancedVisualAssets } from "./studio-media-scanner.ts";
 import { readStringArg, readStringArrayArg } from "./studio-tool-helpers.ts";
+import { executeMeta2026Tool, isMeta2026ToolName } from "./meta-2026-tools-exec.ts";
 import { executeVideoStudioTool, isVideoStudioToolName } from "./video-tools-exec.ts";
 export async function executePhase10CreativeMetaTool(
   toolName: string,
@@ -34,6 +35,9 @@ export async function executePhase10CreativeMetaTool(
   ctx: { workspaceRoot: string; nativeStore: NativeAppConnectionsStore | null }
 ): Promise<unknown> {
   const { workspaceRoot, nativeStore } = ctx;
+  if (isMeta2026ToolName(toolName)) {
+    return await executeMeta2026Tool(toolName, args, deps, ctx);
+  }
   if (isVideoStudioToolName(toolName)) {
     return await executeVideoStudioTool(toolName, args, deps, workspaceRoot);
   }
@@ -75,6 +79,9 @@ export async function executePhase10CreativeMetaTool(
       if (!deps.vault) {
         throw new Error("Cofre AES-256-GCM indisponível neste contexto.");
       }
+      const rawStrategy = readStringArg(args, "trial_graduation_strategy", "trialGraduationStrategy");
+      const trialGraduationStrategy =
+        rawStrategy === "MANUAL" || rawStrategy === "SS_PERFORMANCE" ? rawStrategy : undefined;
       return await metaPublishTool(
         {
           media_type: (readStringArg(args, "media_type") ?? "IMAGE") as MetaPublishParams["media_type"],
@@ -83,6 +90,15 @@ export async function executePhase10CreativeMetaTool(
           approved_by_human: args.approved_by_human === true,
           conta_id: readStringArg(args, "conta_id", "contaId"),
           editorial_post_id: readStringArg(args, "editorial_post_id", "editorialPostId"),
+          trial_reel: args.trial_reel === true,
+          trial_graduation_strategy: trialGraduationStrategy,
+          first_comment: readStringArg(args, "first_comment", "firstComment"),
+          first_comment_approved: args.first_comment_approved === true,
+          first_comment_delay_seconds:
+            typeof args.first_comment_delay_seconds === "number" &&
+            Number.isFinite(args.first_comment_delay_seconds)
+              ? args.first_comment_delay_seconds
+              : undefined,
         },
         {
           vault: deps.vault,

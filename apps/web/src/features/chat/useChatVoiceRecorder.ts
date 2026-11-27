@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import type { AnexoChat } from "@criativo/contracts";
 import { daemonApi } from "../../services/websocket-client";
+import {
+  ClientVoiceVadTracker,
+  encodeAudioBufferSegmentsToWavBlobs,
+  MAX_CLIENT_DICTATION_SEC,
+  SEGMENT_ROTATION_SEC,
+} from "./voice-vad-chunker";
 
 export interface UseChatVoiceRecorderParams {
   textareaRef: RefObject<HTMLTextAreaElement | null>;
@@ -22,6 +28,10 @@ export function useChatVoiceRecorder({
   const [recordingLevel, setRecordingLevel] = useState(0);
   const [transcribingVoice, setTranscribingVoice] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [speechDetected, setSpeechDetected] = useState(false);
+  const [transcriptionProgress, setTranscriptionProgress] = useState<string | null>(null);
+  const vadTrackerRef = useRef<ClientVoiceVadTracker | null>(null);
+  const secondsRef = useRef(0);
   const [pendingFailedAudio, setPendingFailedAudio] = useState<{
     file: File;
     message: string;
@@ -142,6 +152,10 @@ export function useChatVoiceRecorder({
     setPendingFailedAudio(null);
     cancelledRecordRef.current = false;
     recordChunksRef.current = [];
+    secondsRef.current = 0;
+    vadTrackerRef.current = new ClientVoiceVadTracker();
+    setSpeechDetected(false);
+    setTranscriptionProgress(null);
     setRecordingSeconds(0);
 
     try {
@@ -184,6 +198,8 @@ export function useChatVoiceRecorder({
           for (let i = 0; i < data.length; i += 1) sum += data[i];
           const avg = Math.min(100, Math.round((sum / Math.max(1, data.length)) * 1.6));
           setRecordingLevel(avg);
+          const active = vadTrackerRef.current?.push(avg, performance.now()) ?? false;
+          setSpeechDetected(active);
           voiceRafRef.current = window.requestAnimationFrame(sampleLevel);
         };
         voiceRafRef.current = window.requestAnimationFrame(sampleLevel);
@@ -208,13 +224,47 @@ export function useChatVoiceRecorder({
         }
 
         const audioBlob = new Blob(chunks, { type: mimeType });
+        const vadSummary = vadTrackerRef.current?.getSummary();
+        const durationSec = Math.min(secondsRef.current, MAX_CLIENT_DICTATION_SEC);
+        if (vadSummary && !vadSummary.hasSpeech) {
+          setRecordingSeconds(0);
+          setTranscriptionProgress(null);
+          setVoiceError("Nenhuma fala detectada (silêncio ignorado).");
+          return;
+        }
         setTranscribingVoice(true);
         try {
-          const base64 = await blobToBase64(audioBlob);
-          const res = await daemonApi.transcribeAudio(base64, mimeType);
-          const cleanText = res.texto?.trim();
-          if (cleanText) {
-            setDraft((prev) => (prev.trim() ? `${prev.trim()} ${cleanText}` : cleanText));
+          let blobs: Blob[] = [audioBlob];
+          let blobMime = mimeType;
+          if (durationSec > SEGMENT_ROTATION_SEC || audioBlob.size > 4 * 1024 * 1024) {
+            try {
+              const ctx = new window.AudioContext();
+              const decoded = await ctx.decodeAudioData(await audioBlob.arrayBuffer());
+              void ctx.close().catch(() => undefined);
+              blobs = await encodeAudioBufferSegmentsToWavBlobs(decoded, SEGMENT_ROTATION_SEC);
+              blobMime = "audio/wav";
+            } catch {
+              blobs = [audioBlob];
+            }
+          }
+          let anyText = false;
+          for (let i = 0; i < blobs.length; i += 1) {
+            setTranscriptionProgress(
+              blobs.length > 1 ? `Transcrevendo bloco ${i + 1}/${blobs.length}...` : null
+            );
+            const base64 = await blobToBase64(blobs[i]!);
+            const res = await daemonApi.transcribeAudio(base64, blobMime, {
+              vadEnabled: true,
+              clientSpeechMs: vadSummary?.speechMs,
+              durationSec,
+            });
+            const cleanText = res.texto?.trim();
+            if (cleanText) {
+              anyText = true;
+              setDraft((prev) => (prev.trim() ? `${prev.trim()} ${cleanText}` : cleanText));
+            }
+          }
+          if (anyText) {
             window.requestAnimationFrame(() => textareaRef.current?.focus());
           } else {
             setVoiceError("Nenhuma fala foi detectada na gravação.");
@@ -229,6 +279,7 @@ export function useChatVoiceRecorder({
           setPendingFailedAudio({ file: audioFile, message: msg });
         } finally {
           setTranscribingVoice(false);
+          setTranscriptionProgress(null);
           setRecordingSeconds(0);
         }
       };
@@ -236,7 +287,12 @@ export function useChatVoiceRecorder({
       recorder.start(250);
       setListeningVoice(true);
       recordTimerRef.current = window.setInterval(() => {
+        secondsRef.current += 1;
         setRecordingSeconds((sec) => sec + 1);
+        if (secondsRef.current >= MAX_CLIENT_DICTATION_SEC) {
+          setTranscriptionProgress("Limite de 10 minutos atingido; transcrevendo gravação...");
+          stopRecordingAndTranscribe();
+        }
       }, 1000);
     } catch {
       cleanupVoiceCapture();
@@ -253,6 +309,9 @@ export function useChatVoiceRecorder({
     recordingLevel,
     transcribingVoice,
     voiceError,
+    speechDetected,
+    transcriptionProgress,
+    maxDurationSec: MAX_CLIENT_DICTATION_SEC,
     setVoiceError,
     pendingFailedAudio,
     setPendingFailedAudio,

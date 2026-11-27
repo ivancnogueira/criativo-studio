@@ -1,4 +1,5 @@
 import type {
+  GranularidadeAnalyticsUso,
   LinhaDetalheUso,
   PontoDiarioUso,
   RelatorioAnalyticsHost,
@@ -6,6 +7,10 @@ import type {
 import type {
   CriativoDatabase,
 } from "../database/client.ts";
+import {
+  buildStackedUsageSeries,
+  resolveAnalyticsGranularity,
+} from "./host-analytics-buckets.ts";
 
 function formatProviderDisplayLabel(provider: string): string {
   const p = provider.toLowerCase();
@@ -35,9 +40,14 @@ function emptyMetricAccumulator() {
 
 export function computeHostAnalytics(
   db: CriativoDatabase,
-  options: { dias?: number; agenteId?: string | null }
+  options: {
+    dias?: number;
+    agenteId?: string | null;
+    granularidade?: "auto" | GranularidadeAnalyticsUso;
+  }
 ): RelatorioAnalyticsHost {
-  const dias = Math.max(1, Math.min(365, options.dias ?? 30));
+  const dias = Math.max(1, Math.min(3650, options.dias ?? 30));
+  const granularidade = resolveAnalyticsGranularity(dias, options.granularidade);
   const agenteId = options.agenteId || null;
   const cutoffIso = new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
 
@@ -220,11 +230,18 @@ export function computeHostAnalytics(
     skillAgg.set(s.skill, cur);
   }
 
+  const serieEmpilhada = buildStackedUsageSeries(rows, {
+    dias,
+    granularidade,
+    formatProviderLabel: formatProviderDisplayLabel,
+  });
+
   return {
     periodo_dias: dias,
     agente_id: agenteId,
     coleta_iniciada_em: earliestIso,
     atualizado_em: latestIso,
+    granularidade,
     totais: {
       sessoes: tot.sessions.size,
       turnos: tot.turns,
@@ -260,6 +277,7 @@ export function computeHostAnalytics(
       })
       .sort((a, b) => b.tokens_sem_cache - a.tokens_sem_cache),
     por_dia: pontosDiarios,
+    serie_empilhada: serieEmpilhada,
     por_habilidade: [...skillAgg.entries()]
       .map(([hab, v]) => ({
         habilidade: hab,

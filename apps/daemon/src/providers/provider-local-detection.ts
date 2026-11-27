@@ -12,10 +12,22 @@ import {
   join,
 } from "node:path";
 import type {
-  ContaProvedorInfo,
   ModeloProvedorInfo,
-  PoolContasConfig,
 } from "@criativo/contracts";
+export {
+  POOL_AFFINITY_WINDOW_MS,
+  POOL_BUFFER_SHORT_WINDOW_PCT,
+  POOL_BUFFER_WEEKLY_WINDOW_PCT,
+  SPREAD_ACTIVE_TURN_PENALTY_PCT,
+  AccountTurnCoordinator,
+  accountTurnCoordinator,
+  getAccountLongestWindowResetMs,
+  getAccountAverageRemainingPct,
+  getAccountMinRemainingPct,
+  accountRespectsQuotaBuffers,
+  selectPoolAccount,
+  type SelectPoolAccountOptions,
+} from "./provider-account-pool.ts";
 import {
   getExtraSystemCandidatePaths,
   isLikelyAntigravityGuiBinary,
@@ -216,110 +228,5 @@ export async function detectOllamaModels(): Promise<{ up: boolean; models: Model
   } finally {
     clearTimeout(timer);
   }
-}
-
-export const POOL_AFFINITY_WINDOW_MS = 10 * 60 * 1000;
-export const POOL_BUFFER_SHORT_WINDOW_PCT = 15; // <= 24h (janela_5h)
-export const POOL_BUFFER_WEEKLY_WINDOW_PCT = 5; // janela_semanal
-
-export function getAccountLongestWindowResetMs(conta: ContaProvedorInfo): number {
-  const grupos = conta.grupos_cota ?? [];
-  const weeklyResets: number[] = [];
-  const shortResets: number[] = [];
-
-  for (const grupo of grupos) {
-    if (grupo.janela_semanal?.reseta_em) {
-      const ts = Date.parse(grupo.janela_semanal.reseta_em);
-      if (Number.isFinite(ts)) weeklyResets.push(ts);
-    }
-    if (grupo.janela_5h?.reseta_em) {
-      const ts = Date.parse(grupo.janela_5h.reseta_em);
-      if (Number.isFinite(ts)) shortResets.push(ts);
-    }
-  }
-
-  if (weeklyResets.length > 0) return Math.min(...weeklyResets);
-  if (shortResets.length > 0) return Math.min(...shortResets);
-  return Number.MAX_SAFE_INTEGER;
-}
-
-export function getAccountAverageRemainingPct(conta: ContaProvedorInfo): number {
-  const values: number[] = [];
-  for (const grupo of conta.grupos_cota ?? []) {
-    if (grupo.janela_5h) values.push(grupo.janela_5h.restante_percentual);
-    if (grupo.janela_semanal) values.push(grupo.janela_semanal.restante_percentual);
-  }
-  if (values.length === 0) return 100;
-  return values.reduce((sum, v) => sum + v, 0) / values.length;
-}
-
-export function accountRespectsQuotaBuffers(conta: ContaProvedorInfo): boolean {
-  for (const grupo of conta.grupos_cota ?? []) {
-    if (grupo.janela_5h) {
-      const dur = Number(grupo.janela_5h.duracao_minutos ?? 300);
-      const minRequired = dur <= 24 * 60 ? POOL_BUFFER_SHORT_WINDOW_PCT : POOL_BUFFER_WEEKLY_WINDOW_PCT;
-      if (grupo.janela_5h.restante_percentual < minRequired) {
-        return false;
-      }
-    }
-    if (grupo.janela_semanal) {
-      if (grupo.janela_semanal.restante_percentual < POOL_BUFFER_WEEKLY_WINDOW_PCT) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
-/**
- * Seleciona a melhor conta do pool respeitando exclusões, reserva mínima de segurança
- * (15% na janela 5h e 5% na janela semanal), prioridade para a janela mais longa que
- * reinicia primeiro e afinidade com `preferredAccountId`/`conta_em_uso` quando diferença < 10 min.
- */
-export function selectPoolAccount(
-  contas: ContaProvedorInfo[],
-  pool: PoolContasConfig | null | undefined,
-  preferredAccountId?: string | null,
-): ContaProvedorInfo | null {
-  const excluded = new Set(pool?.contas_excluidas ?? []);
-  const usable = contas.filter(
-    (c) =>
-      c.estado === "conectado" &&
-      !excluded.has(c.id) &&
-      accountRespectsQuotaBuffers(c),
-  );
-
-  if (usable.length === 0) {
-    return null;
-  }
-
-  const sorted = [...usable].sort((a, b) => {
-    const resetA = getAccountLongestWindowResetMs(a);
-    const resetB = getAccountLongestWindowResetMs(b);
-    if (resetA !== resetB) {
-      return resetA - resetB;
-    }
-    return getAccountAverageRemainingPct(b) - getAccountAverageRemainingPct(a);
-  });
-
-  const best = sorted[0]!;
-  const stickyId = preferredAccountId ?? pool?.conta_em_uso ?? null;
-  if (stickyId) {
-    const sticky = usable.find((c) => c.id === stickyId);
-    if (sticky) {
-      const bestReset = getAccountLongestWindowResetMs(best);
-      const stickyReset = getAccountLongestWindowResetMs(sticky);
-      if (
-        bestReset === stickyReset ||
-        (bestReset !== Number.MAX_SAFE_INTEGER &&
-          stickyReset !== Number.MAX_SAFE_INTEGER &&
-          Math.abs(stickyReset - bestReset) < POOL_AFFINITY_WINDOW_MS)
-      ) {
-        return sticky;
-      }
-    }
-  }
-
-  return best;
 }
 

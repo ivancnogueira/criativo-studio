@@ -496,7 +496,7 @@ export function useStudioBootstrap(state: StudioAppState) {
     if (centerMode.type === "thread") {
       const { agenteId, threadId } = centerMode;
       void daemonApi
-        .readThreadMessages(threadId, { limit: 50 })
+        .readThreadMessages(threadId)
         .then((pagina) => {
           setThreadChatById((prev) => ({ ...prev, [threadId]: pagina.mensagens }));
           setThreadPaginationById((prev) => ({ ...prev, [threadId]: pagina }));
@@ -509,7 +509,7 @@ export function useStudioBootstrap(state: StudioAppState) {
       const key = `agente:${centerMode.agenteId}`;
       const mainKey = `main:${centerMode.agenteId}`;
       void daemonApi
-        .readAgentMessagesPage(centerMode.agenteId, { limit: 50 })
+        .readAgentMessagesPage(centerMode.agenteId)
         .then((pagina) => {
           setChatByKey((prev) => ({ ...prev, [key]: pagina.mensagens }));
           setThreadPaginationById((prev) => ({ ...prev, [mainKey]: pagina }));

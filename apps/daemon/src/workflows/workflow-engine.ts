@@ -43,6 +43,7 @@ import {
   resolveWorkflowSafeOutputFile,
 } from "./engine/workflow-direct-llm.ts";
 import { executeWorkflowCoreOrAiNode } from "./engine/workflow-node-core-exec.ts";
+import { retryBatchMediaVariant } from "./engine/workflow-batch-media-exec.ts";
 import { executeWorkflowOutputNode } from "./engine/workflow-node-output-exec.ts";
 import {
   dispatchWorkflowReadyInitialSteps,
@@ -204,7 +205,9 @@ private async runNodeExecution(params: {
           step,
           node,
           cfg,
+          graph,
           inputs,
+          stepsByNode,
           runPayload,
           signal,
         });
@@ -472,6 +475,13 @@ private async runNodeExecution(params: {
     this.trackPromise(p);
 
     return this.deps.store.getRunDetail(detail.run.run_id) ?? detail;
+  }
+
+  public async retryStepVariant(
+    stepId: string,
+    slotIndex: number
+  ) {
+    return await retryBatchMediaVariant(this.getRuntimeContext(), stepId, slotIndex);
   }
 
   public async decideStep(

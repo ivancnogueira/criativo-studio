@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import type { AnexoChat, ArquivoStudio } from "@criativo/contracts";
 import { CodePreview } from "./CodePreview";
+import { DocxFilePreview } from "./DocxFilePreview";
 import { MarkdownFilePreview, MermaidDiagram } from "./MarkdownMathMermaidPreview";
 import { SpreadsheetFilePreview } from "./SpreadsheetFilePreview";
 
@@ -237,6 +238,8 @@ export interface FilePreviewPanelProps {
   initialTextContent?: string;
   onClose: () => void;
   onOpenImageLightbox?: (url: string, alt?: string) => void;
+  /** Quando `true`, ocupa 100% do grupo no painel multi-split (sem largura fixa nem borda externa). */
+  embedded?: boolean;
 }
 
 /**
@@ -248,6 +251,7 @@ export function FilePreviewPanel({
   initialTextContent,
   onClose,
   onOpenImageLightbox,
+  embedded = false,
 }: FilePreviewPanelProps): React.ReactElement | null {
   const [textContent, setTextContent] = useState<string>(initialTextContent ?? "");
   const [loadingText, setLoadingText] = useState<boolean>(false);
@@ -266,12 +270,16 @@ export function FilePreviewPanel({
   const isCsv = mime.includes("csv") || mime.includes("tab-separated") || ext === "csv" || ext === "tsv";
   const isMermaid = ext === "mmd" || ext === "mermaid";
   const isMarkdown = mime.includes("markdown") || ext === "md";
+  const isDocx =
+    ext === "docx" ||
+    mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   const isCodeOrText =
     !isImage &&
     !isMedia &&
     !isCsv &&
     !isMermaid &&
     !isMarkdown &&
+    !isDocx &&
     (mime.startsWith("text/") ||
       mime.includes("json") ||
       mime.includes("javascript") ||
@@ -365,6 +373,9 @@ export function FilePreviewPanel({
     if (isMarkdown) {
       return <MarkdownFilePreview markdown={textContent} fileName={fileName} />;
     }
+    if (isDocx) {
+      return <DocxFilePreview url={file.url} fileName={fileName} />;
+    }
     if (isCodeOrText) {
       return <CodePreview code={textContent} fileName={fileName} />;
     }
@@ -431,14 +442,20 @@ export function FilePreviewPanel({
 
   return (
     <aside
-      style={{ width: `${panelWidth}px` }}
-      className="relative h-full max-w-full shrink-0 bg-[#1A1A1A] border-l border-[rgba(255,255,255,0.12)] flex flex-col overflow-hidden"
+      style={embedded ? undefined : { width: `${panelWidth}px` }}
+      className={
+        embedded
+          ? "relative w-full h-full flex flex-col bg-[#161618] overflow-hidden"
+          : "relative h-full max-w-full shrink-0 bg-[#1A1A1A] border-l border-[rgba(255,255,255,0.12)] flex flex-col overflow-hidden"
+      }
     >
-      <div
-        onPointerDown={startResize}
-        title="Redimensionar painel"
-        className="hidden md:block absolute left-0 inset-y-0 w-1 cursor-col-resize hover:bg-[#007CF7]"
-      />
+      {!embedded && (
+        <div
+          onPointerDown={startResize}
+          title="Redimensionar painel"
+          className="hidden md:block absolute left-0 inset-y-0 w-1 cursor-col-resize hover:bg-[#007CF7]"
+        />
+      )}
       <div className="flex items-center justify-between gap-2 border-b border-[rgba(255,255,255,0.06)] bg-[#212121] p-4">
         <h3 className="text-[14px] font-semibold text-[#FFFFFF] truncate">{fileName}</h3>
         <div className="flex items-center gap-2 shrink-0">

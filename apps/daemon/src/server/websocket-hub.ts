@@ -107,11 +107,43 @@ export class WebSocketHub {
   }>();
   private readonly workflowPresence = new Map<string, Map<string, WorkflowPresenceMember>>();
 
-  public upsertWorkflowPresence(member: Omit<WorkflowPresenceMember, "updatedAt">): WorkflowPresenceMember[] {
+  public pruneStaleWorkflowPresence(
+    workflowId: string,
+    nowMs = Date.now(),
+    ttlMs = 45_000,
+    broadcastChanges = true
+  ): WorkflowPresenceMember[] {
+    const room = this.workflowPresence.get(workflowId);
+    if (!room) return [];
+
+    let removed = false;
+    for (const [memberId, entry] of room.entries()) {
+      const updatedMs = Date.parse(entry.updatedAt);
+      if (!Number.isFinite(updatedMs) || nowMs - updatedMs > ttlMs) {
+        room.delete(memberId);
+        removed = true;
+      }
+    }
+
+    if (room.size === 0) {
+      this.workflowPresence.delete(workflowId);
+    }
+
+    const members = Array.from(room.values());
+    if (removed && broadcastChanges) {
+      this.broadcast("workflow:presence", { workflowId, members });
+    }
+    return members;
+  }
+
+  public upsertWorkflowPresence(
+    member: Omit<WorkflowPresenceMember, "updatedAt"> & { updatedAt?: string }
+  ): WorkflowPresenceMember[] {
+    this.pruneStaleWorkflowPresence(member.workflowId, Date.now(), 45_000, false);
     const room = this.workflowPresence.get(member.workflowId) ?? new Map<string, WorkflowPresenceMember>();
     room.set(member.memberId, {
       ...member,
-      updatedAt: new Date().toISOString(),
+      updatedAt: member.updatedAt ?? new Date().toISOString(),
     });
     this.workflowPresence.set(member.workflowId, room);
     const members = Array.from(room.values());
@@ -123,14 +155,20 @@ export class WebSocketHub {
     const room = this.workflowPresence.get(workflowId);
     if (!room) return [];
     room.delete(memberId);
+    if (room.size === 0) {
+      this.workflowPresence.delete(workflowId);
+    }
     const members = Array.from(room.values());
     this.broadcast("workflow:presence", { workflowId, members });
     return members;
   }
 
-  public listWorkflowPresence(workflowId: string): WorkflowPresenceMember[] {
-    const room = this.workflowPresence.get(workflowId);
-    return room ? Array.from(room.values()) : [];
+  public listWorkflowPresence(
+    workflowId: string,
+    nowMs = Date.now(),
+    ttlMs = 45_000
+  ): WorkflowPresenceMember[] {
+    return this.pruneStaleWorkflowPresence(workflowId, nowMs, ttlMs);
   }
 
   public registerSseClient(

@@ -122,9 +122,9 @@ export function wf_createRunWithReusedSteps(
             `
             INSERT INTO projecao_workflow_etapas (
               step_id, workflow_id, run_id, node_id, tentativa, request_id, kind, agente_id,
-              status, tarefa_id, input, output, output_tipo, artefatos_json, branch, erro,
+              status, tarefa_id, input, output, output_tipo, artefatos_json, branch, erro, structured_output_json,
               iniciado_em, encerrado_em, criado_em, atualizado_em
-            ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
           `
           )
           .run(
@@ -143,6 +143,7 @@ export function wf_createRunWithReusedSteps(
             reused.artefatos_json,
             reused.branch,
             reused.erro,
+            reused.structured_output_json ?? null,
             reused.iniciado_em ?? nowIso,
             reused.encerrado_em ?? nowIso,
             nowIso,
@@ -316,6 +317,7 @@ export function wf_createOrGetStep(
     branch?: WorkflowBranch | null;
     erro?: string | null;
     tarefaId?: string | null;
+    structuredOutput?: Record<string, unknown> | null;
   }): { step: WorkflowStepRecord; created: boolean } {
     const byReq = deps.db.connection
       .prepare(
@@ -350,9 +352,9 @@ export function wf_createOrGetStep(
           `
           INSERT INTO projecao_workflow_etapas (
             step_id, workflow_id, run_id, node_id, tentativa, request_id, kind, agente_id,
-            status, tarefa_id, input, output, output_tipo, artefatos_json, branch, erro,
+            status, tarefa_id, input, output, output_tipo, artefatos_json, branch, erro, structured_output_json,
             iniciado_em, encerrado_em, criado_em, atualizado_em
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         `
         )
         .run(
@@ -372,6 +374,7 @@ export function wf_createOrGetStep(
           JSON.stringify(params.artefatos ?? []),
           params.branch ?? null,
           params.erro ?? null,
+          params.structuredOutput ? JSON.stringify(params.structuredOutput) : null,
           nowIso,
           isTerminal ? nowIso : null,
           nowIso,
@@ -397,6 +400,7 @@ export function wf_updateStep(
       artefatos?: unknown[];
       branch?: WorkflowBranch | null;
       erro?: string | null;
+      structuredOutput?: Record<string, unknown> | null;
     }
   ): WorkflowStepRecord | null {
     const current = wf_getStep(deps, stepId);
@@ -410,6 +414,13 @@ export function wf_updateStep(
       nextStatus === "stopped" ||
       nextStatus === "skipped";
 
+    const nextStructuredJson =
+      patch.structuredOutput !== undefined
+        ? patch.structuredOutput
+          ? JSON.stringify(patch.structuredOutput)
+          : null
+        : (current.structured_output_json ?? null);
+
     deps.db.connection
       .prepare(
         `
@@ -421,6 +432,7 @@ export function wf_updateStep(
             artefatos_json = ?,
             branch = ?,
             erro = ?,
+            structured_output_json = ?,
             encerrado_em = CASE WHEN ? THEN COALESCE(encerrado_em, ?) ELSE NULL END,
             atualizado_em = ?
         WHERE step_id = ?;
@@ -434,6 +446,7 @@ export function wf_updateStep(
         patch.artefatos !== undefined ? JSON.stringify(patch.artefatos) : current.artefatos_json,
         patch.branch !== undefined ? patch.branch : current.branch,
         patch.erro !== undefined ? patch.erro : current.erro,
+        nextStructuredJson,
         isTerminal ? 1 : 0,
         nowIso,
         nowIso,

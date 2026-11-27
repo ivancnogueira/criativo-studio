@@ -13,6 +13,7 @@ import { join, resolve } from "node:path";
 import { EXEC_TIMEOUT_MS, resolveCliBinaryForProvider, spawnCommandWithStdin, type CliExecutionInput, type CliExecutionOutput, type CliServiceRuntimeContext } from "./cli-types-and-helpers.ts";
 import { forceUpgradeProviderRuntime } from "../provider-runtime-resolver.ts";
 import { extractCleanCodexError, isCodexSchemaMismatchError } from "./codex-models-http.ts";
+import { accountTurnCoordinator, selectPoolAccount } from "../provider-account-pool.ts";
 
 export async function executeCliAgentTurn(
   ctx: CliServiceRuntimeContext,
@@ -23,7 +24,10 @@ input: CliExecutionInput): Promise<CliExecutionOutput> {
       throw abortErr;
     }
 
-    const accounts = ctx.listAccounts(input.provedor);
+    const accountsWithQuotas = await ctx
+      .listAccountsWithQuotas(input.provedor, false)
+      .catch(() => ctx.listAccounts(input.provedor));
+    const accounts = accountsWithQuotas.length > 0 ? accountsWithQuotas : ctx.listAccounts(input.provedor);
     if (accounts.length === 0) {
       throw new Error(
         input.provedor === "claude"
@@ -38,13 +42,23 @@ input: CliExecutionInput): Promise<CliExecutionOutput> {
     }
 
     const pool = ctx.getPoolConfig(input.provedor);
-    const chosenId = input.preferredAccountId ?? pool?.conta_em_uso ?? accounts[0].id;
+    const chosenAccount = selectPoolAccount(accounts, pool, input.preferredAccountId, {
+      activeTurnsByAccount: accountTurnCoordinator.getActiveTurnsMap(input.provedor),
+      drainingAccountIds: accountTurnCoordinator.getDrainingAccountIds(input.provedor),
+    });
+    const drainingIds = accountTurnCoordinator.getDrainingAccountIds(input.provedor);
+    const nonDrainingAccount = accounts.find((a) => !drainingIds.has(a.id));
+    const chosenId = chosenAccount?.id ?? input.preferredAccountId ?? nonDrainingAccount?.id ?? accounts[0].id;
     const rec =
       ctx.getStoredRecords().find((r) => r.provedor === input.provedor && r.id === chosenId) ??
+      ctx.getStoredRecords().find((r) => r.provedor === input.provedor && !drainingIds.has(r.id)) ??
       ctx.getStoredRecords().find((r) => r.provedor === input.provedor);
     if (!rec) {
       throw new Error("Conta configurada não localizada em disco.");
     }
+
+    const releaseTurn = accountTurnCoordinator.beginTurn(input.provedor, rec.id);
+    try {
 
     const promptParts: string[] = [];
     if (input.systemPrompt) promptParts.push(input.systemPrompt);
@@ -305,4 +319,7 @@ input: CliExecutionInput): Promise<CliExecutionOutput> {
         output: output || Math.round(finalText.length / 4),
       },
     };
+    } finally {
+      releaseTurn?.();
+    }
   }

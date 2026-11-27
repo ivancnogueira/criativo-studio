@@ -46,8 +46,13 @@ export function summarizeMetaGalleryPosts(posts: MetaGalleryPostItem[]): MetaGal
   let visualizacoesTotal = 0;
   let salvamentosTotal = 0;
   let interacoesTotal = 0;
+  let repostsTotal = 0;
   let melhorTaxa: number | null = null;
+  let skipRateSum = 0;
+  let skipRateCount = 0;
+  let melhorGanchoSkip: number | null = null;
   const resumoPorFormato: Record<string, MetaGalleryFormatSummary> = {};
+  const skipPorFormato = new Map<string, { sum: number; count: number }>();
 
   for (const post of posts) {
     const reach = post.reach ?? 0;
@@ -56,6 +61,7 @@ export function summarizeMetaGalleryPosts(posts: MetaGalleryPostItem[]): MetaGal
     const likes = post.likes ?? 0;
     const comments = post.comments ?? 0;
     const shares = post.shares ?? 0;
+    const reposts = post.reposts ?? 0;
     const interactions = post.total_interactions ?? likes + comments + saved + shares;
 
     if (post.reach !== null && post.reach !== undefined) {
@@ -65,9 +71,17 @@ export function summarizeMetaGalleryPosts(posts: MetaGalleryPostItem[]): MetaGal
     visualizacoesTotal += views;
     salvamentosTotal += saved;
     interacoesTotal += interactions;
+    repostsTotal += reposts;
 
     if (post.taxa_salvamento_pct !== null && (melhorTaxa === null || post.taxa_salvamento_pct > melhorTaxa)) {
       melhorTaxa = post.taxa_salvamento_pct;
+    }
+    if (typeof post.skip_rate_3s_pct === "number" && Number.isFinite(post.skip_rate_3s_pct)) {
+      skipRateSum += post.skip_rate_3s_pct;
+      skipRateCount += 1;
+      if (melhorGanchoSkip === null || post.skip_rate_3s_pct < melhorGanchoSkip) {
+        melhorGanchoSkip = post.skip_rate_3s_pct;
+      }
     }
 
     const fmtKey = post.formato_normalizado;
@@ -78,6 +92,8 @@ export function summarizeMetaGalleryPosts(posts: MetaGalleryPostItem[]): MetaGal
         total_saved: 0,
         total_reach: 0,
         total_views: 0,
+        avg_skip_rate_3s_pct: null,
+        total_reposts: 0,
       };
     }
     const bucket = resumoPorFormato[fmtKey];
@@ -85,6 +101,13 @@ export function summarizeMetaGalleryPosts(posts: MetaGalleryPostItem[]): MetaGal
     bucket.total_saved += saved;
     bucket.total_reach += reach;
     bucket.total_views += views;
+    bucket.total_reposts = (bucket.total_reposts ?? 0) + reposts;
+    if (typeof post.skip_rate_3s_pct === "number" && Number.isFinite(post.skip_rate_3s_pct)) {
+      const acc = skipPorFormato.get(fmtKey) ?? { sum: 0, count: 0 };
+      acc.sum += post.skip_rate_3s_pct;
+      acc.count += 1;
+      skipPorFormato.set(fmtKey, acc);
+    }
   }
 
   let melhorFormato: string | null = null;
@@ -92,6 +115,9 @@ export function summarizeMetaGalleryPosts(posts: MetaGalleryPostItem[]): MetaGal
   for (const [fmt, bucket] of Object.entries(resumoPorFormato)) {
     bucket.avg_salvamento_pct =
       bucket.total_reach > 0 ? Number(((bucket.total_saved / bucket.total_reach) * 100).toFixed(2)) : null;
+    const skipAcc = skipPorFormato.get(fmt);
+    bucket.avg_skip_rate_3s_pct =
+      skipAcc && skipAcc.count > 0 ? Number((skipAcc.sum / skipAcc.count).toFixed(2)) : null;
     const score = bucket.avg_salvamento_pct ?? bucket.total_saved;
     if (score > melhorScore) {
       melhorScore = score;
@@ -102,6 +128,8 @@ export function summarizeMetaGalleryPosts(posts: MetaGalleryPostItem[]): MetaGal
   const alcanceMedio = reachCount > 0 ? Math.round(alcanceTotal / reachCount) : 0;
   const taxaMedia =
     alcanceTotal > 0 ? Number(((salvamentosTotal / alcanceTotal) * 100).toFixed(2)) : null;
+  const skipMedio = skipRateCount > 0 ? Number((skipRateSum / skipRateCount).toFixed(2)) : null;
+  const retencaoMedia = skipMedio !== null ? Number((100 - skipMedio).toFixed(2)) : null;
 
   return {
     total_posts: posts.length,
@@ -113,6 +141,10 @@ export function summarizeMetaGalleryPosts(posts: MetaGalleryPostItem[]): MetaGal
     melhor_taxa_salvamento_pct: melhorTaxa,
     taxa_salvamento_media_pct: taxaMedia,
     melhor_formato: melhorFormato,
+    reposts_total: repostsTotal,
+    skip_rate_3s_medio_pct: skipMedio,
+    retencao_3s_media_pct: retencaoMedia,
+    melhor_gancho_skip_rate_pct: melhorGanchoSkip,
     resumo_por_formato: resumoPorFormato,
   };
 }
@@ -158,8 +190,24 @@ export class MetaGalleryService {
     sincronizadoEm: string,
     editorialLinks: Map<string, string>
   ): MetaGalleryPostItem {
+    const skipRate =
+      typeof item.skip_rate_3s_pct === "number" && Number.isFinite(item.skip_rate_3s_pct)
+        ? item.skip_rate_3s_pct
+        : null;
+    const hookRetention =
+      typeof item.hook_retention_3s_pct === "number" && Number.isFinite(item.hook_retention_3s_pct)
+        ? item.hook_retention_3s_pct
+        : skipRate !== null
+          ? Number((100 - skipRate).toFixed(2))
+          : null;
+    const reposts =
+      typeof item.reposts === "number" && Number.isFinite(item.reposts) ? item.reposts : null;
+
     return {
       ...item,
+      skip_rate_3s_pct: skipRate,
+      hook_retention_3s_pct: hookRetention,
+      reposts,
       formato_normalizado: normalizeGalleryFormat(item),
       sincronizado_em: sincronizadoEm,
       editorial_post_id: editorialLinks.get(item.id) ?? null,

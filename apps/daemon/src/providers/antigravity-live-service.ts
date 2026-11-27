@@ -7,7 +7,13 @@ import type {
   ModeloProvedorInfo,
   NivelEsforco,
   PoolContasConfig,
+  PoolEstrategiaContas,
 } from "@criativo/contracts";
+import {
+  buildPoolSnapshotsForStudioRecords,
+  executeSafeAccountRemoval,
+  type SafeAccountRemovalResult,
+} from "./provider-account-pool.ts";
 import type { CriativoDatabase } from "../database/client.ts";
 import type { McpGateway } from "../mcp/mcp-gateway.ts";
 import {
@@ -193,7 +199,12 @@ export class AntigravityLiveService {
 
   private getStudioRecords(): {
     accounts: StudioAccountRecord[];
-    poolOverride?: { habilitado?: boolean; contas_excluidas?: string[]; conta_em_uso?: string | null };
+    poolOverride?: {
+      habilitado?: boolean;
+      contas_excluidas?: string[];
+      conta_em_uso?: string | null;
+      estrategia?: PoolEstrategiaContas;
+    };
   } {
     if (!this.db) return { accounts: [] };
     try {
@@ -210,6 +221,7 @@ export class AntigravityLiveService {
             habilitado?: boolean;
             contas_excluidas?: string[];
             conta_em_uso?: string | null;
+            estrategia?: PoolEstrategiaContas;
           })
         : undefined;
 
@@ -413,6 +425,7 @@ export class AntigravityLiveService {
     habilitado?: boolean;
     contas_excluidas?: string[];
     conta_em_uso?: string | null;
+    estrategia?: PoolEstrategiaContas;
   }): void {
     if (!this.db) return;
     const { poolOverride } = this.getStudioRecords();
@@ -420,6 +433,7 @@ export class AntigravityLiveService {
       habilitado: patch.habilitado ?? poolOverride?.habilitado ?? true,
       contas_excluidas: patch.contas_excluidas ?? poolOverride?.contas_excluidas ?? [],
       conta_em_uso: patch.conta_em_uso !== undefined ? patch.conta_em_uso : poolOverride?.conta_em_uso ?? null,
+      estrategia: patch.estrategia ?? poolOverride?.estrategia ?? "fill_first",
     };
     this.db.connection
       .prepare(
@@ -675,6 +689,23 @@ export class AntigravityLiveService {
 
   public removeExtraAccount(accountId: string): boolean {
     return this.removeAccount(accountId);
+  }
+
+  public requestSafeRemoveAccount(accountId: string, onFinalized?: () => void, timeoutMs?: number): SafeAccountRemovalResult {
+    const { accounts, poolOverride } = this.getStudioRecords();
+    const { contas, pool } = buildPoolSnapshotsForStudioRecords("gemini", accounts, poolOverride);
+    const result = executeSafeAccountRemoval({
+      provedor: "gemini",
+      accountId,
+      accounts: contas,
+      pool,
+      updatePoolAccountInUse: (nextId) => this.setPoolSettings({ conta_em_uso: nextId }),
+      performPhysicalRemove: () => { this.removeAccount(accountId); },
+      onFinalized: () => { this.snapshotCache = null; onFinalized?.(); },
+      timeoutMs,
+    });
+    this.snapshotCache = null;
+    return result;
   }
 
 

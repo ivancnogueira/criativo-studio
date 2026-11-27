@@ -40,7 +40,11 @@ export interface ConnectorsPageProps {
   initialDetailProviderId?: ProviderName | null;
   onSelectDefaultProvider?: (provedor: ProviderName) => Promise<void>;
   onRefreshProviders?: () => Promise<void>;
-  onTogglePool?: (provedor: ProviderName, habilitado: boolean) => Promise<void>;
+  onTogglePool?: (
+    provedor: ProviderName,
+    habilitado: boolean,
+    estrategia?: "fill_first" | "spread"
+  ) => Promise<void>;
   onSetAccountActive?: (provedor: ProviderName, contaId: string) => Promise<void>;
   onToggleAccountExcluded?: (
     provedor: ProviderName,

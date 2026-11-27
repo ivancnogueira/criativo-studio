@@ -9,6 +9,8 @@ export const INSTAGRAM_TOOL_NAMES = new Set([
   "validar_integracao_meta",
   "consultar_metricas_meta",
   "meta_publicar",
+  "meta_agendar_primeiro_comentario",
+  "meta_excluir_midia",
 ]);
 
 export const WHATSAPP_TOOL_NAMES = new Set([

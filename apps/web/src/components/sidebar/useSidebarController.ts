@@ -6,6 +6,8 @@ import type {
 } from "@criativo/contracts";
 import type { SidebarProps } from "./sidebar-types-helpers";
 
+export type SidebarQuickFilter = "all" | "unread" | "folders";
+
 export function useSidebarController(props: SidebarProps) {
   const {
     agentes,
@@ -21,6 +23,7 @@ export function useSidebarController(props: SidebarProps) {
 
   const workingAgentSet = useMemo(() => new Set(workingAgentIds ?? []), [workingAgentIds]);
   const [search, setSearch] = useState("");
+  const [quickFilter, setQuickFilter] = useState<SidebarQuickFilter>("all");
   const [menuOpen, setMenuOpen] = useState(false);
   const [dismissWhatsAppCard, setDismissWhatsAppCard] = useState(false);
   const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({});
@@ -100,15 +103,34 @@ export function useSidebarController(props: SidebarProps) {
     );
   }, [agentes, search]);
 
+  const isAgentMarkedUnread = (ag: SidebarProps["agentes"][number]) =>
+    (ag.nao_lidas ?? 0) > 0 ||
+    Boolean((ag.config as Record<string, unknown> | undefined)?.marked_unread);
+
+  const totalUnreadCount = useMemo(() => {
+    let count = 0;
+    for (const ag of agentes) {
+      if ((ag.config as Record<string, unknown>)?.upgrade_desbloqueado === false) continue;
+      if ((ag.nao_lidas ?? 0) > 0) count += ag.nao_lidas ?? 0;
+      else if (Boolean((ag.config as Record<string, unknown> | undefined)?.marked_unread)) count += 1;
+    }
+    for (const ch of canais) {
+      count += ch.nao_lidas ?? 0;
+    }
+    return count;
+  }, [agentes, canais]);
+
   const filteredChannels = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return canais;
-    return canais.filter(
-      (c) =>
+    return canais.filter((c) => {
+      if (quickFilter === "unread" && (c.nao_lidas ?? 0) <= 0) return false;
+      if (!q) return true;
+      return (
         c.nome.toLowerCase().includes(q) ||
-        c.descricao.toLowerCase().includes(q)
-    );
-  }, [canais, search]);
+        (c.descricao ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [canais, search, quickFilter]);
 
   const hiddenSet = useMemo(
     () => new Set(sidebarLayout?.hiddenAgentIds ?? []),
@@ -157,29 +179,34 @@ export function useSidebarController(props: SidebarProps) {
   };
 
   const visibleAgents = useMemo(
-    () => filteredAgents.filter((a) => !hiddenSet.has(a.agente_id)),
-    [filteredAgents, hiddenSet]
+    () =>
+      filteredAgents.filter((a) => {
+        if (hiddenSet.has(a.agente_id)) return false;
+        if (quickFilter === "unread" && !isAgentMarkedUnread(a)) return false;
+        return true;
+      }),
+    [filteredAgents, hiddenSet, quickFilter]
   );
 
   const hiddenAgents = useMemo(
-    () => filteredAgents.filter((a) => hiddenSet.has(a.agente_id)),
-    [filteredAgents, hiddenSet]
+    () =>
+      quickFilter === "all"
+        ? filteredAgents.filter((a) => hiddenSet.has(a.agente_id))
+        : [],
+    [filteredAgents, hiddenSet, quickFilter]
   );
 
   const pinnedAgents = useMemo(() => {
+    if (quickFilter === "folders") return [];
     const byId = new Map(visibleAgents.map((a) => [a.agente_id, a]));
     return pinOrder
       .map((id) => byId.get(id))
       .filter((a): a is SidebarProps["agentes"][number] => Boolean(a));
-  }, [pinOrder, visibleAgents]);
-
-  const isAgentMarkedUnread = (ag: SidebarProps["agentes"][number]) =>
-    (ag.nao_lidas ?? 0) > 0 ||
-    Boolean((ag.config as Record<string, unknown> | undefined)?.marked_unread);
+  }, [pinOrder, visibleAgents, quickFilter]);
 
   const unreadAgents = useMemo(
-    () => visibleAgents.filter((a) => isAgentMarkedUnread(a)),
-    [visibleAgents]
+    () => (quickFilter === "folders" ? [] : visibleAgents.filter((a) => isAgentMarkedUnread(a))),
+    [visibleAgents, quickFilter]
   );
 
   const setupAssistantAgent = useMemo(
@@ -239,14 +266,23 @@ export function useSidebarController(props: SidebarProps) {
   const orderedSections = useMemo(() => {
     const order = sidebarLayout?.order ?? [];
     const rank = new Map(order.map((id, idx) => [id, idx]));
-    return [...sectionsList].sort((a, b) => {
-      const ra = rank.get(a.section_id);
-      const rb = rank.get(b.section_id);
-      if (ra !== undefined && rb !== undefined) return ra - rb;
-      if (a.ordem !== b.ordem) return a.ordem - b.ordem;
-      return a.nome.localeCompare(b.nome, "pt-BR");
-    });
-  }, [sectionsList, sidebarLayout?.order]);
+    const visibleIds = new Set(visibleAgents.map((a) => a.agente_id));
+    const sectionHasContent = (secId: string): boolean => {
+      if (quickFilter !== "unread") return true;
+      const hasAgent = visibleAgents.some((a) => agentAssignments[a.agente_id] === secId && visibleIds.has(a.agente_id));
+      if (hasAgent) return true;
+      return sectionsList.some((s) => s.parent_id === secId && sectionHasContent(s.section_id));
+    };
+    return [...sectionsList]
+      .filter((sec) => sectionHasContent(sec.section_id))
+      .sort((a, b) => {
+        const ra = rank.get(a.section_id);
+        const rb = rank.get(b.section_id);
+        if (ra !== undefined && rb !== undefined) return ra - rb;
+        if (a.ordem !== b.ordem) return a.ordem - b.ordem;
+        return a.nome.localeCompare(b.nome, "pt-BR");
+      });
+  }, [sectionsList, sidebarLayout?.order, quickFilter, visibleAgents, agentAssignments]);
 
   const handleCreateSectionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -275,6 +311,9 @@ export function useSidebarController(props: SidebarProps) {
     workingAgentSet,
     search,
     setSearch,
+    quickFilter,
+    setQuickFilter,
+    totalUnreadCount,
     menuOpen,
     setMenuOpen,
     dismissWhatsAppCard,

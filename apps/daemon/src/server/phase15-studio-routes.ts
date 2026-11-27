@@ -358,8 +358,40 @@ export async function handlePhase15StudioRoutes(
         return true;
       }
 
+      const durationSec =
+        typeof body.duration_sec === "number" && Number.isFinite(body.duration_sec)
+          ? body.duration_sec
+          : undefined;
+      if (durationSec !== undefined && durationSec > 600) {
+        sendJson(res, 400, {
+          ok: false,
+          codigo: "CRV-VOICE-DURATION",
+          erro: "CRV-VOICE-DURATION: o ditado excede o limite de 10 minutos.",
+        });
+        return true;
+      }
+      const vadEnabled = body.vad_enabled !== false;
+      const clientSpeechMs =
+        typeof body.client_speech_ms === "number" && Number.isFinite(body.client_speech_ms)
+          ? body.client_speech_ms
+          : undefined;
+
+      if (typeof transcriber.transcribeAudioDetailed === "function") {
+        const detailed = await transcriber.transcribeAudioDetailed(audioBuffer, rawMime, {
+          vadEnabled,
+          clientSpeechMs,
+          maxDurationSec: durationSec,
+        });
+        sendJson(res, 200, {
+          ok: true,
+          texto: detailed.texto,
+          silent: detailed.silent,
+          chunks_processados: detailed.chunks,
+        });
+        return true;
+      }
       const texto = await transcriber.transcribeAudio(audioBuffer, rawMime);
-      sendJson(res, 200, { ok: true, texto });
+      sendJson(res, 200, { ok: true, texto, silent: false, chunks_processados: 1 });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("MISSING_TRANSCRIPTION_KEY")) {

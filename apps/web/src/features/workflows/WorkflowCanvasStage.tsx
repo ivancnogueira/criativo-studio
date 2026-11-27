@@ -1,10 +1,15 @@
-import {
-  Zap,
-} from "lucide-react";
+import { useEffect, useState } from "react";
+import type { WorkflowTemplateDefinition } from "@criativo/contracts";
+import { daemonApi } from "../../services/websocket-client";
+import { WorkflowEmptyTemplates } from "./WorkflowEmptyTemplates";
 import { WorkflowNodeCard } from "./WorkflowNodes";
 import { WORKFLOW_PORT_META, getWorkflowNodeWidth } from "./workflow-canvas-helpers";
-import { TRIGGER_PRESETS, cloneCanvasSnapshot } from "./workflow-canvas-types";
+import { cloneCanvasSnapshot } from "./workflow-canvas-types";
 import type { WorkflowsCanvasPageProps } from "./workflow-canvas-types";
+import { useWorkflowCanvasMediaDrop } from "./useWorkflowCanvasMediaDrop";
+import { useWorkflowPresence } from "./useWorkflowPresence";
+import { WorkflowCollaborativeCursors } from "./WorkflowCollaborativeCursors";
+import { instantiateWorkflowTemplate } from "./workflow-templates";
 import type { WorkflowCanvasController } from "./useWorkflowCanvasController";
 
 export function WorkflowCanvasStage({
@@ -19,6 +24,7 @@ export function WorkflowCanvasStage({
     canais = [],
     arquivos = [],
     provedores = [],
+    onCreateWorkflow,
     onExecuteStep,
     onDecideStep,
     onRetryStep,
@@ -26,6 +32,7 @@ export function WorkflowCanvasStage({
   } = props;
   const {
     currentWf,
+    setActiveWfId,
     selectedNodeId,
     setSelectedNodeId,
     selectedEdgeId,
@@ -47,6 +54,12 @@ export function WorkflowCanvasStage({
     draggingNodeRef,
     mouseWorld,
     hydrateWorkflowSideData,
+    setLocalNos,
+    setLocalArestas,
+    setStatusFeedback,
+    scheduleDebouncedSave,
+    pushUndoSnapshot,
+    fitView,
     displayNos,
     displayArestas,
     displayTracos,
@@ -64,14 +77,100 @@ export function WorkflowCanvasStage({
     handleRunWorkflow,
   } = ctrl;
 
+  const [remoteTemplates, setRemoteTemplates] = useState<WorkflowTemplateDefinition[]>([]);
+
+  const { remoteMembers, collaboratorByNodeId, reportCursor } = useWorkflowPresence({
+    workflowId: currentWf?.workflow_id ?? null,
+    selectedNodeId,
+  });
+
+  useEffect(() => {
+    if (displayNos.length > 0) return;
+    let active = true;
+    void daemonApi
+      .listWorkflowTemplates()
+      .then((res) => {
+        if (active && Array.isArray(res.templates) && res.templates.length > 0) {
+          setRemoteTemplates(res.templates);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [displayNos.length]);
+
+  const {
+    isDraggingMedia,
+    uploadingDropCount,
+    handleDragOver,
+    handleDragLeave,
+    handleDrop,
+  } = useWorkflowCanvasMediaDrop({
+    stageRef,
+    zoom,
+    panOffset,
+    isReadOnly,
+    onUploadFile,
+    onCreateAssetNodeAt: (arquivo, x, y) => {
+      handleAddNode("asset", {
+        titulo: arquivo.nome_original,
+        x,
+        y,
+        fileId: arquivo.arquivo_id,
+        config: { fileId: arquivo.arquivo_id },
+      });
+    },
+    setStatusFeedback,
+  });
+
+  const handleApplyTemplate = (templateId: WorkflowTemplateDefinition["id"]) => {
+    const built = instantiateWorkflowTemplate(templateId, provedores, remoteTemplates);
+    if (!currentWf && onCreateWorkflow) {
+      void onCreateWorkflow({
+        nome: built.template.nome,
+        nos: built.nos,
+        arestas: built.arestas,
+      }).then((created) => {
+        setActiveWfId(created.workflow_id);
+        setStatusFeedback(`Template "${built.template.nome}" criado.`);
+      });
+      return;
+    }
+    if (isReadOnly) return;
+    pushUndoSnapshot();
+    localNosRef.current = built.nos;
+    localArestasRef.current = built.arestas;
+    setLocalNos(built.nos);
+    setLocalArestas(built.arestas);
+    setSelectedNodeId(built.nos[0]?.id ?? null);
+    setTriggerMenuOpen(false);
+    scheduleDebouncedSave(built.nos, built.arestas);
+    setStatusFeedback(`Template "${built.template.nome}" aplicado ao fluxo.`);
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => fitView());
+    }
+  };
+
   return (
     <>
       {/* Fundo infinito dot-grid */}
       <div
         ref={stageRef}
         onPointerDown={handleStagePointerDown}
-        onPointerMove={handleStagePointerMove}
+        onPointerMove={(e) => {
+          handleStagePointerMove(e);
+          if (!currentWf) return;
+          const rect = stageRef.current?.getBoundingClientRect();
+          if (!rect) return;
+          const worldX = (e.clientX - rect.left - panOffset.x) / zoom;
+          const worldY = (e.clientY - rect.top - panOffset.y) / zoom;
+          reportCursor(worldX, worldY);
+        }}
         onPointerUp={handleStagePointerUp}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
         style={{
           backgroundImage:
             "radial-gradient(rgba(255,255,255,0.12) 1px, transparent 1px)",
@@ -224,7 +323,10 @@ export function WorkflowCanvasStage({
             <WorkflowNodeCard
               key={node.id}
               node={node}
+              allNodes={displayNos}
+              allEdges={displayArestas}
               selected={selectedNodeId === node.id}
+              collaboratorSelection={collaboratorByNodeId.get(node.id) ?? null}
               readOnly={isReadOnly}
               agentes={agentes}
               canais={canais}
@@ -293,57 +395,33 @@ export function WorkflowCanvasStage({
               }
               onOpenTriggerModal={(n) => setTriggerModalNode(n)}
               onUploadFile={onUploadFile}
+              onRefreshRunData={
+                currentWf ? () => hydrateWorkflowSideData(currentWf.workflow_id) : undefined
+              }
             />
           ))}
+
+          {/* Cursores colaborativos ao vivo na camada transformada */}
+          <WorkflowCollaborativeCursors members={remoteMembers} />
         </div>
 
         {/* Estado vazio quando não há nós */}
         {displayNos.length === 0 && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-4">
-            <div className="pointer-events-auto max-w-md rounded-2xl border border-white/[0.12] bg-[#212121] p-6 text-center shadow-2xl space-y-4">
-              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-[#FF9412]/15 text-[#FF9412]">
-                <Zap className="h-6 w-6" />
-              </div>
-              <h2 className="text-[20px] font-semibold text-white">Comece com um gatilho</h2>
-              <p className="text-[14px] text-[#979797]">
-                Defina como este fluxo será disparado automaticamente ou sob demanda.
-              </p>
-              <div className="relative flex justify-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setTriggerMenuOpen((v) => !v)}
-                  className="flex items-center gap-2 rounded-lg bg-[#F0F0F0] px-4 py-2 text-[14px] font-semibold text-[#141414] hover:bg-white"
-                >
-                  <Zap className="h-4 w-4" />
-                  <span>Adicionar gatilho</span>
-                </button>
-                {triggerMenuOpen && (
-                  <div className="absolute top-full z-40 mt-2 w-60 rounded-xl border border-white/[0.12] bg-[#212121] p-1 text-left shadow-2xl">
-                    {TRIGGER_PRESETS.map((preset) => (
-                      <button
-                        key={preset.titulo}
-                        type="button"
-                        onClick={() =>
-                          handleAddNode("gatilho", {
-                            titulo: preset.titulo,
-                            triggerKind: preset.triggerKind,
-                            config: preset.conectorId
-                              ? {
-                                  triggerKind: preset.triggerKind,
-                                  conectorId: preset.conectorId,
-                                }
-                              : { triggerKind: preset.triggerKind },
-                          })
-                        }
-                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-[14px] text-[#DCDCDC] hover:bg-[#2A2A2A]"
-                      >
-                        <Zap className="h-3.5 w-3.5 text-[#FF9412]" />
-                        <span>{preset.titulo}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+          <WorkflowEmptyTemplates
+            templates={remoteTemplates}
+            triggerMenuOpen={triggerMenuOpen}
+            onToggleTriggerMenu={() => setTriggerMenuOpen((v) => !v)}
+            onApplyTemplate={handleApplyTemplate}
+            onAddTriggerNode={(tipo, extra) => handleAddNode(tipo, extra)}
+          />
+        )}
+
+        {(isDraggingMedia || uploadingDropCount > 0) && (
+          <div className="pointer-events-none absolute inset-4 z-30 flex items-center justify-center rounded-2xl border-2 border-dashed border-[#007CF7] bg-[#007CF7]/10 backdrop-blur-xs">
+            <div className="rounded-xl border border-[#007CF7]/40 bg-[#181818] px-4 py-2 text-[13px] font-semibold text-white shadow-2xl">
+              {uploadingDropCount > 0
+                ? `Enviando ${uploadingDropCount} mídia(s) para o fluxo...`
+                : "Solte vídeo (MP4/MOV), áudio (MP3/WAV) ou imagem para adicionar ao fluxo"}
             </div>
           </div>
         )}
