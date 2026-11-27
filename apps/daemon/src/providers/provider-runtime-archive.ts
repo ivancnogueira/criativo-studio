@@ -318,13 +318,14 @@ export function resolveAntigravityReleaseAssetName(
 
 export async function downloadAndStageStandaloneArchive(params: {
   label: string;
-  folder: "opencode" | "antigravity";
+  folder: "opencode" | "antigravity" | "codex";
   appDataDir?: string;
   platform?: NodeJS.Platform;
   timeoutMs?: number;
   downloadUrl: string;
   explicitVersion?: string | null;
   expectedSha512?: string | null;
+  expectedSha256?: string | null;
   assetName: string;
   archFolder: string;
   binName: string;
@@ -382,6 +383,18 @@ export async function downloadAndStageStandaloneArchive(params: {
       }
     }
 
+    if (params.expectedSha256 && params.expectedSha256.trim().length > 0) {
+      const actualSha256 = createHash("sha256").update(buf).digest("hex").toLowerCase();
+      if (actualSha256 !== params.expectedSha256.trim().toLowerCase()) {
+        return {
+          executable: null,
+          version: null,
+          installedNow: false,
+          error: `Verificação de integridade SHA-256 falhou para ${params.label}.`,
+        };
+      }
+    }
+
     writeFileSync(archivePath, buf);
 
     let extractedBin: string | null = null;
@@ -408,7 +421,7 @@ export async function downloadAndStageStandaloneArchive(params: {
       };
     }
 
-    const verMatch = (res.url || params.downloadUrl).match(/\/download\/v?([0-9]+\.[0-9]+\.[0-9][^/]*)\//i);
+    const verMatch = (res.url || params.downloadUrl).match(/\/download\/(?:rust-)?v?([0-9]+\.[0-9]+\.[0-9][^/]*)\//i);
     const cleanExplicit = params.explicitVersion?.replace(/^v/i, "").trim();
     const version = cleanExplicit || verMatch?.[1] || "latest";
     const finalBinPath = join(baseDir, params.archFolder, version, "bin", params.binName);

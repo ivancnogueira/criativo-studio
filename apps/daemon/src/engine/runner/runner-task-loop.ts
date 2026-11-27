@@ -10,6 +10,8 @@ import type { CatalogService } from "../../marketplace/catalog-service.ts";
 import type { SkillsManager } from "../../marketplace/skills-manager.ts";
 import type { McpGateway, McpOAuthRequiredNotice } from "../../mcp/mcp-gateway.ts";
 import { redactMcpPayload, redactMcpSecrets } from "../../mcp/mcp-redaction.ts";
+import { DEFAULT_FALLBACK_FREE_MODEL } from "../../providers/default-model-resolver.ts";
+import { resolveOpenCodeCliExecutable } from "../../providers/opencode-live-service.ts";
 import type { FifoQueueManager } from "../../queue/fifo-queue.ts";
 import {
   assertAgentPermissionForPath,
@@ -300,16 +302,33 @@ export async function executeAgentRunTask(
         | { mode: "cli"; text: string }
       > => {
         let resolvedClient: ReturnType<ProviderRegistry["getClientForModel"]> | null = null;
+        let resolvedModelId = targetModel;
         try {
           resolvedClient = deps.providers.getClientForModel(targetModel);
         } catch {
           resolvedClient = null;
         }
 
+        if (!resolvedClient && targetModel.trim() === DEFAULT_FALLBACK_FREE_MODEL) {
+          const isOpenCodeFallback = deps.providers.resolveProviderName(targetModel) === "opencode";
+          const canFallbackFromOpenCode =
+            !deps.providerConnection ||
+            (isOpenCodeFallback &&
+              (process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1" ||
+                !resolveOpenCodeCliExecutable().executable));
+          if (canFallbackFromOpenCode) {
+            const fb = deps.providers.resolveFallbackClientForDefault();
+            if (fb) {
+              resolvedClient = fb.client;
+              resolvedModelId = fb.model;
+            }
+          }
+        }
+
         if (resolvedClient) {
           const result = await resolvedClient.streamTurn(
             {
-              model: targetModel,
+              model: resolvedModelId,
               systemPrompt,
               messages: attemptMessages,
               tools: exposedTools,

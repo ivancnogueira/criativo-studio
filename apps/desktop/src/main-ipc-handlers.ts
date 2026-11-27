@@ -68,6 +68,8 @@ export function registerDesktopIpcHandlers(deps: DesktopIpcDeps): void {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         target_server_id: typeof targetServerId === "string" ? targetServerId : undefined,
+        restart: true,
+        force: true,
       }),
     });
     return await res.json();
@@ -78,6 +80,8 @@ export function registerDesktopIpcHandlers(deps: DesktopIpcDeps): void {
     if (!handle) return null;
     const res = await fetch(`${handle.baseUrl}/api/studio/updates/restart`, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force: true }),
     });
     return await res.json();
   });

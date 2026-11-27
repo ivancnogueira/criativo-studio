@@ -1,5 +1,9 @@
 import type { AvatarShape, FrenteAgente, NivelEsforco } from "@criativo/contracts";
 import type { CriativoDatabase } from "../../database/client.ts";
+import {
+  DEFAULT_FALLBACK_FREE_MODEL,
+  LEGACY_OR_DEPRECATED_DEFAULT_MODELS,
+} from "../../providers/default-model-resolver.ts";
 
 export interface AgenteDefinicao {
   agente_id: string;
@@ -90,7 +94,7 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     frente: "conteudo",
     pasta: "Conteúdo Base",
     skill_slug: "planejar-conteudo",
-    modelo_padrao: "gemini-2.5-pro",
+    modelo_padrao: DEFAULT_FALLBACK_FREE_MODEL,
     avatar_shape: "hex",
     avatar_color: "#31cf76",
     effort: "alto",
@@ -106,7 +110,7 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     frente: "conteudo",
     pasta: "Conteúdo Base",
     skill_slug: "copywriter-instagram",
-    modelo_padrao: "claude-3-7-sonnet-latest",
+    modelo_padrao: DEFAULT_FALLBACK_FREE_MODEL,
     avatar_shape: "blob",
     avatar_color: "#38bdf8",
     effort: "alto",
@@ -122,7 +126,7 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     frente: "conteudo",
     pasta: "Conteúdo Base",
     skill_slug: "criar-post-individual",
-    modelo_padrao: "gemini-2.5-pro",
+    modelo_padrao: DEFAULT_FALLBACK_FREE_MODEL,
     avatar_shape: "diamond",
     avatar_color: "#f27ba5",
     effort: "medio",
@@ -138,7 +142,7 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     frente: "conteudo",
     pasta: "Conteúdo Base",
     skill_slug: "criar-carrossel",
-    modelo_padrao: "gemini-2.5-pro",
+    modelo_padrao: DEFAULT_FALLBACK_FREE_MODEL,
     avatar_shape: "rounded_square",
     avatar_color: "#2dd4bf",
     effort: "alto",
@@ -154,7 +158,7 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     frente: "conteudo",
     pasta: "Conteúdo Base",
     skill_slug: "criar-post-anuncio",
-    modelo_padrao: "gpt-4o",
+    modelo_padrao: DEFAULT_FALLBACK_FREE_MODEL,
     avatar_shape: "triangle",
     avatar_color: "#f97316",
     effort: "medio",
@@ -170,7 +174,7 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     frente: "conteudo",
     pasta: "Conteúdo Base",
     skill_slug: "gerar-stories",
-    modelo_padrao: "gemini-2.5-flash",
+    modelo_padrao: DEFAULT_FALLBACK_FREE_MODEL,
     avatar_shape: "cloud",
     avatar_color: "#eab308",
     effort: "medio",
@@ -186,7 +190,7 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     frente: "conteudo",
     pasta: "Conteúdo Base",
     skill_slug: "criar-identidade-visual",
-    modelo_padrao: "claude-3-7-sonnet-latest",
+    modelo_padrao: DEFAULT_FALLBACK_FREE_MODEL,
     avatar_shape: "octo",
     avatar_color: "#8b5cf6",
     effort: "alto",
@@ -202,7 +206,7 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     frente: "conteudo",
     pasta: "Conteúdo Base",
     skill_slug: "configurar-instagram",
-    modelo_padrao: "gemini-2.5-flash",
+    modelo_padrao: DEFAULT_FALLBACK_FREE_MODEL,
     avatar_shape: "pill",
     avatar_color: "#34479c",
     effort: "baixo",
@@ -218,7 +222,7 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     frente: "conteudo",
     pasta: "Conteúdo Base",
     skill_slug: "analise-metricas",
-    modelo_padrao: "gemini-2.5-pro",
+    modelo_padrao: DEFAULT_FALLBACK_FREE_MODEL,
     avatar_shape: "diamond",
     avatar_color: "#6bc7d9",
     effort: "alto",
@@ -234,7 +238,7 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     frente: "bonus",
     pasta: "Agentes Bônus",
     skill_slug: "gerador-de-entregaveis",
-    modelo_padrao: "claude-3-7-sonnet-latest",
+    modelo_padrao: DEFAULT_FALLBACK_FREE_MODEL,
     avatar_shape: "rounded_square",
     avatar_color: "#d6b98c",
     effort: "medio",
@@ -250,7 +254,7 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     frente: "bonus",
     pasta: "Agentes Bônus",
     skill_slug: "engenharia-reversa-concorrentes",
-    modelo_padrao: "gemini-2.5-pro",
+    modelo_padrao: DEFAULT_FALLBACK_FREE_MODEL,
     avatar_shape: "octo",
     avatar_color: "#6366f1",
     effort: "alto",
@@ -266,7 +270,7 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     frente: "bonus",
     pasta: "Agentes Bônus",
     skill_slug: "consistencia-personagem",
-    modelo_padrao: "gemini-2.5-pro",
+    modelo_padrao: DEFAULT_FALLBACK_FREE_MODEL,
     avatar_shape: "blob",
     avatar_color: "#a855f7",
     effort: "alto",
@@ -282,7 +286,7 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     frente: "video",
     pasta: "Estúdio de Vídeo",
     skill_slug: "criar-video-reels",
-    modelo_padrao: "gemini-2.5-pro",
+    modelo_padrao: DEFAULT_FALLBACK_FREE_MODEL,
     avatar_shape: "hex",
     avatar_color: "#ef4444",
     effort: "alto",
@@ -298,7 +302,7 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     frente: "video",
     pasta: "Estúdio de Vídeo",
     skill_slug: "roteirista-faceless",
-    modelo_padrao: "claude-3-7-sonnet-latest",
+    modelo_padrao: DEFAULT_FALLBACK_FREE_MODEL,
     avatar_shape: "triangle",
     avatar_color: "#f59e0b",
     effort: "medio",
@@ -314,7 +318,7 @@ export const ROSTER_15_AGENTES: readonly AgenteDefinicao[] = ([
     frente: "video",
     pasta: "Estúdio de Vídeo",
     skill_slug: "roteirista-talking-head",
-    modelo_padrao: "claude-3-7-sonnet-latest",
+    modelo_padrao: DEFAULT_FALLBACK_FREE_MODEL,
     avatar_shape: "cloud",
     avatar_color: "#a8324e",
     effort: "medio",
@@ -337,7 +341,7 @@ export const SETUP_ASSISTANT_AGENT_DEF: AgenteDefinicao = {
   pacote: "base",
   pasta: "Setup Inicial",
   skill_slug: "criar-identidade-visual",
-  modelo_padrao: "gemini-2.5-flash",
+  modelo_padrao: DEFAULT_FALLBACK_FREE_MODEL,
   avatar_shape: "pill",
   avatar_color: "#42a0ff",
   effort: "baixo",
@@ -359,7 +363,7 @@ export const VPS_ASSISTANT_AGENT_DEF: AgenteDefinicao = {
   pacote: "base",
   pasta: "Infraestrutura VPS",
   skill_slug: "configurar-instagram",
-  modelo_padrao: "gemini-2.5-flash",
+  modelo_padrao: DEFAULT_FALLBACK_FREE_MODEL,
   avatar_shape: "hex",
   avatar_color: "#2EC4B6",
   effort: "medio",
@@ -498,25 +502,37 @@ export function seedDefaultAgents(db: CriativoDatabase): number {
       inseridos += Number(res.changes);
     }
 
-    // Backfill completo: preenche prompt_base, skill_slug, pacote, ferramentas e tema caso ausentes ou vazios
+    // Backfill completo: preenche prompt_base, skill_slug, pacote, ferramentas, tema e migra modelos legados/descontinuados
     const existingRows = db.connection
-      .prepare(`SELECT agente_id, config_json FROM projecao_agentes;`)
-      .all() as Array<{ agente_id: string; config_json: string }>;
+      .prepare(`SELECT agente_id, modelo_padrao, config_json FROM projecao_agentes;`)
+      .all() as Array<{ agente_id: string; modelo_padrao: string; config_json: string }>;
 
     const updateConfigStmt = db.connection.prepare(
       `UPDATE projecao_agentes SET config_json = ? WHERE agente_id = ?;`
+    );
+    const updateModelStmt = db.connection.prepare(
+      `UPDATE projecao_agentes SET modelo_padrao = ?, atualizado_em = ? WHERE agente_id = ?;`
     );
 
     for (const row of existingRows) {
       const def = allDefs.find((a) => a.agente_id === row.agente_id);
       const theme = DEFAULT_AVATAR_THEMES[row.agente_id];
-      if (!def && !theme) continue;
       let parsed: Record<string, unknown> = {};
       try {
         parsed = JSON.parse(row.config_json || "{}") as Record<string, unknown>;
       } catch {
         parsed = {};
       }
+
+      const currentModel = (row.modelo_padrao || "").trim();
+      if (
+        parsed.modelo_fixado_usuario !== true &&
+        (!currentModel || LEGACY_OR_DEPRECATED_DEFAULT_MODELS.has(currentModel))
+      ) {
+        updateModelStmt.run(DEFAULT_FALLBACK_FREE_MODEL, agora, row.agente_id);
+      }
+
+      if (!def && !theme) continue;
       const promptVazio = typeof parsed.prompt_base !== "string" || parsed.prompt_base.trim().length === 0;
       const precisaAtualizar =
         !parsed.avatar_shape ||

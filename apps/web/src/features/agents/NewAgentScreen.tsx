@@ -1,9 +1,10 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import type {
   AvatarShape,
   AvatarStyle,
   NivelEsforco,
   ProvedorStatusInfo,
+  ProviderName,
 } from "@criativo/contracts";
 import { ChevronDown } from "lucide-react";
 import {
@@ -14,6 +15,7 @@ import {
 import {
   inferProviderFromModelId,
   ModelProviderPopover,
+  pickDefaultModelFromProviders,
 } from "../../components/ModelProviderPopover";
 import { ProviderLogo } from "../../components/ProviderLogo";
 
@@ -42,7 +44,7 @@ const AGENT_SUGGESTIONS: Array<{
   prompt: string;
   shape: AvatarShape;
   color: string;
-  modelo: string;
+  preferredProvider?: ProviderName;
   effort: NivelEsforco;
 }> = [
   {
@@ -52,7 +54,7 @@ const AGENT_SUGGESTIONS: Array<{
       "Atue como especialista em retenção nos 3 primeiros segundos. Gere 10 ganchos curtos de alta curiosidade sem promessas irreais para [@SEU_PERFIL].",
     shape: "blob",
     color: "#d946ef",
-    modelo: "claude-3-7-sonnet-latest",
+    preferredProvider: "claude",
     effort: "alto",
   },
   {
@@ -62,7 +64,7 @@ const AGENT_SUGGESTIONS: Array<{
       "Estruture variações A/B de anúncios estáticos com título forte, prova e CTA direto usando generate_image 3:4.",
     shape: "triangle",
     color: "#38bdf8",
-    modelo: "gpt-4o",
+    preferredProvider: "openai",
     effort: "medio",
   },
   {
@@ -72,7 +74,7 @@ const AGENT_SUGGESTIONS: Array<{
       "Converte ideias em uma tabela semanal pronta com pilar, formato (Carrossel/Reels/Stories) e objetivo de negócio.",
     shape: "hex",
     color: "#eab308",
-    modelo: "gemini-2.5-pro",
+    preferredProvider: "gemini",
     effort: "alto",
   },
   {
@@ -82,7 +84,7 @@ const AGENT_SUGGESTIONS: Array<{
       "Garanta que todas as lâminas respeitem margens seguras, tipografia contrastante e identidade visual de [NOME_DA_MARCA].",
     shape: "rounded_square",
     color: "#22c55e",
-    modelo: "gemini-2.5-flash-image",
+    preferredProvider: "gemini",
     effort: "medio",
   },
   {
@@ -92,7 +94,7 @@ const AGENT_SUGGESTIONS: Array<{
       "Produza legendas em português brasileiro claro com 1ª linha de impacto, bullets escaneáveis e fechamento focado em salvamentos.",
     shape: "cloud",
     color: "#f97316",
-    modelo: "claude-3-7-sonnet-latest",
+    preferredProvider: "claude",
     effort: "medio",
   },
   {
@@ -102,7 +104,7 @@ const AGENT_SUGGESTIONS: Array<{
       "Analise métricas em CSV ou tabela Markdown e destaque exatamente quais pilares repetir e quais otimizar na próxima semana.",
     shape: "octo",
     color: "#6366f1",
-    modelo: "grok-4.6",
+    preferredProvider: "grok",
     effort: "alto",
   },
 ];
@@ -128,10 +130,16 @@ export const NewAgentScreen: React.FC<NewAgentScreenProps> = ({
   const [style, setStyle] = useState<AvatarStyle>("classic");
   const [variant, setVariant] = useState<string>("rounded_square");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [modelo, setModelo] = useState("gemini-2.5-flash");
+  const [userPickedModel, setUserPickedModel] = useState(false);
+  const [modelo, setModelo] = useState(() => pickDefaultModelFromProviders(provedores));
   const [effort, setEffort] = useState<NivelEsforco>("alto");
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (userPickedModel) return;
+    setModelo(pickDefaultModelFromProviders(provedores));
+  }, [provedores, userPickedModel]);
 
   const activeProvider = inferProviderFromModelId(modelo);
 
@@ -278,7 +286,8 @@ export const NewAgentScreen: React.FC<NewAgentScreenProps> = ({
                 setVariant(sug.shape);
                 setImageUrl(null);
                 setColor(sug.color);
-                setModelo(sug.modelo);
+                setUserPickedModel(false);
+                setModelo(pickDefaultModelFromProviders(provedores, sug.preferredProvider));
                 setEffort(sug.effort);
               }}
               className="rounded-xl bg-[#212121] hover:bg-[#262626] border border-white/[0.06] p-3 text-left flex items-start gap-2.5 transition-colors"
@@ -302,6 +311,7 @@ export const NewAgentScreen: React.FC<NewAgentScreenProps> = ({
         selectedModel={modelo}
         selectedEffort={effort}
         onSelectModelAndEffort={(nextModel, nextEffort) => {
+          setUserPickedModel(true);
           setModelo(nextModel);
           setEffort(nextEffort);
         }}

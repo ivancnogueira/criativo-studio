@@ -65,6 +65,10 @@ import {
 import type { StudioRouteContext } from "./route-helpers.ts";
 import { sanitizeAvatarStyle, sanitizeFileName, safeJsonParse, type BrandSummary } from "./route-helpers.ts";
 import { enrichAgentRow } from "./agent-enrichment-helpers.ts";
+import {
+  DEFAULT_FALLBACK_FREE_MODEL,
+  pickBestAvailableModel,
+} from "../../providers/default-model-resolver.ts";
 
 export async function tryHandleAgentsCrudRoutes(ctx: StudioRouteContext): Promise<boolean> {
   const { req, res, path, method, url, deps, db, wsHub, workspaceRoot } = ctx;
@@ -127,6 +131,8 @@ export async function tryHandleAgentsCrudRoutes(ctx: StudioRouteContext): Promis
     const allRoster = getSetupCompatibleRoster();
     const now = new Date().toISOString();
     const restoredIds: string[] = [];
+    const statusList = await providerConnection.getProvidersStatus(false).catch(() => []);
+    const resolvedDefaultModel = pickBestAvailableModel(statusList);
 
     db.runInTransaction(() => {
       for (const meta of metaList) {
@@ -165,7 +171,7 @@ export async function tryHandleAgentsCrudRoutes(ctx: StudioRouteContext): Promis
             def.agente_id,
             def.nome,
             def.papel,
-            def.modelo_padrao,
+            resolvedDefaultModel,
             JSON.stringify(def.skills_paths),
             def.ordem_exibicao,
             JSON.stringify(restoredConfig),
@@ -418,6 +424,17 @@ export async function tryHandleAgentsCrudRoutes(ctx: StudioRouteContext): Promis
           ? incomingBodyConfig.avatar_image_url.trim()
           : null;
 
+    const rawExplicitModel =
+      typeof body.modelo_padrao === "string" ? body.modelo_padrao.trim() : "";
+    const hasExplicitModel = rawExplicitModel.length > 0;
+    const resolvedDynamicModel = hasExplicitModel
+      ? rawExplicitModel
+      : pickBestAvailableModel(await providerConnection.getProvidersStatus(false).catch(() => []));
+    const shouldPinModel =
+      hasExplicitModel &&
+      incomingBodyConfig.modelo_fixado_usuario !== false &&
+      rawExplicitModel !== DEFAULT_FALLBACK_FREE_MODEL;
+
     const config = {
       frente: "custom",
       pasta: typeof body.pasta === "string" ? body.pasta : "Agentes Customizados",
@@ -430,6 +447,7 @@ export async function tryHandleAgentsCrudRoutes(ctx: StudioRouteContext): Promis
       effort: typeof body.effort === "string" ? body.effort : "alto",
       prompt_base: resolvedPromptBase,
       customizado: true,
+      ...(shouldPinModel ? { modelo_fixado_usuario: true } : {}),
     };
 
     const rawPapel =
@@ -437,10 +455,7 @@ export async function tryHandleAgentsCrudRoutes(ctx: StudioRouteContext): Promis
         ? body.papel.trim()
         : resolvedPromptBase.slice(0, 120);
     const papel = hasBrand ? interpolateBrandPlaceholders(rawPapel, currentBrand) : rawPapel;
-    const modeloPadrao =
-      typeof body.modelo_padrao === "string" && body.modelo_padrao.trim().length > 0
-        ? body.modelo_padrao.trim()
-        : "gemini-2.5-flash";
+    const modeloPadrao = resolvedDynamicModel;
 
     db.connection
       .prepare(

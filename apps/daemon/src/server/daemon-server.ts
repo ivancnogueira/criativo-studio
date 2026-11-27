@@ -29,6 +29,7 @@ import { createDaemonRuntimeServices } from "./daemon-runtime-services.ts";
 import { createWhatsAppAuthorizedTurnHandler } from "./daemon-whatsapp-handler.ts";
 import { createDaemonLaneScheduler } from "./daemon-lane-scheduler.ts";
 import { mapErrorToCatalog } from "./error-catalog-mapper.ts";
+import { reconcileAgentsDefaultModels } from "../providers/default-model-resolver.ts";
 
 export {
   type TaskExecutorHook,
@@ -473,14 +474,28 @@ export async function createDaemonServer(
     if (!skipBgAutoInstall) {
       autoUpdateService.startPeriodicCheck();
       void providerConnection
+        .getProvidersStatus(false)
+        .then((list) => {
+          const rec = reconcileAgentsDefaultModels(db, list);
+          if (rec.updatedIds.length > 0) {
+            wsHub.broadcast("sidebar:updated", { revision: Date.now() });
+          }
+        })
+        .catch(() => null);
+      void providerConnection
         .ensureOpenCodeRuntimeInBackground()
-        .then((res) => {
+        .then(async (res) => {
           if (res.installed && res.connected) {
             wsHub.broadcast("provider:updated", {
               provedor: "opencode",
               conectado: true,
               modo: "cli",
             });
+            const list = await providerConnection.getProvidersStatus(false).catch(() => []);
+            const rec = reconcileAgentsDefaultModels(db, list);
+            if (rec.updatedIds.length > 0) {
+              wsHub.broadcast("sidebar:updated", { revision: Date.now() });
+            }
           }
         })
         .catch((err) => {
@@ -497,6 +512,10 @@ export async function createDaemonServer(
               conectado: geminiStatus?.conectado ?? false,
               modo: geminiStatus?.modo_conexao ?? "nenhum",
             });
+            const rec = reconcileAgentsDefaultModels(db, list);
+            if (rec.updatedIds.length > 0) {
+              wsHub.broadcast("sidebar:updated", { revision: Date.now() });
+            }
           }
         })
         .catch((err) => {
@@ -523,6 +542,10 @@ export async function createDaemonServer(
                   modo: st.modo_conexao,
                 });
               }
+            }
+            const rec = reconcileAgentsDefaultModels(db, list);
+            if (rec.updatedIds.length > 0) {
+              wsHub.broadcast("sidebar:updated", { revision: Date.now() });
             }
           }
         })

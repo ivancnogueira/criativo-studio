@@ -168,7 +168,7 @@ export function useChatConversationController(props: AgentConversationViewProps)
     agentStatus: agente?.status ?? null,
   });
 
-  const currentModel = agente?.modelo_padrao ?? "gemini-2.5-pro";
+  const currentModel = agente?.modelo_padrao ?? "opencode/glm-5.3-flash-free";
   const currentEffort = (
     typeof agentConfig.effort === "string" ? agentConfig.effort : "alto"
   ) as NivelEsforco;

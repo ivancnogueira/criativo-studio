@@ -38,6 +38,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
+  runAfterFinish: true
   shortcutName: "CriativoOS"
 
 mac:

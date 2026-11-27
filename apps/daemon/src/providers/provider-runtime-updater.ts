@@ -86,14 +86,32 @@ export async function fetchLatestVersionForRuntime(
   try {
     if (folder === "codex" || folder === "claude") {
       const pkg = RUNTIME_NPM_PACKAGES[folder];
-      if (!pkg) return null;
-      const res = await fetchImpl(`https://registry.npmjs.org/${encodeURIComponent(pkg)}/latest`, {
-        headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(8_000),
-      });
-      if (!res.ok) return null;
-      const json = (await res.json().catch(() => null)) as { version?: unknown } | null;
-      return cleanVersionTag(json?.version);
+      if (pkg) {
+        const res = await fetchImpl(`https://registry.npmjs.org/${encodeURIComponent(pkg)}/latest`, {
+          headers: { Accept: "application/json" },
+          signal: AbortSignal.timeout(8_000),
+        }).catch(() => null);
+        if (res?.ok) {
+          const json = (await res.json().catch(() => null)) as { version?: unknown } | null;
+          const ver = cleanVersionTag(json?.version);
+          if (ver) return ver;
+        }
+      }
+      if (folder === "codex") {
+        const ghRes = await fetchImpl("https://api.github.com/repos/openai/codex/releases/latest", {
+          headers: { Accept: "application/vnd.github+json", "User-Agent": "CriativoStudio-RuntimeUpdater" },
+          signal: AbortSignal.timeout(8_000),
+        }).catch(() => null);
+        if (ghRes?.ok) {
+          const ghJson = (await ghRes.json().catch(() => null)) as { tag_name?: unknown } | null;
+          return cleanVersionTag(
+            typeof ghJson?.tag_name === "string"
+              ? ghJson.tag_name.replace(/^rust-/i, "")
+              : ghJson?.tag_name
+          );
+        }
+      }
+      return null;
     }
 
     if (folder === "antigravity") {
@@ -209,6 +227,116 @@ export async function forceUpgradeProviderRuntime(
   return promise;
 }
 
+function readInstalledManagedVersion(
+  folder: ManagedRuntimeFolder,
+  appDataDir: string
+): { executable: string | null; version: string | null } {
+  const ownRuntime = resolveManagedProviderRuntime(folder, {
+    appDataDir,
+    includeSystemPaths: false,
+  });
+  let currentVer: string | null =
+    ownRuntime.version && /^[0-9]+\.[0-9]+\.[0-9]+/.test(ownRuntime.version)
+      ? cleanVersionTag(ownRuntime.version)
+      : null;
+
+  if (folder === "codex" || folder === "claude") {
+    const npmVer = readManagedNpmPackageVersion(folder, appDataDir);
+    if (npmVer && (!currentVer || compareSemverStrings(npmVer, currentVer) > 0)) {
+      currentVer = npmVer;
+    }
+  }
+
+  const active = ownRuntime.executable
+    ? ownRuntime
+    : resolveManagedProviderRuntime(folder, { appDataDir });
+  return { executable: active.executable, version: currentVer };
+}
+
+export interface ManagedRuntimeUpdateInfo {
+  folder: ManagedRuntimeFolder;
+  provider: "openai" | "claude" | "gemini" | "opencode";
+  label: string;
+  executable: string | null;
+  currentVersion: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+}
+
+const RUNTIME_FOLDER_META: Record<
+  ManagedRuntimeFolder,
+  { provider: "openai" | "claude" | "gemini" | "opencode"; label: string }
+> = {
+  codex: { provider: "openai", label: "ChatGPT / Codex CLI" },
+  claude: { provider: "claude", label: "Claude CLI" },
+  antigravity: { provider: "gemini", label: "Antigravity CLI" },
+  opencode: { provider: "opencode", label: "OpenCode CLI" },
+};
+
+const RUNTIME_STATUS_CACHE_TTL_MS = 15 * 60 * 1000;
+const runtimeStatusCache = new Map<
+  string,
+  { checkedAt: number; latestVersion: string | null }
+>();
+
+/**
+ * Consulta rapidamente quais CLIs gerenciadas têm nova versão oficial disponível
+ * para exibição de banner estilo OpenBot no topo da interface.
+ */
+export async function checkManagedRuntimesUpdateStatus(options?: {
+  appDataDir?: string;
+  folders?: ManagedRuntimeFolder[];
+  forceCheck?: boolean;
+  fetchImpl?: typeof fetch;
+}): Promise<ManagedRuntimeUpdateInfo[]> {
+  const resolvedAppData = getDefaultAppDataDir(options?.appDataDir);
+  const folders = options?.folders ?? ["codex", "claude", "antigravity", "opencode"];
+  const fetcher = options?.fetchImpl ?? fetch;
+  const now = Date.now();
+  const out: ManagedRuntimeUpdateInfo[] = [];
+
+  for (const folder of folders) {
+    const installed = readInstalledManagedVersion(folder, resolvedAppData);
+    const meta = RUNTIME_FOLDER_META[folder];
+    const cacheKey = folder;
+    const cached = runtimeStatusCache.get(cacheKey);
+    let latestVersion: string | null = null;
+
+    if (
+      !options?.forceCheck &&
+      cached &&
+      now - cached.checkedAt < RUNTIME_STATUS_CACHE_TTL_MS
+    ) {
+      latestVersion = cached.latestVersion;
+    } else if (
+      options?.fetchImpl ||
+      (process.env.CRIATIVO_SKIP_LOCAL_PROBE !== "1" &&
+        process.env.CRIATIVO_DISABLE_AUTO_INSTALL !== "1")
+    ) {
+      latestVersion = await fetchLatestVersionForRuntime(folder, fetcher);
+      runtimeStatusCache.set(cacheKey, { checkedAt: now, latestVersion });
+    }
+
+    const updateAvailable = Boolean(
+      installed.executable &&
+        latestVersion &&
+        (!installed.version || compareSemverStrings(latestVersion, installed.version) > 0)
+    );
+
+    out.push({
+      folder,
+      provider: meta.provider,
+      label: meta.label,
+      executable: installed.executable,
+      currentVersion: installed.version,
+      latestVersion,
+      updateAvailable,
+    });
+  }
+
+  return out;
+}
+
 /**
  * Verifica periodicamente (TTL 24h) se há nova versão oficial para as CLIs instaladas
  * e atualiza silenciosamente na pasta própria do CriativoOS.
@@ -257,24 +385,19 @@ export async function checkAndUpdateManagedRuntimes(options?: {
     if (!latestVersion) continue;
 
     let needsUpgrade = false;
+    const installed = readInstalledManagedVersion(folder, resolvedAppData);
     if (folder === "codex" || folder === "claude") {
-      const localNpmVer = readManagedNpmPackageVersion(folder, resolvedAppData);
-      if (localNpmVer) {
-        needsUpgrade = compareSemverStrings(latestVersion, localNpmVer) > 0;
+      if (installed.version) {
+        needsUpgrade = compareSemverStrings(latestVersion, installed.version) > 0;
       } else {
-        // Se usa CLI global antiga, só atualiza para a pasta gerenciada caso não exista versão recente gerenciada
         const semverLike = activeRuntime.version && /^[0-9]+\.[0-9]+\.[0-9]+/.test(activeRuntime.version)
           ? activeRuntime.version
           : null;
         needsUpgrade = semverLike ? compareSemverStrings(latestVersion, semverLike) > 0 : true;
       }
     } else {
-      const ownRuntime = resolveManagedProviderRuntime(folder, {
-        appDataDir: resolvedAppData,
-        includeSystemPaths: false,
-      });
-      if (ownRuntime.executable && ownRuntime.version && ownRuntime.version !== "latest") {
-        needsUpgrade = compareSemverStrings(latestVersion, ownRuntime.version) > 0;
+      if (installed.executable && installed.version && installed.version !== "latest") {
+        needsUpgrade = compareSemverStrings(latestVersion, installed.version) > 0;
       }
     }
 
@@ -284,6 +407,7 @@ export async function checkAndUpdateManagedRuntimes(options?: {
       ? await options.upgradeImpl(folder).catch(() => null)
       : await forceUpgradeProviderRuntime(folder, { appDataDir: resolvedAppData }).catch(() => null);
     if (upgradeRes?.executable) {
+      runtimeStatusCache.set(folder, { checkedAt: Date.now(), latestVersion });
       updated.push(folder);
     }
   }

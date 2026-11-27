@@ -13,6 +13,10 @@ import type {
   SkillSugestaoItem,
 } from "@criativo/contracts";
 import type { CriativoDatabase } from "../../database/client.ts";
+import {
+  DEFAULT_FALLBACK_FREE_MODEL,
+  LEGACY_OR_DEPRECATED_DEFAULT_MODELS,
+} from "../../providers/default-model-resolver.ts";
 import type { ProviderConnectionService } from "../../providers/provider-connection-service.ts";
 import type { WebSocketHub } from "../../server/websocket-hub.ts";
 import type { ProviderRegistry } from "../providers/provider-registry.ts";
@@ -329,17 +333,37 @@ export class SkillLearningService {
     const ag = this.db.connection
       .prepare("SELECT modelo_padrao FROM projecao_agentes WHERE agente_id = ? LIMIT 1;")
       .get(agenteId) as { modelo_padrao?: string } | undefined;
-    const model = ag?.modelo_padrao ?? "gemini-2.5-pro";
+    const model = ag?.modelo_padrao ?? DEFAULT_FALLBACK_FREE_MODEL;
     try {
-      if (this.providerConnection) {
-        const prov = this.providers.resolveProviderName(model);
+      let client: ReturnType<ProviderRegistry["getClientForModel"]> | null = null;
+      let prov = this.providers.resolveProviderName(model);
+      try {
+        client = this.providers.getClientForModel(model);
+      } catch {
+        client = null;
+      }
+
+      if (
+        (!client || (prov === "opencode" && !this.providers.hasCustomProvider("opencode"))) &&
+        (model.trim() === DEFAULT_FALLBACK_FREE_MODEL ||
+          LEGACY_OR_DEPRECATED_DEFAULT_MODELS.has(model.trim()))
+      ) {
+        const fb = this.providers.resolveFallbackClientForDefault();
+        if (fb) {
+          client = fb.client;
+          prov = fb.provider;
+        }
+      }
+
+      if (!client) return null;
+
+      if (this.providerConnection && !this.providers.hasCustomProvider(prov)) {
         const statuses = await this.providerConnection.getProvidersStatus(false);
         const st = statuses.find((s) => s.provedor === prov);
         if (st && !st.conectado && !st.vault_configurado) {
           return null;
         }
       }
-      const client = this.providers.getClientForModel(model);
       return await client.generateText(userPrompt, systemPrompt);
     } catch {
       return null;

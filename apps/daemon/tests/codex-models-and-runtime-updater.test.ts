@@ -162,6 +162,13 @@ describe("Codex Modelos Reais da Conta, Auto-Updater e Spawn Sem cmd.exe", () =>
                 visibility: "list",
                 priority: 3,
               },
+              {
+                slug: "gpt-4-text-only",
+                display_name: "GPT Text Only",
+                visibility: "list",
+                priority: 4,
+                input_modalities: ["text"],
+              },
             ],
           }),
           { status: 200, headers: { "Content-Type": "application/json" } }
@@ -186,13 +193,14 @@ describe("Codex Modelos Reais da Conta, Auto-Updater e Spawn Sem cmd.exe", () =>
 
       assert.deepEqual(
         models.map((m) => m.id),
-        ["gpt-5.5", "gpt-5.4-mini", "gpt-image-1"]
+        ["gpt-5.5", "gpt-5.4-mini", "gpt-image-1", "gpt-4-text-only"]
       );
       assert.equal(models[0].padrao, true);
-      assert.equal(models[0].suporta_imagem, false);
+      assert.equal(models[0].suporta_imagem, true);
       assert.deepEqual(models[0].esforcos_suportados, ["baixo", "medio", "alto"]);
-      assert.equal(models[1].suporta_imagem, false);
+      assert.equal(models[1].suporta_imagem, true);
       assert.equal(models[2].suporta_imagem, true);
+      assert.equal(models[3].suporta_imagem, false);
 
       // Valida também mapCodexModelsResponseToInfo isolado contra hidden=true
       const directMapped = mapCodexModelsResponseToInfo([

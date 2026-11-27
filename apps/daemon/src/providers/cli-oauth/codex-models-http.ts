@@ -4,6 +4,7 @@ import type { ModeloProvedorInfo } from "@criativo/contracts";
 import {
   compareSemverStrings,
   readManagedNpmPackageVersion,
+  resolveManagedProviderRuntime,
 } from "../provider-runtime-resolver.ts";
 import { decodeJwtPayload, mapEffortList } from "./cli-types-and-helpers.ts";
 
@@ -27,6 +28,31 @@ export function isInternalHiddenCodexModel(id: string): boolean {
  */
 export function isImageGenerationCodexModel(id: string): boolean {
   return /^(gpt-image|dall-e|chatgpt-image)|-image(?:-|$)/i.test(id.trim());
+}
+
+/**
+ * Determina se um modelo ChatGPT/Codex aceita/suporta imagem via `input_modalities`
+ * ou capacidades conhecidas da família multimodal GPT (em paridade com os Gemini no seletor).
+ */
+export function modelSupportsImageCodex(params: {
+  id: string;
+  input_modalities?: unknown[];
+  inputModalities?: unknown[];
+}): boolean {
+  if (isImageGenerationCodexModel(params.id)) return true;
+  const rawModalities = Array.isArray(params.input_modalities)
+    ? params.input_modalities
+    : Array.isArray(params.inputModalities)
+      ? params.inputModalities
+      : null;
+  if (rawModalities && rawModalities.length > 0) {
+    return rawModalities.some((m) => String(m ?? "").trim().toLowerCase() === "image");
+  }
+  const clean = params.id.trim().toLowerCase();
+  if (/\b(audio|realtime|tts|transcribe|whisper|embedding)\b/i.test(clean)) {
+    return false;
+  }
+  return /^gpt-(?:4o|4\.1|5|6)/i.test(clean);
 }
 
 export function isCodexSchemaMismatchError(text: string): boolean {
@@ -121,6 +147,8 @@ interface RawCodexHttpModel {
   isDefault?: boolean;
   priority?: number;
   default_reasoning_level?: string;
+  input_modalities?: unknown[];
+  inputModalities?: unknown[];
   supported_reasoning_levels?: Array<{ effort?: string; reasoningEffort?: string } | string>;
   supportedReasoningEfforts?: Array<{ reasoningEffort?: string }>;
 }
@@ -164,7 +192,11 @@ export function mapCodexModelsResponseToInfo(rawModels: unknown[]): ModeloProved
       id,
       rotulo: (item.display_name ?? item.displayName)?.trim() || id,
       padrao: Boolean(item.is_default || item.isDefault),
-      suporta_imagem: isImageGenerationCodexModel(id),
+      suporta_imagem: modelSupportsImageCodex({
+        id,
+        input_modalities: item.input_modalities,
+        inputModalities: item.inputModalities,
+      }),
       esforcos_suportados: mapEffortList(rawEfforts),
       descoberto_em_conta: true,
     });
@@ -187,10 +219,18 @@ export async function fetchCodexAccountModelsHttp(options: {
   let creds = readCodexAuthCredentials(options.codexHome);
   if (!creds.accessToken) return [];
 
-  const installedVer = readManagedNpmPackageVersion("codex", options.appDataDir);
+  const installedNpmVer = readManagedNpmPackageVersion("codex", options.appDataDir);
+  const installedStandaloneVer = resolveManagedProviderRuntime("codex", {
+    appDataDir: options.appDataDir,
+    includeSystemPaths: false,
+  }).version;
   let clientVersion = MIN_CODEX_CLIENT_VERSION;
-  for (const candidate of [installedVer, options.clientVersion]) {
-    if (candidate && compareSemverStrings(candidate, clientVersion) > 0) {
+  for (const candidate of [installedNpmVer, installedStandaloneVer, options.clientVersion]) {
+    if (
+      candidate &&
+      /^[0-9]+\.[0-9]+\.[0-9]+/.test(candidate) &&
+      compareSemverStrings(candidate, clientVersion) > 0
+    ) {
       clientVersion = candidate;
     }
   }

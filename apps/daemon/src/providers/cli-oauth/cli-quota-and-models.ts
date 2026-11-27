@@ -33,6 +33,7 @@ import {
   isCodexSchemaMismatchError,
   isImageGenerationCodexModel,
   isInternalHiddenCodexModel,
+  modelSupportsImageCodex,
 } from "./codex-models-http.ts";
 import { EXEC_TIMEOUT_MS, MODEL_CATALOG_TTL_MS, QUOTA_CACHE_TTL_MS, mapEffortList, resolveCliBinaryForProvider, type CliServiceRuntimeContext } from "./cli-types-and-helpers.ts";
 
@@ -375,7 +376,10 @@ export async function probeCliCodexModels(
         id,
         rotulo: item.displayName?.trim() || id,
         padrao: Boolean(item.isDefault),
-        suporta_imagem: isImageGenerationCodexModel(id),
+        suporta_imagem: modelSupportsImageCodex({
+          id,
+          inputModalities: item.inputModalities,
+        }),
         esforcos_suportados: efforts,
         descoberto_em_conta: true,
       });

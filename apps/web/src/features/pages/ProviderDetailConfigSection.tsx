@@ -1,6 +1,7 @@
 import {
   RefreshCw,
 } from "lucide-react";
+import { daemonApi } from "../../services/websocket-client";
 import { SwitchPill, formatPlatformLabel } from "./providers-catalog-helpers";
 import type { ProvidersCatalogController } from "./useProvidersCatalogController";
 
@@ -143,8 +144,25 @@ export function ProviderDetailConfigSection({ ctrl }: { ctrl: ProvidersCatalogCo
                   onClick={async () => {
                     setRefreshingRuntime(true);
                     try {
-                      await onRefreshProviders();
-                      onShowToast("Detecção de runtime atualizada.");
+                      if (
+                        detailProvider.provedor === "openai" ||
+                        detailProvider.provedor === "claude" ||
+                        detailProvider.provedor === "gemini" ||
+                        detailProvider.provedor === "opencode"
+                      ) {
+                        const up = await daemonApi.upgradeProviderRuntime(detailProvider.provedor);
+                        await onRefreshProviders();
+                        if (up.ok) {
+                          onShowToast(
+                            `CLI atualizada (${up.versao ?? "última versão"}) e modelos recarregados.`
+                          );
+                        } else {
+                          onShowToast(up.erro ?? "Detecção de runtime atualizada.");
+                        }
+                      } else {
+                        await onRefreshProviders();
+                        onShowToast("Detecção de runtime atualizada.");
+                      }
                     } finally {
                       setRefreshingRuntime(false);
                     }

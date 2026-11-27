@@ -10,6 +10,10 @@ import type {
   PassoChat,
 } from "@criativo/contracts";
 import type { CriativoDatabase } from "../../database/client.ts";
+import {
+  DEFAULT_FALLBACK_FREE_MODEL,
+  LEGACY_OR_DEPRECATED_DEFAULT_MODELS,
+} from "../../providers/default-model-resolver.ts";
 import type { ProviderConnectionService } from "../../providers/provider-connection-service.ts";
 import type { WebSocketHub } from "../../server/websocket-hub.ts";
 import type { ProviderRegistry } from "../providers/provider-registry.ts";
@@ -312,9 +316,29 @@ export class MemoryReviewService {
     userPrompt: string,
   ): Promise<string | null> {
     try {
-      const client = this.providers.getClientForModel(modeloPadrao);
-      if (this.providerConnection) {
-        const providerName = this.providers.resolveProviderName(modeloPadrao);
+      let client: ReturnType<ProviderRegistry["getClientForModel"]> | null = null;
+      let providerName = this.providers.resolveProviderName(modeloPadrao);
+      try {
+        client = this.providers.getClientForModel(modeloPadrao);
+      } catch {
+        client = null;
+      }
+
+      if (
+        (!client || (providerName === "opencode" && !this.providers.hasCustomProvider("opencode"))) &&
+        (modeloPadrao.trim() === DEFAULT_FALLBACK_FREE_MODEL ||
+          LEGACY_OR_DEPRECATED_DEFAULT_MODELS.has(modeloPadrao.trim()))
+      ) {
+        const fb = this.providers.resolveFallbackClientForDefault();
+        if (fb) {
+          client = fb.client;
+          providerName = fb.provider;
+        }
+      }
+
+      if (!client) return null;
+
+      if (this.providerConnection && !this.providers.hasCustomProvider(providerName)) {
         const statuses = await this.providerConnection.getProvidersStatus(false);
         const st = statuses.find((s) => s.provedor === providerName);
         if (st && !st.conectado && !st.vault_configurado) {

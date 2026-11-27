@@ -43,6 +43,7 @@ import { StudioAgentInspectorPane } from "./components/studio/StudioAgentInspect
 import { StudioSecondaryPagesSwitch } from "./components/studio/StudioSecondaryPagesSwitch";
 import { StudioModalsHost } from "./components/studio/StudioModalsHost";
 import { CommandPaletteModal } from "./components/CommandPaletteModal";
+import { ProviderCliUpdateBanner } from "./features/updates/ProviderCliUpdateBanner";
 import { getCriativoDesktopBridge } from "./types/desktop-bridge";
 import { I18nProvider } from "./i18n/I18nContext";
 
@@ -228,6 +229,8 @@ export function App() {
               </button>
             </div>
           )}
+
+          <ProviderCliUpdateBanner onProvidersUpdated={(list) => setProvedores(list)} />
 
           <main className="flex-1 min-h-0 flex overflow-hidden">
             {activeSection === "agentes" && (

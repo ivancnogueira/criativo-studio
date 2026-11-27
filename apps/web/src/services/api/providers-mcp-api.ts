@@ -491,6 +491,64 @@ export const providersMcpApi = {
     };
   },
 
+  async listProviderRuntimeUpdates(force = false): Promise<
+    Array<{
+      folder: string;
+      provider: "openai" | "claude" | "gemini" | "opencode";
+      label: string;
+      executable: string | null;
+      currentVersion: string | null;
+      latestVersion: string | null;
+      updateAvailable: boolean;
+    }>
+  > {
+    const res = await apiFetch(`/api/provedores/runtimes/updates${force ? "?force=1" : ""}`);
+    const json = (await res.json()) as {
+      runtimes?: Array<{
+        folder: string;
+        provider: "openai" | "claude" | "gemini" | "opencode";
+        label: string;
+        executable: string | null;
+        currentVersion: string | null;
+        latestVersion: string | null;
+        updateAvailable: boolean;
+      }>;
+    };
+    return json.runtimes ?? [];
+  },
+
+  async upgradeProviderRuntime(
+    provedor: "openai" | "claude" | "gemini" | "opencode" | string
+  ): Promise<{
+    ok: boolean;
+    provedor: string;
+    versao: string | null;
+    executavel: string | null;
+    erro: string | null;
+    provedores: ProvedorStatusInfo[];
+  }> {
+    const res = await apiFetch(
+      `/api/provedores/${encodeURIComponent(provedor)}/runtime/atualizar`,
+      { method: "POST" }
+    );
+    const json = (await res.json()) as {
+      ok?: boolean;
+      provedor?: string;
+      versao?: string | null;
+      executavel?: string | null;
+      erro?: string | null;
+      provedores?: ProvedorStatusInfo[];
+    };
+    return {
+      ok: Boolean(json.ok),
+      provedor: json.provedor ?? provedor,
+      versao: json.versao ?? null,
+      executavel: json.executavel ?? null,
+      erro: json.erro ?? null,
+      provedores: json.provedores ?? [],
+    };
+  },
+
   async disconnectMcpOAuth(mcpId: string, contaChave?: string): Promise<void> {
     const res = await apiFetch(`/api/mcps/servidores/${encodeURIComponent(mcpId)}/oauth/desconectar`, {
       method: "POST",

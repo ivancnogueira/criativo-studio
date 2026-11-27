@@ -34,6 +34,12 @@ import {
 } from "@criativo/contracts";
 import { SkillLoader } from "../../engine/runner/skill-loader.ts";
 import {
+  hasAnyUsableConnectedProvider,
+  inferProviderKeyFromModel,
+  LEGACY_OR_DEPRECATED_DEFAULT_MODELS,
+  pickBestAvailableModel,
+} from "../../providers/default-model-resolver.ts";
+import {
   buildConnectorsList,
   computeHostAnalytics,
   importExternalTelemetryIfAvailable,
@@ -357,7 +363,43 @@ export async function prepareAgentReplySetup(
         );
 
   const governance = readAgentGovernance(deps.db, agente.agente_id);
-  const initialModel = options?.overrideModel?.trim() || agente.modelo_padrao;
+  const agService = deps.providerConnection.getAntigravityService();
+  const [statusList, agSnapshot] = await Promise.all([
+    deps.providerConnection.getProvidersStatus(false),
+    agService.getLiveSnapshot(false),
+  ]);
+
+  let resolvedAgentModel = agente.modelo_padrao;
+  if (
+    !options?.overrideModel?.trim() &&
+    config.modelo_fixado_usuario !== true &&
+    hasAnyUsableConnectedProvider(statusList)
+  ) {
+    const currentTrimmed = (agente.modelo_padrao || "").trim();
+    const currentProvKey = inferProviderKeyFromModel(currentTrimmed);
+    const currentProvUsable = statusList.some(
+      (p) =>
+        p.provedor === currentProvKey &&
+        p.conectado &&
+        p.modelos.some((m) => !m.oculto && !LEGACY_OR_DEPRECATED_DEFAULT_MODELS.has(m.id.trim()))
+    );
+    if (
+      !currentTrimmed ||
+      LEGACY_OR_DEPRECATED_DEFAULT_MODELS.has(currentTrimmed) ||
+      !currentProvUsable
+    ) {
+      const upgradedModel = pickBestAvailableModel(statusList);
+      if (upgradedModel && upgradedModel !== currentTrimmed) {
+        resolvedAgentModel = upgradedModel;
+        agente.modelo_padrao = upgradedModel;
+        deps.db.connection
+          .prepare(`UPDATE projecao_agentes SET modelo_padrao = ?, atualizado_em = ? WHERE agente_id = ?;`)
+          .run(upgradedModel, turnStartedIso, agente.agente_id);
+      }
+    }
+  }
+
+  const initialModel = options?.overrideModel?.trim() || resolvedAgentModel;
   const providerName = deps.providers.resolveProviderName(initialModel);
 
   let effectivePromptBase = promptBase;
@@ -379,11 +421,6 @@ export async function prepareAgentReplySetup(
       effectivePromptBase = `${promptBase}\n\n[Resumo da Auto-Compactação]: ${compactOutcome.summaryText}`;
     }
   }
-  const agService = deps.providerConnection.getAntigravityService();
-  const [statusList, agSnapshot] = await Promise.all([
-    deps.providerConnection.getProvidersStatus(false),
-    agService.getLiveSnapshot(false),
-  ]);
   const claudeOAuthStatus = statusList.find((item) => item.provedor === "claude");
   const openaiOAuthStatus = statusList.find((item) => item.provedor === "openai");
   const opencodeStatus = statusList.find((item) => item.provedor === "opencode");

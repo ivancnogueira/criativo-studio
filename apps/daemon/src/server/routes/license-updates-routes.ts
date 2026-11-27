@@ -143,6 +143,7 @@ export async function tryHandleLicenseAndUpdatesRoutes(ctx: StudioRouteContext):
           : undefined,
       targetProductDir: typeof body.target_product_dir === "string" ? body.target_product_dir : undefined,
       restartAfterApply: body.restart === true,
+      forceRestart: body.force === true,
     });
     sendJson(res, 200, { ok: true, status });
     return true;

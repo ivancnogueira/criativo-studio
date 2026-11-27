@@ -13,6 +13,7 @@ import {
 import { BrowserPipWindowController } from "./browser-pip-window.ts";
 import { installDesktopCsp } from "./desktop-security.ts";
 import { registerDesktopIpcHandlers } from "./main-ipc-handlers.ts";
+import { launchNativeUpdateAndRelaunch } from "./update-relauncher.ts";
 import { loadOrCreateSafeVaultMasterKey } from "./safe-vault-key.ts";
 import { FloatingDockController } from "./floating-dock.ts";
 import { createStudioTray } from "./tray-manager.ts";
@@ -239,17 +240,18 @@ async function handleUpdateRestart(userDataDir: string, payload: UpdateRestartPa
   isQuitting = true;
 
   if (payload.mode === "native_installer" && safeArtifactPath) {
-    if (process.platform === "win32" && safeArtifactPath.toLowerCase().endsWith(".exe")) {
-      const installer = spawn(safeArtifactPath, ["/S"], {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-      });
-      installer.unref();
-    } else {
-      void shell.openPath(safeArtifactPath);
-    }
-    app.quit();
+    launchNativeUpdateAndRelaunch({
+      platform: process.platform,
+      currentPid: process.pid,
+      currentExePath: process.execPath,
+      artifactPath: safeArtifactPath,
+      version: payload.version ?? null,
+      appImagePath: process.env.APPIMAGE ?? null,
+      openPathFallback: (p) => {
+        void shell.openPath(p);
+      },
+    });
+    app.exit(0);
     return;
   }
 

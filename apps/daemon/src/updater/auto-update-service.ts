@@ -33,6 +33,7 @@ export interface AutoUpdateServiceOptions {
   serverId?: string;
   serverKind?: ServerConnectionKind;
   idleWaitCoordinator?: IdleWaitCoordinator;
+  autoDownload?: boolean;
   onRestartRequested?: (ctx?: UpdateRestartContext) => Promise<void> | void;
 }
 
@@ -118,6 +119,9 @@ export class AutoUpdateService {
   #stagedArtifactName: string | null = null;
   #initialCheckTimer: NodeJS.Timeout | null = null;
   #periodicCheckTimer: NodeJS.Timeout | null = null;
+  #autoDownloadEnabled: boolean;
+  #inFlightDownload: Promise<UpdateStatusSnapshot> | null = null;
+  #restartPendingAfterDownload = false;
 
   constructor(options: AutoUpdateServiceOptions) {
     this.#licenseService = options.licenseService;
@@ -129,6 +133,11 @@ export class AutoUpdateService {
     this.#idleWaitCoordinator = options.idleWaitCoordinator;
     this.#onRestartRequested = options.onRestartRequested;
     this.#currentVersion = options.currentVersion ?? readProductVersion(options.paths.productRoot);
+    const isTestProc =
+      process.env.NODE_ENV === "test" ||
+      process.execArgv.includes("--test") ||
+      process.argv.includes("--test");
+    this.#autoDownloadEnabled = options.autoDownload ?? !isTestProc;
   }
 
   getStagedArtifactPath(): string | null {
@@ -150,8 +159,15 @@ export class AutoUpdateService {
    * Inicia verificação automática no boot e polling periódico em background,
    * emitindo `update:status` via WebSocket sempre que houver nova release.
    */
-  startPeriodicCheck(options?: { intervalMs?: number; initialDelayMs?: number }): void {
+  startPeriodicCheck(options?: {
+    intervalMs?: number;
+    initialDelayMs?: number;
+    autoDownload?: boolean;
+  }): void {
     this.stopPeriodicCheck();
+    if (typeof options?.autoDownload === "boolean") {
+      this.#autoDownloadEnabled = options.autoDownload;
+    }
 
     const envInterval = Number(process.env.CRIATIVO_UPDATE_CHECK_INTERVAL_MS || "");
     const rawInterval =
@@ -331,7 +347,16 @@ export class AutoUpdateService {
       } else {
         this.#state = "up_to_date";
       }
-      return this.emitStatus();
+      const snap = this.emitStatus();
+      if (
+        snap.update_available &&
+        this.#autoDownloadEnabled &&
+        this.selectArtifact(manifest) &&
+        !this.#inFlightDownload
+      ) {
+        void this.downloadAndApplyUpdate({ restartAfterApply: false }).catch(() => {});
+      }
+      return snap;
     } catch (err) {
       this.#lastCheckedAt = new Date().toISOString();
       this.#state = "error";
@@ -370,149 +395,178 @@ export class AutoUpdateService {
     platform?: ReleaseArtifactInfo["platform"];
     targetProductDir?: string;
     restartAfterApply?: boolean;
+    forceRestart?: boolean;
   }): Promise<UpdateStatusSnapshot> {
-    if (!this.#latestManifest || this.#state === "error") {
-      await this.checkForUpdates();
+    if (this.#inFlightDownload) {
+      if (options?.restartAfterApply) {
+        this.#restartPendingAfterDownload = true;
+      }
+      const snap = await this.#inFlightDownload;
+      if (options?.restartAfterApply && snap.state === "ready_to_restart") {
+        this.#restartPendingAfterDownload = false;
+        await this.triggerRestart({ force: options?.forceRestart === true });
+      }
+      return snap;
     }
 
-    if (this.#state === "license_blocked") {
-      const err = new Error(this.#errorMessage || "Licença bloqueada para atualizações.") as Error & {
-        statusCode?: number;
-        code?: string;
-      };
-      err.statusCode = 403;
-      err.code = "license_not_active_for_updates";
-      throw err;
-    }
+    const runDownload = async (): Promise<UpdateStatusSnapshot> => {
+      if (!this.#latestManifest || this.#state === "error") {
+        await this.checkForUpdates();
+      }
 
-    const manifest = this.#latestManifest;
-    if (!manifest || compareSemver(manifest.version, this.#currentVersion) <= 0) {
-      this.#state = "up_to_date";
+      if (this.#state === "license_blocked") {
+        const err = new Error(this.#errorMessage || "Licença bloqueada para atualizações.") as Error & {
+          statusCode?: number;
+          code?: string;
+        };
+        err.statusCode = 403;
+        err.code = "license_not_active_for_updates";
+        throw err;
+      }
+
+      const manifest = this.#latestManifest;
+      if (!manifest || compareSemver(manifest.version, this.#currentVersion) <= 0) {
+        this.#state = "up_to_date";
+        this.emitStatus();
+        return this.getStatus();
+      }
+
+      const artifact = this.selectArtifact(manifest, options?.platform);
+      if (!artifact) {
+        this.#state = "error";
+        this.#errorMessage = "Nenhum artefato compatível publicado para esta plataforma.";
+        this.emitStatus();
+        const err = new Error(this.#errorMessage) as Error & { statusCode?: number };
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const headers = this.#licenseService.getCredentialHeaders() ?? {};
+      this.#state = "downloading";
+      this.#progressPercent = 25;
+      this.#errorMessage = null;
       this.emitStatus();
-      return this.getStatus();
-    }
 
-    const artifact = this.selectArtifact(manifest, options?.platform);
-    if (!artifact) {
-      this.#state = "error";
-      this.#errorMessage = "Nenhum artefato compatível publicado para esta plataforma.";
+      const dlUrl = artifact.download_path.startsWith("http")
+        ? artifact.download_path
+        : `${this.#licenseService.hubBaseUrl}${artifact.download_path}`;
+
+      const res = await this.#fetchImpl(dlUrl, { method: "GET", headers });
+      if (res.status === 401 || res.status === 403) {
+        this.#state = "license_blocked";
+        this.#progressPercent = 0;
+        this.#errorMessage = "Licença revogada ou inválida ao baixar atualização.";
+        this.emitStatus();
+        const err = new Error(this.#errorMessage) as Error & { statusCode?: number; code?: string };
+        err.statusCode = 403;
+        err.code = "license_not_active_for_updates";
+        throw err;
+      }
+      if (!res.ok) {
+        this.#state = "error";
+        this.#progressPercent = 0;
+        this.#errorMessage = `Falha no download do pacote (HTTP ${res.status}).`;
+        this.emitStatus();
+        const err = new Error(this.#errorMessage) as Error & { statusCode?: number };
+        err.statusCode = res.status;
+        throw err;
+      }
+
+      const rawBytes = Buffer.from(await res.arrayBuffer());
+      this.#state = "verifying";
+      this.#progressPercent = 65;
       this.emitStatus();
-      const err = new Error(this.#errorMessage) as Error & { statusCode?: number };
-      err.statusCode = 404;
-      throw err;
-    }
 
-    const headers = this.#licenseService.getCredentialHeaders() ?? {};
-    this.#state = "downloading";
-    this.#progressPercent = 25;
-    this.#errorMessage = null;
-    this.emitStatus();
+      const actualSha256 = createHash("sha256").update(rawBytes).digest("hex").toLowerCase();
+      const expectedSha256 = String(artifact.sha256 || "").trim().toLowerCase();
+      if (!expectedSha256 || actualSha256 !== expectedSha256) {
+        this.#state = "error";
+        this.#progressPercent = 0;
+        this.#errorMessage = `Falha na verificação SHA-256 do pacote '${artifact.filename}'. Atualização abortada por segurança.`;
+        this.emitStatus();
+        const err = new Error(this.#errorMessage) as Error & { statusCode?: number; code?: string };
+        err.statusCode = 422;
+        err.code = "sha256_mismatch";
+        throw err;
+      }
 
-    const dlUrl = artifact.download_path.startsWith("http")
-      ? artifact.download_path
-      : `${this.#licenseService.hubBaseUrl}${artifact.download_path}`;
+      mkdirSync(this.#paths.updatesDir, { recursive: true });
+      const safeFileName = basename(artifact.filename).replace(/[^a-zA-Z0-9._-]/g, "_") || "update.pkg";
+      const stagedPath = join(this.#paths.updatesDir, safeFileName);
+      writeFileSync(stagedPath, rawBytes);
 
-    const res = await this.#fetchImpl(dlUrl, { method: "GET", headers });
-    if (res.status === 401 || res.status === 403) {
-      this.#state = "license_blocked";
-      this.#progressPercent = 0;
-      this.#errorMessage = "Licença revogada ou inválida ao baixar atualização.";
+      this.#state = "applying";
+      this.#progressPercent = 85;
       this.emitStatus();
-      const err = new Error(this.#errorMessage) as Error & { statusCode?: number; code?: string };
-      err.statusCode = 403;
-      err.code = "license_not_active_for_updates";
-      throw err;
-    }
-    if (!res.ok) {
-      this.#state = "error";
-      this.#progressPercent = 0;
-      this.#errorMessage = `Falha no download do pacote (HTTP ${res.status}).`;
-      this.emitStatus();
-      const err = new Error(this.#errorMessage) as Error & { statusCode?: number };
-      err.statusCode = res.status;
-      throw err;
-    }
 
-    const rawBytes = Buffer.from(await res.arrayBuffer());
-    this.#state = "verifying";
-    this.#progressPercent = 65;
-    this.emitStatus();
-
-    const actualSha256 = createHash("sha256").update(rawBytes).digest("hex").toLowerCase();
-    const expectedSha256 = String(artifact.sha256 || "").trim().toLowerCase();
-    if (!expectedSha256 || actualSha256 !== expectedSha256) {
-      this.#state = "error";
-      this.#progressPercent = 0;
-      this.#errorMessage = `Falha na verificação SHA-256 do pacote '${artifact.filename}'. Atualização abortada por segurança.`;
-      this.emitStatus();
-      const err = new Error(this.#errorMessage) as Error & { statusCode?: number; code?: string };
-      err.statusCode = 422;
-      err.code = "sha256_mismatch";
-      throw err;
-    }
-
-    mkdirSync(this.#paths.updatesDir, { recursive: true });
-    const safeFileName = basename(artifact.filename).replace(/[^a-zA-Z0-9._-]/g, "_") || "update.pkg";
-    const stagedPath = join(this.#paths.updatesDir, safeFileName);
-    writeFileSync(stagedPath, rawBytes);
-
-    this.#state = "applying";
-    this.#progressPercent = 85;
-    this.emitStatus();
-
-    const targetRoot = resolve(options?.targetProductDir ?? this.#paths.productRoot);
-    let appliedHotBundle = false;
-    try {
-      const maybeText = rawBytes.toString("utf8");
-      if (maybeText.trimStart().startsWith("{")) {
-        const parsed = JSON.parse(maybeText) as Partial<UpdateBundlePayloadV1 | UpdateBundlePayloadV2>;
-        if (
-          parsed.format === "criativo-update-bundle-v1" &&
-          parsed.files &&
-          typeof parsed.files === "object" &&
-          !Array.isArray(parsed.files)
-        ) {
-          for (const [relPath, fileContent] of Object.entries(parsed.files)) {
-            writeSafeProductEntry(targetRoot, relPath, String(fileContent));
+      const targetRoot = resolve(options?.targetProductDir ?? this.#paths.productRoot);
+      let appliedHotBundle = false;
+      try {
+        const maybeText = rawBytes.toString("utf8");
+        if (maybeText.trimStart().startsWith("{")) {
+          const parsed = JSON.parse(maybeText) as Partial<UpdateBundlePayloadV1 | UpdateBundlePayloadV2>;
+          if (
+            parsed.format === "criativo-update-bundle-v1" &&
+            parsed.files &&
+            typeof parsed.files === "object" &&
+            !Array.isArray(parsed.files)
+          ) {
+            for (const [relPath, fileContent] of Object.entries(parsed.files)) {
+              writeSafeProductEntry(targetRoot, relPath, String(fileContent));
+            }
+            appliedHotBundle = true;
+          } else if (
+            parsed.format === "criativo-update-bundle-v2" &&
+            Array.isArray(parsed.files)
+          ) {
+            for (const entry of parsed.files) {
+              if (!entry || typeof entry.path !== "string" || typeof entry.content !== "string") continue;
+              const data =
+                entry.encoding === "base64"
+                  ? Buffer.from(entry.content, "base64")
+                  : entry.content;
+              writeSafeProductEntry(targetRoot, entry.path, data);
+            }
+            appliedHotBundle = true;
           }
-          appliedHotBundle = true;
-        } else if (
-          parsed.format === "criativo-update-bundle-v2" &&
-          Array.isArray(parsed.files)
-        ) {
-          for (const entry of parsed.files) {
-            if (!entry || typeof entry.path !== "string" || typeof entry.content !== "string") continue;
-            const data =
-              entry.encoding === "base64"
-                ? Buffer.from(entry.content, "base64")
-                : entry.content;
-            writeSafeProductEntry(targetRoot, entry.path, data);
-          }
-          appliedHotBundle = true;
+        }
+      } catch {
+        if (!existsSync(stagedPath)) {
+          rmSync(stagedPath, { force: true });
         }
       }
-    } catch {
-      // Artefatos binários (.exe/.dmg/.AppImage/.tar.gz) permanecem em staging aguardando instalador/reinício nativo
-      if (!existsSync(stagedPath)) {
-        rmSync(stagedPath, { force: true });
+
+      this.#stagedArtifactPath = stagedPath;
+      this.#stagedArtifactName = safeFileName;
+      this.#installMode =
+        appliedHotBundle || safeFileName.toLowerCase().endsWith(".json")
+          ? "hot_bundle"
+          : "native_installer";
+
+      this.#currentVersion = manifest.version;
+      this.#state = "ready_to_restart";
+      this.#progressPercent = 100;
+      this.#errorMessage = null;
+      return this.emitStatus();
+    };
+
+    const promise = runDownload();
+    this.#inFlightDownload = promise;
+    if (options?.restartAfterApply) {
+      this.#restartPendingAfterDownload = true;
+    }
+    let finalSnapshot: UpdateStatusSnapshot;
+    try {
+      finalSnapshot = await promise;
+    } finally {
+      if (this.#inFlightDownload === promise) {
+        this.#inFlightDownload = null;
       }
     }
 
-    this.#stagedArtifactPath = stagedPath;
-    this.#stagedArtifactName = safeFileName;
-    this.#installMode =
-      appliedHotBundle || safeFileName.toLowerCase().endsWith(".json")
-        ? "hot_bundle"
-        : "native_installer";
-
-    this.#currentVersion = manifest.version;
-    this.#state = "ready_to_restart";
-    this.#progressPercent = 100;
-    this.#errorMessage = null;
-    const finalSnapshot = this.emitStatus();
-
-    if (options?.restartAfterApply) {
-      await this.triggerRestart();
+    if ((options?.restartAfterApply || this.#restartPendingAfterDownload) && finalSnapshot.state === "ready_to_restart") {
+      this.#restartPendingAfterDownload = false;
+      await this.triggerRestart({ force: options?.forceRestart === true });
     }
 
     return finalSnapshot;

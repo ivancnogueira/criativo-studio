@@ -256,9 +256,16 @@ export async function tryHandleAgentsLifecycleRoutes(ctx: StudioRouteContext): P
     const nextAvatarImageUrl =
       typeof rawAvatarImage === "string" && rawAvatarImage.trim() ? rawAvatarImage.trim() : null;
 
+    const explicitModel =
+      typeof body.modelo_padrao === "string" && body.modelo_padrao.trim().length > 0
+        ? body.modelo_padrao.trim()
+        : null;
+    const modelChangedExplicitly = Boolean(explicitModel && explicitModel !== existing.modelo_padrao);
+
     const nextConfig = {
       ...currentConfig,
       ...incomingConfig,
+      ...(modelChangedExplicitly ? { modelo_fixado_usuario: true } : {}),
       ...(typeof body.effort === "string" ? { effort: body.effort } : {}),
       ...(typeof body.avatar_shape === "string" ? { avatar_shape: body.avatar_shape } : {}),
       ...(typeof body.avatar_color === "string" ? { avatar_color: body.avatar_color } : {}),
@@ -288,8 +295,7 @@ export async function tryHandleAgentsLifecycleRoutes(ctx: StudioRouteContext): P
         : {}),
     };
 
-    const nextModel =
-      typeof body.modelo_padrao === "string" ? body.modelo_padrao : existing.modelo_padrao;
+    const nextModel = explicitModel ?? existing.modelo_padrao;
     const nextNome = typeof body.nome === "string" ? body.nome : existing.nome;
     const nextPapel = typeof body.papel === "string" ? body.papel : existing.papel;
 

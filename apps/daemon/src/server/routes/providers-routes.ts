@@ -1,3 +1,5 @@
+import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import {
   resolveMetaGraphApiVersion,
   type AgentAllowedFolder,
@@ -31,7 +33,12 @@ import {
   type WorkflowTraco,
   type WorkflowVisual,
 } from "@criativo/contracts";
-import { ensureProviderRuntimeInstalled } from "../../providers/provider-runtime-resolver.ts";
+import {
+  checkManagedRuntimesUpdateStatus,
+  ensureProviderRuntimeInstalled,
+  forceUpgradeProviderRuntime,
+  type ManagedRuntimeFolder,
+} from "../../providers/provider-runtime-resolver.ts";
 import {
   buildConnectorsList,
   computeHostAnalytics,
@@ -43,12 +50,89 @@ import {
 } from "../analytics-skills-service.ts";
 import type { StudioRouteContext } from "./route-helpers.ts";
 import { safeJsonParse } from "./route-helpers.ts";
+import { reconcileAgentsDefaultModels } from "../../providers/default-model-resolver.ts";
+
+function reconcileAndBroadcastSidebar(
+  db: StudioRouteContext["db"],
+  wsHub: StudioRouteContext["wsHub"],
+  provedores: Parameters<typeof reconcileAgentsDefaultModels>[1],
+): void {
+  const rec = reconcileAgentsDefaultModels(db, provedores);
+  if (rec.updatedIds.length > 0) {
+    wsHub.broadcast("sidebar:updated", { revision: Date.now() });
+  }
+}
 
 export async function tryHandleProvidersRoutes(ctx: StudioRouteContext): Promise<boolean> {
   const { req, res, path, method, url, deps, db, wsHub, workspaceRoot } = ctx;
   const { sendJson, readJsonBody, providerConnection } = deps;
 
   // 2. Provedores, CLIs & Uso
+  if (method === "GET" && path === "/api/provedores/runtimes/updates") {
+    const forceCheck = url.searchParams.get("force") === "1";
+    const folders: ManagedRuntimeFolder[] = ["antigravity", "opencode"];
+    if (providerConnection.getCliOAuthService().listAccounts("openai").length > 0) {
+      folders.push("codex");
+    }
+    if (providerConnection.getCliOAuthService().listAccounts("claude").length > 0) {
+      folders.push("claude");
+    }
+    const runtimes = await checkManagedRuntimesUpdateStatus({ forceCheck, folders });
+    sendJson(res, 200, { ok: true, runtimes });
+    return true;
+  }
+
+  const runtimeUpgradeMatch = path.match(/^\/api\/provedores\/(gemini|claude|openai|opencode)\/runtime\/atualizar$/);
+  if (method === "POST" && runtimeUpgradeMatch) {
+    const provId = runtimeUpgradeMatch[1] as "gemini" | "claude" | "openai" | "opencode";
+    const folderMap: Record<typeof provId, ManagedRuntimeFolder> = {
+      openai: "codex",
+      claude: "claude",
+      gemini: "antigravity",
+      opencode: "opencode",
+    };
+    const folder = folderMap[provId];
+    const cliOAuth = providerConnection.getCliOAuthService();
+    const codexDirs = provId === "openai" ? cliOAuth.getAccountConfigDirs("openai") : [];
+    const primaryRes = await forceUpgradeProviderRuntime(folder, {
+      codexHomeToResetCache: codexDirs[0],
+    });
+    for (const extraDir of codexDirs.slice(1)) {
+      const cacheFile = join(extraDir, "models_cache.json");
+      if (existsSync(cacheFile)) {
+        try {
+          rmSync(cacheFile, { force: true });
+        } catch {
+          // ignora
+        }
+      }
+    }
+    providerConnection.invalidateCliProbeCache();
+    if (provId === "openai" || provId === "claude") {
+      cliOAuth.invalidateModelCache(provId);
+      cliOAuth.invalidateQuotaCache(provId);
+    }
+    const provedores = await providerConnection.getProvidersStatus(true);
+    const st = provedores.find((p) => p.provedor === provId);
+    if (st) {
+      wsHub.broadcast("provider:updated", {
+        provedor: st.provedor,
+        conectado: st.conectado,
+        modo: st.modo_conexao,
+      });
+    }
+    reconcileAndBroadcastSidebar(db, wsHub, provedores);
+    sendJson(res, primaryRes.executable ? 200 : 500, {
+      ok: Boolean(primaryRes.executable),
+      provedor: provId,
+      versao: primaryRes.version,
+      executavel: primaryRes.executable,
+      erro: primaryRes.error ?? null,
+      provedores,
+    });
+    return true;
+  }
+
   if (method === "GET" && path === "/api/provedores/status") {
     const force = url.searchParams.get("refresh") === "1";
     const provedores = await providerConnection.getProvidersStatus(force);
@@ -75,6 +159,8 @@ export async function tryHandleProvidersRoutes(ctx: StudioRouteContext): Promise
         conectado: status.conectado,
         modo: status.modo_conexao,
       });
+      const allProviders = await providerConnection.getProvidersStatus(false).catch(() => [status]);
+      reconcileAndBroadcastSidebar(db, wsHub, allProviders);
       sendJson(res, 200, { provedor: status });
     } catch (err) {
       sendJson(res, 400, {
@@ -96,6 +182,8 @@ export async function tryHandleProvidersRoutes(ctx: StudioRouteContext): Promise
       conectado: status.conectado,
       modo: status.modo_conexao,
     });
+    const allProviders = await providerConnection.getProvidersStatus(false).catch(() => [status]);
+    reconcileAndBroadcastSidebar(db, wsHub, allProviders);
     sendJson(res, 200, { provedor: status });
     return true;
   }
@@ -143,6 +231,7 @@ export async function tryHandleProvidersRoutes(ctx: StudioRouteContext): Promise
         conectado: true,
         modo: "assinatura",
       });
+      reconcileAndBroadcastSidebar(db, wsHub, result.provedores);
       sendJson(res, 200, { ok: true, conta: result.conta, provedores: result.provedores, uso });
     } catch (err) {
       const msg =
@@ -282,6 +371,7 @@ export async function tryHandleProvidersRoutes(ctx: StudioRouteContext): Promise
       conectado: true,
       modo: "assinatura",
     });
+    reconcileAndBroadcastSidebar(db, wsHub, provedores);
     sendJson(res, 201, { conta: enrichedConta, provedores, uso });
     return true;
   }
@@ -308,6 +398,7 @@ export async function tryHandleProvidersRoutes(ctx: StudioRouteContext): Promise
       conectado: true,
       modo: "assinatura",
     });
+    reconcileAndBroadcastSidebar(db, wsHub, provedores);
     sendJson(res, 201, { ok: true, conta: enrichedConta, provedores, uso });
     return true;
   }
@@ -322,6 +413,9 @@ export async function tryHandleProvidersRoutes(ctx: StudioRouteContext): Promise
         : providerConnection.getAntigravityService().removeAccount(contaId);
     const provedores = await providerConnection.getProvidersStatus(true);
     const uso = await providerConnection.getUsageSnapshot(true);
+    if (removed) {
+      reconcileAndBroadcastSidebar(db, wsHub, provedores);
+    }
     sendJson(res, removed ? 200 : 404, { ok: removed, provedores, uso });
     return true;
   }

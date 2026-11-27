@@ -7,6 +7,7 @@ import {
 } from "node:path";
 import { type ResolvedProviderRuntime, RUNTIME_NPM_PACKAGES, getDefaultAppDataDir, findInSystemPath, resolveManagedProviderRuntime, spawnProviderProcess } from "./provider-runtime-locate.ts";
 import { OPENCODE_LATEST_RELEASE_BASE_URL, resolveOpenCodeReleaseAssetName, inFlightOpenCodeInstalls, inFlightAntigravityInstalls, ANTIGRAVITY_LATEST_RELEASE_API, ANTIGRAVITY_LATEST_DOWNLOAD_BASE, ANTIGRAVITY_OFFICIAL_MANIFEST_BASE, resolveAntigravityManifestPlatform, resolveAntigravityReleaseAssetName, downloadAndStageStandaloneArchive } from "./provider-runtime-archive.ts";
+import { installCodexStandaloneBinary } from "./codex-standalone-installer.ts";
 
 export async function installOpenCodeStandaloneBinary(options?: {
   appDataDir?: string;
@@ -300,6 +301,18 @@ export async function ensureProviderRuntimeInstalled(
   let standaloneError: string | undefined;
   if (folder === "opencode") {
     const standalone = await installOpenCodeStandaloneBinary({
+      appDataDir: options?.appDataDir,
+      timeoutMs: options?.timeoutMs,
+      forceInstall: options?.forceInstall,
+    });
+    if (standalone.executable) {
+      return standalone;
+    }
+    standaloneError = standalone.error;
+  }
+
+  if (folder === "codex") {
+    const standalone = await installCodexStandaloneBinary({
       appDataDir: options?.appDataDir,
       timeoutMs: options?.timeoutMs,
       forceInstall: options?.forceInstall,

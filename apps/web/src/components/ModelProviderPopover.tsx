@@ -14,6 +14,74 @@ interface ModelProviderPopoverProps {
 }
 
 const PROVIDER_ORDER: ProviderName[] = ["claude", "openai", "grok", "opencode", "ollama", "gemini"];
+const DEFAULT_FALLBACK_FREE_MODEL = "opencode/glm-5.3-flash-free";
+const PREFERRED_ACCOUNT_PROVIDERS: ProviderName[] = ["openai", "gemini", "claude", "grok"];
+const LEGACY_DEFAULT_MODEL_IDS = new Set([
+  "gemini-2.5-pro",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-image",
+  "claude-3-7-sonnet-latest",
+  "gpt-4o",
+  "grok-4.6",
+]);
+
+function isMediaOnlyModelId(modelId: string): boolean {
+  const id = modelId.trim().toLowerCase();
+  if (!id) return true;
+  return (
+    id.includes("-image") ||
+    id.startsWith("imagen-") ||
+    id.startsWith("veo-") ||
+    id.startsWith("gpt-image") ||
+    id.startsWith("dall-e") ||
+    id.startsWith("tts-") ||
+    id.startsWith("whisper")
+  );
+}
+
+/**
+ * Escolhe o melhor modelo disponível a partir dos provedores conectados no Frontend.
+ */
+export function pickDefaultModelFromProviders(
+  provedores: ProvedorStatusInfo[],
+  preferredProvider?: ProviderName
+): string {
+  const pickFromProvider = (provId: ProviderName): string | null => {
+    const prov = provedores.find((p) => p.provedor === provId);
+    if (!prov || !prov.conectado) return null;
+    const valid = prov.modelos.filter(
+      (m) =>
+        Boolean(m?.id) &&
+        !m.oculto &&
+        !isMediaOnlyModelId(m.id) &&
+        !LEGACY_DEFAULT_MODEL_IDS.has(m.id.trim())
+    );
+    if (valid.length === 0) return null;
+    const padrao = valid.find((m) => m.padrao);
+    if (padrao) return padrao.id;
+    if (provId === "opencode") {
+      const exact = valid.find((m) => m.id === DEFAULT_FALLBACK_FREE_MODEL);
+      if (exact) return exact.id;
+      const freeOne = valid.find((m) => m.id.endsWith("-free") || m.id.includes("big-pickle"));
+      if (freeOne) return freeOne.id;
+    }
+    return valid[0]!.id;
+  };
+
+  if (preferredProvider) {
+    const pref = pickFromProvider(preferredProvider);
+    if (pref) return pref;
+  }
+  for (const provId of PREFERRED_ACCOUNT_PROVIDERS) {
+    const chosen = pickFromProvider(provId);
+    if (chosen) return chosen;
+  }
+  for (const fallbackId of ["opencode", "ollama"] as const) {
+    const chosen = pickFromProvider(fallbackId);
+    if (chosen) return chosen;
+  }
+  return DEFAULT_FALLBACK_FREE_MODEL;
+}
 
 export function inferProviderFromModelId(modelId?: string | null): ProviderName {
   const m = (modelId ?? "").toLowerCase();
@@ -261,7 +329,11 @@ export const ModelProviderPopover: React.FC<ModelProviderPopoverProps> = ({
                         {model.rotulo}
                       </div>
                       {model.suporta_imagem && (
-                        <div className="text-[10px] text-[#74B9FF]">Geração de imagem</div>
+                        <div className="text-[10px] text-[#74B9FF]">
+                          {/(?:gpt-image|dall-e|chatgpt-image|nano-banana|imagen|-image(?:-|$))/i.test(model.id)
+                            ? "Geração de imagem"
+                            : "Suporta imagem"}
+                        </div>
                       )}
                     </div>
                   </div>

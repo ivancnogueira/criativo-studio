@@ -257,6 +257,7 @@ export const serversLicenseApi = {
   async aplicarAtualizacao(payload?: {
     platform?: "win32" | "darwin" | "linux" | "vps-tarball";
     restart?: boolean;
+    force?: boolean;
   }): Promise<UpdateStatusSnapshot> {
     const data = await requestJson<{ ok: boolean; status: UpdateStatusSnapshot }>(
       "/api/studio/updates/apply",
@@ -269,7 +270,7 @@ export const serversLicenseApi = {
     return data.status;
   },
 
-  async triggerUpdateRestart(): Promise<{
+  async triggerUpdateRestart(options?: { force?: boolean }): Promise<{
     ok: boolean;
     triggered: boolean;
     mode: "hot_bundle" | "native_installer";
@@ -278,6 +279,8 @@ export const serversLicenseApi = {
   }> {
     return await requestJson("/api/studio/updates/restart", {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force: options?.force === true }),
     });
   },
 };

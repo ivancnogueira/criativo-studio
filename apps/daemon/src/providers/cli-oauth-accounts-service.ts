@@ -253,6 +253,12 @@ export class CliOAuthAccountsService {
     return await connectCliAccountViaBrowser(this.getCtx(), provedor, label, onAuthUrl);
   }
 
+  public getAccountConfigDirs(provedor: "claude" | "openai"): string[] {
+    return this.getStoredRecords()
+      .filter((r) => r.provedor === provedor)
+      .map((r) => resolve(r.configDir));
+  }
+
   public invalidateModelCache(provedor?: "claude" | "openai"): void {
     if (provedor) {
       this.dynamicModelsCache.delete(provedor);

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ArrowUpCircle, CheckCircle2, Loader2, Sparkles } from "lucide-react";
 import type { UpdateStatusSnapshot } from "@criativo/contracts";
 import { triggerUpdateBeam } from "./update-beam-effect";
@@ -20,6 +20,7 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
 }) => {
   const actionBtnRef = useRef<HTMLButtonElement | null>(null);
   const downloadBeamVersionRef = useRef<string | null>(null);
+  const [restarting, setRestarting] = useState(false);
 
   const isInProgress =
     applying ||
@@ -31,11 +32,17 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
   const show = Boolean(status) && (Boolean(status?.update_available) || isInProgress || isWaitingIdle || isReady);
   const targetVersion = status?.latest_version || status?.current_version || "";
 
-  // Animação radial estilo OpenBot ao surgir atualização disponível ou iniciar download
+  useEffect(() => {
+    if (status?.state === "error" || status?.state === "up_to_date") {
+      setRestarting(false);
+    }
+  }, [status?.state]);
+
+  // Animação radial estilo OpenBot ao surgir atualização disponível/pronta ou iniciar download
   useEffect(() => {
     if (!show || !targetVersion) return;
 
-    if (status?.update_available) {
+    if (status?.update_available || isReady) {
       let seen = false;
       const seenKey = `criativo:update-beam-seen:${targetVersion}`;
       try {
@@ -60,20 +67,22 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
       return () => cancelAnimationFrame(raf);
     }
     return undefined;
-  }, [show, status?.update_available, status?.state, targetVersion]);
+  }, [show, isReady, status?.update_available, status?.state, targetVersion]);
 
   if (!status || !show) return null;
 
   const handleActionClick = () => {
     const btn = actionBtnRef.current;
     if (isWaitingIdle && onForceRestart) {
+      setRestarting(true);
       void triggerUpdateBeam(btn, "out");
       onForceRestart();
       return;
     }
     if (isReady && onApplyUpdate) {
+      setRestarting(true);
       const beamPromise = triggerUpdateBeam(btn, "out");
-      const hold = new Promise<void>((r) => setTimeout(r, 450));
+      const hold = new Promise<void>((r) => setTimeout(r, 380));
       void Promise.race([beamPromise, hold]).then(() => {
         onApplyUpdate();
       });
@@ -101,11 +110,13 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
             <Sparkles className="h-4 w-4 text-[#31CF76] shrink-0" />
           )}
           <span>
-            {isWaitingIdle
-              ? `Atualização v${targetVersion} aguardando ociosidade`
-              : isReady
-                ? `Atualização v${targetVersion} aplicada`
-                : `Nova versão v${targetVersion}`}
+            {restarting
+              ? `Atualizando v${targetVersion}...`
+              : isWaitingIdle
+                ? `Atualização v${targetVersion} aguardando ociosidade`
+                : isReady
+                  ? `Nova versão v${targetVersion} pronta`
+                  : `Nova versão v${targetVersion}`}
           </span>
         </div>
 
@@ -121,17 +132,19 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
       </div>
 
       <p className="mt-1 text-[11px] text-[#B8D8C5] leading-snug">
-        {isWaitingIdle
-          ? "Aguardando a conclusão do turno/renderização atual antes de reiniciar o servidor."
-          : isReady
-            ? "Dados preservados. Reinicie o servidor para ativar a nova versão."
-            : isInProgress
-              ? status.state === "verifying"
-                ? "Validando assinatura SHA-256 do pacote..."
-                : status.state === "applying"
-                  ? "Aplicando atualização sem tocar nos seus dados..."
-                  : `Baixando atualização (${Math.round(status.progress_percent)}%)...`
-              : "Clique para atualizar mantendo Criativos, conversas e banco seguros."}
+        {restarting
+          ? "Fechando serviços, aplicando atualização e reabrindo automaticamente..."
+          : isWaitingIdle
+            ? "Aguardando a conclusão da tarefa atual antes de reiniciar e atualizar."
+            : isReady
+              ? "Atualização já baixada e validada. Clique abaixo para reiniciar e atualizar."
+              : isInProgress
+                ? status.state === "verifying"
+                  ? "Validando assinatura SHA-256 do pacote..."
+                  : status.state === "applying"
+                    ? "Preparando atualização sem tocar nos seus dados..."
+                    : `Baixando em segundo plano (${Math.round(status.progress_percent)}%)...`
+                : "Clique para baixar, atualizar e reiniciar automaticamente mantendo seus dados seguros."}
       </p>
 
       {isInProgress && (
@@ -146,29 +159,34 @@ export const UpdateNotificationBanner: React.FC<UpdateNotificationBannerProps> =
       <button
         ref={actionBtnRef}
         type="button"
-        disabled={isInProgress}
+        disabled={isInProgress || restarting}
         onClick={handleActionClick}
         className="mt-2.5 w-full rounded-lg bg-[#31CF76] hover:bg-[#3EE086] active:scale-[0.97] disabled:opacity-60 text-[#081A0F] py-1.5 px-2.5 text-[12px] font-semibold flex items-center justify-center gap-1.5 transition-all"
       >
-        {isWaitingIdle ? (
+        {restarting ? (
           <>
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            <span>Reiniciar agora (forçar)</span>
+            <span>Reiniciando e atualizando...</span>
+          </>
+        ) : isWaitingIdle ? (
+          <>
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <span>Reiniciar para atualizar (forçar)</span>
           </>
         ) : isInProgress ? (
           <>
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            <span>Atualizando...</span>
+            <span>Baixando atualização...</span>
           </>
         ) : isReady ? (
           <>
             <CheckCircle2 className="h-3.5 w-3.5" />
-            <span>Pronto · Reiniciar agora</span>
+            <span>Reiniciar para atualizar</span>
           </>
         ) : (
           <>
             <ArrowUpCircle className="h-3.5 w-3.5" />
-            <span>Atualizar agora</span>
+            <span>Atualizar e reiniciar</span>
           </>
         )}
       </button>

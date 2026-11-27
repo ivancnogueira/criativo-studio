@@ -8,6 +8,10 @@ import type {
 import { computeNextCronExecution } from "../routines/cron-scheduler.ts";
 import { interpolateBrandPlaceholders } from "../server/brand-onboarding-service.ts";
 import {
+  DEFAULT_FALLBACK_FREE_MODEL,
+  LEGACY_OR_DEPRECATED_DEFAULT_MODELS,
+} from "../providers/default-model-resolver.ts";
+import {
   CatalogServiceError,
   convertRoutineScheduleToCron,
   sanitizeAgentIdBase,
@@ -64,7 +68,7 @@ export function catalog_installAgentPackage(
             source: slugOrPayload.source === "verified" ? "verified" : "public",
             verified: Boolean(slugOrPayload.verified),
             featured: Boolean(slugOrPayload.featured),
-            recommendedModel: slugOrPayload.recommendedModel?.trim() || "gemini-2.5-pro",
+            recommendedModel: slugOrPayload.recommendedModel?.trim() || DEFAULT_FALLBACK_FREE_MODEL,
             avatarShape: (slugOrPayload.avatarShape ?? "rounded_square") as AvatarShape,
             avatarColor: slugOrPayload.avatarColor?.trim() || "#007CF7",
             promptBase:
@@ -104,7 +108,13 @@ export function catalog_installAgentPackage(
           configuredBrand
         )
       : `Olá! Sou **${nome}** (${papel}). ${pkg.tagline}\n\nEstou pronto para colaborar com [NOME_DA_MARCA].`;
-    const modeloPadrao = overrides.model?.trim() || pkg.recommendedModel || "gemini-2.5-pro";
+    const rawRecModel = pkg.recommendedModel?.trim();
+    const safeRecModel =
+      rawRecModel && !LEGACY_OR_DEPRECATED_DEFAULT_MODELS.has(rawRecModel)
+        ? rawRecModel
+        : DEFAULT_FALLBACK_FREE_MODEL;
+    const explicitOverrideModel = overrides.model?.trim() || "";
+    const modeloPadrao = explicitOverrideModel || safeRecModel;
     const agora = new Date().toISOString();
 
     const maxOrderRow = deps.db.connection
@@ -124,6 +134,7 @@ export function catalog_installAgentPackage(
       ferramentas: ["handoff_agente"],
       prompt_base: resolvedPromptBase,
       customizado: true,
+      ...(explicitOverrideModel ? { modelo_fixado_usuario: true } : {}),
       origem_loja_slug: pkg.slug,
       categoria_loja: pkg.category,
       mcp_slugs: pkg.mcpSlugs ?? [],

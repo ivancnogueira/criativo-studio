@@ -113,12 +113,17 @@ export function useStudioServerActions(
           criativoDesktop?: {
             isPackagedDesktop?: boolean;
             triggerUpdateInstall?: () => Promise<unknown>;
+            restartForUpdate?: () => Promise<unknown>;
           };
         })
       : null;
 
     if (updateStatus?.state === "ready_to_restart") {
-      await daemonApi.triggerUpdateRestart().catch(() => {});
+      if (win?.criativoDesktop?.isPackagedDesktop && win.criativoDesktop.restartForUpdate) {
+        await win.criativoDesktop.restartForUpdate().catch(() => {});
+        return;
+      }
+      await daemonApi.triggerUpdateRestart({ force: true }).catch(() => {});
       return;
     }
 
@@ -129,7 +134,7 @@ export function useStudioServerActions(
       return;
     }
 
-    const next = await daemonApi.aplicarAtualizacao({ restart: true });
+    const next = await daemonApi.aplicarAtualizacao({ restart: true, force: true });
     setUpdateStatus(next);
   }, [updateStatus?.state]);
 
