@@ -16,6 +16,7 @@ import {
   parseBackupModelsJson,
 } from "../../engine/runner/backup-models-resolver.ts";
 import { compactRecentHistory, runTextModelWorkflowToolLoop } from "./chat-routing-helpers.ts";
+import { resolveUniversalTurnPolicy } from "../../providers/universal-turn-policy.ts";
 import type { ModelAttemptContext } from "./agent-reply-types.ts";
 
 export async function tryAntigravityAttempt(ctx: ModelAttemptContext): Promise<string | null> {
@@ -62,7 +63,15 @@ export async function tryAntigravityAttempt(ctx: ModelAttemptContext): Promise<s
       });
       const t0 = Date.now();
       try {
-        const historyMsgs = compactRecentHistory(history, 6, 1200);
+        const turnPolicy = resolveUniversalTurnPolicy({
+          turnMode: setup.turnMode,
+          configuredEffort: typeof config.effort === "string" ? config.effort : undefined,
+          channelOrigin: options?.channelOrigin,
+          agentName: agente.nome,
+          promptBase,
+          studioToolsPromptGuidance,
+        });
+        const historyMsgs = compactRecentHistory(history, turnPolicy.historyLimit, turnPolicy.historyMaxChars);
         historyMsgs.push({
           role: "user",
           text:
@@ -71,13 +80,13 @@ export async function tryAntigravityAttempt(ctx: ModelAttemptContext): Promise<s
               : userPrompt,
         });
 
-        const agEffort = typeof config.effort === "string" ? config.effort : undefined;
         const skipExtraImagesOnFollowUp = anexosGerados.length > 0;
-        const agSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e especializada como ${agente.nome}. Use tabelas Markdown quando ajudar na organização. Nunca invente handles ou marcas reais: utilize apenas os informados pelo usuário.${studioToolsPromptGuidance}`;
+        const effectiveMcpServers = turnPolicy.includeMcpServers ? turnAcpMcpServers : [];
         const liveResult = await agService.executeCodeAssistGenerate({
           model: targetModel,
-          effort: agEffort,
-          systemPrompt: agSystemPrompt,
+          effort: turnPolicy.effectiveEffort,
+          turnMode: turnPolicy.mode,
+          systemPrompt: turnPolicy.systemPrompt,
           messages: historyMsgs,
           imagePaths: skipExtraImagesOnFollowUp ? [] : resolvedImageDiskPaths,
           labeledImages: skipExtraImagesOnFollowUp ? [] : labeledVisualAssets,
@@ -85,7 +94,7 @@ export async function tryAntigravityAttempt(ctx: ModelAttemptContext): Promise<s
           threadId: options?.threadId ?? `main:${agente.agente_id}`,
           preferredAccountId: preferredAccId,
           signal: options?.signal,
-          mcpServers: turnAcpMcpServers,
+          mcpServers: effectiveMcpServers,
           onDelta: (delta) => {
             onProgress?.({
               fase: "chunk",
@@ -121,8 +130,9 @@ export async function tryAntigravityAttempt(ctx: ModelAttemptContext): Promise<s
             invokeFollowUp: async (followUpPrompt) => {
               const next = await agService.executeCodeAssistGenerate({
                 model: targetModel,
-                effort: agEffort,
-                systemPrompt: agSystemPrompt,
+                effort: turnPolicy.effectiveEffort,
+                turnMode: turnPolicy.mode,
+                systemPrompt: turnPolicy.systemPrompt,
                 messages: [
                   ...historyMsgs,
                   { role: "assistant", text: liveResult.text },
@@ -134,7 +144,7 @@ export async function tryAntigravityAttempt(ctx: ModelAttemptContext): Promise<s
                 threadId: options?.threadId ?? `main:${agente.agente_id}`,
                 preferredAccountId: preferredAccId,
                 signal: options?.signal,
-                mcpServers: turnAcpMcpServers,
+                mcpServers: effectiveMcpServers,
               });
               return next.text;
             },

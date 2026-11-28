@@ -76,10 +76,14 @@ function resolveCodexNativeCandidates(nmRoot: string): string[] {
       : null;
 
   return [
+    join(nmRoot, ...platformPkg.split("/"), "vendor", archFolder, "bin", binName),
+    join(nmRoot, "@openai", "codex", "vendor", archFolder, "bin", binName),
     join(nmRoot, ...platformPkg.split("/"), "vendor", archFolder, "codex", binName),
     join(nmRoot, "@openai", "codex", "vendor", archFolder, "codex", binName),
     ...(gnuFallback
       ? [
+          join(nmRoot, ...platformPkg.split("/"), "vendor", gnuFallback, "bin", binName),
+          join(nmRoot, "@openai", "codex", "vendor", gnuFallback, "bin", binName),
           join(nmRoot, ...platformPkg.split("/"), "vendor", gnuFallback, "codex", binName),
           join(nmRoot, "@openai", "codex", "vendor", gnuFallback, "codex", binName),
         ]
@@ -90,22 +94,26 @@ function resolveCodexNativeCandidates(nmRoot: string): string[] {
 function resolveClaudeNativeCandidates(nmRoot: string): string[] {
   const isWin = process.platform === "win32";
   const binName = isWin ? "claude.exe" : "claude";
-  const platPkg = isWin
+  const suffix = isWin
     ? process.arch === "arm64"
-      ? "claude-agent-sdk-win32-arm64"
-      : "claude-agent-sdk-win32-x64"
+      ? "win32-arm64"
+      : "win32-x64"
     : process.platform === "darwin"
       ? process.arch === "arm64"
-        ? "claude-agent-sdk-darwin-arm64"
-        : "claude-agent-sdk-darwin-x64"
+        ? "darwin-arm64"
+        : "darwin-x64"
       : process.arch === "arm64"
-        ? "claude-agent-sdk-linux-arm64"
-        : "claude-agent-sdk-linux-x64";
+        ? "linux-arm64"
+        : "linux-x64";
+  const cliPlatPkg = `claude-code-${suffix}`;
+  const sdkPlatPkg = `claude-agent-sdk-${suffix}`;
 
   return [
+    join(nmRoot, "@anthropic-ai", cliPlatPkg, binName),
+    join(nmRoot, "@anthropic-ai", cliPlatPkg, "bin", binName),
     join(nmRoot, "@anthropic-ai", "claude-code", "bin", binName),
-    join(nmRoot, "@anthropic-ai", platPkg, binName),
-    join(nmRoot, "@anthropic-ai", platPkg, "bin", binName),
+    join(nmRoot, "@anthropic-ai", sdkPlatPkg, binName),
+    join(nmRoot, "@anthropic-ai", sdkPlatPkg, "bin", binName),
   ];
 }
 
@@ -172,8 +180,8 @@ export function unwrapNpmNativeBinary(
 }
 
 /**
- * Detecta se um diretório gerenciado de runtime ainda depende de instalação legada `npm`
- * (sem binário nativo standalone versionado em `<arch>/<versao>/bin/`).
+ * Detecta se um diretório gerenciado de runtime ainda depende de wrapper legado `npm`
+ * (`.cmd`/`.bat`/`.js` sem binário nativo desembrulhável).
  */
 export function isLegacyNpmRuntime(
   baseRuntimeDir: string,
@@ -187,8 +195,18 @@ export function isLegacyNpmRuntime(
   if (!hasNpmFolder && !exeInsideNpm) {
     return false;
   }
-  if (executablePath && !exeInsideNpm) {
-    return false;
+  if (executablePath) {
+    const ext = extname(executablePath).toLowerCase();
+    const isWrapperScript = [".cmd", ".bat", ".js", ".cjs", ".mjs"].includes(ext);
+    if (!isWrapperScript && !normalizedExe.includes("/.bin/") && isExistingFile(executablePath)) {
+      return false;
+    }
+    if (isWrapperScript && unwrapNpmNativeBinary(executablePath)) {
+      return false;
+    }
+    if (!exeInsideNpm) {
+      return false;
+    }
   }
   return true;
 }

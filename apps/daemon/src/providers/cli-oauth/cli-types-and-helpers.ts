@@ -49,6 +49,7 @@ export interface CliExecutionInput {
   agentId?: string | null;
   threadId?: string | null;
   turnMode?: "light" | "action";
+  effort?: string | null;
   preferredAccountId?: string | null;
   mcpConfig?: Record<string, unknown> | null;
   timeoutMs?: number;

@@ -10,6 +10,7 @@ import { CODE_ASSIST_URL, DAILY_CODE_ASSIST_URL, GENERATE_TIMEOUT_MS, type Antig
 import { getAntigravityUserAgent, inferImageMimeFromPath } from "./quota-helpers.ts";
 import { callCodeAssistEndpoint, safeReadJson } from "./model-filter-helpers.ts";
 import { accountTurnCoordinator, selectPoolAccount } from "../provider-account-pool.ts";
+import { ensureIsolatedLightCwd } from "../universal-turn-policy.ts";
 
 export async function executeAntigravityCodeAssistGenerate(
   ctx: AntigravityGenerateRuntimeContext,
@@ -72,9 +73,15 @@ export async function executeAntigravityCodeAssistGenerate(
       }
       promptParts.push(input.messages[input.messages.length - 1]?.text ?? "");
 
-      const sandboxCwd = resolve(ctx.workspaceCwd, "dados", "agent-sandbox");
+      const sandboxCwd =
+        input.turnMode === "light"
+          ? ensureIsolatedLightCwd(resolve(ctx.workspaceCwd, "dados"))
+          : resolve(ctx.workspaceCwd, "dados", "agent-sandbox");
       mkdirSync(sandboxCwd, { recursive: true });
       const combinedPrompt = promptParts.join("\n\n");
+      const effectiveMcpServers = input.turnMode === "light" ? [] : input.mcpServers;
+      const effectiveEffort =
+        input.turnMode === "light" ? (input.effort || "baixo") : input.effort;
 
       for (let attempt = 0; attempt < 2; attempt += 1) {
         if (input.signal?.aborted) {
@@ -90,13 +97,13 @@ export async function executeAntigravityCodeAssistGenerate(
             incrementalPromptText: input.messages[input.messages.length - 1]?.text ?? combinedPrompt,
             systemPrompt: input.systemPrompt,
             modelId: input.model,
-            effort: input.effort,
+            effort: effectiveEffort,
             imagePaths: input.imagePaths,
             labeledImages: input.labeledImages,
             signal: input.signal,
             agentId: input.agentId,
             threadId: input.threadId,
-            mcpServers: input.mcpServers,
+            mcpServers: effectiveMcpServers,
             onDelta: attempt === 0 ? input.onDelta : undefined,
             onToolStep: attempt === 0 ? input.onToolStep : undefined,
           });

@@ -1,6 +1,6 @@
 {
   "name": "criativo-studio-online",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "private": true,
   "description": "Plataforma autônoma multi-agente para produção de criativos, carrosséis, stories e vídeos cinematográficos Remotion via Web, WhatsApp e Telegram.",
   "type": "module",

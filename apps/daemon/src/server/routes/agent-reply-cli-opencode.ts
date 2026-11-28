@@ -48,6 +48,7 @@ import {
   parseBackupModelsJson,
 } from "../../engine/runner/backup-models-resolver.ts";
 import { compactRecentHistory, runTextModelWorkflowToolLoop } from "./chat-routing-helpers.ts";
+import { resolveUniversalTurnPolicy } from "../../providers/universal-turn-policy.ts";
 import type { ModelAttemptContext } from "./agent-reply-types.ts";
 
 export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise<string | null> {
@@ -103,7 +104,15 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
       });
       const t0 = Date.now();
       try {
-        const cliMsgs = compactRecentHistory(history, 6, 1200);
+        const cliPolicy = resolveUniversalTurnPolicy({
+          turnMode: setup.turnMode,
+          configuredEffort: typeof setup.config.effort === "string" ? setup.config.effort : undefined,
+          channelOrigin: options?.channelOrigin,
+          agentName: agente.nome,
+          promptBase,
+          studioToolsPromptGuidance,
+        });
+        const cliMsgs = compactRecentHistory(history, cliPolicy.historyLimit, cliPolicy.historyMaxChars);
         cliMsgs.push({
           role: "user",
           text:
@@ -112,7 +121,8 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
               : userPrompt,
         });
 
-        const cliSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e objetiva. Nunca invente handles ou marcas reais.${studioToolsPromptGuidance}`;
+        const cliSystemPrompt = cliPolicy.systemPrompt;
+        const effectiveCliMcpConfig = cliPolicy.includeMcpServers ? turnCliMcpConfig : null;
         const poolAccount = await deps.providerConnection
           .pickPoolAccount(targetProvider, preferredAccId)
           .catch(() => null);
@@ -125,9 +135,10 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
           messages: cliMsgs,
           agentId: agente.agente_id,
           threadId: options?.threadId ?? `main:${agente.agente_id}`,
-          turnMode: setup.turnMode,
+          turnMode: cliPolicy.mode,
+          effort: cliPolicy.effectiveEffort,
           preferredAccountId: effAccountId,
-          mcpConfig: turnCliMcpConfig,
+          mcpConfig: effectiveCliMcpConfig,
           signal: options?.signal,
           onToolStep: (toolStep) => {
             const passo: PassoChat = {
@@ -165,9 +176,10 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
               ],
               agentId: agente.agente_id,
               threadId: options?.threadId ?? `main:${agente.agente_id}`,
-              turnMode: setup.turnMode,
+              turnMode: cliPolicy.mode,
+              effort: cliPolicy.effectiveEffort,
               preferredAccountId: effAccountId,
-              mcpConfig: turnCliMcpConfig,
+              mcpConfig: effectiveCliMcpConfig,
               signal: options?.signal,
             });
             return next.text;
@@ -242,7 +254,15 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
       });
       const t0 = Date.now();
       try {
-        const ocMsgs = compactRecentHistory(history, 6, 1200);
+        const ocPolicy = resolveUniversalTurnPolicy({
+          turnMode: setup.turnMode,
+          configuredEffort: typeof setup.config.effort === "string" ? setup.config.effort : undefined,
+          channelOrigin: options?.channelOrigin,
+          agentName: agente.nome,
+          promptBase,
+          studioToolsPromptGuidance,
+        });
+        const ocMsgs = compactRecentHistory(history, ocPolicy.historyLimit, ocPolicy.historyMaxChars);
         ocMsgs.push({
           role: "user",
           text:
@@ -251,16 +271,18 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
               : userPrompt,
         });
 
-        const ocSystemPrompt = `${promptBase}\nResponda em pt-br de forma prática e especializada.${studioToolsPromptGuidance}`;
+        const ocSystemPrompt = ocPolicy.systemPrompt;
+        const effectiveOcMcpServers = ocPolicy.includeMcpServers ? turnAcpMcpServers : [];
         const ocResult = await deps.providerConnection.getOpenCodeService().executePrompt({
           modelId: targetModel,
+          turnMode: ocPolicy.mode,
           systemPrompt: ocSystemPrompt,
           messages: ocMsgs,
           signal: options?.signal,
           agentId: agente.agente_id,
           threadId: options?.threadId ?? `main:${agente.agente_id}`,
           channelOrigin: options?.channelOrigin,
-          mcpServers: turnAcpMcpServers,
+          mcpServers: effectiveOcMcpServers,
           onDelta: (delta) => {
             onProgress?.({
               fase: "chunk",
@@ -296,6 +318,7 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
             invokeFollowUp: async (followUpPrompt) => {
               const next = await deps.providerConnection.getOpenCodeService().executePrompt({
                 modelId: targetModel,
+                turnMode: ocPolicy.mode,
                 systemPrompt: ocSystemPrompt,
                 messages: [
                   ...ocMsgs,
@@ -306,7 +329,7 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
                 agentId: agente.agente_id,
                 threadId: options?.threadId ?? `main:${agente.agente_id}`,
                 channelOrigin: options?.channelOrigin,
-                mcpServers: turnAcpMcpServers,
+                mcpServers: effectiveOcMcpServers,
               });
               return next.text;
             },

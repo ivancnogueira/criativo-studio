@@ -2,6 +2,10 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { NdjsonBufferedLineReader } from "../acp-stream-framing.ts";
 import { spawnProviderProcess } from "../provider-runtime-locate.ts";
 import {
+  buildCodexThreadStartParams,
+  isCodexToolItemType,
+} from "./codex-prompt-settings.ts";
+import {
   createTurnStallWatchdog,
   DEFAULT_CLI_TOOL_STALL_MS,
   DEFAULT_CLI_TURN_STALL_MS,
@@ -28,6 +32,8 @@ export interface CodexAppServerTurnInput {
   modelId: string;
   agenteId?: string | null;
   threadId?: string | null;
+  turnMode?: "light" | "action";
+  effort?: string | null;
   systemPrompt?: string;
   coldPrompt: string;
   incrementalPrompt: string;
@@ -229,7 +235,10 @@ class CodexAppServerWorker {
 
     this.initPromise = (async () => {
       await this.sendRequest("initialize", {
-        clientInfo: { name: "criativo-studio", version: "1.1.1" },
+        clientInfo: {
+          name: "criativo-studio",
+          version: process.env.CRIATIVO_APP_VERSION || "1.1.3",
+        },
         capabilities: {},
       }, 15_000);
       this.sendNotification("initialized", {});
@@ -285,6 +294,7 @@ class CodexAppServerWorker {
     codexThreadId: string;
     reusedThread: boolean;
     promptText: string;
+    effort?: string | null;
     agenteId?: string | null;
     timeoutMs?: number;
     signal?: AbortSignal;
@@ -357,6 +367,7 @@ class CodexAppServerWorker {
       this.sendRequest("turn/start", {
         threadId: opts.codexThreadId,
         input: [{ type: "text", text: opts.promptText }],
+        ...(opts.effort ? { effort: opts.effort } : {}),
       })
         .then(() => {
           watchdog.touch();
@@ -453,6 +464,10 @@ class CodexAppServerWorker {
           const text = extractTextFromDeltaOrItem(item);
           if (text) turn.fallbackCompletedText = text;
         }
+        return;
+      }
+
+      if (!isCodexToolItemType(itemType)) {
         return;
       }
 
@@ -608,6 +623,7 @@ export class CodexAppServerPool {
           codexThreadId: cached.codexThreadId,
           reusedThread: true,
           promptText: input.incrementalPrompt,
+          effort: input.turnMode === "light" ? (input.effort ?? "low") : input.effort,
           agenteId: input.agenteId,
           timeoutMs: input.timeoutMs,
           signal: input.signal,
@@ -623,16 +639,29 @@ export class CodexAppServerPool {
       this.threadBindings.delete(bindingKey);
     }
 
-    const startRes = await worker.sendRequest<{ thread?: { id?: string }; threadId?: string }>(
-      "thread/start",
-      {
+    const richThreadParams = buildCodexThreadStartParams({
+      modelId: input.modelId,
+      cwd: input.cwd,
+      systemPrompt: input.systemPrompt,
+      turnMode: input.turnMode,
+      effort: input.effort,
+    });
+    let startRes: { thread?: { id?: string }; threadId?: string };
+    try {
+      startRes = await worker.sendRequest("thread/start", richThreadParams);
+    } catch (startErr) {
+      const msg = startErr instanceof Error ? startErr.message : String(startErr);
+      if (!/unknown field|unrecognized|invalid.*(config|param|field)/i.test(msg)) {
+        throw startErr;
+      }
+      startRes = await worker.sendRequest("thread/start", {
         model: input.modelId,
         cwd: input.cwd,
         sandbox: "read-only",
         approvalPolicy: "never",
         ...(input.systemPrompt ? { developerInstructions: input.systemPrompt } : {}),
-      }
-    );
+      });
+    }
     const codexThreadId = startRes.thread?.id ?? startRes.threadId;
     if (!codexThreadId) {
       throw new Error("Codex app-server retornou thread/start sem threadId.");
@@ -650,6 +679,7 @@ export class CodexAppServerPool {
       codexThreadId,
       reusedThread: false,
       promptText: input.coldPrompt,
+      effort: input.turnMode === "light" ? (input.effort ?? "low") : input.effort,
       agenteId: input.agenteId,
       timeoutMs: input.timeoutMs,
       signal: input.signal,

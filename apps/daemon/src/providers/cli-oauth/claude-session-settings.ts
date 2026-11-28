@@ -60,6 +60,8 @@ export function buildClaudeCliArgs(input: {
   newSessionId?: string | null;
   systemPrompt?: string;
   turnMode?: "light" | "action";
+  effort?: "low" | "medium" | "high";
+  minimalCompat?: boolean;
   includeAllowedMcpTools?: boolean;
 }): string[] {
   const args: string[] = [
@@ -72,6 +74,14 @@ export function buildClaudeCliArgs(input: {
     "--disallowedTools",
     CLAUDE_DISALLOWED_HOST_TOOLS.join(","),
   ];
+
+  if (!input.minimalCompat) {
+    if (input.turnMode === "light") {
+      args.push("--setting-sources", "", "--effort", "low");
+    } else if (input.effort) {
+      args.push("--effort", input.effort);
+    }
+  }
 
   if (input.resumeSessionId) {
     args.push("--resume", input.resumeSessionId);

@@ -1,5 +1,17 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
   ReleaseArtifactInfo,
@@ -441,98 +453,185 @@ export class AutoUpdateService {
         throw err;
       }
 
-      const headers = this.#licenseService.getCredentialHeaders() ?? {};
-      this.#state = "downloading";
-      this.#progressPercent = 25;
-      this.#errorMessage = null;
-      this.emitStatus();
-
-      const dlUrl = artifact.download_path.startsWith("http")
-        ? artifact.download_path
-        : `${this.#licenseService.hubBaseUrl}${artifact.download_path}`;
-
-      const res = await this.#fetchImpl(dlUrl, { method: "GET", headers });
-      if (res.status === 401 || res.status === 403) {
-        this.#state = "license_blocked";
-        this.#progressPercent = 0;
-        this.#errorMessage = "Licença revogada ou inválida ao baixar atualização.";
-        this.emitStatus();
-        const err = new Error(this.#errorMessage) as Error & { statusCode?: number; code?: string };
-        err.statusCode = 403;
-        err.code = "license_not_active_for_updates";
-        throw err;
-      }
-      if (!res.ok) {
-        this.#state = "error";
-        this.#progressPercent = 0;
-        this.#errorMessage = `Falha no download do pacote (HTTP ${res.status}).`;
-        this.emitStatus();
-        const err = new Error(this.#errorMessage) as Error & { statusCode?: number };
-        err.statusCode = res.status;
-        throw err;
-      }
-
-      const rawBytes = Buffer.from(await res.arrayBuffer());
-      this.#state = "verifying";
-      this.#progressPercent = 65;
-      this.emitStatus();
-
-      const actualSha256 = createHash("sha256").update(rawBytes).digest("hex").toLowerCase();
-      const expectedSha256 = String(artifact.sha256 || "").trim().toLowerCase();
-      if (!expectedSha256 || actualSha256 !== expectedSha256) {
-        this.#state = "error";
-        this.#progressPercent = 0;
-        this.#errorMessage = `Falha na verificação SHA-256 do pacote '${artifact.filename}'. Atualização abortada por segurança.`;
-        this.emitStatus();
-        const err = new Error(this.#errorMessage) as Error & { statusCode?: number; code?: string };
-        err.statusCode = 422;
-        err.code = "sha256_mismatch";
-        throw err;
-      }
-
       mkdirSync(this.#paths.updatesDir, { recursive: true });
       const safeFileName = basename(artifact.filename).replace(/[^a-zA-Z0-9._-]/g, "_") || "update.pkg";
       const stagedPath = join(this.#paths.updatesDir, safeFileName);
-      writeFileSync(stagedPath, rawBytes);
+      const partPath = `${stagedPath}.part`;
+      const expectedSha256 = String(artifact.sha256 || "").trim().toLowerCase();
+
+      const computeFileSha256 = (filePath: string): string => {
+        const hash = createHash("sha256");
+        const fd = openSync(filePath, "r");
+        try {
+          const buf = Buffer.allocUnsafe(256 * 1024);
+          let bytesRead = 0;
+          while ((bytesRead = readSync(fd, buf, 0, buf.length, null)) > 0) {
+            hash.update(bytesRead === buf.length ? buf : buf.subarray(0, bytesRead));
+          }
+        } finally {
+          closeSync(fd);
+        }
+        return hash.digest("hex").toLowerCase();
+      };
+
+      const canReuseStaged =
+        expectedSha256.length === 64 &&
+        existsSync(stagedPath) &&
+        (() => {
+          try {
+            return computeFileSha256(stagedPath) === expectedSha256;
+          } catch {
+            return false;
+          }
+        })();
+
+      if (!canReuseStaged) {
+        const headers = this.#licenseService.getCredentialHeaders() ?? {};
+        this.#state = "downloading";
+        this.#progressPercent = 10;
+        this.#errorMessage = null;
+        this.emitStatus();
+
+        const dlUrl = artifact.download_path.startsWith("http")
+          ? artifact.download_path
+          : `${this.#licenseService.hubBaseUrl}${artifact.download_path}`;
+
+        const res = await this.#fetchImpl(dlUrl, { method: "GET", headers });
+        if (res.status === 401 || res.status === 403) {
+          this.#state = "license_blocked";
+          this.#progressPercent = 0;
+          this.#errorMessage = "Licença revogada ou inválida ao baixar atualização.";
+          this.emitStatus();
+          const err = new Error(this.#errorMessage) as Error & { statusCode?: number; code?: string };
+          err.statusCode = 403;
+          err.code = "license_not_active_for_updates";
+          throw err;
+        }
+        if (!res.ok) {
+          this.#state = "error";
+          this.#progressPercent = 0;
+          this.#errorMessage = `Falha no download do pacote (HTTP ${res.status}).`;
+          this.emitStatus();
+          const err = new Error(this.#errorMessage) as Error & { statusCode?: number };
+          err.statusCode = res.status;
+          throw err;
+        }
+
+        rmSync(partPath, { force: true });
+        const contentLenHeader = res.headers?.get?.("content-length");
+        const parsedContentLen = contentLenHeader ? Number(contentLenHeader) : 0;
+        const expectedTotalBytes =
+          Number.isFinite(parsedContentLen) && parsedContentLen > 0
+            ? parsedContentLen
+            : Number(artifact.size_bytes ?? 0);
+
+        let actualSha256 = "";
+        const reader =
+          res.body && typeof (res.body as ReadableStream<Uint8Array>).getReader === "function"
+            ? (res.body as ReadableStream<Uint8Array>).getReader()
+            : null;
+
+        if (reader) {
+          const hash = createHash("sha256");
+          const fd = openSync(partPath, "w");
+          let receivedBytes = 0;
+          let lastEmitAt = Date.now();
+          let lastEmitPct = 10;
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (!value || value.byteLength === 0) continue;
+              const buf = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+              writeSync(fd, buf);
+              hash.update(buf);
+              receivedBytes += buf.byteLength;
+              if (expectedTotalBytes > 0) {
+                const pct = Math.min(78, Math.max(10, Math.round(10 + (receivedBytes / expectedTotalBytes) * 68)));
+                const now = Date.now();
+                if (pct - lastEmitPct >= 3 || now - lastEmitAt >= 400) {
+                  lastEmitPct = pct;
+                  lastEmitAt = now;
+                  this.#progressPercent = pct;
+                  this.emitStatus();
+                }
+              }
+            }
+          } finally {
+            closeSync(fd);
+          }
+          this.#state = "verifying";
+          this.#progressPercent = 80;
+          this.emitStatus();
+          actualSha256 = hash.digest("hex").toLowerCase();
+        } else {
+          const rawBytes = Buffer.from(await res.arrayBuffer());
+          this.#state = "verifying";
+          this.#progressPercent = 80;
+          this.emitStatus();
+          actualSha256 = createHash("sha256").update(rawBytes).digest("hex").toLowerCase();
+          writeFileSync(partPath, rawBytes);
+        }
+
+        if (!expectedSha256 || actualSha256 !== expectedSha256) {
+          rmSync(partPath, { force: true });
+          this.#state = "error";
+          this.#progressPercent = 0;
+          this.#errorMessage = `Falha na verificação SHA-256 do pacote '${artifact.filename}'. Atualização abortada por segurança.`;
+          this.emitStatus();
+          const err = new Error(this.#errorMessage) as Error & { statusCode?: number; code?: string };
+          err.statusCode = 422;
+          err.code = "sha256_mismatch";
+          throw err;
+        }
+
+        rmSync(stagedPath, { force: true });
+        renameSync(partPath, stagedPath);
+      }
 
       this.#state = "applying";
-      this.#progressPercent = 85;
+      this.#progressPercent = 88;
       this.emitStatus();
 
       const targetRoot = resolve(options?.targetProductDir ?? this.#paths.productRoot);
       let appliedHotBundle = false;
-      try {
-        const maybeText = rawBytes.toString("utf8");
-        if (maybeText.trimStart().startsWith("{")) {
-          const parsed = JSON.parse(maybeText) as Partial<UpdateBundlePayloadV1 | UpdateBundlePayloadV2>;
-          if (
-            parsed.format === "criativo-update-bundle-v1" &&
-            parsed.files &&
-            typeof parsed.files === "object" &&
-            !Array.isArray(parsed.files)
-          ) {
-            for (const [relPath, fileContent] of Object.entries(parsed.files)) {
-              writeSafeProductEntry(targetRoot, relPath, String(fileContent));
+      const stagedSizeBytes = statSync(stagedPath).size;
+      const shouldInspectHotBundle =
+        safeFileName.toLowerCase().endsWith(".json") || stagedSizeBytes <= 10 * 1024 * 1024;
+      if (shouldInspectHotBundle) {
+        try {
+          const maybeText = readFileSync(stagedPath, "utf8");
+          if (maybeText.trimStart().startsWith("{")) {
+            const parsed = JSON.parse(maybeText) as Partial<UpdateBundlePayloadV1 | UpdateBundlePayloadV2>;
+            if (
+              parsed.format === "criativo-update-bundle-v1" &&
+              parsed.files &&
+              typeof parsed.files === "object" &&
+              !Array.isArray(parsed.files)
+            ) {
+              for (const [relPath, fileContent] of Object.entries(parsed.files)) {
+                writeSafeProductEntry(targetRoot, relPath, String(fileContent));
+              }
+              appliedHotBundle = true;
+            } else if (
+              parsed.format === "criativo-update-bundle-v2" &&
+              Array.isArray(parsed.files)
+            ) {
+              for (const entry of parsed.files) {
+                if (!entry || typeof entry.path !== "string" || typeof entry.content !== "string") continue;
+                const data =
+                  entry.encoding === "base64"
+                    ? Buffer.from(entry.content, "base64")
+                    : entry.content;
+                writeSafeProductEntry(targetRoot, entry.path, data);
+              }
+              appliedHotBundle = true;
             }
-            appliedHotBundle = true;
-          } else if (
-            parsed.format === "criativo-update-bundle-v2" &&
-            Array.isArray(parsed.files)
-          ) {
-            for (const entry of parsed.files) {
-              if (!entry || typeof entry.path !== "string" || typeof entry.content !== "string") continue;
-              const data =
-                entry.encoding === "base64"
-                  ? Buffer.from(entry.content, "base64")
-                  : entry.content;
-              writeSafeProductEntry(targetRoot, entry.path, data);
-            }
-            appliedHotBundle = true;
           }
-        }
-      } catch {
-        if (!existsSync(stagedPath)) {
-          rmSync(stagedPath, { force: true });
+        } catch {
+          if (!existsSync(stagedPath)) {
+            rmSync(stagedPath, { force: true });
+          }
         }
       }
 

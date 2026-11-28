@@ -18,6 +18,22 @@ export function buildChangelogUrl(version?: string | null): string {
 
 export const RELEASE_NOTES_CATALOG: readonly ReleaseNoteEntry[] = [
   {
+    versao: "1.1.3",
+    data: "2026-11-28",
+    added: [
+      "Motor Universal Multiplataforma (universal-turn-policy.ts): orçamento leve uniforme de histórico, esforço baixo, diretório isolado (.light-cwd) e zero ferramentas/MCPs ociosos em saudações para Codex/ChatGPT, Claude CLI, Antigravity/Gemini, OpenCode e API Direta/Ollama.",
+    ],
+    changed: [
+      "Codex App Server com baseInstructions compacto e features/plugins pesados desativados no modo leve, Claude CLI com --setting-sources '' e --effort low (com fallback automático), além de corte de diretrizes longas no OpenCode/Antigravity/APIs locais.",
+      "Auto-update com download em streaming (progresso contínuo de 10% a 78%) e reaproveitamento imediato de instaladores já validados por SHA-256 em disco.",
+    ],
+    fixed: [
+      "Fim definitivo da abertura do Windows Terminal em turnos Codex e Claude: priorização do layout real vendor/<arch>/bin/codex.exe e @anthropic-ai/claude-code-<plat> sem fallback para wrappers JS/CMD, além de evitar re-downloads quando o binário nativo já está presente.",
+      "Auto-update 'Atualizar e reiniciar' corrigido no Windows via script .ps1 dedicado com encerramento de processos filhos da pasta de instalação, flags NSIS /S /currentuser --updated, log de atualização, retry e fallback assistido.",
+      "Remoção da etapa falsa [userMessage] (e reasoning/plan) da lista de ferramentas executadas na interface durante turnos Codex App Server.",
+    ],
+  },
+  {
     versao: "1.1.2",
     data: "2026-11-28",
     added: [

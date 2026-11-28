@@ -256,6 +256,20 @@ async function handleUpdateRestart(userDataDir: string, payload: UpdateRestartPa
   trayHandle = null;
   floatingDock?.destroy();
   floatingDock = null;
+  try {
+    await cuaRuntime?.dispose?.();
+  } catch {
+    // ignora erro ao encerrar runtime CUA
+  }
+  cuaRuntime = null;
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      if (!win.isDestroyed()) win.destroy();
+    } catch {
+      // ignora erro ao destruir janelas auxiliares
+    }
+  }
+  mainWindow = null;
   isQuitting = true;
 
   if (payload.mode === "native_installer" && safeArtifactPath) {
@@ -266,6 +280,8 @@ async function handleUpdateRestart(userDataDir: string, payload: UpdateRestartPa
       artifactPath: safeArtifactPath,
       version: payload.version ?? null,
       appImagePath: process.env.APPIMAGE ?? null,
+      logFilePath: join(userDataDir, "logs", "updater.log"),
+      scriptDir: join(userDataDir, "updates"),
       openPathFallback: (p) => {
         void shell.openPath(p);
       },

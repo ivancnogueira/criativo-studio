@@ -54,6 +54,7 @@ import {
 import { compactRecentHistory } from "./chat-routing-helpers.ts";
 import { LAZY_META_TOOL_NAMES } from "../../engine/tools/lazy-tool-router.ts";
 import { buildPortableChatMessages } from "../../engine/runner/handoff-history-builder.ts";
+import { resolveUniversalTurnPolicy } from "../../providers/universal-turn-policy.ts";
 import type { ModelAttemptContext } from "./agent-reply-types.ts";
 
 export async function tryApiKeyOrOllamaAttempt(ctx: ModelAttemptContext): Promise<string | null> {
@@ -92,10 +93,18 @@ export async function tryApiKeyOrOllamaAttempt(ctx: ModelAttemptContext): Promis
       });
       const t0 = Date.now();
       try {
+        const apiPolicy = resolveUniversalTurnPolicy({
+          turnMode: setup.turnMode,
+          configuredEffort: typeof setup.config.effort === "string" ? setup.config.effort : undefined,
+          channelOrigin: options?.channelOrigin,
+          agentName: agente.nome,
+          promptBase,
+          studioToolsPromptGuidance: "",
+        });
         const client = deps.providers.getClientForModel(targetModel);
         const turnMessages: ConversationMessage[] = ctx.handoffNote
           ? buildPortableChatMessages(history, agente.modelo_padrao, targetModel).messages
-          : compactRecentHistory(history, 6, 1200).map((item) => ({
+          : compactRecentHistory(history, apiPolicy.historyLimit, apiPolicy.historyMaxChars).map((item) => ({
               role: item.role,
               content: item.text,
             }));
@@ -113,10 +122,8 @@ export async function tryApiKeyOrOllamaAttempt(ctx: ModelAttemptContext): Promis
               : userPrompt,
         });
 
-        const systemPromptChat =
-          options?.channelOrigin === "whatsapp"
-            ? `${promptBase}\nResponda sempre em pt-br com objetividade para celular (sem tabelas Markdown e sem cabeçalhos #) e zero dados fictícios de clientes reais.`
-            : `${promptBase}\nResponda sempre em pt-br com objetividade, tabelas Markdown quando útil e zero dados fictícios de clientes reais.`;
+        const systemPromptChat = apiPolicy.systemPrompt;
+        const effectiveApiTools = apiPolicy.includeTools ? availableChatTools : [];
         let totalInputTokens = 0;
         let totalOutputTokens = 0;
         let finalReplyText = "";
@@ -127,7 +134,8 @@ export async function tryApiKeyOrOllamaAttempt(ctx: ModelAttemptContext): Promis
             model: targetModel,
             systemPrompt: systemPromptChat,
             messages: turnMessages,
-            tools: availableChatTools,
+            tools: effectiveApiTools,
+            ...(apiPolicy.maxOutputTokens ? { maxTokens: apiPolicy.maxOutputTokens } : {}),
           });
           assertNotAborted();
 

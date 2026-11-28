@@ -266,6 +266,7 @@ export class OpenCodeLiveService {
 
   public async executePrompt(input: {
     modelId: string;
+    turnMode?: "light" | "action";
     systemPrompt?: string;
     messages: Array<{ role: "user" | "assistant"; text: string }>;
     timeoutMs?: number;
@@ -295,20 +296,31 @@ export class OpenCodeLiveService {
       }
     }
 
-    const sandboxCwd = resolve(this.workspaceCwd, "dados", "opencode-sandbox");
+    const isLight = input.turnMode === "light";
+    const sandboxCwd = resolve(
+      this.workspaceCwd,
+      "dados",
+      isLight ? ".light-cwd" : "opencode-sandbox"
+    );
     mkdirSync(sandboxCwd, { recursive: true });
     const apiKey = this.vault?.getSecret("opencode_api_key");
-    const resolvedMcpServers = Array.isArray(input.mcpServers)
-      ? input.mcpServers
-      : ((await this.mcpServersResolver?.(input.agentId)) ?? []);
+    const resolvedMcpServers = isLight
+      ? []
+      : Array.isArray(input.mcpServers)
+        ? input.mcpServers
+        : ((await this.mcpServersResolver?.(input.agentId)) ?? []);
 
     const promptParts: string[] = [];
     if (input.systemPrompt) {
-      const styleDirective =
-        input.channelOrigin === "whatsapp"
-          ? "[Diretriz de execução WhatsApp]: Responda diretamente de forma curta e amigável para celular (máximo 1 a 4 parágrafos curtos ou lista breve com •). Nunca use tabelas Markdown (|...|), nunca use cabeçalhos #, e não inspecione arquivos internos do repositório nem cite diretórios de código como apps/daemon."
-          : "[Diretriz de execução]: Responda diretamente ao pedido editorial/estratégico do usuário usando Markdown bem estruturado (títulos, listas, negrito, tabelas quando útil). Não inspecione arquivos internos do repositório nem cite diretórios de código como apps/daemon.";
-      promptParts.push(`${input.systemPrompt}\n\n${styleDirective}`);
+      if (isLight) {
+        promptParts.push(input.systemPrompt);
+      } else {
+        const styleDirective =
+          input.channelOrigin === "whatsapp"
+            ? "[Diretriz de execução WhatsApp]: Responda diretamente de forma curta e amigável para celular (máximo 1 a 4 parágrafos curtos ou lista breve com •). Nunca use tabelas Markdown (|...|), nunca use cabeçalhos #, e não inspecione arquivos internos do repositório nem cite diretórios de código como apps/daemon."
+            : "[Diretriz de execução]: Responda diretamente ao pedido editorial/estratégico do usuário usando Markdown bem estruturado (títulos, listas, negrito, tabelas quando útil). Não inspecione arquivos internos do repositório nem cite diretórios de código como apps/daemon.";
+        promptParts.push(`${input.systemPrompt}\n\n${styleDirective}`);
+      }
     }
     if (input.messages.length > 1) {
       promptParts.push(

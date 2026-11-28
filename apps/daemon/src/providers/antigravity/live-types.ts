@@ -151,6 +151,7 @@ export interface AntigravityLiveSnapshot {
 export interface CodeAssistGenerateInput {
   model: string;
   effort?: string;
+  turnMode?: "light" | "action";
   systemPrompt?: string;
   messages: Array<{ role: "user" | "assistant"; text: string }>;
   imagePaths?: string[];

@@ -123,12 +123,12 @@ describe("Subfase 40.10 — Auto-Update com Relaunch, Codex CLI Standalone & Fla
     }
   });
 
-  it("2. buildWindowsUpdateRelaunchScript aguarda PID encerrar, executa instalador /S e reabre executável via env vars", () => {
+  it("2. buildWindowsUpdateRelaunchScript aguarda PID encerrar, executa instalador /S /currentuser --updated e reabre executável via env vars", () => {
     const script = buildWindowsUpdateRelaunchScript();
     assert.match(script, /CRIATIVO_UPDATER_PID/);
     assert.match(script, /CRIATIVO_UPDATER_INSTALLER/);
     assert.match(script, /CRIATIVO_UPDATER_EXE/);
-    assert.match(script, /ArgumentList\s+'\/S'/);
+    assert.match(script, /ArgumentList\s+@\('\/S',\s*'\/currentuser',\s*'--updated'\)/);
     assert.match(script, /Start-Process\s+-FilePath\s+\$exePath/);
   });
 

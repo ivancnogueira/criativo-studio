@@ -29,6 +29,10 @@ import {
   claudeSessionCache,
   computeClaudeFingerprint,
 } from "./claude-session-settings.ts";
+import {
+  ensureIsolatedLightCwd,
+  mapEffortToCliLevel,
+} from "../universal-turn-policy.ts";
 
 export async function executeCliAgentTurn(
   ctx: CliServiceRuntimeContext,
@@ -97,6 +101,9 @@ input: CliExecutionInput): Promise<CliExecutionOutput> {
         : "claude-sonnet-4-6";
 
       const isLightTurn = input.turnMode === "light";
+      const effectiveClaudeCwd = isLightTurn ? ensureIsolatedLightCwd(absDir) : ctx.workspaceCwd;
+      const claudeEffort =
+        mapEffortToCliLevel(input.effort) ?? (isLightTurn ? "low" : undefined);
       const rawMcpConfig =
         input.mcpConfig !== undefined
           ? input.mcpConfig
@@ -118,7 +125,7 @@ input: CliExecutionInput): Promise<CliExecutionOutput> {
               .join("\n")}\n\n${lastUserMessage}`
           : lastUserMessage;
 
-      const runClaudeAttempt = async (resumeSessionId: string | null) => {
+      const runClaudeAttempt = async (resumeSessionId: string | null, minimalCompat = false) => {
         const candidateSessionId = resumeSessionId ?? randomUUID();
         let tempMcpDir: string | null = null;
         let mcpConfigFile: string | null = null;
@@ -136,6 +143,8 @@ input: CliExecutionInput): Promise<CliExecutionOutput> {
           newSessionId: resumeSessionId ? null : candidateSessionId,
           systemPrompt: resumeSessionId ? undefined : input.systemPrompt,
           turnMode: input.turnMode,
+          effort: claudeEffort,
+          minimalCompat,
         });
 
         try {
@@ -143,7 +152,7 @@ input: CliExecutionInput): Promise<CliExecutionOutput> {
             executable,
             args: claudeArgs,
             env,
-            cwd: ctx.workspaceCwd,
+            cwd: effectiveClaudeCwd,
             stdinText: resumeSessionId ? lastUserMessage : coldClaudeUserPrompt,
             timeoutMs: input.timeoutMs ?? EXEC_TIMEOUT_MS,
             stallMode: true,
@@ -165,9 +174,22 @@ input: CliExecutionInput): Promise<CliExecutionOutput> {
       const cachedSession = claudeSessionCache.getValid(sessionKey, claudeFingerprint);
       let attempt = await runClaudeAttempt(cachedSession?.sessionId ?? null);
 
+      if (
+        attempt.res.code !== 0 &&
+        /unknown option|unrecognized|unexpected argument/i.test(`${attempt.res.stderr} ${attempt.res.stdout}`)
+      ) {
+        attempt = await runClaudeAttempt(cachedSession?.sessionId ?? null, true);
+      }
+
       if (cachedSession && attempt.res.code !== 0) {
         claudeSessionCache.delete(sessionKey);
-        attempt = await runClaudeAttempt(null);
+        attempt = await runClaudeAttempt(null, false);
+        if (
+          attempt.res.code !== 0 &&
+          /unknown option|unrecognized|unexpected argument/i.test(`${attempt.res.stderr} ${attempt.res.stdout}`)
+        ) {
+          attempt = await runClaudeAttempt(null, true);
+        }
       }
 
       if (attempt.res.code !== 0) {
@@ -249,16 +271,23 @@ input: CliExecutionInput): Promise<CliExecutionOutput> {
     coldCodexPromptParts.push(lastUserMessage);
     const coldCodexPrompt = coldCodexPromptParts.join("\n\n");
 
+    const effectiveCodexCwd =
+      input.turnMode === "light" ? ensureIsolatedLightCwd(absDir) : ctx.workspaceCwd;
+    const codexEffort =
+      mapEffortToCliLevel(input.effort) ?? (input.turnMode === "light" ? "low" : undefined);
+
     let appServerFallback = false;
     try {
       const appServerRes = await codexAppServerPool.executeTurn({
         executable,
-        cwd: ctx.workspaceCwd,
+        cwd: effectiveCodexCwd,
         codexHome: absDir,
         accountId: rec.id,
         modelId: targetModel,
         agenteId: input.agentId,
         threadId: input.threadId,
+        turnMode: input.turnMode,
+        effort: codexEffort,
         systemPrompt: input.systemPrompt,
         coldPrompt: coldCodexPrompt,
         incrementalPrompt: lastUserMessage,
@@ -312,7 +341,7 @@ input: CliExecutionInput): Promise<CliExecutionOutput> {
           "-",
         ],
         env,
-        cwd: ctx.workspaceCwd,
+        cwd: effectiveCodexCwd,
         stdinText: fullPrompt,
         timeoutMs: input.timeoutMs ?? EXEC_TIMEOUT_MS,
         stallMode: true,
