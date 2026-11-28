@@ -15,6 +15,7 @@ import {
   ACP_MAX_MESSAGE_BYTES,
   NdjsonBufferedLineReader,
 } from "./acp-stream-framing.ts";
+import { acpSessionCache, runWithAcpSessionCache } from "./acp-session-cache.ts";
 import { type AcpDiscoveredModel, type LabeledImageInput, formatLabeledImageInstruction, type AcpPromptExecutionOutput, type AcpSessionNewResult, resolveAcpModelSelection, inferMimeFromImagePath, normalizeJsonRpcError } from "./antigravity-acp-helpers.ts";
 import { createAcpStreamPresentation, createTurnStallWatchdog, detectAcpBackgroundTaskOutput, getLastMcpActivityAt, hasActiveMcpToolForAgent, type AcpToolStepEvent } from "./turn-stall-watchdog.ts";
 
@@ -87,7 +88,7 @@ export class AcpProcessConnection {
       },
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
-      windowsHide: !opts.interactiveLogin,
+      windowsHide: true,
     });
 
     this.child.stdin.on("error", () => {
@@ -505,6 +506,9 @@ export class AcpProcessConnection {
   public async runPrompt(input: {
     cwd: string;
     promptText: string;
+    incrementalPromptText?: string;
+    reuseKey?: string;
+    configFingerprint?: string;
     modelId?: string;
     effort?: string;
     imagePaths?: string[];
@@ -519,168 +523,172 @@ export class AcpProcessConnection {
     await this.ensureInitializedAndAuthenticated(30_000);
 
     const resolvedMcpServers = Array.isArray(input.mcpServers) ? input.mcpServers : [];
-    const sessionRes = await this.request<AcpSessionNewResult>(
-      "session/new",
-      {
-        cwd: input.cwd,
-        mcpServers: resolvedMcpServers,
-        _meta: {
-          antigravity: {
-            disabledTools: [
-              "schedule",
-              "run_workflow",
-              "swarm",
-              "search_marketplace",
-              "invoke_subagent",
-              "define_subagent",
-              "manage_subagents",
-              "list_plugin_accounts",
-              "manage_task",
-            ],
+    const closeSession = (sid: string) => {
+      if (!this.closed) {
+        void this.request("session/close", { sessionId: sid }, 3_000).catch(() => {});
+      }
+    };
+
+    return await runWithAcpSessionCache({
+      provider: "antigravity",
+      reuseKey: input.reuseKey,
+      connectionRef: this,
+      configFingerprint: input.configFingerprint,
+      modelId: input.modelId ?? "gemini-4-argon-medium",
+      hasDeferredClose: () => Boolean(!input.reuseKey && this.detectedBackgroundTaskInTurn && !this.closed),
+      createSession: async () => {
+        const sessionRes = await this.request<AcpSessionNewResult>(
+          "session/new",
+          {
+            cwd: input.cwd,
+            mcpServers: resolvedMcpServers,
+            _meta: {
+              antigravity: {
+                disabledTools: [
+                  "schedule",
+                  "run_workflow",
+                  "swarm",
+                  "search_marketplace",
+                  "invoke_subagent",
+                  "define_subagent",
+                  "manage_subagents",
+                  "list_plugin_accounts",
+                  "manage_task",
+                ],
+              },
+            },
           },
-        },
+          60_000,
+          { signal: input.signal }
+        );
+
+        const sessionId = sessionRes.sessionId;
+        const modelOpt = Array.isArray(sessionRes.configOptions)
+          ? sessionRes.configOptions.find((opt) => opt.id === "model" || opt.category === "model")
+          : undefined;
+        const candidateIds = [
+          ...(sessionRes.models?.availableModels?.map((m) => m.modelId?.trim() ?? "").filter(Boolean) ?? []),
+          ...(modelOpt?.options?.map((o) => o.value?.trim() ?? "").filter(Boolean) ?? []),
+        ];
+
+        let modelUsed =
+          input.modelId ?? sessionRes.models?.currentModelId ?? modelOpt?.currentValue ?? "gemini-4-argon-medium";
+
+        if (input.modelId) {
+          const resolvedId = resolveAcpModelSelection(input.modelId, candidateIds, input.effort) ?? input.modelId;
+          if (modelOpt?.id && modelOpt.options?.some((o) => o.value === resolvedId)) {
+            try {
+              await this.request("session/set_config_option", { sessionId, configId: modelOpt.id, value: resolvedId }, 10_000);
+              modelUsed = resolvedId;
+            } catch {
+              // fallback abaixo
+            }
+          } else if (sessionRes.models?.availableModels?.some((m) => m.modelId === resolvedId)) {
+            try {
+              await this.request("session/set_model", { sessionId, modelId: resolvedId }, 10_000);
+              modelUsed = resolvedId;
+            } catch {
+              // Mantém modelo padrão caso servidor não aceite troca explícita
+            }
+          } else if (sessionRes.models?.currentModelId || modelOpt?.currentValue) {
+            modelUsed = sessionRes.models?.currentModelId ?? modelOpt?.currentValue ?? modelUsed;
+          }
+        }
+        return { sessionId, modelUsed };
       },
-      60_000,
-      { signal: input.signal }
-    );
+      closeSession,
+      executePrompt: async ({ sessionId, modelUsed, reused }) => {
+        const effectiveText =
+          reused && input.incrementalPromptText !== undefined
+            ? input.incrementalPromptText
+            : input.promptText;
+        const promptBlocks: Array<Record<string, unknown>> = [{ type: "text", text: effectiveText }];
+        const labeledList =
+          this.supportsImages && input.labeledImages && input.labeledImages.length > 0
+            ? input.labeledImages.slice(0, 5)
+            : this.supportsImages && input.imagePaths && input.imagePaths.length > 0
+              ? input.imagePaths.slice(0, 3).map((p) => ({ path: p, role: "anexo_usuario" as const, label: p }))
+              : [];
+        if (labeledList.length > 0) {
+          for (const item of labeledList) {
+            try {
+              if (existsSync(item.path)) {
+                if (input.labeledImages && input.labeledImages.length > 0) {
+                  promptBlocks.push({ type: "text", text: formatLabeledImageInstruction(item) });
+                }
+                promptBlocks.push({
+                  type: "image",
+                  mimeType: inferMimeFromImagePath(item.path),
+                  data: readFileSync(item.path).toString("base64"),
+                });
+              }
+            } catch {
+              // ignora anexo ilegível
+            }
+          }
+        }
 
-    const sessionId = sessionRes.sessionId;
-    const modelOpt = Array.isArray(sessionRes.configOptions)
-      ? sessionRes.configOptions.find((opt) => opt.id === "model" || opt.category === "model")
-      : undefined;
-    const candidateIds = [
-      ...(sessionRes.models?.availableModels?.map((m) => m.modelId?.trim() ?? "").filter(Boolean) ?? []),
-      ...(modelOpt?.options?.map((o) => o.value?.trim() ?? "").filter(Boolean) ?? []),
-    ];
+        const chunks: string[] = [];
+        let reportedUsedTokens = 0;
 
-    let modelUsed =
-      input.modelId ?? sessionRes.models?.currentModelId ?? modelOpt?.currentValue ?? "gemini-4-argon-medium";
+        this.onChunkListener = (txt) => {
+          chunks.push(txt);
+          input.onDelta?.(txt);
+        };
+        this.onUsageListener = (used) => {
+          reportedUsedTokens = Math.max(reportedUsedTokens, used);
+        };
 
-    // Seleciona o modelo solicitado (ou variante correspondente ao prefixo) na sessão ACP
-    if (input.modelId) {
-      const resolvedId = resolveAcpModelSelection(input.modelId, candidateIds, input.effort) ?? input.modelId;
-      if (modelOpt?.id && modelOpt.options?.some((o) => o.value === resolvedId)) {
+        this.openToolCalls.clear();
+        this.detectedBackgroundTaskInTurn = false;
+        this.streamPresentation.reset(input.onToolStep);
         try {
           await this.request(
-            "session/set_config_option",
-            { sessionId, configId: modelOpt.id, value: resolvedId },
-            10_000
-          );
-          modelUsed = resolvedId;
-        } catch {
-          // fallback abaixo para session/set_model
-        }
-      } else if (sessionRes.models?.availableModels?.some((m) => m.modelId === resolvedId)) {
-        try {
-          await this.request("session/set_model", { sessionId, modelId: resolvedId }, 10_000);
-          modelUsed = resolvedId;
-        } catch {
-          // Mantém modelo padrão caso servidor não aceite troca explícita
-        }
-      } else if (sessionRes.models?.currentModelId || modelOpt?.currentValue) {
-        modelUsed = sessionRes.models?.currentModelId ?? modelOpt?.currentValue ?? modelUsed;
-      }
-    }
-
-    const promptBlocks: Array<Record<string, unknown>> = [{ type: "text", text: input.promptText }];
-    const labeledList =
-      this.supportsImages && input.labeledImages && input.labeledImages.length > 0
-        ? input.labeledImages.slice(0, 5)
-        : this.supportsImages && input.imagePaths && input.imagePaths.length > 0
-          ? input.imagePaths.slice(0, 3).map((p) => ({ path: p, role: "anexo_usuario" as const, label: p }))
-          : [];
-    if (labeledList.length > 0) {
-      for (const item of labeledList) {
-        try {
-          if (existsSync(item.path)) {
-            if (input.labeledImages && input.labeledImages.length > 0) {
-              promptBlocks.push({
-                type: "text",
-                text: formatLabeledImageInstruction(item),
-              });
+            "session/prompt",
+            { sessionId, prompt: promptBlocks },
+            input.timeoutMs,
+            {
+              signal: input.signal,
+              resetOnActivity: true,
+              agentId: input.agentId,
+              enableAliveProbe: true,
+              onAbortSendCancelSessionId: sessionId,
             }
-            promptBlocks.push({
-              type: "image",
-              mimeType: inferMimeFromImagePath(item.path),
-              data: readFileSync(item.path).toString("base64"),
-            });
+          );
+        } finally {
+          this.openToolCalls.clear();
+          this.streamPresentation.reset(null);
+          this.onChunkListener = null;
+          this.onUsageListener = null;
+          if (!input.reuseKey && this.detectedBackgroundTaskInTurn && !this.closed) {
+            const sid = sessionId;
+            const holdTimer = setTimeout(() => {
+              this.deferredCloseTimers.delete(holdTimer);
+              closeSession(sid);
+            }, 5 * 60_000);
+            holdTimer.unref?.();
+            this.deferredCloseTimers.add(holdTimer);
           }
-        } catch {
-          // ignora anexo ilegível
+          this.detectedBackgroundTaskInTurn = false;
         }
-      }
-    }
 
-    const chunks: string[] = [];
-    let reportedUsedTokens = 0;
+        const finalText = chunks.join("").trim();
+        const estInput = Math.max(1, Math.round(effectiveText.length / 4));
+        const estOutput = Math.max(1, Math.round(finalText.length / 4));
+        const uncachedInput = reportedUsedTokens > estOutput ? reportedUsedTokens - estOutput : estInput;
 
-    this.onChunkListener = (txt) => {
-      chunks.push(txt);
-      input.onDelta?.(txt);
-    };
-    this.onUsageListener = (used) => {
-      reportedUsedTokens = Math.max(reportedUsedTokens, used);
-    };
-
-    this.openToolCalls.clear();
-    this.detectedBackgroundTaskInTurn = false;
-    this.streamPresentation.reset(input.onToolStep);
-    try {
-      await this.request(
-        "session/prompt",
-        {
-          sessionId,
-          prompt: promptBlocks,
-        },
-        input.timeoutMs,
-        {
-          signal: input.signal,
-          resetOnActivity: true,
-          agentId: input.agentId,
-          enableAliveProbe: true,
-          onAbortSendCancelSessionId: sessionId,
-        }
-      );
-    } finally {
-      this.openToolCalls.clear();
-      this.streamPresentation.reset(null);
-      this.onChunkListener = null;
-      this.onUsageListener = null;
-      if (this.detectedBackgroundTaskInTurn && !this.closed) {
-        const sid = sessionId;
-        const holdTimer = setTimeout(() => {
-          this.deferredCloseTimers.delete(holdTimer);
-          if (!this.closed) {
-            void this.request("session/close", { sessionId: sid }, 3_000).catch(() => {});
-          }
-        }, 5 * 60_000);
-        holdTimer.unref?.();
-        this.deferredCloseTimers.add(holdTimer);
-      } else {
-        // Encerra sessão sem bloquear
-        void this.request("session/close", { sessionId }, 3_000).catch(() => {});
-      }
-      this.detectedBackgroundTaskInTurn = false;
-    }
-
-    const finalText = chunks.join("").trim();
-    const estInput = Math.max(1, Math.round(input.promptText.length / 4));
-    const estOutput = Math.max(1, Math.round(finalText.length / 4));
-    const uncachedInput = reportedUsedTokens > estOutput ? reportedUsedTokens - estOutput : estInput;
-
-    return {
-      text: finalText,
-      modelUsed,
-      usage: {
-        uncachedInput,
-        cachedInput: 0,
-        output: estOutput,
+        return {
+          text: finalText,
+          modelUsed,
+          usage: { uncachedInput, cachedInput: 0, output: estOutput },
+        };
       },
-    };
+    });
   }
 
   public dispose(): void {
     this.closed = true;
+    acpSessionCache.invalidateByConnection(this);
     this.openToolCalls.clear();
     for (const timer of this.deferredCloseTimers) {
       clearTimeout(timer);

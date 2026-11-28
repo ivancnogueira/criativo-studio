@@ -47,10 +47,20 @@ export interface CliExecutionInput {
   systemPrompt?: string;
   messages: Array<{ role: "user" | "assistant"; text: string }>;
   agentId?: string | null;
+  threadId?: string | null;
+  turnMode?: "light" | "action";
   preferredAccountId?: string | null;
   mcpConfig?: Record<string, unknown> | null;
   timeoutMs?: number;
   signal?: AbortSignal;
+  onDelta?: (chunk: string) => void;
+  onToolStep?: (step: {
+    id: string;
+    toolName: string;
+    title: string;
+    status: "executando" | "concluido" | "erro";
+    duracaoMs?: number;
+  }) => void;
 }
 
 export interface CliExecutionOutput {
@@ -130,7 +140,7 @@ export function spawnCommandWithStdin(input: {
       cwd: input.cwd,
       env: input.env,
       stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: !input.interactiveWindow,
+      windowsHide: process.platform === "win32" ? true : !input.interactiveWindow,
     });
     child.stdin.on("error", () => {});
 

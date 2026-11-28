@@ -87,7 +87,11 @@ import {
   resolveModelContextBudget,
   toolBelongsToScopes,
 } from "../turn-context-planner.ts";
-import { LazyToolRouter } from "../../engine/tools/lazy-tool-router.ts";
+import {
+  DEFAULT_CORE_EXPOSED_TOOLS,
+  LazyToolRouter,
+} from "../../engine/tools/lazy-tool-router.ts";
+import { MCP_CORE_DIRECT_TOOLS } from "../../mcp/mcp-lazy-catalog.ts";
 import type { StudioRoutesDeps } from "./route-helpers.ts";
 import { safeJsonParse } from "./route-helpers.ts";
 import type { ChatProgressReport } from "./agent-enrichment-helpers.ts";
@@ -174,6 +178,7 @@ export async function prepareAgentReplySetup(
     memoryManager: deps.memoryManager,
     userPrompt,
     compact: turnPlan.compactLiveContext,
+    includeBrandFiles: turnPlan.attachBrandImages || turnPlan.loadFullSkill,
   });
 
   const promptBaseParts = [
@@ -196,7 +201,11 @@ export async function prepareAgentReplySetup(
   if (memories.length > 0) {
     promptBaseParts.push(`Memórias do agente:\n${memories.map((m) => `- ${m.texto}`).join("\n")}`);
   }
-  if (agente.agente_id.startsWith("designer_") || agente.agente_id === "consistencia_visual") {
+  if (
+    turnPlan.mode === "action" &&
+    (turnPlan.attachBrandImages || turnPlan.mcpScopes.includes("media")) &&
+    (agente.agente_id.startsWith("designer_") || agente.agente_id === "consistencia_visual")
+  ) {
     promptBaseParts.push(
       "REGRA ANTI-ALUCINAÇÃO VISUAL: NUNCA responda ao usuário dizendo 'já estou processando/gerando a arte' ou prometendo mostrar a imagem em instantes sem realmente invocar a ferramenta `generate_image`. Se nenhuma arte nova foi gerada neste turno, invoque `generate_image` agora ou explique exatamente o impedimento técnico."
     );
@@ -328,39 +337,27 @@ export async function prepareAgentReplySetup(
   }
   const rawAvailableChatTools = Array.from(availableChatToolsMap.values());
   const lazyToolsEnabled = config.lazy_tools_enabled !== false;
+  const effectiveCoreTools = new Set<string>(
+    turnPlan.attachBrandImages ? [...MCP_CORE_DIRECT_TOOLS, "generate_image"] : MCP_CORE_DIRECT_TOOLS
+  );
+  if (turnPlan.mcpScopes.includes("schedule")) {
+    for (const sName of DEFAULT_CORE_EXPOSED_TOOLS) {
+      if (sName.includes("wakeup") || sName.includes("background_job")) {
+        effectiveCoreTools.add(sName);
+      }
+    }
+  }
   const lazyToolRouter = new LazyToolRouter(rawAvailableChatTools, {
     enabled: lazyToolsEnabled,
-    threshold: 20,
+    threshold: 12,
+    coreNames: effectiveCoreTools,
   });
   const availableChatTools = lazyToolRouter.selectExposedTools();
   const toolFallbackNames = availableChatTools.map((t) => t.name);
   const studioToolsPromptGuidance =
-    availableChatTools.length > 0
-      ? `\n\n## Ferramentas Nativas & MCP (${toolFallbackNames.length}${lazyToolRouter.isLazyActive() ? ` expostas de ${lazyToolRouter.getTotalIndexed()} indexadas` : ""})\nFerramentas autorizadas: ${toolFallbackNames.join(", ")}.${lazyToolRouter.isLazyActive() ? "\nUse `tool_search`, `tool_describe` e `tool_call` para descobrir e invocar ferramentas secundárias sob demanda." : ""}\nPrefira chamar diretamente via MCP \`criativo_studio\` quando expostas no runtime; se apenas texto estiver ativo, emita \`<tool_call>{"name":"nome","arguments":{...}}</tool_call>\`. Nunca invente dados ou negue acesso a uma ferramenta listada acima.`
+    turnPlan.mode === "action" && availableChatTools.length > 0
+      ? `\n\n## Ferramentas (${toolFallbackNames.length}${lazyToolRouter.isLazyActive() ? `/${lazyToolRouter.getTotalIndexed()}` : ""}): ${toolFallbackNames.join(", ")}.${lazyToolRouter.isLazyActive() ? " Use `tool_search`, `tool_describe` e `tool_call` sob demanda." : ""}`
       : "";
-
-  const turnMcpEndpointOpts = {
-    scopes: turnPlan.mcpScopes,
-    includeExternalMcps: turnPlan.includeExternalMcps,
-    threadId: options?.threadId ?? `main:${agente.agente_id}`,
-    channelOrigin: options?.channelOrigin,
-    whatsappContaId: options?.whatsappContaId ?? null,
-    whatsappChatJid: options?.whatsappChatJid ?? null,
-  };
-  const turnAcpMcpServers =
-    turnPlan.mode === "light"
-      ? []
-      : deps.providerConnection.buildCombinedAcpMcpServers(
-          agente.agente_id,
-          turnMcpEndpointOpts,
-        );
-  const turnCliMcpConfig =
-    turnPlan.mode === "light"
-      ? null
-      : deps.providerConnection.buildClaudeMcpConfig(
-          agente.agente_id,
-          turnMcpEndpointOpts,
-        );
 
   const governance = readAgentGovernance(deps.db, agente.agente_id);
   const agService = deps.providerConnection.getAntigravityService();
@@ -401,6 +398,32 @@ export async function prepareAgentReplySetup(
 
   const initialModel = options?.overrideModel?.trim() || resolvedAgentModel;
   const providerName = deps.providers.resolveProviderName(initialModel);
+  const hasAntigravityAccount = agSnapshot.contas.some((c) => c.estado === "conectado" || Boolean(c.token_valido));
+
+  const turnMcpEndpointOpts = {
+    scopes: turnPlan.mcpScopes,
+    includeExternalMcps: turnPlan.includeExternalMcps,
+    threadId: options?.threadId ?? `main:${agente.agente_id}`,
+    channelOrigin: options?.channelOrigin,
+    whatsappContaId: options?.whatsappContaId ?? null,
+    whatsappChatJid: options?.whatsappChatJid ?? null,
+    provider: hasAntigravityAccount && providerName === "gemini" ? "antigravity" : providerName,
+    lazy: lazyToolsEnabled,
+  };
+  const turnAcpMcpServers =
+    turnPlan.mode === "light"
+      ? []
+      : deps.providerConnection.buildCombinedAcpMcpServers(
+          agente.agente_id,
+          turnMcpEndpointOpts,
+        );
+  const turnCliMcpConfig =
+    turnPlan.mode === "light"
+      ? null
+      : deps.providerConnection.buildClaudeMcpConfig(
+          agente.agente_id,
+          turnMcpEndpointOpts,
+        );
 
   let effectivePromptBase = promptBase;
   if (deps.phase13?.contextReset && config.auto_compact_enabled !== false) {
@@ -425,7 +448,6 @@ export async function prepareAgentReplySetup(
   const openaiOAuthStatus = statusList.find((item) => item.provedor === "openai");
   const opencodeStatus = statusList.find((item) => item.provedor === "opencode");
 
-  const hasAntigravityAccount = agSnapshot.contas.some((c) => c.estado === "conectado" || Boolean(c.token_valido));
   const hasClaudeOAuthAccount = Boolean(claudeOAuthStatus?.contas && claudeOAuthStatus.contas.length > 0);
   const hasOpenAIOAuthAccount = Boolean(openaiOAuthStatus?.contas && openaiOAuthStatus.contas.length > 0);
 
@@ -504,6 +526,7 @@ export async function prepareAgentReplySetup(
     config,
     onboarding,
     skillSlug,
+    turnMode: turnPlan.mode,
     intentSourcePrompt,
     greetingOrCapability,
     loadedSkill,

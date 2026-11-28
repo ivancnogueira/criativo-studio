@@ -6,6 +6,7 @@ import {
   join,
 } from "node:path";
 import { type ResolvedProviderRuntime, RUNTIME_NPM_PACKAGES, getDefaultAppDataDir, findInSystemPath, resolveManagedProviderRuntime, spawnProviderProcess } from "./provider-runtime-locate.ts";
+import { isLegacyNpmRuntime } from "./provider-native-binary-resolver.ts";
 import { OPENCODE_LATEST_RELEASE_BASE_URL, resolveOpenCodeReleaseAssetName, inFlightOpenCodeInstalls, inFlightAntigravityInstalls, ANTIGRAVITY_LATEST_RELEASE_API, ANTIGRAVITY_LATEST_DOWNLOAD_BASE, ANTIGRAVITY_OFFICIAL_MANIFEST_BASE, resolveAntigravityManifestPlatform, resolveAntigravityReleaseAssetName, downloadAndStageStandaloneArchive } from "./provider-runtime-archive.ts";
 import { installCodexStandaloneBinary } from "./codex-standalone-installer.ts";
 
@@ -424,5 +425,60 @@ export async function ensureProviderRuntimeInstalled(
     installedNow: Boolean(resolvedAfter.executable),
     ...(resolvedAfter.executable ? {} : { error: `Pacote ${pkg} instalado, mas binário não localizado.` }),
   };
+}
+
+/**
+ * Migra silenciosamente instalações legadas em `<AppData>/CriativoStudio/provider-runtimes/<folder>/npm`
+ * para binários nativos standalone oficiais sem exigir Node, npm ou ação manual do usuário.
+ */
+export async function migrateLegacyNpmRuntimes(options?: {
+  appDataDir?: string;
+  timeoutMs?: number;
+  folders?: Array<"codex" | "opencode">;
+}): Promise<{ migrated: Array<"codex" | "opencode">; skipped: boolean }> {
+  if (
+    process.env.CRIATIVO_SKIP_LOCAL_PROBE === "1" ||
+    process.env.CRIATIVO_DISABLE_AUTO_INSTALL === "1"
+  ) {
+    return { migrated: [], skipped: true };
+  }
+
+  const resolvedAppData = getDefaultAppDataDir(options?.appDataDir);
+  const targets = options?.folders ?? ["codex", "opencode"];
+  const migrated: Array<"codex" | "opencode"> = [];
+
+  for (const folder of targets) {
+    const baseDir = join(resolvedAppData, "CriativoStudio", "provider-runtimes", folder);
+    const current = resolveManagedProviderRuntime(folder, {
+      appDataDir: resolvedAppData,
+      includeSystemPaths: false,
+    });
+    if (!isLegacyNpmRuntime(baseDir, current.executable)) {
+      continue;
+    }
+
+    if (folder === "codex") {
+      const upgraded = await installCodexStandaloneBinary({
+        appDataDir: resolvedAppData,
+        timeoutMs: options?.timeoutMs ?? 120_000,
+        forceInstall: true,
+      }).catch(() => null);
+      if (upgraded?.executable) {
+        migrated.push("codex");
+      }
+    } else if (folder === "opencode") {
+      const upgraded = await installOpenCodeStandaloneBinary({
+        appDataDir: resolvedAppData,
+        timeoutMs: options?.timeoutMs ?? 120_000,
+        includeSystemPaths: false,
+        forceInstall: true,
+      }).catch(() => null);
+      if (upgraded?.executable) {
+        migrated.push("opencode");
+      }
+    }
+  }
+
+  return { migrated, skipped: false };
 }
 

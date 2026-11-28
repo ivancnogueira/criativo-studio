@@ -83,6 +83,33 @@ export interface EmbeddedDaemonHandle {
   getRecentLogs: () => string[];
 }
 
+export function buildDaemonChildEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  options: Pick<EmbeddedDaemonOptions, "isPackaged" | "vaultKey" | "appVersion">,
+  runtime: { port: number; productRoot: string; userDataDir: string }
+): NodeJS.ProcessEnv {
+  const cleanEnv: NodeJS.ProcessEnv = { ...baseEnv };
+  delete cleanEnv.CHROME_CRASHPAD_PIPE_NAME;
+  delete cleanEnv.ELECTRON_ENABLE_LOGGING;
+  delete cleanEnv.ELECTRON_ATTACH_CONSOLE;
+  delete cleanEnv.NODE_OPTIONS;
+
+  return {
+    ...cleanEnv,
+    ELECTRON_RUN_AS_NODE: "1",
+    ELECTRON_NO_ATTACH_CONSOLE: "1",
+    NODE_ENV: options.isPackaged ? "production" : (cleanEnv.NODE_ENV ?? "production"),
+    HOST: "127.0.0.1",
+    PORT: String(runtime.port),
+    CRIATIVO_PACKAGED: options.isPackaged === false ? "0" : "1",
+    CRIATIVO_DESKTOP_PACKAGED: "1",
+    CRIATIVO_PRODUCT_ROOT: runtime.productRoot,
+    CRIATIVO_USER_DATA_DIR: runtime.userDataDir,
+    ...(options.vaultKey ? { CRIATIVO_VAULT_KEY: options.vaultKey } : {}),
+    ...(options.appVersion ? { CRIATIVO_APP_VERSION: options.appVersion } : {}),
+  };
+}
+
 export function createWatchdogRecoveryController<TProc extends { exitCode: number | null; killed: boolean }>(deps: {
   port: number;
   maxRestarts?: number;
@@ -92,6 +119,7 @@ export function createWatchdogRecoveryController<TProc extends { exitCode: numbe
   spawnProc: () => TProc;
   waitHealthy: (proc: TProc) => Promise<void>;
   attachWatchdog: (proc: TProc) => void;
+  cancelPendingTimer?: () => void;
   checkHealth: () => Promise<boolean>;
   isStopping: () => boolean;
   log?: (msg: string) => void;
@@ -134,6 +162,7 @@ export function createWatchdogRecoveryController<TProc extends { exitCode: numbe
       if (watchdogSuspended) {
         deps.log?.("[Watchdog] Recuperação manual solicitada ao reabrir janela; limpando suspensão anterior.");
       }
+      deps.cancelPendingTimer?.();
       restartTimestamps.length = 0;
       watchdogSuspended = false;
 
@@ -258,19 +287,7 @@ export async function startEmbeddedDaemon(options: EmbeddedDaemonOptions): Promi
       cwd: userDataDir,
       stdio: ["ignore", "pipe", "pipe", "ipc"],
       windowsHide: true,
-      env: {
-        ...process.env,
-        ELECTRON_RUN_AS_NODE: "1",
-        NODE_ENV: options.isPackaged ? "production" : (process.env.NODE_ENV ?? "production"),
-        HOST: "127.0.0.1",
-        PORT: String(port),
-        CRIATIVO_PACKAGED: options.isPackaged === false ? "0" : "1",
-        CRIATIVO_DESKTOP_PACKAGED: "1",
-        CRIATIVO_PRODUCT_ROOT: productRoot,
-        CRIATIVO_USER_DATA_DIR: userDataDir,
-        ...(options.vaultKey ? { CRIATIVO_VAULT_KEY: options.vaultKey } : {}),
-        ...(options.appVersion ? { CRIATIVO_APP_VERSION: options.appVersion } : {}),
-      },
+      env: buildDaemonChildEnv(process.env, options, { port, productRoot, userDataDir }),
     });
 
     child.on("message", (raw: unknown) => {
@@ -313,7 +330,9 @@ export async function startEmbeddedDaemon(options: EmbeddedDaemonOptions): Promi
   const attachExitWatchdog = (procRef: ChildProcess): void => {
     procRef.once("exit", (code, signal) => {
       if (stopping) return;
-      pushLog(`[Watchdog] Daemon encerrou inesperadamente (code=${code ?? "null"}, signal=${signal ?? "null"}).`);
+      const hexCode =
+        typeof code === "number" ? ` (0x${(code >>> 0).toString(16).toUpperCase()})` : "";
+      pushLog(`[Watchdog] Daemon encerrou inesperadamente (code=${code ?? "null"}${hexCode}, signal=${signal ?? "null"}).`);
       options.onDaemonCrashed?.(code, signal);
 
       const decision = recovery.canAutoRestart();
@@ -326,6 +345,9 @@ export async function startEmbeddedDaemon(options: EmbeddedDaemonOptions): Promi
 
       pushLog(`[Watchdog] Agendando reinício automático #${decision.attempt} em ${decision.backoffMs}ms...`);
 
+      if (restartTimer) {
+        clearTimeout(restartTimer);
+      }
       restartTimer = setTimeout(() => {
         restartTimer = null;
         if (stopping) return;
@@ -357,6 +379,12 @@ export async function startEmbeddedDaemon(options: EmbeddedDaemonOptions): Promi
     spawnProc: spawnDaemonChild,
     waitHealthy: (proc) => waitForDaemonHealthy(port, proc, () => logs),
     attachWatchdog: attachExitWatchdog,
+    cancelPendingTimer: () => {
+      if (restartTimer) {
+        clearTimeout(restartTimer);
+        restartTimer = null;
+      }
+    },
     checkHealth: checkDaemonHealthNow,
     isStopping: () => stopping,
     log: pushLog,

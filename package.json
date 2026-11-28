@@ -1,6 +1,6 @@
 {
   "name": "criativo-studio-online",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "private": true,
   "description": "Plataforma autônoma multi-agente para produção de criativos, carrosséis, stories e vídeos cinematográficos Remotion via Web, WhatsApp e Telegram.",
   "type": "module",
@@ -17,6 +17,7 @@
     "check:migrations": "node scripts/check-frozen-migrations.mjs",
     "check:ratchets": "node scripts/check-quality-ratchets.mjs",
     "check:sizes": "node scripts/check-file-sizes.mjs",
+    "check:context-budget": "node scripts/check-agent-context-budget.mjs",
     "start": "npm run start:daemon",
     "instalar": "node scripts/configurar-local.mjs",
     "configurar": "node scripts/configurar-local.mjs",

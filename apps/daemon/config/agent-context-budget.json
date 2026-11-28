@@ -1,0 +1,8 @@
+{
+  "prompt.light.maxBytes": 2500,
+  "prompt.action.maxBytes": 14000,
+  "mcp.tools_list.default.maxBytes": 16000,
+  "mcp.tools_list.antigravity.maxBytes": 12000,
+  "mcp.tools_list.maxToolsCount": 15,
+  "guidance.total.maxBytes": 12000
+}

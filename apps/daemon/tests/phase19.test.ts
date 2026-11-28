@@ -325,19 +325,40 @@ describe("Fase 19 — Onboarding Híbrido, Ponte MCP Nativa/Meta v27.0, Layout D
     const initJson = (await initRes.json()) as { result: { serverInfo: { name: string } } };
     assert.equal(initJson.result.serverInfo.name, "criativo-studio");
 
-    // 3. tools/list para analista_bi contém consultar_metricas_meta; para copywriter NÃO contém!
-    const listAnalistaRes = await fetch(urlAnalista, {
+    // 3. Lazy MCP filtra descoberta via tool_search e ?lazy=0 lista catálogo direto autorizado por agentId
+    const searchAnalistaRes = await fetch(urlAnalista, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "X-Criativo-Mcp-Token": bridgeToken,
       },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "tool_search", arguments: { query: "consultar_metricas_meta" } },
+      }),
+    });
+    const searchAnalistaJson = (await searchAnalistaRes.json()) as {
+      result: { content: Array<{ text: string }> };
+    };
+    const searchAnalistaPayload = JSON.parse(searchAnalistaJson.result.content[0]?.text ?? "{}") as {
+      resultados?: Array<{ name: string }>;
+    };
+    assert.ok(searchAnalistaPayload.resultados?.some((r) => r.name === "consultar_metricas_meta"));
+
+    const listAnalistaRes = await fetch(`${urlAnalista}&lazy=0`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Criativo-Mcp-Token": bridgeToken,
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 20, method: "tools/list" }),
     });
     const listAnalista = (await listAnalistaRes.json()) as { result: { tools: Array<{ name: string }> } };
     assert.ok(listAnalista.result.tools.some((t) => t.name === "consultar_metricas_meta"));
 
-    const listCopyRes = await fetch(urlCopy, {
+    const listCopyRes = await fetch(`${urlCopy}&lazy=0`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

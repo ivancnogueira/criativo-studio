@@ -124,9 +124,31 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
           systemPrompt: cliSystemPrompt,
           messages: cliMsgs,
           agentId: agente.agente_id,
+          threadId: options?.threadId ?? `main:${agente.agente_id}`,
+          turnMode: setup.turnMode,
           preferredAccountId: effAccountId,
           mcpConfig: turnCliMcpConfig,
           signal: options?.signal,
+          onToolStep: (toolStep) => {
+            const passo: PassoChat = {
+              id: toolStep.id,
+              ferramenta: toolStep.toolName,
+              titulo: toolStep.title,
+              status: toolStep.status,
+              ...(toolStep.duracaoMs ? { duracao_ms: toolStep.duracaoMs } : {}),
+            };
+            const idx = steps.findIndex((s) => s.id === passo.id);
+            if (idx >= 0) steps[idx] = passo;
+            else steps.push(passo);
+            onProgress?.({
+              fase: "etapa",
+              mensagem_status:
+                toolStep.status === "executando"
+                  ? `${toolStep.title}...`
+                  : `Escrevendo resposta (${targetModel})...`,
+              step: passo,
+            });
+          },
         });
 
         const cliFinalText = await runTextModelWorkflowToolLoop({
@@ -142,6 +164,8 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
                 { role: "user", text: followUpPrompt },
               ],
               agentId: agente.agente_id,
+              threadId: options?.threadId ?? `main:${agente.agente_id}`,
+              turnMode: setup.turnMode,
               preferredAccountId: effAccountId,
               mcpConfig: turnCliMcpConfig,
               signal: options?.signal,
@@ -234,6 +258,7 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
           messages: ocMsgs,
           signal: options?.signal,
           agentId: agente.agente_id,
+          threadId: options?.threadId ?? `main:${agente.agente_id}`,
           channelOrigin: options?.channelOrigin,
           mcpServers: turnAcpMcpServers,
           onDelta: (delta) => {
@@ -279,6 +304,7 @@ export async function tryCliOrOpenCodeAttempt(ctx: ModelAttemptContext): Promise
                 ],
                 signal: options?.signal,
                 agentId: agente.agente_id,
+                threadId: options?.threadId ?? `main:${agente.agente_id}`,
                 channelOrigin: options?.channelOrigin,
                 mcpServers: turnAcpMcpServers,
               });

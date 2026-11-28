@@ -42,6 +42,7 @@ export interface PreparedAgentReplySetup {
   config: Record<string, unknown>;
   onboarding: ReturnType<StudioRoutesDeps["providerConnection"]["getOnboardingState"]>;
   skillSlug: string;
+  turnMode: "light" | "action";
   intentSourcePrompt: string;
   greetingOrCapability: boolean;
   loadedSkill: { tokensEst: number } | null;

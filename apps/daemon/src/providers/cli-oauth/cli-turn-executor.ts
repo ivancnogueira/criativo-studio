@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -14,6 +15,20 @@ import { EXEC_TIMEOUT_MS, resolveCliBinaryForProvider, spawnCommandWithStdin, ty
 import { forceUpgradeProviderRuntime } from "../provider-runtime-resolver.ts";
 import { extractCleanCodexError, isCodexSchemaMismatchError } from "./codex-models-http.ts";
 import { accountTurnCoordinator, selectPoolAccount } from "../provider-account-pool.ts";
+import {
+  buildCodexConfigOverrideArgs,
+  computeCodexSessionFingerprint,
+} from "./codex-prompt-settings.ts";
+import {
+  CodexAppServerUnsupportedError,
+  codexAppServerPool,
+} from "./codex-app-server-client.ts";
+import {
+  buildClaudeCliArgs,
+  buildClaudeEnv,
+  claudeSessionCache,
+  computeClaudeFingerprint,
+} from "./claude-session-settings.ts";
 
 export async function executeCliAgentTurn(
   ctx: CliServiceRuntimeContext,
@@ -76,73 +91,93 @@ input: CliExecutionInput): Promise<CliExecutionOutput> {
     const absDir = resolve(rec.configDir);
 
     if (input.provedor === "claude") {
-      const env: Record<string, string | undefined> = {
-        ...process.env,
-        CLAUDE_CONFIG_DIR: absDir,
-        DISABLE_AUTOUPDATER: "1",
-      };
+      const env = buildClaudeEnv(absDir);
       const targetModel = input.modelId.toLowerCase().includes("claude")
         ? input.modelId
         : "claude-sonnet-4-6";
 
-      const mcpConfigObj =
+      const isLightTurn = input.turnMode === "light";
+      const rawMcpConfig =
         input.mcpConfig !== undefined
           ? input.mcpConfig
           : (ctx.getMcpConfigResolver()?.(input.agentId ?? null) ?? null);
-      let tempMcpDir: string | null = null;
-      const claudeArgs = [
-        "-p",
-        "--output-format",
-        "json",
-        "--no-session-persistence",
-        "--tools",
-        "",
-      ];
+      const effectiveMcpConfig = isLightTurn ? null : rawMcpConfig;
+      const claudeFingerprint = computeClaudeFingerprint({
+        modelId: targetModel,
+        systemPrompt: input.systemPrompt,
+        mcpConfig: effectiveMcpConfig,
+        turnMode: input.turnMode,
+      });
+      const sessionKey = claudeSessionCache.buildKey(rec.id, input.agentId, input.threadId);
+      const lastUserMessage = input.messages[input.messages.length - 1]?.text ?? "";
+      const coldClaudeUserPrompt =
+        input.messages.length > 1
+          ? `[Contexto recente da conversa]\n${input.messages
+              .slice(-7, -1)
+              .map((m) => `${m.role === "user" ? "Usuário" : "Assistente"}: ${m.text}`)
+              .join("\n")}\n\n${lastUserMessage}`
+          : lastUserMessage;
 
-      if (mcpConfigObj && Object.keys(mcpConfigObj).length > 0) {
-        tempMcpDir = mkdtempSync(join(tmpdir(), "criativo-claude-mcp-"));
-        const mcpConfigFile = join(tempMcpDir, "mcp-config.json");
-        writeFileSync(mcpConfigFile, JSON.stringify(mcpConfigObj, null, 2), "utf8");
-        claudeArgs.push(
-          "--mcp-config",
+      const runClaudeAttempt = async (resumeSessionId: string | null) => {
+        const candidateSessionId = resumeSessionId ?? randomUUID();
+        let tempMcpDir: string | null = null;
+        let mcpConfigFile: string | null = null;
+
+        if (!isLightTurn && effectiveMcpConfig && Object.keys(effectiveMcpConfig).length > 0) {
+          tempMcpDir = mkdtempSync(join(tmpdir(), "criativo-claude-mcp-"));
+          mcpConfigFile = join(tempMcpDir, "mcp-config.json");
+          writeFileSync(mcpConfigFile, JSON.stringify(effectiveMcpConfig, null, 2), "utf8");
+        }
+
+        const claudeArgs = buildClaudeCliArgs({
+          targetModel,
           mcpConfigFile,
-          "--allowedTools",
-          "mcp__criativo_studio__*"
-        );
-      }
-
-      claudeArgs.push("--model", targetModel);
-
-      let res: { code: number | null; stdout: string; stderr: string };
-      try {
-        res = await spawnCommandWithStdin({
-          executable,
-          args: claudeArgs,
-          env,
-          cwd: ctx.workspaceCwd,
-          stdinText: fullPrompt,
-          timeoutMs: input.timeoutMs ?? EXEC_TIMEOUT_MS,
-          stallMode: true,
-          signal: input.signal,
-          agentId: input.agentId,
+          resumeSessionId,
+          newSessionId: resumeSessionId ? null : candidateSessionId,
+          systemPrompt: resumeSessionId ? undefined : input.systemPrompt,
+          turnMode: input.turnMode,
         });
-      } finally {
-        if (tempMcpDir) {
-          try {
-            rmSync(tempMcpDir, { recursive: true, force: true });
-          } catch {
-            // ignora falha de limpeza temporária
+
+        try {
+          const res = await spawnCommandWithStdin({
+            executable,
+            args: claudeArgs,
+            env,
+            cwd: ctx.workspaceCwd,
+            stdinText: resumeSessionId ? lastUserMessage : coldClaudeUserPrompt,
+            timeoutMs: input.timeoutMs ?? EXEC_TIMEOUT_MS,
+            stallMode: true,
+            signal: input.signal,
+            agentId: input.agentId,
+          });
+          return { res, usedSessionId: candidateSessionId };
+        } finally {
+          if (tempMcpDir) {
+            try {
+              rmSync(tempMcpDir, { recursive: true, force: true });
+            } catch {
+              // ignora falha de limpeza temporária
+            }
           }
         }
+      };
+
+      const cachedSession = claudeSessionCache.getValid(sessionKey, claudeFingerprint);
+      let attempt = await runClaudeAttempt(cachedSession?.sessionId ?? null);
+
+      if (cachedSession && attempt.res.code !== 0) {
+        claudeSessionCache.delete(sessionKey);
+        attempt = await runClaudeAttempt(null);
       }
 
-      if (res.code !== 0) {
-        throw new Error(res.stderr.trim() || res.stdout.trim() || "Claude CLI retornou erro.");
+      if (attempt.res.code !== 0) {
+        throw new Error(attempt.res.stderr.trim() || attempt.res.stdout.trim() || "Claude CLI retornou erro.");
       }
 
-      const parsed = JSON.parse(res.stdout.trim()) as {
+      const parsed = JSON.parse(attempt.res.stdout.trim()) as {
         result?: string;
         is_error?: boolean;
+        session_id?: string;
         usage?: {
           input_tokens?: number;
           cache_read_input_tokens?: number;
@@ -154,13 +189,22 @@ input: CliExecutionInput): Promise<CliExecutionOutput> {
         throw new Error(parsed.result || "Claude retornou resposta vazia ou erro de sessão.");
       }
 
+      claudeSessionCache.set(sessionKey, {
+        sessionId: parsed.session_id || attempt.usedSessionId,
+        fingerprint: claudeFingerprint,
+        updatedAtMs: Date.now(),
+      });
+
       return {
         text: parsed.result.trim(),
         modelUsed: targetModel,
         accountId: rec.id,
         accountEmail: rec.email,
         usage: {
-          uncachedInput: Number(parsed.usage?.input_tokens ?? Math.round(fullPrompt.length / 4)),
+          uncachedInput: Number(
+            parsed.usage?.input_tokens ??
+              Math.round((cachedSession ? lastUserMessage : coldClaudeUserPrompt).length / 4)
+          ),
           cachedInput: Number(parsed.usage?.cache_read_input_tokens ?? 0),
           output: Number(parsed.usage?.output_tokens ?? Math.round(parsed.result.length / 4)),
         },
@@ -181,45 +225,76 @@ input: CliExecutionInput): Promise<CliExecutionOutput> {
       input.mcpConfig !== undefined
         ? input.mcpConfig
         : (ctx.getMcpConfigResolver()?.(input.agentId ?? null) ?? null);
-    const codexMcpArgs: string[] = [];
-    const rawMcpServers =
-      mcpConfigObj &&
-      typeof mcpConfigObj === "object" &&
-      mcpConfigObj.mcpServers &&
-      typeof mcpConfigObj.mcpServers === "object"
-        ? (mcpConfigObj.mcpServers as Record<string, Record<string, unknown>>)
-        : null;
+    // buildCodexConfigOverrideArgs serializa -c features.* e -c mcp_servers.<chave> apenas no modo action
+    const codexOverrideArgs = buildCodexConfigOverrideArgs({
+      mcpConfig: mcpConfigObj,
+      turnMode: input.turnMode,
+    });
+    const configFingerprint = computeCodexSessionFingerprint({
+      modelId: targetModel,
+      systemPrompt: input.systemPrompt,
+      mcpConfig: mcpConfigObj,
+      turnMode: input.turnMode,
+    });
+    const lastUserMessage = input.messages[input.messages.length - 1]?.text ?? "";
+    const coldCodexPromptParts: string[] = [];
+    if (input.messages.length > 1) {
+      coldCodexPromptParts.push(
+        `[Contexto recente da conversa]\n${input.messages
+          .slice(-7, -1)
+          .map((m) => `${m.role === "user" ? "Usuário" : "Assistente"}: ${m.text}`)
+          .join("\n")}`
+      );
+    }
+    coldCodexPromptParts.push(lastUserMessage);
+    const coldCodexPrompt = coldCodexPromptParts.join("\n\n");
 
-    if (rawMcpServers) {
-      for (const [srvName, srvSpec] of Object.entries(rawMcpServers)) {
-        const safeKey = srvName.replace(/[^a-zA-Z0-9_]/g, "_");
-        if (!safeKey || !srvSpec || typeof srvSpec !== "object") continue;
-        if (typeof srvSpec.url === "string" && srvSpec.url.trim()) {
-          codexMcpArgs.push("-c", `mcp_servers.${safeKey}.url=${JSON.stringify(srvSpec.url.trim())}`);
-          if (srvSpec.headers && typeof srvSpec.headers === "object" && !Array.isArray(srvSpec.headers)) {
-            const entries = Object.entries(srvSpec.headers as Record<string, unknown>).filter(
-              ([k, v]) => k.trim().length > 0 && typeof v === "string",
-            );
-            if (entries.length > 0) {
-              const headerToml = entries
-                .map(([k, v]) => `${JSON.stringify(k)} = ${JSON.stringify(String(v))}`)
-                .join(", ");
-              codexMcpArgs.push("-c", `mcp_servers.${safeKey}.http_headers={ ${headerToml} }`);
-            }
-          }
-        } else if (typeof srvSpec.command === "string" && srvSpec.command.trim()) {
-          codexMcpArgs.push(
-            "-c",
-            `mcp_servers.${safeKey}.command=${JSON.stringify(srvSpec.command.trim())}`,
-          );
-          if (Array.isArray(srvSpec.args)) {
-            codexMcpArgs.push(
-              "-c",
-              `mcp_servers.${safeKey}.args=${JSON.stringify(srvSpec.args.map(String))}`,
-            );
-          }
-        }
+    let appServerFallback = false;
+    try {
+      const appServerRes = await codexAppServerPool.executeTurn({
+        executable,
+        cwd: ctx.workspaceCwd,
+        codexHome: absDir,
+        accountId: rec.id,
+        modelId: targetModel,
+        agenteId: input.agentId,
+        threadId: input.threadId,
+        systemPrompt: input.systemPrompt,
+        coldPrompt: coldCodexPrompt,
+        incrementalPrompt: lastUserMessage,
+        overrideArgs: codexOverrideArgs,
+        configFingerprint,
+        timeoutMs: input.timeoutMs ?? EXEC_TIMEOUT_MS,
+        signal: input.signal,
+        onDelta: input.onDelta,
+        onToolStep: input.onToolStep,
+      });
+
+      const finalAppText = appServerRes.text.trim();
+      if (finalAppText) {
+        return {
+          text: finalAppText,
+          modelUsed: targetModel,
+          accountId: rec.id,
+          accountEmail: rec.email,
+          usage: {
+            uncachedInput: appServerRes.usage.uncachedInput,
+            cachedInput: appServerRes.usage.cachedInput,
+            output: appServerRes.usage.output || Math.round(finalAppText.length / 4),
+          },
+        };
       }
+      appServerFallback = true;
+    } catch (appErr) {
+      if (appErr instanceof CodexAppServerUnsupportedError) {
+        appServerFallback = true;
+      } else {
+        throw appErr;
+      }
+    }
+
+    if (appServerFallback) {
+      // fallback transparente para `codex exec` quando o binário local não suportar `app-server`
     }
 
     const runCodexExec = (execPath: string) =>
@@ -231,7 +306,7 @@ input: CliExecutionInput): Promise<CliExecutionOutput> {
           "--skip-git-repo-check",
           "--sandbox",
           "read-only",
-          ...codexMcpArgs,
+          ...codexOverrideArgs,
           "--model",
           targetModel,
           "-",

@@ -158,6 +158,7 @@ export interface CodeAssistGenerateInput {
   generateImage?: boolean;
   preferredAccountId?: string | null;
   agentId?: string | null;
+  threadId?: string | null;
   signal?: AbortSignal;
   mcpServers?: unknown[];
   onDelta?: (chunk: string) => void;

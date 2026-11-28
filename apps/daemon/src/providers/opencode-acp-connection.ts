@@ -1,6 +1,7 @@
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawnProviderProcess } from "./provider-runtime-resolver.ts";
 import { ACP_MAX_MESSAGE_BYTES, NdjsonBufferedLineReader } from "./acp-stream-framing.ts";
+import { acpSessionCache, runWithAcpSessionCache } from "./acp-session-cache.ts";
 import { createAcpStreamPresentation, createTurnStallWatchdog, detectAcpBackgroundTaskOutput, getLastMcpActivityAt, hasActiveMcpToolForAgent, type AcpToolStepEvent } from "./turn-stall-watchdog.ts";
 
 export const OPENCODE_SESSION_NEW_TIMEOUT_MS = 60_000;
@@ -327,6 +328,9 @@ export class OpenCodeAcpConnection {
   public async runPrompt(input: {
     cwd: string;
     promptText: string;
+    incrementalPromptText?: string;
+    reuseKey?: string;
+    configFingerprint?: string;
     modelId: string;
     timeoutMs: number;
     signal?: AbortSignal;
@@ -354,92 +358,110 @@ export class OpenCodeAcpConnection {
     }
 
     const resolvedMcpServers = Array.isArray(input.mcpServers) ? input.mcpServers : [];
-    const sess = await this.request<{ sessionId: string; configOptions?: OpenCodeConfigOption[] }>(
-      "session/new",
-      { cwd: input.cwd, mcpServers: resolvedMcpServers },
-      OPENCODE_SESSION_NEW_TIMEOUT_MS,
-      { signal: input.signal }
-    );
+    const closeSession = (sid: string) => {
+      if (!this.closed) {
+        void this.request("session/close", { sessionId: sid }, 3_000).catch(() => {});
+      }
+    };
 
-    let modelUsed = input.modelId;
-    if (Array.isArray(sess.configOptions)) {
-      const modelOpt = sess.configOptions.find((o) => o.id === "model" || o.category === "model");
-      if (modelOpt?.id) {
+    return await runWithAcpSessionCache({
+      provider: "opencode",
+      reuseKey: input.reuseKey,
+      connectionRef: this,
+      configFingerprint: input.configFingerprint,
+      modelId: input.modelId,
+      hasDeferredClose: () => Boolean(!input.reuseKey && this.detectedBackgroundTaskInTurn && !this.closed),
+      createSession: async () => {
+        const sess = await this.request<{ sessionId: string; configOptions?: OpenCodeConfigOption[] }>(
+          "session/new",
+          { cwd: input.cwd, mcpServers: resolvedMcpServers },
+          OPENCODE_SESSION_NEW_TIMEOUT_MS,
+          { signal: input.signal }
+        );
+        let modelUsed = input.modelId;
+        if (Array.isArray(sess.configOptions)) {
+          const modelOpt = sess.configOptions.find((o) => o.id === "model" || o.category === "model");
+          if (modelOpt?.id) {
+            try {
+              await this.request(
+                "session/set_config_option",
+                { sessionId: sess.sessionId, configId: modelOpt.id, value: input.modelId },
+                10_000,
+                { signal: input.signal }
+              );
+            } catch {
+              if (modelOpt.currentValue) modelUsed = modelOpt.currentValue;
+            }
+          }
+        }
+        return { sessionId: sess.sessionId, modelUsed };
+      },
+      closeSession,
+      executePrompt: async ({ sessionId, modelUsed, reused }) => {
+        const effectivePromptText =
+          reused && input.incrementalPromptText !== undefined
+            ? input.incrementalPromptText
+            : input.promptText;
+        const chunks: string[] = [];
+        let reportedUsed = 0;
+        this.onChunk = (txt) => {
+          chunks.push(txt);
+          input.onDelta?.(txt);
+        };
+        this.onUsage = (u) => {
+          reportedUsed = Math.max(reportedUsed, u);
+        };
+
+        this.openToolCalls.clear();
+        this.detectedBackgroundTaskInTurn = false;
+        this.streamPresentation.reset(input.onToolStep);
         try {
           await this.request(
-            "session/set_config_option",
-            { sessionId: sess.sessionId, configId: modelOpt.id, value: input.modelId },
-            10_000,
-            { signal: input.signal }
+            "session/prompt",
+            { sessionId, prompt: [{ type: "text", text: effectivePromptText }] },
+            input.timeoutMs,
+            {
+              signal: input.signal,
+              resetOnActivity: true,
+              agentId: input.agentId,
+              onAbortSendCancelSessionId: sessionId,
+            }
           );
-        } catch {
-          if (modelOpt.currentValue) modelUsed = modelOpt.currentValue;
-        }
-      }
-    }
-
-    const chunks: string[] = [];
-    let reportedUsed = 0;
-    this.onChunk = (txt) => {
-      chunks.push(txt);
-      input.onDelta?.(txt);
-    };
-    this.onUsage = (u) => {
-      reportedUsed = Math.max(reportedUsed, u);
-    };
-
-    this.openToolCalls.clear();
-    this.detectedBackgroundTaskInTurn = false;
-    this.streamPresentation.reset(input.onToolStep);
-    try {
-      await this.request(
-        "session/prompt",
-        { sessionId: sess.sessionId, prompt: [{ type: "text", text: input.promptText }] },
-        input.timeoutMs,
-        {
-          signal: input.signal,
-          resetOnActivity: true,
-          agentId: input.agentId,
-          onAbortSendCancelSessionId: sess.sessionId,
-        }
-      );
-    } finally {
-      this.openToolCalls.clear();
-      this.streamPresentation.reset(null);
-      this.onChunk = null;
-      this.onUsage = null;
-      if (this.detectedBackgroundTaskInTurn && !this.closed) {
-        const sid = sess.sessionId;
-        const holdTimer = setTimeout(() => {
-          this.deferredCloseTimers.delete(holdTimer);
-          if (!this.closed) {
-            void this.request("session/close", { sessionId: sid }, 3_000).catch(() => {});
+        } finally {
+          this.openToolCalls.clear();
+          this.streamPresentation.reset(null);
+          this.onChunk = null;
+          this.onUsage = null;
+          if (!input.reuseKey && this.detectedBackgroundTaskInTurn && !this.closed) {
+            const holdTimer = setTimeout(() => {
+              this.deferredCloseTimers.delete(holdTimer);
+              closeSession(sessionId);
+            }, 5 * 60_000);
+            holdTimer.unref?.();
+            this.deferredCloseTimers.add(holdTimer);
           }
-        }, 5 * 60_000);
-        holdTimer.unref?.();
-        this.deferredCloseTimers.add(holdTimer);
-      } else {
-        void this.request("session/close", { sessionId: sess.sessionId }, 3_000).catch(() => {});
-      }
-      this.detectedBackgroundTaskInTurn = false;
-    }
+          this.detectedBackgroundTaskInTurn = false;
+        }
 
-    const finalText = chunks.join("").trim();
-    const estOut = Math.max(1, Math.round(finalText.length / 4));
-    const estIn = Math.max(1, Math.round(input.promptText.length / 4));
-    return {
-      text: finalText,
-      modelUsed,
-      usage: {
-        uncachedInput: reportedUsed > estOut ? reportedUsed - estOut : estIn,
-        cachedInput: 0,
-        output: estOut,
+        const finalText = chunks.join("").trim();
+        const estOut = Math.max(1, Math.round(finalText.length / 4));
+        const estIn = Math.max(1, Math.round(effectivePromptText.length / 4));
+        return {
+          text: finalText,
+          modelUsed,
+          usage: {
+            uncachedInput: reportedUsed > estOut ? reportedUsed - estOut : estIn,
+            cachedInput: 0,
+            output: estOut,
+          },
+        };
       },
-    };
+    });
   }
 
   public dispose(): void {
     this.closed = true;
+    acpSessionCache.invalidateByConnection(this);
     this.openToolCalls.clear();
     for (const timer of this.deferredCloseTimers) {
       clearTimeout(timer);

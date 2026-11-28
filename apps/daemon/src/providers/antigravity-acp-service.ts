@@ -3,6 +3,7 @@ import {
 } from "node:path";
 import { watchGoogleSignInUrlOnWindows, type AcpDiscoveredModel, type AcpAuthTokenSnapshot, type McpServersResolver, type AcpPromptExecutionInput, type AcpPromptExecutionOutput, DEFAULT_SIGN_IN_TIMEOUT_MS, DEFAULT_PROMPT_TIMEOUT_MS, WORKER_IDLE_TTL_MS, resolveAntigravityCliExecutable, readAccountTokenFile } from "./antigravity-acp-helpers.ts";
 import { AcpProcessConnection } from "./antigravity-acp-connection.ts";
+import { acpSessionCache, computeAcpConfigFingerprint } from "./acp-session-cache.ts";
 import { ensureProviderRuntimeInstalled } from "./provider-runtime-resolver.ts";
 
 export * from "./antigravity-acp-helpers.ts";
@@ -256,6 +257,18 @@ export class AntigravityAcpService {
     input: AcpPromptExecutionInput
   ): Promise<AcpPromptExecutionOutput> {
     const resolvedMcpServers = await this.resolveMcpServers(input.agentId, input.mcpServers);
+    const reuseKey = acpSessionCache.buildKey({
+      provider: "antigravity",
+      accountId: accountKey,
+      agentId: input.agentId,
+      threadId: input.threadId,
+    });
+    const configFingerprint = computeAcpConfigFingerprint({
+      modelId: input.modelId,
+      effort: input.effort,
+      systemPrompt: input.systemPrompt,
+      mcpServers: resolvedMcpServers,
+    });
     return this.withAccountWorker(
       accountKey,
       input.geminiDir,
@@ -263,6 +276,9 @@ export class AntigravityAcpService {
         conn.runPrompt({
           cwd: input.cwd,
           promptText: input.promptText,
+          incrementalPromptText: input.incrementalPromptText,
+          reuseKey,
+          configFingerprint,
           modelId: input.modelId,
           effort: input.effort,
           imagePaths: input.imagePaths,

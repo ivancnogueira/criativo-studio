@@ -109,6 +109,8 @@ export interface AcpPromptExecutionInput {
   geminiDir: string;
   cwd: string;
   promptText: string;
+  incrementalPromptText?: string;
+  systemPrompt?: string;
   modelId?: string;
   effort?: string;
   imagePaths?: string[];
@@ -116,6 +118,7 @@ export interface AcpPromptExecutionInput {
   timeoutMs?: number;
   signal?: AbortSignal;
   agentId?: string | null;
+  threadId?: string | null;
   mcpServers?: unknown[];
   onDelta?: (chunk: string) => void;
   onToolStep?: (step: AcpToolStepEvent) => void;

@@ -33,6 +33,7 @@ export function buildStudioLiveContext(deps: {
   memoryManager?: MemoryManager;
   userPrompt?: string;
   compact?: boolean;
+  includeBrandFiles?: boolean;
 }): string {
   if (deps.compact) {
     const onboarding = deps.providerConnection.getOnboardingState();
@@ -85,17 +86,18 @@ export function buildStudioLiveContext(deps: {
     .all() as Array<{ nome_original: string; caminho_relativo: string; tipo_uso: string }>;
 
   const canReadDisk = process.env.CRIATIVO_SKIP_LOCAL_PROBE !== "1";
-  const perfilFileSnippet = canReadDisk
-    ? readBrandSnippetIfRich(resolve(deps.workspaceRoot, "conteudos", "perfil-da-marca.md"), 1200)
+  const shouldLoadBrandFiles = canReadDisk && (deps.includeBrandFiles ?? true);
+  const perfilFileSnippet = shouldLoadBrandFiles
+    ? readBrandSnippetIfRich(resolve(deps.workspaceRoot, "conteudos", "perfil-da-marca.md"), 900)
     : "";
-  const idVisualSnippet = canReadDisk
-    ? readBrandSnippetIfRich(resolve(deps.workspaceRoot, "conteudos", "identidade-visual.yml"), 800)
+  const idVisualSnippet = shouldLoadBrandFiles
+    ? readBrandSnippetIfRich(resolve(deps.workspaceRoot, "conteudos", "identidade-visual.yml"), 700)
     : "";
-  const brandbookSnippet = canReadDisk
-    ? readBrandSnippetIfRich(resolve(deps.workspaceRoot, "recursos", "brand", "brandbook.md"), 800)
+  const brandbookSnippet = shouldLoadBrandFiles
+    ? readBrandSnippetIfRich(resolve(deps.workspaceRoot, "recursos", "brand", "brandbook.md"), 700)
     : "";
-  const designSystemSnippet = canReadDisk
-    ? readBrandSnippetIfRich(resolve(deps.workspaceRoot, "recursos", "brand", "design-system.md"), 600)
+  const designSystemSnippet = shouldLoadBrandFiles
+    ? readBrandSnippetIfRich(resolve(deps.workspaceRoot, "recursos", "brand", "design-system.md"), 500)
     : "";
 
   const lines: string[] = [
@@ -109,14 +111,9 @@ export function buildStudioLiveContext(deps: {
     ...(typeof marcaConfig.tom_voz === "string" && marcaConfig.tom_voz
       ? [`- Tom de Voz: ${marcaConfig.tom_voz}`]
       : []),
-    `- Cofre AES-256-GCM (SQLite) — Meta/Instagram: ${
-      metaCreds.configured
-        ? "CONFIGURADO (token e account ID salvos no Cofre; nunca peça token no chat)"
-        : "NÃO CONFIGURADO (oriente salvar em Conexões -> Apps & Canais -> Instagram)"
-    }`,
-    `- Cofre — ElevenLabs TTS: ${hasEleven ? "Configurado" : "Não configurado (fallback edge-tts)"}`,
-    `- Cofre — Telegram Bot: ${hasTelegram ? "Configurado" : "Não configurado"}`,
-    `- Regra de Ouro do Studio Online: As credenciais NÃO ficam em .env visível; ficam cifradas no Cofre SQLite e validadas pela ferramenta nativa 'validar_integracao_meta' (ou via 'npm run validar:integracoes').`,
+    `- Cofre AES-256-GCM — Meta/Instagram: ${
+      metaCreds.configured ? "Configurado (nunca peça tokens no chat)" : "Não configurado"
+    } | ElevenLabs: ${hasEleven ? "Configurado" : "Não configurado"} | Telegram: ${hasTelegram ? "Configurado" : "Não configurado"}`,
   ];
 
   if (deps.agenteId) {
@@ -210,17 +207,12 @@ export function buildStudioLiveContext(deps: {
   try {
     if (deps.db.hasTable("projecao_agente_rotinas")) {
       const rotinasRows = deps.db.connection
-        .prepare(
-          `SELECT nome, owner_id, trigger_kind, ativa FROM projecao_agente_rotinas ORDER BY atualizado_em DESC LIMIT 15;`
-        )
-        .all() as Array<{ nome: string; owner_id: string; trigger_kind: string; ativa: number }>;
+        .prepare(`SELECT ativa FROM projecao_agente_rotinas ORDER BY atualizado_em DESC LIMIT 15;`)
+        .all() as Array<{ ativa: number }>;
       const ativasCount = rotinasRows.filter((r) => r.ativa === 1).length;
-      lines.push(
-        "",
-        "### Rotinas, Webhooks e Agenda",
-        `- Rotinas registradas no estúdio: ${rotinasRows.length} (${ativasCount} ativas).`,
-        "- Use `create_routine`, `update_routine`, `delete_routine`, `list_routines` ou `test_routine` para gerenciar rotinas agendadas; `create_webhook_routine`/`update_webhook_routine` apenas mediante pedido explícito humano no chat; e `routine_no_update`/`routine_report_failure` quando rodando em turno automático."
-      );
+      if (rotinasRows.length > 0) {
+        lines.push(`- Rotinas registradas: ${rotinasRows.length} (${ativasCount} ativas).`);
+      }
     }
   } catch {
     // Tabela opcional em contextos legados
@@ -230,14 +222,9 @@ export function buildStudioLiveContext(deps: {
     if (deps.agenteId) {
       const memMgr = deps.memoryManager ?? new MemoryManager(deps.db);
       const snap = memMgr.getEssentialContextSnapshot(deps.agenteId);
-      const xmlBlock =
-        snap.contextBlock || `<agent_memories count="${snap.memorias.length}"></agent_memories>`;
-      lines.push(
-        "",
-        "### Memórias Essenciais, Shared Tables e Generative UI",
-        xmlBlock,
-        "- Use `remember` / `forget_memory` para gravar decisões duráveis, `memory_recall` para buscar memórias `searchable` via FTS5, `list_tables` / `query_data` / `execute_data` para o banco SQL compartilhado entre agentes, `html_render` para painéis interativos em sandbox e `ask_user` / `ask_ui` / `acknowledge_request` / `request_api_key` para cards bloqueantes.",
-      );
+      if (snap.contextBlock) {
+        lines.push("", snap.contextBlock);
+      }
     }
   } catch {
     // Ignora caso tabela de memórias não esteja pronta em ambiente mínimo
@@ -245,11 +232,7 @@ export function buildStudioLiveContext(deps: {
 
   lines.push(
     "",
-    "### Navegador CDP, Mídia, Geração de Imagens/Vídeos, Sidebar & Showcase",
-    "- Use `criativo_browser` (action: open, list_tabs, navigate, snapshot, click, type, fill_fields, press, scroll, screenshot, request_takeover, submit_secret, close_tab) para operar o Chromium real.",
-    "- Use `generate_image` para artes reais (Gemini Nano Banana 2.1 até 14 referências, GPT Image 2.6/2.5 até 16 referências via API Key ou Antigravity); você decide quantas e quais referências enviar via `imagens_referencia`.",
-    "- Use `generate_video` para gerar vídeos MP4 com áudio nativo sincronizado via Gemini Omni 1.2 Flash (3 a 15s, até 6 imagens de referência via `imagens_referencia`).",
-    "- Use `read_video(url, frames?)`, `read_image(path)` e `capture_screen(purpose)` para inspeção visual; `list_sections`/`assign_agent_section` para Sidebar e `list_sites`/`publish_site` para Showcase.",
+    "- Ferramentas especializadas e guias de uso carregam sob demanda via `tool_search` / `tool_describe` / `tool_call`.",
   );
 
   return lines.join("\n");

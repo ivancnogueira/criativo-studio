@@ -5,6 +5,9 @@ import { MemoryManager } from "../engine/runner/memory-manager.ts";
 import type { ProviderRegistry } from "../engine/providers/provider-registry.ts";
 import type { ProviderConnectionService } from "../providers/provider-connection-service.ts";
 import type { WebSocketHub } from "../server/websocket-hub.ts";
+import { buildDeterministicHandoffPacket } from "./handoff-packet-builder.ts";
+import { acpSessionCache } from "../providers/acp-session-cache.ts";
+import { claudeSessionCache } from "../providers/cli-oauth/claude-session-settings.ts";
 
 export interface ContextResetServiceDeps {
   db: CriativoDatabase;
@@ -20,13 +23,31 @@ export interface ContextResetServiceDeps {
 export class ContextResetService {
   private readonly db: CriativoDatabase;
   private readonly wsHub: WebSocketHub;
+  private readonly providerConnection?: ProviderConnectionService;
   private readonly memoryManager: MemoryManager;
   private readonly pendingNewChatByAgent = new Set<string>();
 
   constructor(deps: ContextResetServiceDeps) {
     this.db = deps.db;
     this.wsHub = deps.wsHub;
+    this.providerConnection = deps.providerConnection;
     this.memoryManager = new MemoryManager(deps.db);
+  }
+
+  private notifyProviderSessionCompaction(agenteId: string, threadId: string): void {
+    acpSessionCache.invalidateByAgentAndThread(agenteId, threadId);
+    claudeSessionCache.invalidateByAgentAndThread(agenteId, threadId);
+    const cliService = this.providerConnection?.getCliOAuthService();
+    if (!cliService) return;
+    void (async () => {
+      try {
+        await cliService.compactCodexThread(agenteId, threadId);
+      } catch {
+        // fallback silencioso caso nenhum thread Codex ativo exista
+      } finally {
+        cliService.invalidateProviderSessions(agenteId, threadId);
+      }
+    })();
   }
 
   private getAgentRow(agenteId: string): {
@@ -182,6 +203,19 @@ export class ContextResetService {
       if (saved) memoriasSalvas += 1;
     }
 
+    const handoffPacket = buildDeterministicHandoffPacket({
+      messages: [...recentMessages].reverse().map((m) => ({
+        role: m.autor === "usuario" ? "user" : m.autor === "agente" ? "assistant" : "system",
+        content: m.conteudo_markdown,
+      })),
+      instructions: [...userPoints, ...agentPoints],
+    });
+    if (handoffPacket.trim().length > 0 && recentMessages.length > 0) {
+      if (this.memoryManager.addMemory(agenteId, `[Handoff Compactado]\n${handoffPacket}`, "automatica")) {
+        memoriasSalvas += 1;
+      }
+    }
+
     const cutoffAt = new Date().toISOString();
     const dividerMsgId = `msg-reset-${randomUUID().slice(0, 8)}`;
     const dividerText =
@@ -201,7 +235,11 @@ export class ContextResetService {
       item_type: "context_reset",
       status: "completed",
       ordinal: 0,
-      metadados: { cutoff_at: cutoffAt, memorias_salvas: memoriasSalvas },
+      metadados: {
+        cutoff_at: cutoffAt,
+        memorias_salvas: memoriasSalvas,
+        chars_handoff: handoffPacket.length,
+      },
       lida: true,
       criado_em: cutoffAt,
     };
@@ -255,6 +293,7 @@ export class ContextResetService {
     });
 
     this.pendingNewChatByAgent.delete(agenteId);
+    this.notifyProviderSessionCompaction(agenteId, threadId);
 
     this.wsHub.broadcast("context:reset", {
       agente_id: agenteId,
@@ -266,6 +305,13 @@ export class ContextResetService {
       canal_id: canalId,
       agente_id: agenteId,
       mensagem: mensagemDivisor,
+    });
+    this.wsHub.broadcast("contexto.compactado", {
+      agente_id: agenteId,
+      thread_id: threadId,
+      modo: "manual",
+      memorias_salvas: memoriasSalvas,
+      chars_handoff: handoffPacket.length,
     });
 
       return {
@@ -361,6 +407,19 @@ export class ContextResetService {
       }
     }
 
+    const handoffPacket = buildDeterministicHandoffPacket({
+      messages: [...recentMessages].reverse().map((m) => ({
+        role: m.autor === "usuario" ? "user" : m.autor === "agente" ? "assistant" : "system",
+        content: m.conteudo_markdown,
+      })),
+      instructions: summaryLines,
+    });
+    if (handoffPacket.trim().length > 0 && recentMessages.length > 0) {
+      if (this.memoryManager.addMemory(input.agenteId, `[Handoff Compactado]\n${handoffPacket}`, "automatica")) {
+        memoriasSalvas += 1;
+      }
+    }
+
     const cutoffAt = new Date().toISOString();
     const dividerMsgId = `msg-autocompact-${randomUUID().slice(0, 8)}`;
     const pctLabel = Math.round(ratio * 100);
@@ -396,6 +455,7 @@ export class ContextResetService {
         ...(reasonClean ? { reason_label: reasonClean } : {}),
         cutoff_at: cutoffAt,
         memorias_salvas: memoriasSalvas,
+        chars_handoff: handoffPacket.length,
         usage_ratio: Number(ratio.toFixed(3)),
       },
       lida: true,
@@ -434,6 +494,8 @@ export class ContextResetService {
         );
     });
 
+    this.notifyProviderSessionCompaction(input.agenteId, threadId);
+
     this.wsHub.broadcast("context:reset", {
       agente_id: input.agenteId,
       thread_id: threadId,
@@ -444,6 +506,13 @@ export class ContextResetService {
       canal_id: canalId,
       agente_id: input.agenteId,
       mensagem: mensagemDivisor,
+    });
+    this.wsHub.broadcast("contexto.compactado", {
+      agente_id: input.agenteId,
+      thread_id: threadId,
+      modo: "auto",
+      memorias_salvas: memoriasSalvas,
+      chars_handoff: handoffPacket.length,
     });
 
     return {

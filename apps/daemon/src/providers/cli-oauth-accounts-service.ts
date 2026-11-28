@@ -29,6 +29,8 @@ import {
 } from "./cli-oauth/cli-quota-and-models.ts";
 import { connectCliAccountViaBrowser } from "./cli-oauth/cli-login-flows.ts";
 import { executeCliAgentTurn } from "./cli-oauth/cli-turn-executor.ts";
+import { codexAppServerPool } from "./cli-oauth/codex-app-server-client.ts";
+import { claudeSessionCache } from "./cli-oauth/claude-session-settings.ts";
 import {
   importCliCodexAuthAccount,
   registerCliLoopbackTargetFromAuthUrl,
@@ -369,6 +371,23 @@ export class CliOAuthAccountsService {
 
   public async executeTurn(input: CliExecutionInput): Promise<CliExecutionOutput> {
     return await executeCliAgentTurn(this.getCtx(), input);
+  }
+
+  public async compactCodexThread(
+    agenteId: string,
+    threadId?: string | null,
+    accountId?: string | null
+  ): Promise<boolean> {
+    return await codexAppServerPool.compactThread({
+      agenteId,
+      threadId,
+      accountId,
+    });
+  }
+
+  public invalidateProviderSessions(agenteId?: string | null, threadId?: string | null): void {
+    codexAppServerPool.invalidateAgentThread(agenteId, threadId);
+    claudeSessionCache.invalidateByAgentAndThread(agenteId, threadId);
   }
 
   private registerLoopbackTargetFromAuthUrl(provedor: "claude" | "openai", rawUrl: string): void {

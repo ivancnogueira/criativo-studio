@@ -18,6 +18,7 @@ import {
   dirname,
   join,
 } from "node:path";
+import { unwrapNpmNativeBinary } from "./provider-native-binary-resolver.ts";
 
 export type ManagedRuntimeFolder = "claude" | "codex" | "opencode" | "antigravity";
 
@@ -127,7 +128,7 @@ export function scanProviderRuntimesBase(
             }
           }
         }
-        return { executable: npmBin, version: npmVer };
+        return { executable: unwrapNpmNativeBinary(npmBin) ?? npmBin, version: npmVer };
       }
     }
   } catch {
@@ -401,6 +402,15 @@ export function spawnProviderProcess(
   options: SpawnOptions = {}
 ): ChildProcess {
   const windowsHide = options.windowsHide ?? true;
+
+  const unwrappedNative = unwrapNpmNativeBinary(executable);
+  if (unwrappedNative) {
+    return spawn(unwrappedNative, args, {
+      ...options,
+      windowsHide,
+      shell: false,
+    });
+  }
 
   if (/\.(m|c)?js$/i.test(executable)) {
     return spawn(process.execPath, [executable, ...args], {

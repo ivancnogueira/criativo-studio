@@ -695,10 +695,16 @@ const isEntryPoint =
   process.env.CRIATIVO_LOCAL_CHILD !== "1";
 
 if (isEntryPoint) {
+  const isBenignStreamDisconnect = (val: unknown): boolean => {
+    const code = (val as { code?: string } | null)?.code;
+    return code === "EPIPE" || code === "ECONNRESET" || code === "ERR_STREAM_DESTROYED";
+  };
   process.on("unhandledRejection", (reason) => {
+    if (isBenignStreamDisconnect(reason)) return;
     console.error("[Criativo Daemon] unhandledRejection capturada:", reason);
   });
   process.on("uncaughtException", (err) => {
+    if (isBenignStreamDisconnect(err)) return;
     console.error("[Criativo Daemon] uncaughtException capturada:", err);
   });
 

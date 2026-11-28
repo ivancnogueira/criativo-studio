@@ -18,6 +18,22 @@ export function buildChangelogUrl(version?: string | null): string {
 
 export const RELEASE_NOTES_CATALOG: readonly ReleaseNoteEntry[] = [
   {
+    versao: "1.1.2",
+    data: "2026-11-28",
+    added: [
+      "Motor persistente Codex App Server (codex app-server --listen stdio://) com reuso de thread, streaming em tempo real, compactação nativa (thread/compact/start) e fallback transparente para codex exec.",
+      "Sessões persistentes e higiene nativa em todas as plataformas: Claude CLI (ENABLE_TOOL_SEARCH=true, --strict-mcp-config, --disallowedTools e --resume com recuperação automática), OpenCode ACP e Antigravity ACP com cache compartilhado por conversa.",
+      "Descoberta Lazy MCP universal (tool_search com schemas e guias sob demanda, tool_describe, tool_call), compactação real /compact com pacote determinístico de handoff de 32k caracteres e trava automatizada check:context-budget.",
+    ],
+    changed: [
+      "Turnos leves de conversa ('oi') isolados sem anexar schemas MCP ociosos, arquivos de marca completos ou regra anti-alucinação visual, reduzindo drasticamente o consumo de tokens e a latência de resposta.",
+    ],
+    fixed: [
+      "Fim definitivo das janelas pretas de CMD/Terminal no Windows com resolução direta de binários nativos .exe, migração automática de instalações npm legadas para standalone e windowsHide: true absoluto.",
+      "Fim do desaparecimento intermitente de agentes e provedores na UI com cache stale-while-revalidate no SQLite (timeout de 4s por sonda e fallback local sem rede), guarda de hidratação no frontend e isolamento Crashpad/Watchdog no daemon Desktop.",
+    ],
+  },
+  {
     versao: "1.1.1",
     data: "2026-11-27",
     added: [

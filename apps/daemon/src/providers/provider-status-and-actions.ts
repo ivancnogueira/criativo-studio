@@ -24,166 +24,199 @@ import {
   detectOllamaModels,
   selectPoolAccount,
 } from "./provider-local-detection.ts";
+import {
+  invalidateProvidersSnapshotCache,
+  readOrRefreshProviderStatusSnapshot,
+  withProviderProbeTimeout,
+} from "./provider-status-cache.ts";
 
 export async function getProvidersStatusOp(deps: ProviderConnectionDeps, forceProbe = false): Promise<ProvedorStatusInfo[]> {
   if (forceProbe) {
+    invalidateProvidersSnapshotCache(deps.db);
     deps.invalidateCliProbeCache();
     if (
       process.env.CRIATIVO_SKIP_LOCAL_PROBE !== "1" &&
       !deps.antigravityLive.getCliExecutable()
     ) {
-      const installed = await ensureProviderRuntimeInstalled("antigravity").catch(() => null);
+      const installed = await withProviderProbeTimeout(
+        ensureProviderRuntimeInstalled("antigravity"),
+        4_000,
+        null
+      );
       if (installed?.executable) {
         deps.invalidateCliProbeCache();
       }
     }
   }
 
-  const [
-    cliData,
-    agSnapshot,
-    ollamaCheck,
-    opencodeCatalog,
-    claudeDynamicModels,
-    openaiDynamicModels,
-    claudeAccounts,
-    openaiAccounts,
-  ] = await Promise.all([
-    deps.getCliProbeCache(),
-    deps.antigravityLive.getLiveSnapshot(forceProbe),
-    detectOllamaModels(),
-    deps.opencodeLive.getLiveCatalog(forceProbe),
-    deps.cliOAuth.listDynamicModels("claude", forceProbe).catch(() => []),
-    deps.cliOAuth.listDynamicModels("openai", forceProbe).catch(() => []),
-    deps.cliOAuth.listAccountsWithQuotas("claude", forceProbe).catch(() => deps.cliOAuth.listAccounts("claude")),
-    deps.cliOAuth.listAccountsWithQuotas("openai", forceProbe).catch(() => deps.cliOAuth.listAccounts("openai")),
-  ]);
+  return await readOrRefreshProviderStatusSnapshot({
+    db: deps.db,
+    forceProbe,
+    computeFresh: async () => {
+      const fallbackAg = deps.antigravityLive.getLocalFallbackSnapshot();
+      const [
+        cliData,
+        agSnapshot,
+        ollamaCheck,
+        opencodeCatalog,
+        claudeDynamicModels,
+        openaiDynamicModels,
+        claudeAccounts,
+        openaiAccounts,
+      ] = await Promise.all([
+        withProviderProbeTimeout(
+          deps.getCliProbeCache(),
+          4_000,
+          {} as Record<string, { found: boolean; version: string | null; executable: string | null }>
+        ),
+        withProviderProbeTimeout(deps.antigravityLive.getLiveSnapshot(forceProbe), 4_000, fallbackAg),
+        withProviderProbeTimeout(detectOllamaModels(), 4_000, { up: false, models: [] }),
+        withProviderProbeTimeout(
+          deps.opencodeLive.getLiveCatalog(forceProbe),
+          4_000,
+          { detected: false, version: null, executable: null, modelos: [] }
+        ),
+        withProviderProbeTimeout(deps.cliOAuth.listDynamicModels("claude", forceProbe), 4_000, []),
+        withProviderProbeTimeout(deps.cliOAuth.listDynamicModels("openai", forceProbe), 4_000, []),
+        withProviderProbeTimeout(
+          deps.cliOAuth.listAccountsWithQuotas("claude", forceProbe),
+          4_000,
+          deps.cliOAuth.listAccounts("claude")
+        ),
+        withProviderProbeTimeout(
+          deps.cliOAuth.listAccountsWithQuotas("openai", forceProbe),
+          4_000,
+          deps.cliOAuth.listAccounts("openai")
+        ),
+      ]);
 
-  const secretSet = new Set(deps.vault.listSecretsMetadata().map((item) => item.chave_nome));
-  const connectedFlags = deps.getStudioConfig<Record<string, boolean>>("provedores_conectados", {});
-  const hiddenModelsMap = deps.getStudioConfig<Record<string, string[]>>("modelos_ocultos_por_provedor", {});
-  const agentsByProvider = deps.getAgentsByProvider();
+      const secretSet = new Set(deps.vault.listSecretsMetadata().map((item) => item.chave_nome));
+      const connectedFlags = deps.getStudioConfig<Record<string, boolean>>("provedores_conectados", {});
+      const hiddenModelsMap = deps.getStudioConfig<Record<string, string[]>>("modelos_ocultos_por_provedor", {});
+      const agentsByProvider = deps.getAgentsByProvider();
 
-  return await Promise.all(
-    PROVIDER_CATALOG.map(async (meta) => {
-      const cli = (cliData as Record<string, { found: boolean; version: string | null; executable: string | null }>)[meta.provedor] ?? { found: false, version: null, executable: null };
-      const vaultConfigured = meta.vaultKeys.some((k) => secretSet.has(k));
+      return await Promise.all(
+        PROVIDER_CATALOG.map(async (meta) => {
+          const cli = (cliData as Record<string, { found: boolean; version: string | null; executable: string | null }>)[meta.provedor] ?? { found: false, version: null, executable: null };
+          const vaultConfigured = meta.vaultKeys.some((k) => secretSet.has(k));
 
-      let contas: ContaProvedorInfo[] = [];
-      let pool: PoolContasConfig | null = null;
-      let discoveredModels: ModeloProvedorInfo[] = [];
+          let contas: ContaProvedorInfo[] = [];
+          let pool: PoolContasConfig | null = null;
+          let discoveredModels: ModeloProvedorInfo[] = [];
 
-      if (meta.provedor === "gemini") {
-        contas = agSnapshot.contas;
-        pool = agSnapshot.pool;
-        discoveredModels = agSnapshot.modelos;
-      } else if (meta.provedor === "claude") {
-        contas = claudeAccounts;
-        pool = deps.cliOAuth.getPoolConfig("claude");
-        discoveredModels = claudeDynamicModels;
-      } else if (meta.provedor === "openai") {
-        contas = openaiAccounts;
-        pool = deps.cliOAuth.getPoolConfig("openai");
-        discoveredModels = openaiDynamicModels;
-      } else if (meta.provedor === "opencode") {
-        discoveredModels = opencodeCatalog.modelos;
-      } else if (meta.provedor === "ollama") {
-        discoveredModels = ollamaCheck.models;
-      }
+          if (meta.provedor === "gemini") {
+            contas = agSnapshot.contas;
+            pool = agSnapshot.pool;
+            discoveredModels = agSnapshot.modelos;
+          } else if (meta.provedor === "claude") {
+            contas = claudeAccounts;
+            pool = deps.cliOAuth.getPoolConfig("claude");
+            discoveredModels = claudeDynamicModels;
+          } else if (meta.provedor === "openai") {
+            contas = openaiAccounts;
+            pool = deps.cliOAuth.getPoolConfig("openai");
+            discoveredModels = openaiDynamicModels;
+          } else if (meta.provedor === "opencode") {
+            discoveredModels = opencodeCatalog.modelos;
+          } else if (meta.provedor === "ollama") {
+            discoveredModels = ollamaCheck.models;
+          }
 
-      const hasValidAccount = contas.some((c) => c.estado === "conectado" || c.token_valido);
-      if (pool && contas.length > 0 && pool.habilitado) {
-        const picked = selectPoolAccount(contas, pool, pool.conta_em_uso, {
-          activeTurnsByAccount: accountTurnCoordinator.getActiveTurnsMap(meta.provedor),
-          drainingAccountIds: accountTurnCoordinator.getDrainingAccountIds(meta.provedor),
-        });
-        if (picked) {
-          pool = { ...pool, conta_em_uso: picked.id };
-        }
-      }
+          const hasValidAccount = contas.some((c) => c.estado === "conectado" || c.token_valido);
+          if (pool && contas.length > 0 && pool.habilitado) {
+            const picked = selectPoolAccount(contas, pool, pool.conta_em_uso, {
+              activeTurnsByAccount: accountTurnCoordinator.getActiveTurnsMap(meta.provedor),
+              drainingAccountIds: accountTurnCoordinator.getDrainingAccountIds(meta.provedor),
+            });
+            if (picked) {
+              pool = { ...pool, conta_em_uso: picked.id };
+            }
+          }
 
-      let modo: ProvedorStatusInfo["modo_conexao"] = "nenhum";
-      if (meta.provedor === "opencode") {
-        if (vaultConfigured) modo = "api_key";
-        else if (opencodeCatalog.detected && opencodeCatalog.modelos.length > 0) modo = "cli";
-      } else if (meta.provedor === "ollama") {
-        if (ollamaCheck.up) modo = "local";
-      } else {
-        if (hasValidAccount) modo = "assinatura";
-        else if (vaultConfigured || Boolean(connectedFlags[meta.provedor])) {
-          modo = vaultConfigured ? "api_key" : "nenhum";
-        }
-      }
-
-      let modelos: ModeloProvedorInfo[] = [];
-      if (modo !== "nenhum") {
-        if (modo === "api_key") {
-          const cached = !forceProbe ? apiKeyModelsCache.get(meta.provedor) : undefined;
-          if (cached && cached.expiresAt > Date.now()) {
-            modelos = cached.models;
+          let modo: ProvedorStatusInfo["modo_conexao"] = "nenhum";
+          if (meta.provedor === "opencode") {
+            if (vaultConfigured) modo = "api_key";
+            else if (opencodeCatalog.detected && opencodeCatalog.modelos.length > 0) modo = "cli";
+          } else if (meta.provedor === "ollama") {
+            if (ollamaCheck.up) modo = "local";
           } else {
-            const apiKey =
-              meta.vaultKeys
-                .map((k) => deps.vault.getSecret(k) ?? deps.vault.getSecret(k.toUpperCase()))
-                .find((val): val is string => typeof val === "string" && val.trim().length > 0)
-                ?.trim() ?? "";
-            const liveApiModels = apiKey
-              ? await fetchApiModelsForProvider(meta.provedor, apiKey)
-              : [];
-            if (liveApiModels.length > 0) {
-              apiKeyModelsCache.set(meta.provedor, {
-                expiresAt: Date.now() + API_MODELS_CACHE_TTL_MS,
-                models: liveApiModels,
-              });
-              modelos = liveApiModels;
+            if (hasValidAccount) modo = "assinatura";
+            else if (vaultConfigured || Boolean(connectedFlags[meta.provedor])) {
+              modo = vaultConfigured ? "api_key" : "nenhum";
+            }
+          }
+
+          let modelos: ModeloProvedorInfo[] = [];
+          if (modo !== "nenhum") {
+            if (modo === "api_key") {
+              const cached = !forceProbe ? apiKeyModelsCache.get(meta.provedor) : undefined;
+              if (cached && cached.expiresAt > Date.now()) {
+                modelos = cached.models;
+              } else {
+                const apiKey =
+                  meta.vaultKeys
+                    .map((k) => deps.vault.getSecret(k) ?? deps.vault.getSecret(k.toUpperCase()))
+                    .find((val): val is string => typeof val === "string" && val.trim().length > 0)
+                    ?.trim() ?? "";
+                const liveApiModels = apiKey
+                  ? await withProviderProbeTimeout(fetchApiModelsForProvider(meta.provedor, apiKey), 4_000, [])
+                  : [];
+                if (liveApiModels.length > 0) {
+                  apiKeyModelsCache.set(meta.provedor, {
+                    expiresAt: Date.now() + API_MODELS_CACHE_TTL_MS,
+                    models: liveApiModels,
+                  });
+                  modelos = liveApiModels;
+                } else if (discoveredModels.length > 0) {
+                  modelos = discoveredModels;
+                } else {
+                  modelos = meta.fallbackModelos.map((m) => ({
+                    ...m,
+                    descoberto_em_conta: false,
+                  }));
+                }
+              }
             } else if (discoveredModels.length > 0) {
               modelos = discoveredModels;
-            } else {
+            } else if (modo === "assinatura") {
               modelos = meta.fallbackModelos.map((m) => ({
                 ...m,
                 descoberto_em_conta: false,
               }));
             }
           }
-        } else if (discoveredModels.length > 0) {
-          modelos = discoveredModels;
-        } else if (modo === "assinatura") {
-          modelos = meta.fallbackModelos.map((m) => ({
+
+          const hiddenSet = new Set(hiddenModelsMap[meta.provedor] ?? []);
+          const decoratedModelos = modelos.map((m) => ({
             ...m,
-            descoberto_em_conta: false,
+            oculto: hiddenSet.has(m.id),
           }));
-        }
-      }
 
-      const hiddenSet = new Set(hiddenModelsMap[meta.provedor] ?? []);
-      const decoratedModelos = modelos.map((m) => ({
-        ...m,
-        oculto: hiddenSet.has(m.id),
-      }));
-
-      return {
-        provedor: meta.provedor,
-        rotulo: meta.rotulo,
-        subtitulo: meta.subtitulo,
-        conectado: modo !== "nenhum",
-        cli_detectado:
-          meta.provedor === "opencode" ? opencodeCatalog.detected : cli.found,
-        cli_versao:
-          meta.provedor === "opencode" ? opencodeCatalog.version : cli.version,
-        cli_executavel:
-          meta.provedor === "opencode" ? opencodeCatalog.executable : cli.executable,
-        runtime_host: hostname(),
-        runtime_platform: process.platform,
-        vault_configurado: vaultConfigured,
-        modo_conexao: modo,
-        modelos: decoratedModelos,
-        contas,
-        pool,
-        usado_por_agentes: agentsByProvider[meta.provedor] ?? [],
-        reporta_cota: contas.some((c) => (c.grupos_cota?.length ?? 0) > 0),
-      };
-    })
-  );
+          return {
+            provedor: meta.provedor,
+            rotulo: meta.rotulo,
+            subtitulo: meta.subtitulo,
+            conectado: modo !== "nenhum",
+            cli_detectado:
+              meta.provedor === "opencode" ? opencodeCatalog.detected : cli.found,
+            cli_versao:
+              meta.provedor === "opencode" ? opencodeCatalog.version : cli.version,
+            cli_executavel:
+              meta.provedor === "opencode" ? opencodeCatalog.executable : cli.executable,
+            runtime_host: hostname(),
+            runtime_platform: process.platform,
+            vault_configurado: vaultConfigured,
+            modo_conexao: modo,
+            modelos: decoratedModelos,
+            contas,
+            pool,
+            usado_por_agentes: agentsByProvider[meta.provedor] ?? [],
+            reporta_cota: contas.some((c) => (c.grupos_cota?.length ?? 0) > 0),
+          };
+        })
+      );
+    },
+  });
 }
 
 export async function ensureOpenCodeRuntimeInBackgroundOp(deps: ProviderConnectionDeps): Promise<{
@@ -374,7 +407,11 @@ export async function disconnectProviderOp(deps: ProviderConnectionDeps, provedo
 
 export async function getUsageSnapshotOp(deps: ProviderConnectionDeps, forceRefresh = false): Promise<UsoProvedoresSnapshot> {
   const statuses = await getProvidersStatusOp(deps, forceRefresh);
-  const agSnapshot = await deps.antigravityLive.getLiveSnapshot(false);
+  const agSnapshot = await withProviderProbeTimeout(
+    deps.antigravityLive.getLiveSnapshot(false),
+    4_000,
+    deps.antigravityLive.getLocalFallbackSnapshot()
+  );
 
   const cutoffIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const rowUso = deps.db.connection

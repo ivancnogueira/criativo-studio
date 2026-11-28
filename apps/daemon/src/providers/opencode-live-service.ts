@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import type { ModeloProvedorInfo } from "@criativo/contracts";
 import type { VaultService } from "../vault/vault-service.ts";
 import { OpenCodeAcpConnection } from "./opencode-acp-connection.ts";
+import { acpSessionCache, computeAcpConfigFingerprint } from "./acp-session-cache.ts";
 import { type AcpToolStepEvent } from "./turn-stall-watchdog.ts";
 import {
   ensureProviderRuntimeInstalled,
@@ -270,6 +271,7 @@ export class OpenCodeLiveService {
     timeoutMs?: number;
     signal?: AbortSignal;
     agentId?: string | null;
+    threadId?: string | null;
     channelOrigin?: "web" | "whatsapp";
     mcpServers?: unknown[];
     onDelta?: (chunk: string) => void;
@@ -316,17 +318,32 @@ export class OpenCodeLiveService {
           .join("\n")}`
       );
     }
-    promptParts.push(input.messages[input.messages.length - 1]?.text ?? "");
+    const lastUserMessage = input.messages[input.messages.length - 1]?.text ?? "";
+    promptParts.push(lastUserMessage);
     const fullPrompt = promptParts.join("\n\n");
     const workerKey = input.agentId?.trim() || "default";
 
     const runWithModel = async (targetModel: string) => {
+      const reuseKey = acpSessionCache.buildKey({
+        provider: "opencode",
+        accountId: "default",
+        agentId: input.agentId,
+        threadId: input.threadId,
+      });
+      const configFingerprint = computeAcpConfigFingerprint({
+        modelId: targetModel,
+        systemPrompt: input.systemPrompt,
+        mcpServers: resolvedMcpServers,
+      });
       const activeWorker = this.getOrCreateWorker(workerKey, executable, sandboxCwd, apiKey);
       activeWorker.activeCount += 1;
       const run = activeWorker.queue.then(() =>
         activeWorker.conn.runPrompt({
           cwd: sandboxCwd,
           promptText: fullPrompt,
+          incrementalPromptText: lastUserMessage,
+          reuseKey,
+          configFingerprint,
           modelId: targetModel,
           timeoutMs: input.timeoutMs ?? EXEC_TIMEOUT_MS,
           signal: input.signal,

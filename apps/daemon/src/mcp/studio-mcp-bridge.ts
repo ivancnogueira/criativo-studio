@@ -50,6 +50,17 @@ import {
 } from "../server/studio-tools-bridge.ts";
 import type { WebSocketHub } from "../server/websocket-hub.ts";
 import { sanitizeJsonSchemaForGemini } from "./gemini-schema-sanitizer.ts";
+import {
+  assembleClaudeMcpConfigObject,
+  buildLazyMcpToolCatalog,
+  collectVaultSecretsForRedaction,
+  formatMcpToolsListPayload,
+  negotiateMcpProtocolVersion,
+  normalizeMcpToolName,
+  readMcpHeaderValue,
+  sendMcpJsonRpc,
+  tryHandleLazyMetaMcpCall,
+} from "./mcp-lazy-catalog.ts";
 import type { McpGateway } from "./mcp-gateway.ts";
 import type { AcpMcpServer } from "./mcp-provider-shapes.ts";
 import { redactMcpPayload, redactMcpSecrets } from "./mcp-redaction.ts";
@@ -86,21 +97,6 @@ export interface CriativoStudioMcpBridgeOptions {
 }
 
 export const INTERNAL_MCP_ROUTE_PATH = "/api/internal/mcp";
-const DEFAULT_MCP_PROTOCOL_VERSION = "2024-11-05";
-const SUPPORTED_MCP_PROTOCOL_VERSIONS = new Set([
-  "2024-11-05",
-  "2025-03-26",
-  "2025-06-18",
-  "2025-11-25",
-]);
-
-function negotiateMcpProtocolVersion(requested: unknown): string {
-  if (typeof requested !== "string") return DEFAULT_MCP_PROTOCOL_VERSION;
-  const trimmed = requested.trim();
-  if (SUPPORTED_MCP_PROTOCOL_VERSIONS.has(trimmed)) return trimmed;
-  if (/^202[56]-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
-  return DEFAULT_MCP_PROTOCOL_VERSION;
-}
 
 function sendJsonRpc(
   res: ServerResponse,
@@ -108,20 +104,10 @@ function sendJsonRpc(
   body: unknown,
   extraHeaders?: Record<string, string>
 ): void {
-  res.writeHead(statusCode, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-store, no-cache, must-revalidate",
-    ...(extraHeaders ?? {}),
-  });
-  res.end(JSON.stringify(body));
+  sendMcpJsonRpc(res, statusCode, body, extraHeaders);
 }
 
-function readHeaderValue(req: IncomingMessage, headerName: string): string | null {
-  const raw = req.headers[headerName.toLowerCase()];
-  if (typeof raw === "string") return raw.trim() || null;
-  if (Array.isArray(raw) && typeof raw[0] === "string") return raw[0].trim() || null;
-  return null;
-}
+const readHeaderValue = readMcpHeaderValue;
 
 export interface McpBridgeEndpointOptions {
   scopes?: StudioToolScope[] | null;
@@ -131,6 +117,8 @@ export interface McpBridgeEndpointOptions {
   whatsappChatJid?: string | null;
   execucaoId?: string | null;
   includeExternalMcps?: boolean;
+  provider?: string | null;
+  lazy?: boolean;
 }
 
 export interface McpBridgeCallContext {
@@ -207,6 +195,8 @@ export class CriativoStudioMcpBridge {
     if (opts?.whatsappContaId?.trim()) qs.set("whatsappContaId", opts.whatsappContaId.trim());
     if (opts?.whatsappChatJid?.trim()) qs.set("whatsappChatJid", opts.whatsappChatJid.trim());
     if (opts?.execucaoId?.trim()) qs.set("execucaoId", opts.execucaoId.trim());
+    if (opts?.provider?.trim()) qs.set("provider", opts.provider.trim());
+    if (opts?.lazy === false) qs.set("lazy", "0");
     const serialized = qs.toString();
     return serialized ? `${base}?${serialized}` : base;
   }
@@ -247,51 +237,12 @@ export class CriativoStudioMcpBridge {
 
     const includeInternal = !(Array.isArray(opts?.scopes) && opts.scopes.length === 0);
     const url = includeInternal ? this.getEndpointUrlForAgent(agentId, opts) : null;
-
-    const mcpServers: Record<string, unknown> = {};
-    if (url) {
-      mcpServers.criativo_studio = {
-        type: "http",
-        url,
-        headers: {
-          "X-Criativo-Mcp-Token": this.authToken,
-        },
-      };
-    }
-
     const acpExternal =
       opts?.includeExternalMcps === false
         ? []
         : this.deps.mcpGateway?.getAcpMcpServers(agentId) ?? [];
-    for (const srv of acpExternal) {
-      if ("url" in srv) {
-        const headersObj: Record<string, string> = {};
-        for (const h of srv.headers) {
-          headersObj[h.name] = h.value;
-        }
-        mcpServers[srv.name] = {
-          type: "http",
-          url: srv.url,
-          ...(Object.keys(headersObj).length > 0 ? { headers: headersObj } : {}),
-        };
-      } else {
-        const envObj: Record<string, string> = {};
-        for (const e of srv.env) {
-          envObj[e.name] = e.value;
-        }
-        mcpServers[srv.name] = {
-          command: srv.command,
-          args: srv.args,
-          ...(Object.keys(envObj).length > 0 ? { env: envObj } : {}),
-        };
-      }
-    }
 
-    if (Object.keys(mcpServers).length === 0) {
-      return null;
-    }
-
-    return { mcpServers };
+    return assembleClaudeMcpConfigObject(url, this.authToken, acpExternal);
   }
 
   public isAuthorizedToken(candidate: string | null | undefined): boolean {
@@ -314,19 +265,7 @@ export class CriativoStudioMcpBridge {
   }
 
   private collectVaultSecretValues(): string[] {
-    if (!this.deps.vault) return [];
-    const values: string[] = [];
-    try {
-      for (const meta of this.deps.vault.listSecretsMetadata()) {
-        const val = this.deps.vault.getSecret(meta.chave_nome);
-        if (val && val.trim().length >= 8) {
-          values.push(val.trim());
-        }
-      }
-    } catch {
-      // Ignora erro ao listar segredos para redação
-    }
-    return values;
+    return collectVaultSecretsForRedaction(this.deps.vault);
   }
 
   public listToolsForAgent(
@@ -381,17 +320,27 @@ export class CriativoStudioMcpBridge {
     return Array.from(dedup.values());
   }
 
+  public listMcpExposedToolsForAgent(
+    agentId?: string | null,
+    scopes?: StudioToolScope[] | null,
+    opts?: { provider?: string | null; lazy?: boolean }
+  ): ToolDefinition[] {
+    const authorized = this.listToolsForAgent(agentId, scopes);
+    if (authorized.length === 0) return [];
+    const { exposedTools } = buildLazyMcpToolCatalog(authorized, {
+      provider: opts?.provider,
+      lazyEnabled: opts?.lazy !== false,
+    });
+    return exposedTools;
+  }
+
   public async callToolForAgent(
     rawToolName: string,
     args: Record<string, unknown>,
     agentId?: string | null,
     callCtx?: McpBridgeCallContext,
   ): Promise<unknown> {
-    const toolName = rawToolName
-      .replace(/^mcp__criativo_studio__/, "")
-      .replace(/^criativo_studio[_.:-]+/, "")
-      .replace(/^criativo-studio[_.:-]+/, "")
-      .trim();
+    const toolName = normalizeMcpToolName(rawToolName);
     const resolvedAgentId = agentId?.trim() || "sistema";
     const effectiveThreadId = callCtx?.threadId?.trim() || `main:${resolvedAgentId}`;
     const canalId =
@@ -682,13 +631,19 @@ export class CriativoStudioMcpBridge {
       return true;
     }
 
+    const providerFromQuery = url.searchParams.get("provider")?.trim() || null;
+    const lazyFromQuery = url.searchParams.get("lazy") !== "0";
+
     if (rpcMethod === "tools/list") {
-      const tools = this.listToolsForAgent(resolvedAgentId, parsedScopes).map((t) => ({
-        name: t.name,
-        description: t.description,
-        inputSchema: sanitizeJsonSchemaForGemini(t.parameters ?? { type: "object", properties: {} }),
-      }));
-      sendJsonRpc(res, 200, { jsonrpc: "2.0", id, result: { tools } });
+      const exposed = this.listMcpExposedToolsForAgent(resolvedAgentId, parsedScopes, {
+        provider: providerFromQuery,
+        lazy: lazyFromQuery,
+      });
+      sendJsonRpc(res, 200, {
+        jsonrpc: "2.0",
+        id,
+        result: { tools: formatMcpToolsListPayload(exposed) },
+      });
       return true;
     }
 
@@ -708,9 +663,23 @@ export class CriativoStudioMcpBridge {
           : {};
 
       try {
-        const result = await trackMcpToolExecution(resolvedAgentId, () =>
-          this.callToolForAgent(toolName, rawArgs, resolvedAgentId, callCtx)
-        );
+        const result = await trackMcpToolExecution(resolvedAgentId, async () => {
+          const { router } = buildLazyMcpToolCatalog(
+            this.listToolsForAgent(resolvedAgentId, parsedScopes),
+            { provider: providerFromQuery, lazyEnabled: lazyFromQuery }
+          );
+          const metaHandled = await tryHandleLazyMetaMcpCall(
+            router,
+            toolName,
+            rawArgs,
+            (targetName, targetArgs) =>
+              this.callToolForAgent(targetName, targetArgs, resolvedAgentId, callCtx)
+          );
+          if (metaHandled.handled) {
+            return metaHandled.result;
+          }
+          return await this.callToolForAgent(toolName, rawArgs, resolvedAgentId, callCtx);
+        });
         const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
         sendJsonRpc(res, 200, {
           jsonrpc: "2.0",

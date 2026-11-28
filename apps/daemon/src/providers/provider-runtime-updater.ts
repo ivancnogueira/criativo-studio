@@ -5,7 +5,7 @@ import {
   ANTIGRAVITY_OFFICIAL_MANIFEST_BASE,
   resolveAntigravityManifestPlatform,
 } from "./provider-runtime-archive.ts";
-import { ensureProviderRuntimeInstalled } from "./provider-runtime-installer.ts";
+import { ensureProviderRuntimeInstalled, migrateLegacyNpmRuntimes } from "./provider-runtime-installer.ts";
 import {
   type ManagedRuntimeFolder,
   type ResolvedProviderRuntime,
@@ -366,6 +366,18 @@ export async function checkAndUpdateManagedRuntimes(options?: {
   const nowMs = Date.now();
   const updated: ManagedRuntimeFolder[] = [];
   const checked: ManagedRuntimeFolder[] = [];
+
+  if (!isMocked) {
+    const migration = await migrateLegacyNpmRuntimes({ appDataDir: resolvedAppData }).catch(() => ({
+      migrated: [] as Array<"codex" | "opencode">,
+      skipped: true,
+    }));
+    for (const mFolder of migration.migrated) {
+      if (!updated.includes(mFolder)) {
+        updated.push(mFolder);
+      }
+    }
+  }
 
   for (const folder of folders) {
     const lastIso = state.checkedAt?.[folder];

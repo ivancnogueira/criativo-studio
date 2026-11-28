@@ -404,6 +404,13 @@ export type WebSocketEventMap = {
   "theme:reloaded": ThemeReloadEventPayload;
   "cua:status": CuaStatusSnapshot;
   "comment_dm:updated": Record<string, unknown>;
+  "contexto.compactado": {
+    agente_id: string;
+    thread_id: string | null;
+    modo: "manual" | "auto";
+    memorias_salvas: number;
+    chars_handoff: number;
+  };
 };
 
 export interface WebSocketEnvelope<K extends keyof WebSocketEventMap = keyof WebSocketEventMap> {

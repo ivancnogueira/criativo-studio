@@ -725,6 +725,20 @@ export class AntigravityLiveService {
     );
   }
 
+  public getLocalFallbackSnapshot(): AntigravityLiveSnapshot {
+    const { accounts, poolOverride } = this.getStudioRecords();
+    const { contas, pool } = buildPoolSnapshotsForStudioRecords("gemini", accounts, poolOverride);
+    const cached = this.loadLastSnapshotCache();
+    return {
+      contas,
+      pool,
+      modelos: cached?.modelos ?? [],
+      defaultModelId: cached?.defaultModelId ?? null,
+      imageGenerationModelIds: cached?.imageGenerationModelIds ?? [],
+      atualizado_em: new Date().toISOString(),
+    };
+  }
+
   public close(): void {
     this.acpService.closeAll();
   }

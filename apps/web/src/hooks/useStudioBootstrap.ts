@@ -71,6 +71,14 @@ import {
   WebSocketClient,
 } from "../services/websocket-client";
 import { getThreadLaneKey, LAST_TAB_STORAGE_KEY, readStoredWidth, SIDEBAR_WIDTH_KEY, INSPECTOR_WIDTH_KEY, DEFAULT_SIDEBAR_WIDTH, DEFAULT_INSPECTOR_WIDTH, type AgenteEnriquecido, type AgentCenterMode , clampWidth, writeStoredWidth, getAgentAvatar, readCachedUserSettings } from "../utils/studio-storage";
+import {
+  applyNonNullHydration,
+  computeHydrationRetryDelayMs,
+  readLastKnownAgentsCache,
+  readLastKnownProvidersCache,
+  saveLastKnownAgentsCache,
+  saveLastKnownProvidersCache,
+} from "./studio-hydration-guard";
 import type { StudioAppState } from "./useStudioState";
 
 export function useStudioBootstrap(state: StudioAppState) {
@@ -197,9 +205,21 @@ export function useStudioBootstrap(state: StudioAppState) {
     }
   }, []);
 
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryAttemptRef = useRef(0);
+
   const hydrateAll = useCallback(async () => {
     let splashSafetyTimer: ReturnType<typeof setTimeout> | null = null;
     try {
+      const cachedAgents = readLastKnownAgentsCache();
+      if (cachedAgents) {
+        setAgentes((prev) => (prev.length === 0 ? cachedAgents : prev));
+      }
+      const cachedProviders = readLastKnownProvidersCache();
+      if (cachedProviders) {
+        setProvedores((prev) => (prev.length === 0 ? cachedProviders : prev));
+      }
+
       splashSafetyTimer = setTimeout(() => {
         setBootLoading(false);
       }, 12_000);
@@ -239,37 +259,44 @@ export function useStudioBootstrap(state: StudioAppState) {
         remoteDeletedAgents,
       ] = await Promise.all([
         daemonApi.getOnboarding().catch(() => null),
-        daemonApi.listAgents().catch(() => [] as AgenteEnriquecido[]),
-        daemonApi.listChannels().catch(() => [] as CanalEquipe[]),
-        daemonApi.listTasks().catch(() => [] as TarefaRegistro[]),
-        daemonApi
-          .getWhatsAppStatus()
-          .catch(() => ({ status: "desconectado" as StatusMensageria, qrcode_base64: null })),
-        daemonApi.listSkills().catch(() => [] as HabilidadeInstaladaInfo[]),
-        daemonApi.listUpgrades().catch(() => [] as PacoteUpgradeInfo[]),
-        daemonApi.listConnectors().catch(() => [] as ConectorIntegracaoInfo[]),
-        daemonApi.listWorkflows().catch(() => []),
-        daemonApi.listFiles().catch(() => [] as ArquivoStudio[]),
-        daemonApi
-          .getVaultStatus()
-          .catch(() => [] as Array<{ chave_nome: string; atualizado_em: string }>),
-        daemonApi.listWhatsAppAccounts().catch(() => [] as WhatsAppContaResumo[]),
-        daemonApi.listAllThreads().catch(() => [] as AgenteThreadRegistro[]),
+        daemonApi.listAgents().catch(() => null),
+        daemonApi.listChannels().catch(() => null),
+        daemonApi.listTasks().catch(() => null),
+        daemonApi.getWhatsAppStatus().catch(() => null),
+        daemonApi.listSkills().catch(() => null),
+        daemonApi.listUpgrades().catch(() => null),
+        daemonApi.listConnectors().catch(() => null),
+        daemonApi.listWorkflows().catch(() => null),
+        daemonApi.listFiles().catch(() => null),
+        daemonApi.getVaultStatus().catch(() => null),
+        daemonApi.listWhatsAppAccounts().catch(() => null),
+        daemonApi.listAllThreads().catch(() => null),
         daemonApi.listLibraryFolders().catch(() => null),
         daemonApi.getUserSettings().catch(() => null),
         daemonApi.getSidebarLayout().catch(() => null),
-        daemonApi.listBrowserProfiles().catch(() => [] as BrowserProfileInfo[]),
-        daemonApi.listBrowserProxies().catch(() => [] as BrowserProxyConfig[]),
+        daemonApi.listBrowserProfiles().catch(() => null),
+        daemonApi.listBrowserProxies().catch(() => null),
         daemonApi.getBrowserStatus().catch(() => null),
         daemonApi.getWhatsNew().catch(() => null),
         daemonApi.listarServidores().catch(() => null),
         daemonApi.obterStatusAtualizacao().catch(() => null),
-        daemonApi.listDeletedNativeAgents().catch(() => [] as DeletedNativeAgentInfo[]),
+        daemonApi.listDeletedNativeAgents().catch(() => null),
       ]);
 
       // Sondagens de CLIs/cotas e armazenamento rodam em background para nao prender o splash inicial
+      let providersFailed = false;
       void Promise.all([
-        daemonApi.listProvidersStatus(false).then(setProvedores).catch(() => {}),
+        daemonApi
+          .listProvidersStatus(false)
+          .then((list) => {
+            if (Array.isArray(list)) {
+              setProvedores(list);
+              saveLastKnownProvidersCache(list);
+            }
+          })
+          .catch(() => {
+            providersFailed = true;
+          }),
         daemonApi
           .getProvidersUsage(false)
           .then((usageSnap) => {
@@ -284,7 +311,9 @@ export function useStudioBootstrap(state: StudioAppState) {
           .catch(() => {}),
         daemonApi
           .listShowcaseSites()
-          .then(setShowcaseSites)
+          .then((sites) => {
+            if (Array.isArray(sites)) setShowcaseSites(sites);
+          })
           .catch(() => {}),
         daemonApi
           .getStorageUsage()
@@ -292,13 +321,24 @@ export function useStudioBootstrap(state: StudioAppState) {
             if (remoteStorageUsage) setStorageUsage(remoteStorageUsage);
           })
           .catch(() => {}),
-      ]);
+      ]).then(() => {
+        if (providersFailed || agList === null) {
+          const delayMs = computeHydrationRetryDelayMs(retryAttemptRef.current);
+          if (delayMs !== null) {
+            retryAttemptRef.current += 1;
+            if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+            retryTimerRef.current = setTimeout(() => {
+              retryTimerRef.current = null;
+              void hydrateAll();
+            }, delayMs);
+          }
+        } else {
+          retryAttemptRef.current = 0;
+        }
+      });
 
-      setDeletedNativeAgents(remoteDeletedAgents);
-
-      if (remoteUpdateStatus) {
-        setUpdateStatus(remoteUpdateStatus);
-      }
+      applyNonNullHydration(remoteDeletedAgents, setDeletedNativeAgents);
+      applyNonNullHydration(remoteUpdateStatus, setUpdateStatus);
 
       if (remoteServersSnap) {
         setServers(remoteServersSnap.servers);
@@ -317,19 +357,23 @@ export function useStudioBootstrap(state: StudioAppState) {
       }
 
       if (onb) setOnboarding(onb);
-      setAgentes(agList);
-      setCanais(chList);
-      setTarefas(tList);
-      setWhatsappStatus(wa.status);
-      setWhatsappQr(wa.qrcode_base64);
-      setHabilidades(skillsList);
-      setUpgrades(upgradeList);
-      setConectores(connList);
-      setWorkflows(wfList);
-      setArquivos(fileList);
-      setVaultKeys(keys);
-      setWhatsappAccounts(waAccountsList);
-      setAllThreads(threadsList);
+      if (applyNonNullHydration(agList, setAgentes) && agList) {
+        saveLastKnownAgentsCache(agList);
+      }
+      applyNonNullHydration(chList, setCanais);
+      applyNonNullHydration(tList, setTarefas);
+      if (wa) {
+        setWhatsappStatus(wa.status);
+        setWhatsappQr(wa.qrcode_base64);
+      }
+      applyNonNullHydration(skillsList, setHabilidades);
+      applyNonNullHydration(upgradeList, setUpgrades);
+      applyNonNullHydration(connList, setConectores);
+      applyNonNullHydration(wfList, setWorkflows);
+      applyNonNullHydration(fileList, setArquivos);
+      applyNonNullHydration(keys, setVaultKeys);
+      applyNonNullHydration(waAccountsList, setWhatsappAccounts);
+      applyNonNullHydration(threadsList, setAllThreads);
       if (foldersSnap) setFoldersSnapshot(foldersSnap);
       if (remoteUserSettings) {
         setUserSettings(remoteUserSettings);
@@ -351,8 +395,8 @@ export function useStudioBootstrap(state: StudioAppState) {
         if (typeof cp.focus_mode === "boolean") setFocusMode(cp.focus_mode);
       }
       if (remoteSidebarLayout) setSidebarLayout(remoteSidebarLayout);
-      setBrowserProfiles(remoteBrowserProfiles);
-      setBrowserProxies(remoteBrowserProxies);
+      applyNonNullHydration(remoteBrowserProfiles, setBrowserProfiles);
+      applyNonNullHydration(remoteBrowserProxies, setBrowserProxies);
       if (remoteBrowserStatus) {
         setBrowserStatus(remoteBrowserStatus);
         const initialTabs = remoteBrowserStatus.tabs ?? [];
@@ -364,18 +408,21 @@ export function useStudioBootstrap(state: StudioAppState) {
       if (remoteWhatsNew) setWhatsNew(remoteWhatsNew);
       void refreshRoutineCounts();
 
-      if (tList.length > 0) {
+      const safeTasks = tList ?? [];
+      if (safeTasks.length > 0) {
         const pending =
-          tList.find((t) => t.status === "aguardando_aprovacao") ??
-          tList.find((t) => t.status === "executando") ??
-          tList[0];
+          safeTasks.find((t) => t.status === "aguardando_aprovacao") ??
+          safeTasks.find((t) => t.status === "executando") ??
+          safeTasks[0]!;
         setSelectedTaskId((prev) => prev ?? pending.tarefa_id);
       }
 
-      if (!restoredLastTabRef.current && typeof window !== "undefined") {
+      const safeAgents = agList ?? [];
+      const safeChannels = chList ?? [];
+      if (!restoredLastTabRef.current && safeAgents.length > 0 && typeof window !== "undefined") {
         restoredLastTabRef.current = true;
         const urlAgentId = new URLSearchParams(window.location.search).get("agent");
-        const urlMatch = urlAgentId ? agList.find((a) => a.agente_id === urlAgentId) : undefined;
+        const urlMatch = urlAgentId ? safeAgents.find((a) => a.agente_id === urlAgentId) : undefined;
         if (urlMatch) {
           const vis = getAgentAvatar(urlMatch);
           const tabId = `agent:${urlMatch.agente_id}`;
@@ -400,7 +447,7 @@ export function useStudioBootstrap(state: StudioAppState) {
           const savedTabId = shouldRestore ? window.localStorage.getItem(LAST_TAB_STORAGE_KEY) : null;
           if (savedTabId && savedTabId.startsWith("agent:")) {
             const agId = savedTabId.slice("agent:".length);
-            const agMatch = agList.find((a) => a.agente_id === agId);
+            const agMatch = safeAgents.find((a) => a.agente_id === agId);
             if (agMatch) {
               const vis = getAgentAvatar(agMatch);
               setOpenTabs((prev) =>
@@ -418,8 +465,8 @@ export function useStudioBootstrap(state: StudioAppState) {
               );
               setActiveTabId(savedTabId);
               setCenterMode({ type: "agent", agenteId: agId });
-            } else if (agList.length > 0 && !agList.some((a) => a.agente_id === "estrategista")) {
-              const firstAg = agList[0]!;
+            } else if (!safeAgents.some((a) => a.agente_id === "estrategista")) {
+              const firstAg = safeAgents[0]!;
               const vis = getAgentAvatar(firstAg);
               const fallbackTab = `agent:${firstAg.agente_id}`;
               setOpenTabs([{ id: fallbackTab, titulo: firstAg.nome, shape: vis.shape, color: vis.color }]);
@@ -428,7 +475,7 @@ export function useStudioBootstrap(state: StudioAppState) {
             }
           } else if (savedTabId && savedTabId.startsWith("channel:")) {
             const cId = savedTabId.slice("channel:".length);
-            const chMatch = chList.find((c) => c.canal_id === cId);
+            const chMatch = safeChannels.find((c) => c.canal_id === cId);
             if (chMatch) {
               setOpenTabs((prev) =>
                 prev.some((t) => t.id === savedTabId)
@@ -446,8 +493,8 @@ export function useStudioBootstrap(state: StudioAppState) {
               setActiveTabId(savedTabId);
               setCenterMode({ type: "channel", canalId: cId });
             }
-          } else if (agList.length > 0 && !agList.some((a) => a.agente_id === "estrategista")) {
-            const firstAg = agList[0]!;
+          } else if (!safeAgents.some((a) => a.agente_id === "estrategista")) {
+            const firstAg = safeAgents[0]!;
             const vis = getAgentAvatar(firstAg);
             const fallbackTab = `agent:${firstAg.agente_id}`;
             setOpenTabs([{ id: fallbackTab, titulo: firstAg.nome, shape: vis.shape, color: vis.color }]);
@@ -466,6 +513,12 @@ export function useStudioBootstrap(state: StudioAppState) {
 
   useEffect(() => {
     void hydrateAll();
+    return () => {
+      if (retryTimerRef.current) {
+        clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
+    };
   }, [hydrateAll]);
 
   // Re-checa atualizações silenciosamente ao retornar para a janela (throttle de 5 min)
