@@ -140,17 +140,25 @@ function StudioApp() {
     };
   }, []);
 
-  if (isAppBooting || (licenseStatus && !licenseStatus.valid) || (onboarding && !onboarding.onboarding_concluido)) {
-    return (
-      <I18nProvider locale={userSettings.aparencia.idioma}>
-        <StudioAuthAndOnboardingGate ctx={ctx} />
-      </I18nProvider>
-    );
-  }
+  const splashNode = !splashDismissed ? (
+    <StudioSplashPreloader
+      loading={isAppBooting}
+      initialStage={splashStage}
+      onRevealComplete={() => setSplashDismissed(true)}
+    />
+  ) : null;
+
+  const isGated =
+    isAppBooting ||
+    (licenseStatus && !licenseStatus.valid) ||
+    (onboarding && !onboarding.onboarding_concluido);
 
   return (
     <I18nProvider locale={userSettings.aparencia.idioma}>
-      <div className="h-screen w-screen overflow-hidden bg-[#0D0D0D] text-white flex">
+      {isGated ? (
+        <StudioAuthAndOnboardingGate ctx={ctx} />
+      ) : (
+        <div className="h-screen w-screen overflow-hidden bg-[#0D0D0D] text-white flex">
         <WorkspaceRail
           activeSection={activeSection}
           onSelectSection={setActiveSection}
@@ -279,14 +287,9 @@ function StudioApp() {
           onOpenSettings={() => openSettings()}
           onToggleFocusMode={serverActions.handleToggleFocusMode}
         />
-      </div>
-      {!splashDismissed && (
-        <StudioSplashPreloader
-          loading={isAppBooting}
-          initialStage={splashStage}
-          onRevealComplete={() => setSplashDismissed(true)}
-        />
+        </div>
       )}
+      {splashNode}
     </I18nProvider>
   );
 }

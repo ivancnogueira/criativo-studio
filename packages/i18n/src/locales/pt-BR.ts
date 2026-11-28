@@ -54,6 +54,18 @@ export const ptBRMessages = {
   "common.delete": "Excluir",
   "common.loading": "Carregando...",
   "common.ready": "Pronto",
+  "automations.creativeFlows": "Fluxos Criativos",
+  "automations.instagramFlows": "Fluxos Instagram",
+  "automations.betaBadge": "BETA",
+  "automations.collapseSubnav": "Recolher menu",
+  "automations.expandSubnav": "Expandir menu",
+  "commentDm.title": "Fluxos Instagram · Comentário → Direct",
+  "commentDm.betaNotice": "Recurso em Beta · Private Reply (7 dias) abre a janela de 24h após interação do seguidor · Limite oficial de 200 envios/hora por conta.",
+  "commentDm.tab.rules": "Regras & Fluxos",
+  "commentDm.tab.deliverables": "Entregáveis Públicos",
+  "commentDm.tab.connection": "Conexão (3 Modos)",
+  "commentDm.tab.simulator": "Simulador Dry-Run",
+  "commentDm.tab.approvalsLogs": "Aprovação & Logs",
 } as const;
 
 export type I18nMessageKey = keyof typeof ptBRMessages;

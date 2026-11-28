@@ -76,7 +76,7 @@ import {
   type SettingsModalTabId,
   applyUserSettingsToDocument,
 } from "../../features/settings/SettingsModal";
-import { WorkflowsCanvasPage } from "../../features/workflows/WorkflowsCanvasPage";
+import { AutomationsHubPage } from "../../features/automations/AutomationsHubPage";
 import {
   daemonApi,
   getActiveServerId,
@@ -188,7 +188,11 @@ export function StudioSecondaryPagesSwitch({ ctx }: { ctx: StudioUiCtx }) {
   return (
     <>
           {activeSection === "fluxos" && (
-            <WorkflowsCanvasPage
+            <AutomationsHubPage
+              onOpenInstagramConfig={() => {
+                setLojaInitialAppSlug("instagram");
+                setActiveSection("loja");
+              }}
               workflows={workflows}
               agentes={agentes}
               canais={canais}

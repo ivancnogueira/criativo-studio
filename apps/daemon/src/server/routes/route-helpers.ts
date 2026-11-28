@@ -37,6 +37,7 @@ import type { WhatsAppOrchestrator, WhatsAppSessionManager } from "@criativo/wha
 import type { CriativoDatabase } from "../../database/client.ts";
 import type { FetchLike } from "../../engine/providers/provider-interface.ts";
 import type { MetaFirstCommentService } from "../../social/meta-first-comment-service.ts";
+import type { Phase47RuntimeHandle } from "../../social/phase47-runtime.ts";
 import type { ProviderRegistry } from "../../engine/providers/provider-registry.ts";
 import { HandoffBus } from "../../engine/runner/handoff-bus.ts";
 import type { CatalogService } from "../../marketplace/catalog-service.ts";
@@ -209,6 +210,7 @@ export interface StudioRoutesDeps {
   agentTemplatePublisher?: AgentTemplatePublisher;
   resourceMonitor?: HostResourceMonitorService;
   metaFirstCommentService?: MetaFirstCommentService;
+  phase47?: Phase47RuntimeHandle;
   fetchImpl?: FetchLike;
 }
 

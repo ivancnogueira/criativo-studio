@@ -6,6 +6,7 @@ import { SCHEMA_ROUTINES_WORKFLOWS_TABLES } from "./schema-routines-workflows.ts
 import { SCHEMA_THREADS_INTEGRATIONS_TABLES } from "./schema-threads-integrations.ts";
 import { SCHEMA_PHASE36_TABLES } from "./schema-phase36.ts";
 import { SCHEMA_PHASE44_TABLES } from "./schema-phase44.ts";
+import { SCHEMA_PHASE47_TABLES, SCHEMA_PHASE47_TABLE_NAMES } from "./schema-phase47.ts";
 
 export type { SchemaTableDefinition };
 
@@ -15,6 +16,7 @@ export const SCHEMA_TABLES: readonly SchemaTableDefinition[] = [
   ...SCHEMA_THREADS_INTEGRATIONS_TABLES,
   ...SCHEMA_PHASE36_TABLES,
   ...SCHEMA_PHASE44_TABLES,
+  ...SCHEMA_PHASE47_TABLES,
 ];
 
 export const SCHEMA_TABLE_NAMES = [
@@ -83,4 +85,5 @@ export const SCHEMA_TABLE_NAMES = [
   "cofre_logins",
   "meta_first_comments_queue",
   "meta_media_audit_logs",
+  ...SCHEMA_PHASE47_TABLE_NAMES,
 ] as const;

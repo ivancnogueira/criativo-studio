@@ -265,6 +265,7 @@ export function openExternalUrlIfNeeded(url: string): void {
         detached: true,
         stdio: "ignore",
         shell: false,
+        windowsHide: true,
       }).unref();
     } else if (process.platform === "darwin") {
       spawn("open", [url], { detached: true, stdio: "ignore", shell: false }).unref();

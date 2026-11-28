@@ -67,13 +67,95 @@ export function resolveSafeUpdateArtifactPath(
   return resolvedCandidate;
 }
 
+export interface EnsureRunningResult {
+  ok: boolean;
+  restarted: boolean;
+  port: number;
+}
+
 export interface EmbeddedDaemonHandle {
   port: number;
   baseUrl: string;
   productRoot: string;
   userDataDir: string;
+  ensureRunning: () => Promise<EnsureRunningResult>;
   stop: () => Promise<void>;
   getRecentLogs: () => string[];
+}
+
+export function createWatchdogRecoveryController<TProc extends { exitCode: number | null; killed: boolean }>(deps: {
+  port: number;
+  maxRestarts?: number;
+  windowMs?: number;
+  getCurrentProc: () => TProc | null;
+  setCurrentProc: (next: TProc) => void;
+  spawnProc: () => TProc;
+  waitHealthy: (proc: TProc) => Promise<void>;
+  attachWatchdog: (proc: TProc) => void;
+  checkHealth: () => Promise<boolean>;
+  isStopping: () => boolean;
+  log?: (msg: string) => void;
+}) {
+  const maxRestarts = deps.maxRestarts ?? WATCHDOG_MAX_RESTARTS;
+  const windowMs = deps.windowMs ?? WATCHDOG_WINDOW_MS;
+  const restartTimestamps: number[] = [];
+  let inFlightRecovery: Promise<EnsureRunningResult> | null = null;
+  let watchdogSuspended = false;
+
+  const canAutoRestart = (now = Date.now()): { allowed: boolean; attempt: number; backoffMs: number } => {
+    while (restartTimestamps.length > 0 && now - restartTimestamps[0]! > windowMs) {
+      restartTimestamps.shift();
+    }
+    if (restartTimestamps.length >= maxRestarts) {
+      watchdogSuspended = true;
+      return { allowed: false, attempt: restartTimestamps.length, backoffMs: 0 };
+    }
+    const attempt = restartTimestamps.length + 1;
+    const backoffMs = 1000 * 2 ** Math.min(3, restartTimestamps.length);
+    restartTimestamps.push(now);
+    return { allowed: true, attempt, backoffMs };
+  };
+
+  const ensureRunning = async (): Promise<EnsureRunningResult> => {
+    if (deps.isStopping()) {
+      return { ok: false, restarted: false, port: deps.port };
+    }
+    if (inFlightRecovery) {
+      return await inFlightRecovery;
+    }
+
+    const run = (async (): Promise<EnsureRunningResult> => {
+      const proc = deps.getCurrentProc();
+      const procLooksAlive = Boolean(proc && proc.exitCode === null && !proc.killed);
+      if (procLooksAlive && (await deps.checkHealth().catch(() => false))) {
+        return { ok: true, restarted: false, port: deps.port };
+      }
+
+      if (watchdogSuspended) {
+        deps.log?.("[Watchdog] Recuperação manual solicitada ao reabrir janela; limpando suspensão anterior.");
+      }
+      restartTimestamps.length = 0;
+      watchdogSuspended = false;
+
+      const nextProc = deps.spawnProc();
+      deps.setCurrentProc(nextProc);
+      deps.attachWatchdog(nextProc);
+      await deps.waitHealthy(nextProc);
+      deps.log?.(`[Watchdog] Daemon recuperado na porta ${deps.port} via ensureRunning().`);
+      return { ok: true, restarted: true, port: deps.port };
+    })().finally(() => {
+      inFlightRecovery = null;
+    });
+
+    inFlightRecovery = run;
+    return await run;
+  };
+
+  return {
+    canAutoRestart,
+    ensureRunning,
+    isWatchdogSuspended: () => watchdogSuspended,
+  };
 }
 
 export function resolveDesktopProductRoot(options: {
@@ -170,7 +252,6 @@ export async function startEmbeddedDaemon(options: EmbeddedDaemonOptions): Promi
 
   let stopping = false;
   let restartTimer: NodeJS.Timeout | null = null;
-  const restartTimestamps: number[] = [];
 
   const spawnDaemonChild = (): ChildProcess => {
     const child = spawn(process.execPath, [entryFile], {
@@ -214,27 +295,36 @@ export async function startEmbeddedDaemon(options: EmbeddedDaemonOptions): Promi
     return child;
   };
 
+  let currentProc: ChildProcess = spawnDaemonChild();
+
+  const checkDaemonHealthNow = async (): Promise<boolean> => {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/health`, {
+        signal: AbortSignal.timeout(1500),
+      });
+      if (!res.ok) return false;
+      const body = (await res.json()) as { ok?: boolean };
+      return body.ok === true;
+    } catch {
+      return false;
+    }
+  };
+
   const attachExitWatchdog = (procRef: ChildProcess): void => {
     procRef.once("exit", (code, signal) => {
       if (stopping) return;
       pushLog(`[Watchdog] Daemon encerrou inesperadamente (code=${code ?? "null"}, signal=${signal ?? "null"}).`);
       options.onDaemonCrashed?.(code, signal);
 
-      const now = Date.now();
-      while (restartTimestamps.length > 0 && now - restartTimestamps[0]! > WATCHDOG_WINDOW_MS) {
-        restartTimestamps.shift();
-      }
-      if (restartTimestamps.length >= WATCHDOG_MAX_RESTARTS) {
+      const decision = recovery.canAutoRestart();
+      if (!decision.allowed) {
         pushLog(
           `[Watchdog] Limite de ${WATCHDOG_MAX_RESTARTS} reinícios em ${WATCHDOG_WINDOW_MS / 1000}s atingido. Auto-restart suspenso.`,
         );
         return;
       }
 
-      const attempt = restartTimestamps.length + 1;
-      const backoffMs = 1000 * 2 ** Math.min(3, restartTimestamps.length);
-      restartTimestamps.push(now);
-      pushLog(`[Watchdog] Agendando reinício automático #${attempt} em ${backoffMs}ms...`);
+      pushLog(`[Watchdog] Agendando reinício automático #${decision.attempt} em ${decision.backoffMs}ms...`);
 
       restartTimer = setTimeout(() => {
         restartTimer = null;
@@ -244,21 +334,34 @@ export async function startEmbeddedDaemon(options: EmbeddedDaemonOptions): Promi
         attachExitWatchdog(nextProc);
         void waitForDaemonHealthy(port, nextProc, () => logs)
           .then(() => {
-            pushLog(`[Watchdog] Daemon reiniciado com sucesso na porta ${port} (tentativa #${attempt}).`);
-            options.onDaemonRestarted?.(port, attempt);
+            pushLog(`[Watchdog] Daemon reiniciado com sucesso na porta ${port} (tentativa #${decision.attempt}).`);
+            options.onDaemonRestarted?.(port, decision.attempt);
           })
           .catch((err) => {
             pushLog(
-              `[Watchdog] Falha ao aguardar saúde após reinício #${attempt}: ${
+              `[Watchdog] Falha ao aguardar saúde após reinício #${decision.attempt}: ${
                 err instanceof Error ? err.message : String(err)
               }`,
             );
           });
-      }, backoffMs);
+      }, decision.backoffMs);
     });
   };
 
-  let currentProc = spawnDaemonChild();
+  const recovery = createWatchdogRecoveryController({
+    port,
+    getCurrentProc: () => currentProc,
+    setCurrentProc: (next) => {
+      currentProc = next;
+    },
+    spawnProc: spawnDaemonChild,
+    waitHealthy: (proc) => waitForDaemonHealthy(port, proc, () => logs),
+    attachWatchdog: attachExitWatchdog,
+    checkHealth: checkDaemonHealthNow,
+    isStopping: () => stopping,
+    log: pushLog,
+  });
+
   await waitForDaemonHealthy(port, currentProc, () => logs);
   attachExitWatchdog(currentProc);
 
@@ -267,6 +370,7 @@ export async function startEmbeddedDaemon(options: EmbeddedDaemonOptions): Promi
     baseUrl: `http://127.0.0.1:${port}`,
     productRoot,
     userDataDir,
+    ensureRunning: () => recovery.ensureRunning(),
     getRecentLogs: () => [...logs],
     async stop(): Promise<void> {
       stopping = true;

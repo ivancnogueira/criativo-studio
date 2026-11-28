@@ -140,6 +140,8 @@ export class VoiceHostService {
 
     const child = fork(this.workerScriptPath, [], {
       stdio: ["ignore", "ignore", "pipe", "ipc"],
+      silent: true,
+      ...({ windowsHide: true } as Record<string, unknown>),
       env: {
         PATH: process.env.PATH ?? "",
         NODE_ENV: process.env.NODE_ENV ?? "production",

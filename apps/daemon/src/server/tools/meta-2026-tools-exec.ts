@@ -2,13 +2,15 @@ import type { NativeAppConnectionsStore } from "../../marketplace/native-app-con
 import { MetaFirstCommentService } from "../../social/meta-first-comment-service.ts";
 import { MetaMediaDeletionService } from "../../social/meta-media-deletion-service.ts";
 import type { StudioExtensionToolDeps } from "./phase10-tools-schema.ts";
+import { executeMetaCommentDmTool } from "./meta-comment-dm-tools-exec.ts";
+import { isMetaCommentDmToolName } from "./meta-comment-dm-tools-schema.ts";
 import { isMeta2026ToolName } from "./meta-2026-tools-schema.ts";
 import { readStringArg } from "./studio-tool-helpers.ts";
 
 export { isMeta2026ToolName };
 
 /**
- * Executor das tools Meta Graph API 2026 (Fase 44).
+ * Executor das tools Meta Graph API 2026 (Fase 44 + Fase 47).
  */
 export async function executeMeta2026Tool(
   toolName: string,
@@ -16,6 +18,9 @@ export async function executeMeta2026Tool(
   deps: StudioExtensionToolDeps,
   ctx: { workspaceRoot: string; nativeStore: NativeAppConnectionsStore | null }
 ): Promise<unknown> {
+  if (isMetaCommentDmToolName(toolName)) {
+    return await executeMetaCommentDmTool(toolName, args, deps, ctx);
+  }
   if (toolName === "meta_agendar_primeiro_comentario") {
     const mediaId = readStringArg(args, "media_id", "mediaId") ?? "";
     const commentText = readStringArg(args, "comment_text", "commentText") ?? "";

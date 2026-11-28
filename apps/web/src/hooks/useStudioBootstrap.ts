@@ -198,7 +198,12 @@ export function useStudioBootstrap(state: StudioAppState) {
   }, []);
 
   const hydrateAll = useCallback(async () => {
+    let splashSafetyTimer: ReturnType<typeof setTimeout> | null = null;
     try {
+      splashSafetyTimer = setTimeout(() => {
+        setBootLoading(false);
+      }, 12_000);
+
       const serverIdAtStart = getActiveServerId();
       const licStatus = await daemonApi.obterStatusLicenca().catch(() => null);
       if (licStatus) {
@@ -214,9 +219,6 @@ export function useStudioBootstrap(state: StudioAppState) {
         chList,
         tList,
         wa,
-        provList,
-        usageSnap,
-        analyticsData,
         skillsList,
         upgradeList,
         connList,
@@ -231,8 +233,6 @@ export function useStudioBootstrap(state: StudioAppState) {
         remoteBrowserProfiles,
         remoteBrowserProxies,
         remoteBrowserStatus,
-        remoteShowcaseSites,
-        remoteStorageUsage,
         remoteWhatsNew,
         remoteServersSnap,
         remoteUpdateStatus,
@@ -245,9 +245,6 @@ export function useStudioBootstrap(state: StudioAppState) {
         daemonApi
           .getWhatsAppStatus()
           .catch(() => ({ status: "desconectado" as StatusMensageria, qrcode_base64: null })),
-        daemonApi.listProvidersStatus(false).catch(() => [] as ProvedorStatusInfo[]),
-        daemonApi.getProvidersUsage(false).catch(() => null),
-        daemonApi.getUsageAnalytics({ dias: 30, agente_id: null }).catch(() => null),
         daemonApi.listSkills().catch(() => [] as HabilidadeInstaladaInfo[]),
         daemonApi.listUpgrades().catch(() => [] as PacoteUpgradeInfo[]),
         daemonApi.listConnectors().catch(() => [] as ConectorIntegracaoInfo[]),
@@ -264,12 +261,37 @@ export function useStudioBootstrap(state: StudioAppState) {
         daemonApi.listBrowserProfiles().catch(() => [] as BrowserProfileInfo[]),
         daemonApi.listBrowserProxies().catch(() => [] as BrowserProxyConfig[]),
         daemonApi.getBrowserStatus().catch(() => null),
-        daemonApi.listShowcaseSites().catch(() => [] as ShowcaseSiteSummary[]),
-        daemonApi.getStorageUsage().catch(() => null),
         daemonApi.getWhatsNew().catch(() => null),
         daemonApi.listarServidores().catch(() => null),
         daemonApi.obterStatusAtualizacao().catch(() => null),
         daemonApi.listDeletedNativeAgents().catch(() => [] as DeletedNativeAgentInfo[]),
+      ]);
+
+      // Sondagens de CLIs/cotas e armazenamento rodam em background para nao prender o splash inicial
+      void Promise.all([
+        daemonApi.listProvidersStatus(false).then(setProvedores).catch(() => {}),
+        daemonApi
+          .getProvidersUsage(false)
+          .then((usageSnap) => {
+            if (usageSnap) setUso(usageSnap);
+          })
+          .catch(() => {}),
+        daemonApi
+          .getUsageAnalytics({ dias: 30, agente_id: null })
+          .then((analyticsData) => {
+            if (analyticsData) setAnalyticsUso(analyticsData);
+          })
+          .catch(() => {}),
+        daemonApi
+          .listShowcaseSites()
+          .then(setShowcaseSites)
+          .catch(() => {}),
+        daemonApi
+          .getStorageUsage()
+          .then((remoteStorageUsage) => {
+            if (remoteStorageUsage) setStorageUsage(remoteStorageUsage);
+          })
+          .catch(() => {}),
       ]);
 
       setDeletedNativeAgents(remoteDeletedAgents);
@@ -300,9 +322,6 @@ export function useStudioBootstrap(state: StudioAppState) {
       setTarefas(tList);
       setWhatsappStatus(wa.status);
       setWhatsappQr(wa.qrcode_base64);
-      setProvedores(provList);
-      if (usageSnap) setUso(usageSnap);
-      if (analyticsData) setAnalyticsUso(analyticsData);
       setHabilidades(skillsList);
       setUpgrades(upgradeList);
       setConectores(connList);
@@ -342,8 +361,6 @@ export function useStudioBootstrap(state: StudioAppState) {
           setActiveBrowserTabId((prev) => prev ?? initialTabs[0]!.tabId);
         }
       }
-      setShowcaseSites(remoteShowcaseSites);
-      if (remoteStorageUsage) setStorageUsage(remoteStorageUsage);
       if (remoteWhatsNew) setWhatsNew(remoteWhatsNew);
       void refreshRoutineCounts();
 
@@ -440,6 +457,9 @@ export function useStudioBootstrap(state: StudioAppState) {
         }
       }
     } finally {
+      if (splashSafetyTimer !== null) {
+        clearTimeout(splashSafetyTimer);
+      }
       setBootLoading(false);
     }
   }, [refreshRoutineCounts]);

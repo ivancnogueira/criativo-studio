@@ -47,6 +47,12 @@ interface OpenCodeWorkerSlot {
   activeCount: number;
 }
 
+type OpenCodeCatalogCommandRunner = (
+  cmd: string,
+  args: string[],
+  options: { timeout: number; windowsHide: boolean; env: NodeJS.ProcessEnv }
+) => Promise<{ stdout: string }>;
+
 /**
  * Descobre e executa os modelos gratuitos e ativos do OpenCode CLI instalado na máquina.
  */
@@ -54,8 +60,15 @@ export class OpenCodeLiveService {
   private readonly vault?: VaultService;
   private readonly workspaceCwd: string;
   private readonly appDataDir?: string;
+  private readonly catalogCommandRunner: OpenCodeCatalogCommandRunner;
   private mcpServersResolver?: OpenCodeMcpServersResolver;
   private modelsCache: { expiresAt: number; data: ModeloProvedorInfo[]; version: string | null; executable: string | null } | null = null;
+  private inFlightCatalogPromise: Promise<{
+    detected: boolean;
+    version: string | null;
+    executable: string | null;
+    modelos: ModeloProvedorInfo[];
+  }> | null = null;
   private readonly workers = new Map<string, OpenCodeWorkerSlot>();
 
   constructor(options?: {
@@ -63,11 +76,15 @@ export class OpenCodeLiveService {
     workspaceCwd?: string;
     appDataDir?: string;
     mcpServersResolver?: OpenCodeMcpServersResolver;
+    catalogCommandRunner?: OpenCodeCatalogCommandRunner;
   }) {
     this.vault = options?.vault;
     this.workspaceCwd = resolve(options?.workspaceCwd ?? process.cwd());
     this.appDataDir = options?.appDataDir;
     this.mcpServersResolver = options?.mcpServersResolver;
+    this.catalogCommandRunner =
+      options?.catalogCommandRunner ??
+      ((cmd, args, opts) => execFileAsync(cmd, args, opts));
   }
 
   public setMcpServersResolver(resolver?: OpenCodeMcpServersResolver): void {
@@ -90,6 +107,26 @@ export class OpenCodeLiveService {
       };
     }
 
+    if (this.inFlightCatalogPromise) {
+      return await this.inFlightCatalogPromise;
+    }
+
+    const promise = this.loadLiveCatalogInternal().finally(() => {
+      if (this.inFlightCatalogPromise === promise) {
+        this.inFlightCatalogPromise = null;
+      }
+    });
+    this.inFlightCatalogPromise = promise;
+    return await promise;
+  }
+
+  private async loadLiveCatalogInternal(): Promise<{
+    detected: boolean;
+    version: string | null;
+    executable: string | null;
+    modelos: ModeloProvedorInfo[];
+  }> {
+    const now = Date.now();
     const { executable, version } = resolveOpenCodeCliExecutable(this.appDataDir);
     if (!executable) {
       this.modelsCache = { expiresAt: now + MODELS_CACHE_TTL_MS, data: [], version: null, executable: null };
@@ -102,11 +139,12 @@ export class OpenCodeLiveService {
     let models: ModeloProvedorInfo[] = [];
     try {
       const apiKey = this.vault?.getSecret("opencode_api_key");
-      const { stdout } = await execFileAsync(
+      const { stdout } = await this.catalogCommandRunner(
         isCmd ? process.env.ComSpec || "cmd.exe" : executable,
         isCmd ? ["/c", executable, "models"] : ["models"],
         {
           timeout: 20_000,
+          windowsHide: true,
           env: {
             ...process.env,
             OPENCODE_DISABLE_AUTOUPDATE: "1",

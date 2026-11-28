@@ -23,8 +23,8 @@ describe("Catálogo de Notas de Versão e Link de Changelog", () => {
     assert.ok((notes109[0]?.added.length ?? 0) > 0);
     assert.equal(notes109.length, RELEASE_NOTES_CATALOG.length);
 
-    const notesFuture = getReleaseNotesForVersion("1.1.0");
-    assert.equal(notesFuture[0]?.versao, "1.1.0");
+    const notesFuture = getReleaseNotesForVersion("9.9.9");
+    assert.equal(notesFuture[0]?.versao, "9.9.9");
     assert.equal(notesFuture.length, RELEASE_NOTES_CATALOG.length + 1);
   });
 

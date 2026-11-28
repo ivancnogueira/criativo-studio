@@ -142,7 +142,7 @@ export class TtsService {
       const proc = spawn(
         "edge-tts",
         ["--voice", voiceName, "--text", input.text, "--write-media", input.outputPath],
-        { shell: process.platform === "win32" }
+        { shell: process.platform === "win32", windowsHide: true }
       );
       proc.on("error", (err) => rejectPromise(err));
       proc.on("close", (code) => {

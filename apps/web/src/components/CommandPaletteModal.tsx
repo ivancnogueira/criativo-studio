@@ -65,7 +65,8 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
   const quickActions = useMemo<QuickAction[]>(() => {
     const base: QuickAction[] = [
       { id: "act-agentes", label: "Ir para Estúdio (Criativos)", subtitle: "Navegação rápida", Icon: Bot, run: () => onSelectSection("agentes") },
-      { id: "act-fluxos", label: "Ir para Automações (Workflows)", subtitle: "Editor em grafo", Icon: GitBranch, run: () => onSelectSection("fluxos") },
+      { id: "act-fluxos", label: "Ir para Automações (Fluxos Criativos)", subtitle: "Editor em grafo", Icon: GitBranch, run: () => { onSelectSection("fluxos"); window.dispatchEvent(new CustomEvent("criativo:open-automations-tab", { detail: { tab: "creative_flows" } })); } },
+      { id: "act-fluxos-ig", label: "Fluxos Instagram [BETA] (Comentário → Direct)", subtitle: "Automação DM & entregáveis", Icon: MessageSquare, run: () => { onSelectSection("fluxos"); window.dispatchEvent(new CustomEvent("criativo:open-automations-tab", { detail: { tab: "instagram_dm" } })); } },
       { id: "act-tarefas", label: "Ir para Fila de Tarefas", subtitle: "Status e aprovações", Icon: WalletCards, run: () => onSelectSection("tarefas") },
       { id: "act-agenda", label: "Ir para Calendário Editorial & Rotinas", subtitle: "Pautas e agendamentos", Icon: CalendarClock, run: () => onSelectSection("agenda") },
       { id: "act-galeria", label: "Ir para Galeria & Métricas Instagram", subtitle: "Alcance, salvamentos e KPIs", Icon: BarChart3, run: () => onSelectSection("galeria_ig") },

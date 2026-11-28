@@ -11,6 +11,8 @@ import type { LicenseClientService } from "../../license/license-service.ts";
 import type { TranscriptionService } from "../../voice/transcription-service.ts";
 import type { VaultService } from "../../vault/vault-service.ts";
 import type { BackgroundJobService } from "../../waits/background-job-service.ts";
+import type { Phase47RuntimeHandle } from "../../social/phase47-runtime.ts";
+import type { ShowcaseSiteService } from "../showcase-service.ts";
 import type { WebSocketHub } from "../websocket-hub.ts";
 import { META_2026_TOOLS_SCHEMA } from "./meta-2026-tools-schema.ts";
 import { VIDEO_STUDIO_TOOLS_SCHEMA } from "./video-tools-schema.ts";
@@ -36,6 +38,8 @@ export interface StudioExtensionToolDeps {
   skillsManager?: SkillsManager;
   whatsappManager?: WhatsAppSessionManager;
   whatsappOrchestrator?: WhatsAppOrchestrator;
+  showcaseService?: ShowcaseSiteService;
+  phase47Runtime?: Phase47RuntimeHandle;
   fetchImpl?: FetchLike;
   onImageProgress?: (evt: {
     status: "executando" | "concluido" | "erro";

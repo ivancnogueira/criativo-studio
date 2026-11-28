@@ -390,7 +390,7 @@ describe("Fase 22 — Navegador Integrado, Dock Flutuante Desktop, WhatsApp Sync
     assert.doesNotMatch(appSrc, /isAppBooting = bootLoading \|\|/);
     assert.match(
       appSrc,
-      /if \(isAppBooting\) \{\s*return \(\s*<>\s*<div className="min-h-screen w-full bg-\[#0D0D0D\]" \/>\s*\{renderSplashOverlay\(\)\}\s*<\/>\s*\);\s*\}/
+      /if \(isAppBooting\) \{\s*return <div className="min-h-screen w-full bg-\[#0D0D0D\]" \/>;\s*\}/
     );
 
     const desktopMainSrc = readFileSync(

@@ -36,6 +36,7 @@ import { executeAgentConversationTurn, tryHandleStudioRoute } from "./studio-rou
 import { MemoryReviewService } from "../engine/runner/memory-review-service.ts";
 import { CacheExpiryCompactionService } from "../chat/cache-expiry-compaction-service.ts";
 import { MetaFirstCommentService } from "../social/meta-first-comment-service.ts";
+import { createPhase47Runtime } from "../social/phase47-runtime.ts";
 import type { Phase14ToolServices } from "./studio-tools-bridge.ts";
 import { readJsonBody, readRawBody, sendJson, type DaemonServerOptions, type TaskExecutorHook } from "./daemon-http-utils.ts";
 import type { DaemonInfraServices } from "./daemon-infra-services.ts";
@@ -509,7 +510,20 @@ export async function createDaemonRuntimeServices(
   };
   runner.setPhase14Services(phase14Services);
 
+  const phase47Runtime = createPhase47Runtime({
+    db,
+    vault,
+    nativeStore: catalogService.nativeStore,
+    wsHub,
+    workspaceRoot: resolvedWorkspaceRoot,
+    showcaseService,
+    crmService,
+    workflowEngine,
+    fetchImpl: options.fetchImpl,
+  });
+
   const baseStudioDepsForLanes = {
+    phase47: phase47Runtime,
     db,
     queue,
     vault,
@@ -627,6 +641,7 @@ export async function createDaemonRuntimeServices(
     memoryReview,
     cacheExpiryCompaction,
     metaFirstCommentService,
+    phase47Runtime,
     phase14Services,
     baseStudioDepsForLanes,
     studioMcpBridge,

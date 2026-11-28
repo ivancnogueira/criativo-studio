@@ -10,6 +10,7 @@ import { EditorialCalendarService } from "../social/editorial-calendar-service.t
 import { MetaGalleryService } from "../social/meta-gallery-service.ts";
 import type { StudioRouteContext } from "./routes/route-helpers.ts";
 import { tryHandleSocialMeta2026Routes } from "./social-meta-2026-routes.ts";
+import { tryHandleSocialCommentDmRoutes } from "./social-comment-dm-routes.ts";
 import { resolveNativeAppConnectionsStore } from "./studio-tools-bridge.ts";
 
 /**
@@ -237,6 +238,10 @@ export async function tryHandleSocialStudioRoutes(ctx: StudioRouteContext): Prom
   }
 
   if (await tryHandleSocialMeta2026Routes(ctx)) {
+    return true;
+  }
+
+  if (await tryHandleSocialCommentDmRoutes(ctx)) {
     return true;
   }
 

@@ -403,6 +403,7 @@ export type WebSocketEventMap = {
   };
   "theme:reloaded": ThemeReloadEventPayload;
   "cua:status": CuaStatusSnapshot;
+  "comment_dm:updated": Record<string, unknown>;
 };
 
 export interface WebSocketEnvelope<K extends keyof WebSocketEventMap = keyof WebSocketEventMap> {

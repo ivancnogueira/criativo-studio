@@ -18,6 +18,20 @@ export function buildChangelogUrl(version?: string | null): string {
 
 export const RELEASE_NOTES_CATALOG: readonly ReleaseNoteEntry[] = [
   {
+    versao: "1.1.1",
+    data: "2026-11-27",
+    added: [
+      "Automação Comentário → Direct [BETA] unificada em Automações (sub-sidebar Fluxos Criativos | Fluxos Instagram [BETA]) com regras por palavra-chave, escopo de publicações, aprovação humana opcional e Simulador Dry-Run.",
+      "Motor de fluxos multi-etapa pós-abertura da janela de 24h (mensagens, delays, coleta CRM, ramificação por botões, cartões de entregáveis HTTPS, disparo de workflows e handoff para Criativo IA) com limite de 200 req/h.",
+      "3 modos de recepção (Polling 7d local, Webhook Direto HMAC-SHA256 e Relay Zero-Trust no Painel Central), publicador público HTTPS (GitHub Pages via Cofre ou Showcase sob domínio válido sem expor IP) e ferramentas MCP com rascunhos sempre pausados.",
+    ],
+    changed: [],
+    fixed: [
+      "Fim do loop de inicialização/splash com timeout defensivo nas leituras HTTP (15s), sondagens de CLIs/cotas desacopladas em segundo plano, instância única de preloader e auto-recuperação do Watchdog Desktop (ensureRunning).",
+      "Eliminação das janelas de console CMD no Windows ao iniciar o app ou abrir Configurações (windowsHide: true global em processos filhos e deduplicação de catálogo OpenCode em voo).",
+    ],
+  },
+  {
     versao: "1.1.0",
     data: "2026-11-27",
     added: [

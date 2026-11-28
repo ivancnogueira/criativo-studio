@@ -400,9 +400,12 @@ export function spawnProviderProcess(
   args: string[],
   options: SpawnOptions = {}
 ): ChildProcess {
+  const windowsHide = options.windowsHide ?? true;
+
   if (/\.(m|c)?js$/i.test(executable)) {
     return spawn(process.execPath, [executable, ...args], {
       ...options,
+      windowsHide,
       env: { ...(options.env ?? process.env), ELECTRON_RUN_AS_NODE: "1" },
       shell: false,
     });
@@ -414,6 +417,7 @@ export function spawnProviderProcess(
     if (jsTarget) {
       return spawn(process.execPath, [jsTarget, ...args], {
         ...options,
+        windowsHide,
         env: { ...(options.env ?? process.env), ELECTRON_RUN_AS_NODE: "1" },
         shell: false,
       });
@@ -423,6 +427,7 @@ export function spawnProviderProcess(
       ["/c", executable, ...args.map(escapeCmdArgForShellFallback)],
       {
         ...options,
+        windowsHide,
         shell: false,
       }
     );
@@ -430,6 +435,7 @@ export function spawnProviderProcess(
 
   return spawn(executable, args, {
     ...options,
+    windowsHide,
     shell: false,
   });
 }

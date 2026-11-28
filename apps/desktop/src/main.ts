@@ -134,6 +134,22 @@ function focusOrShowMainWindow(): void {
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
+  if (daemonHandle) {
+    const activeDaemon = daemonHandle;
+    void activeDaemon
+      .ensureRunning()
+      .then((res) => {
+        if (res.restarted && mainWindow && !mainWindow.isDestroyed()) {
+          writeDesktopLog(`[Watchdog] Recarregando janela principal após recuperação do Daemon na porta ${res.port}.`);
+          void mainWindow.loadURL(`${activeDaemon.baseUrl}/?fromSplash=1`);
+        }
+      })
+      .catch((err) => {
+        writeDesktopLog(
+          `[Watchdog] Falha ao recuperar Daemon ao reabrir janela: ${err instanceof Error ? err.message : String(err)}`
+        );
+      });
+  }
 }
 
 function createWindow(daemonPort: number, iconPath?: string): BrowserWindow {

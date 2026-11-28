@@ -1,8 +1,3 @@
-import {
-  resolveInitialSplashStageFromSearch,
-  StudioSplashPreloader,
-  type SplashInitialStage,
-} from "../../components/StudioSplashPreloader";
 import { OnboardingFlow } from "../../features/onboarding/OnboardingFlow";
 import { LicenseActivationGate } from "../../features/license/LicenseActivationGate";
 import {
@@ -19,9 +14,6 @@ export function StudioAuthAndOnboardingGate({ ctx }: { ctx: StudioUiCtx }) {
   const { state, boot, serverActions, threadActions } = ctx;
   const {
     setBootLoading,
-    splashStage,
-    splashDismissed,
-    setSplashDismissed,
     onboarding,
     setOnboarding,
     agentes,
@@ -43,29 +35,14 @@ export function StudioAuthAndOnboardingGate({ ctx }: { ctx: StudioUiCtx }) {
 
   const { handleConnectViaBrowser, handleCancelBrowserSignIn } = threadActions;
 
-  const renderSplashOverlay = () =>
-    !splashDismissed ? (
-      <StudioSplashPreloader
-        loading={isAppBooting}
-        initialStage={splashStage}
-        onRevealComplete={() => setSplashDismissed(true)}
-      />
-    ) : null;
-
   if (isAppBooting) {
-    return (
-      <>
-        <div className="min-h-screen w-full bg-[#0D0D0D]" />
-        {renderSplashOverlay()}
-      </>
-    );
+    return <div className="min-h-screen w-full bg-[#0D0D0D]" />;
   }
 
   // Gatekeeper de Licença Comercial (Fase 16)
   if (licenseStatus && !licenseStatus.valid) {
     return (
-      <>
-        <LicenseActivationGate
+      <LicenseActivationGate
           status={licenseStatus}
           onActivate={async (payload) => {
             const next = await daemonApi.ativarLicenca(payload);
@@ -102,16 +79,13 @@ export function StudioAuthAndOnboardingGate({ ctx }: { ctx: StudioUiCtx }) {
             }
           }}
         />
-        {renderSplashOverlay()}
-      </>
     );
   }
 
   // Etapa de Onboarding híbrido 4 etapas (com opções puláveis em marca/canais)
   if (onboarding && !onboarding.onboarding_concluido) {
     return (
-      <>
-        <OnboardingFlow
+      <OnboardingFlow
           initialState={onboarding}
           provedores={provedores}
           activeServerName={
@@ -183,8 +157,6 @@ export function StudioAuthAndOnboardingGate({ ctx }: { ctx: StudioUiCtx }) {
             setArquivos(filesList);
           }}
         />
-        {renderSplashOverlay()}
-      </>
     );
   }
 

@@ -162,6 +162,7 @@ export async function createDaemonServer(
     memoryReview,
     cacheExpiryCompaction,
     metaFirstCommentService,
+    phase47Runtime,
     phase14Services,
     studioMcpBridge,
   } = rt;
@@ -198,6 +199,7 @@ export async function createDaemonServer(
       if (
         configuredAccessToken &&
         !(method === "GET" && (path === "/health" || path === "/api/health" || path === "/api/rotinas/feed.ics")) &&
+        path !== "/api/instagram/webhook" &&
         path.startsWith("/api/") &&
         !hasValidServerToken
       ) {
@@ -216,6 +218,7 @@ export async function createDaemonServer(
       const isLicenseExemptRoute =
         hasValidServerToken ||
         (method === "GET" && (path === "/health" || path === "/api/health" || path === "/api/rotinas/feed.ics")) ||
+        path === "/api/instagram/webhook" ||
         path.startsWith("/api/studio/license/") ||
         (method === "GET" && !path.startsWith("/api/") && path !== "/ws");
 
@@ -317,6 +320,7 @@ export async function createDaemonServer(
         agentTemplatePublisher,
         resourceMonitor,
         metaFirstCommentService,
+        phase47: phase47Runtime,
         fetchImpl: options.fetchImpl,
       };
 
@@ -464,6 +468,7 @@ export async function createDaemonServer(
     routineTimer.arm();
     wakeupService.start();
     metaFirstCommentService.start();
+    phase47Runtime.start();
     await routineFlowsEngine.sweep();
     whatsappArchiveService.startPeriodicCleanup();
     workerTimer = setInterval(() => {
@@ -643,6 +648,7 @@ export async function createDaemonServer(
       memoryReview.dispose();
       cacheExpiryCompaction.dispose();
       metaFirstCommentService.dispose();
+      phase47Runtime.dispose();
       uiBlockRegistry.dispose();
       screenCapture.dispose();
       telegramBot.stopPolling();

@@ -1,10 +1,12 @@
 import type { ToolDefinition } from "@criativo/contracts";
+import { META_COMMENT_DM_TOOLS_SCHEMA } from "./meta-comment-dm-tools-schema.ts";
 
 /**
- * Schema das tools Meta Graph API 2026 (Fase 44).
+ * Schemas das tools Meta Graph API 2026 (Fase 44 e Fase 47).
  * Mantido separado de `phase10-tools-schema.ts` para respeitar o orçamento de linhas.
  */
 export const META_2026_TOOLS_SCHEMA: ToolDefinition[] = [
+  ...META_COMMENT_DM_TOOLS_SCHEMA,
   {
     name: "meta_agendar_primeiro_comentario",
     description:

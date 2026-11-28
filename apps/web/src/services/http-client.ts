@@ -116,15 +116,60 @@ export function resolveActiveServerUrl(rawUrl: string): string {
   return `${rawUrl}${sep}serverId=${encodeURIComponent(activeServerId)}`;
 }
 
-export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  if (!shouldForwardToActiveServer(input)) {
-    return await globalThis.fetch(input, init);
-  }
-  const headers = new Headers(init?.headers);
-  if (!headers.has("X-Criativo-Server-Id")) {
+export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+export const DEFAULT_MUTATION_TIMEOUT_MS = 180_000;
+
+export interface ApiRequestInit extends RequestInit {
+  timeoutMs?: number | null;
+}
+
+export async function apiFetch(input: RequestInfo | URL, init?: ApiRequestInit): Promise<Response> {
+  const method = String(init?.method ?? "GET").toUpperCase();
+  const defaultTimeout =
+    method === "GET" || method === "HEAD" ? DEFAULT_REQUEST_TIMEOUT_MS : DEFAULT_MUTATION_TIMEOUT_MS;
+  const timeoutMs = init?.timeoutMs === undefined ? defaultTimeout : init.timeoutMs;
+  const headers = shouldForwardToActiveServer(input) ? new Headers(init?.headers) : null;
+  if (headers && !headers.has("X-Criativo-Server-Id")) {
     headers.set("X-Criativo-Server-Id", activeServerId);
   }
-  return await globalThis.fetch(input, { ...init, headers });
+
+  let timeoutController: AbortController | null = null;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let signal: AbortSignal | undefined = init?.signal ?? undefined;
+
+  if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    timeoutController = new AbortController();
+    const externalSignal = init?.signal;
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        timeoutController.abort(externalSignal.reason);
+      } else {
+        externalSignal.addEventListener(
+          "abort",
+          () => timeoutController?.abort(externalSignal.reason),
+          { once: true }
+        );
+      }
+    }
+    timeoutId = setTimeout(() => {
+      timeoutController?.abort(new Error(`Tempo limite de ${timeoutMs}ms excedido na requisição ao Daemon.`));
+    }, timeoutMs);
+    signal = timeoutController.signal;
+  }
+
+  const nextInit: RequestInit = {
+    ...(init ?? {}),
+    ...(headers ? { headers } : {}),
+    ...(signal ? { signal } : {}),
+  };
+
+  try {
+    return await globalThis.fetch(input, nextInit);
+  } finally {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 export function setOnLicenseRequiredHandler(
@@ -133,7 +178,7 @@ export function setOnLicenseRequiredHandler(
   licenseRequiredListener = handler;
 }
 
-export async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
+export async function requestJson<T>(input: string, init?: ApiRequestInit): Promise<T> {
   const res = await apiFetch(input, init);
   const text = await res.text();
   let parsed: Record<string, unknown> = {};
